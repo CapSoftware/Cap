@@ -6,8 +6,6 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use tracing::debug;
-
 use cidre::{
     arc::R,
     cv::{self, pixel_buffer::LockFlags},
@@ -592,10 +590,21 @@ impl AVAssetReaderDecoder {
                                     let data = cached.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
                                     let _ = req.sender.send(data.to_decoded_frame());
-                                } else if is_scrubbing {
-                                    let data = cache_frame.data().clone();
-                                    *last_sent_frame.borrow_mut() = Some(data.clone());
-                                    let _ = req.sender.send(data.to_decoded_frame());
+                                } else {
+                                    const MAX_FALLBACK_DISTANCE: u32 = 10;
+
+                                    let nearest = cache
+                                        .range(..=req.frame)
+                                        .next_back()
+                                        .or_else(|| cache.range(req.frame..).next());
+
+                                    if let Some((&frame_num, cached)) = nearest {
+                                        let distance = req.frame.abs_diff(frame_num);
+                                        if distance <= MAX_FALLBACK_DISTANCE {
+                                            let _ =
+                                                req.sender.send(cached.data().to_decoded_frame());
+                                        }
+                                    }
                                 }
                             } else {
                                 remaining_requests.push(req);
@@ -628,16 +637,20 @@ impl AVAssetReaderDecoder {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
                     let _ = req.sender.send(data.to_decoded_frame());
-                } else if let Some(last) = last_sent_frame.borrow().clone() {
-                    if req.sender.send(last.to_decoded_frame()).is_err() {}
-                } else if let Some(first) = first_ever_frame.borrow().clone() {
-                    if req.sender.send(first.to_decoded_frame()).is_err() {}
                 } else {
-                    debug!(
-                        decoder = _name,
-                        requested_frame = req.frame,
-                        "No frame available to send - request dropped"
-                    );
+                    const MAX_FALLBACK_DISTANCE: u32 = 10;
+
+                    let nearest = cache
+                        .range(..=req.frame)
+                        .next_back()
+                        .or_else(|| cache.range(req.frame..).next());
+
+                    if let Some((&frame_num, cached)) = nearest {
+                        let distance = req.frame.abs_diff(frame_num);
+                        if distance <= MAX_FALLBACK_DISTANCE {
+                            let _ = req.sender.send(cached.data().to_decoded_frame());
+                        }
+                    }
                 }
             }
         }

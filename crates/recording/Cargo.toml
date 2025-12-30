@@ -6,6 +6,10 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+default = []
+test-utils = []
+
 [dependencies]
 cap-audio = { path = "../audio" }
 cap-fail = { path = "../fail" }
@@ -88,6 +92,12 @@ scap-cpal = { path = "../scap-cpal" }
 [dev-dependencies]
 tempfile = "3.20.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 libproc = "0.14"
+
+[[example]]
+name = "synthetic-test-runner"
+required-features = ["test-utils"]

@@ -49,6 +49,7 @@ fn benchmark_pool(
         input_capacity: 120,
         output_capacity: 120,
         drop_strategy: DropStrategy::DropOldest,
+        ..Default::default()
     };
 
     let pool = AsyncConverterPool::from_config(config.clone(), pool_config)
@@ -182,6 +183,7 @@ fn simulate_realtime_pipeline(
         input_capacity: 60,
         output_capacity: 30,
         drop_strategy: DropStrategy::DropOldest,
+        ..Default::default()
     };
 
     let pool = AsyncConverterPool::from_config(config.clone(), pool_config)

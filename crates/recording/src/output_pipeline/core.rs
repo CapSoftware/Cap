@@ -28,6 +28,14 @@ use tracing::*;
 const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
+const DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY: usize = 128;
+
+fn get_video_source_channel_capacity() -> usize {
+    std::env::var("CAP_VIDEO_SOURCE_BUFFER_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY)
+}
 
 pub struct TimestampAnomalyTracker {
     stream_name: &'static str,
@@ -647,7 +655,8 @@ async fn setup_video_source<TVideo: VideoSource>(
     video_config: TVideo::Config,
     setup_ctx: &mut SetupCtx,
 ) -> anyhow::Result<(TVideo, mpsc::Receiver<TVideo::Frame>)> {
-    let (video_tx, video_rx) = mpsc::channel(128);
+    let capacity = get_video_source_channel_capacity();
+    let (video_tx, video_rx) = mpsc::channel(capacity);
     let video_source = TVideo::setup(video_config, video_tx, setup_ctx).await?;
 
     Ok((video_source, video_rx))

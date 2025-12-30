@@ -4,6 +4,9 @@ pub use swscale::*;
 mod pool;
 pub use pool::*;
 
+mod frame_pool;
+pub use frame_pool::*;
+
 #[cfg(target_os = "macos")]
 mod videotoolbox;
 #[cfg(target_os = "macos")]
@@ -55,6 +58,16 @@ impl std::fmt::Display for ConverterBackend {
 
 pub trait FrameConverter: Send + Sync + 'static {
     fn convert(&self, input: ffmpeg::frame::Video) -> Result<ffmpeg::frame::Video, ConvertError>;
+
+    fn convert_into(
+        &self,
+        input: ffmpeg::frame::Video,
+        output: &mut ffmpeg::frame::Video,
+    ) -> Result<(), ConvertError> {
+        let result = self.convert(input)?;
+        *output = result;
+        Ok(())
+    }
 
     fn name(&self) -> &'static str;
 

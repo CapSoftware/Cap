@@ -1,0 +1,592 @@
+macbookuser@Macbooks-MacBook-Pro cap % cargo run --package cap-recording --example synthetic-test-runner --features test-utils -- full
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running `target/debug/examples/synthetic-test-runner full`
+Running full test suite (comprehensive matrix)...
+
+[1/60] 1280x720@24fps + NV12 + 48kHz + stereo
+2025-12-29T20:44:25.362696Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_0/segments
+[dash @ 0x152707db0] Opening '/tmp/cap-synthetic-tests/test_0/segments/init.mp4' for writing
+2025-12-29T20:44:25.467660Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_0/segments segment_duration_secs=3
+2025-12-29T20:44:25.491408Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_0/segments
+[h264_videotoolbox @ 0x154104580] Color range not set for nv12. Using MPEG range.
+[dash @ 0x152707db0] Opening '/tmp/cap-synthetic-tests/test_0/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x152707db0] Opening '/tmp/cap-synthetic-tests/test_0/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x152707db0] Opening '/tmp/cap-synthetic-tests/test_0/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:44:30.335131Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 120 frames
+2025-12-29T20:44:30.335229Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:30.335427Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:44:30.335493Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:30.866504Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152707db0] Opening '/tmp/cap-synthetic-tests/test_0/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:44:30.883517Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_0/segments/segment_001.m4s with 20204 bytes, estimated duration 5.505107833s
+2025-12-29T20:44:30.894416Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_0/segments/segment_002.m4s with 13478 bytes, estimated duration 3s
+       ✓ Frame count: 120/120
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.55s
+
+[2/60] 1280x720@24fps + BGRA + 48kHz + stereo
+2025-12-29T20:44:30.935795Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_1/segments
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_1/segments/init.mp4' for writing
+2025-12-29T20:44:30.971776Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_1/segments segment_duration_secs=3
+2025-12-29T20:44:30.980375Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_1/segments
+[h264_videotoolbox @ 0x152707ac0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_1/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_1/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_1/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:44:35.908747Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 120 frames
+2025-12-29T20:44:35.908786Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:35.908848Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:44:35.908867Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:36.436850Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_1/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:44:36.451099Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_1/segments/segment_001.m4s with 2024520 bytes, estimated duration 5.501764459s
+2025-12-29T20:44:36.456066Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_1/segments/segment_002.m4s with 1317560 bytes, estimated duration 3s
+       ✓ Frame count: 120/120
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.54s
+
+[3/60] 1280x720@30fps + NV12 + 48kHz + stereo
+2025-12-29T20:44:36.520825Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_2/segments
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_2/segments/init.mp4' for writing
+2025-12-29T20:44:36.549777Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_2/segments segment_duration_secs=3
+2025-12-29T20:44:36.558331Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_2/segments
+[h264_videotoolbox @ 0x15400cbf0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_2/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_2/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_2/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:44:41.499223Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 150 frames
+2025-12-29T20:44:41.499321Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:41.499423Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:44:41.499451Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:42.026741Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_2/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:44:42.037693Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_2/segments/segment_001.m4s with 26850 bytes, estimated duration 5.506463375s
+2025-12-29T20:44:42.042595Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_2/segments/segment_002.m4s with 15158 bytes, estimated duration 3s
+       ✓ Frame count: 150/150
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.54s
+
+[4/60] 1280x720@30fps + BGRA + 48kHz + stereo
+2025-12-29T20:44:42.078875Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_3/segments
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_3/segments/init.mp4' for writing
+2025-12-29T20:44:42.115834Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_3/segments segment_duration_secs=3
+2025-12-29T20:44:42.126372Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_3/segments
+[h264_videotoolbox @ 0x15400d1d0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_3/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_3/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_3/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:44:47.059608Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 150 frames
+2025-12-29T20:44:47.059645Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:47.059706Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:44:47.059726Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:47.581481Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_3/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:44:47.596259Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_3/segments/segment_001.m4s with 2315928 bytes, estimated duration 5.503429s
+2025-12-29T20:44:47.601273Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_3/segments/segment_002.m4s with 1306754 bytes, estimated duration 3s
+       ✓ Frame count: 150/150
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.54s
+
+[5/60] 1280x720@60fps + NV12 + 48kHz + stereo
+2025-12-29T20:44:47.662433Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_4/segments
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_4/segments/init.mp4' for writing
+2025-12-29T20:44:47.691576Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_4/segments segment_duration_secs=3
+2025-12-29T20:44:47.702068Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_4/segments
+[h264_videotoolbox @ 0x152708460] Color range not set for nv12. Using MPEG range.
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_4/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_4/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_4/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:44:52.655811Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 300 frames
+2025-12-29T20:44:52.655847Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:52.655901Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:44:52.655921Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:53.166286Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_4/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:44:53.182429Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_4/segments/segment_001.m4s with 50325 bytes, estimated duration 5.504508542s
+2025-12-29T20:44:53.188394Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_4/segments/segment_002.m4s with 33611 bytes, estimated duration 3s
+       ✓ Frame count: 300/300
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.54s
+
+[6/60] 1280x720@60fps + BGRA + 48kHz + stereo
+2025-12-29T20:44:53.216503Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_5/segments
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_5/segments/init.mp4' for writing
+2025-12-29T20:44:53.280729Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_5/segments segment_duration_secs=3
+2025-12-29T20:44:53.291301Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_5/segments
+[h264_videotoolbox @ 0x152614400] Color range not set for nv12. Using MPEG range.
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_5/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_5/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_5/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:44:58.211865Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 300 frames
+2025-12-29T20:44:58.211903Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:58.211964Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:44:58.211978Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:44:58.718244Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_5/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:44:58.733740Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_5/segments/segment_001.m4s with 3620296 bytes, estimated duration 5.502497792s
+2025-12-29T20:44:58.737597Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_5/segments/segment_002.m4s with 2272858 bytes, estimated duration 3s
+       ✓ Frame count: 296/300
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.53s
+
+[7/60] 1920x1080@24fps + NV12 + 48kHz + stereo
+2025-12-29T20:44:58.795231Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_6/segments
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_6/segments/init.mp4' for writing
+2025-12-29T20:44:58.833825Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_6/segments segment_duration_secs=3
+2025-12-29T20:44:58.842360Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_6/segments
+[h264_videotoolbox @ 0x15400cbf0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_6/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_6/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_6/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:45:03.775931Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 120 frames
+2025-12-29T20:45:03.775966Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:03.776022Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:03.776042Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:04.297409Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_6/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:04.311621Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_6/segments/segment_001.m4s with 39395 bytes, estimated duration 5.502722542s
+2025-12-29T20:45:04.316570Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_6/segments/segment_002.m4s with 26327 bytes, estimated duration 3s
+       ✓ Frame count: 120/120
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.53s
+
+[8/60] 1920x1080@24fps + BGRA + 48kHz + stereo
+2025-12-29T20:45:04.352710Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_7/segments
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_7/segments/init.mp4' for writing
+2025-12-29T20:45:04.405973Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_7/segments segment_duration_secs=3
+2025-12-29T20:45:04.414481Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_7/segments
+[h264_videotoolbox @ 0x15270bf10] Color range not set for nv12. Using MPEG range.
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_7/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_7/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_7/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:45:09.337089Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 120 frames
+2025-12-29T20:45:09.337128Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:09.337202Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:09.337216Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:09.855702Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152707d80] Opening '/tmp/cap-synthetic-tests/test_7/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:09.876722Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_7/segments/segment_001.m4s with 4515774 bytes, estimated duration 5.506316958s
+2025-12-29T20:45:09.880617Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_7/segments/segment_002.m4s with 2858738 bytes, estimated duration 3s
+       ✓ Frame count: 120/120
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.54s
+
+[9/60] 1920x1080@30fps + NV12 + 48kHz + stereo
+2025-12-29T20:45:09.982949Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_8/segments
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_8/segments/init.mp4' for writing
+2025-12-29T20:45:10.018518Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_8/segments segment_duration_secs=3
+2025-12-29T20:45:10.028013Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_8/segments
+[h264_videotoolbox @ 0x15400cbf0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_8/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_8/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_8/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:45:14.971253Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 150 frames
+2025-12-29T20:45:14.971290Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:14.971343Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:14.971357Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:15.484394Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x15400c980] Opening '/tmp/cap-synthetic-tests/test_8/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:15.494162Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_8/segments/segment_001.m4s with 52473 bytes, estimated duration 5.501815083s
+2025-12-29T20:45:15.498075Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_8/segments/segment_002.m4s with 29584 bytes, estimated duration 3s
+       ✓ Frame count: 150/150
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.53s
+
+[10/60] 1920x1080@30fps + BGRA + 48kHz + stereo
+2025-12-29T20:45:15.539799Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_9/segments
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_9/segments/init.mp4' for writing
+2025-12-29T20:45:15.591037Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_9/segments segment_duration_secs=3
+2025-12-29T20:45:15.600507Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_9/segments
+[h264_videotoolbox @ 0x152614400] Color range not set for nv12. Using MPEG range.
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_9/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_9/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_9/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:45:20.533401Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 150 frames
+2025-12-29T20:45:20.533449Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:20.533535Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:20.533551Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:21.041314Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x1526136d0] Opening '/tmp/cap-synthetic-tests/test_9/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:21.063196Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_9/segments/segment_001.m4s with 5204656 bytes, estimated duration 5.502201791s
+2025-12-29T20:45:21.068954Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_9/segments/segment_002.m4s with 2981951 bytes, estimated duration 3s
+       ✓ Frame count: 150/150
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.55s
+
+[11/60] 1920x1080@60fps + NV12 + 48kHz + stereo
+2025-12-29T20:45:21.179075Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_10/segments
+2025-12-29T20:45:23.612144Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 129 dropped
+2025-12-29T20:45:23.630867Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 130 dropped
+2025-12-29T20:45:23.649587Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 131 dropped
+2025-12-29T20:45:23.668119Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 132 dropped
+2025-12-29T20:45:23.686953Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 133 dropped
+2025-12-29T20:45:23.706275Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 134 dropped
+2025-12-29T20:45:23.725510Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 135 dropped
+2025-12-29T20:45:23.744089Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 136 dropped
+2025-12-29T20:45:23.762669Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 137 dropped
+2025-12-29T20:45:23.781163Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 138 dropped
+2025-12-29T20:45:23.800109Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 139 dropped
+2025-12-29T20:45:23.818728Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 140 dropped
+2025-12-29T20:45:23.837038Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 141 dropped
+2025-12-29T20:45:23.855361Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 142 dropped
+2025-12-29T20:45:23.873772Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 143 dropped
+2025-12-29T20:45:23.892566Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 144 dropped
+2025-12-29T20:45:23.910988Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 145 dropped
+2025-12-29T20:45:23.929237Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 146 dropped
+2025-12-29T20:45:23.947496Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 147 dropped
+2025-12-29T20:45:23.965847Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 148 dropped
+2025-12-29T20:45:23.984447Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 149 dropped
+2025-12-29T20:45:24.003286Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 150 dropped
+2025-12-29T20:45:24.022027Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 151 dropped
+2025-12-29T20:45:24.040483Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 152 dropped
+2025-12-29T20:45:24.058954Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 153 dropped
+2025-12-29T20:45:24.077374Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 154 dropped
+2025-12-29T20:45:24.095759Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 155 dropped
+2025-12-29T20:45:24.114217Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 156 dropped
+2025-12-29T20:45:24.132650Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 157 dropped
+2025-12-29T20:45:24.150899Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 158 dropped
+2025-12-29T20:45:24.169179Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 159 dropped
+2025-12-29T20:45:24.187508Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 160 dropped
+2025-12-29T20:45:24.205873Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 161 dropped
+2025-12-29T20:45:24.224251Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 162 dropped
+2025-12-29T20:45:24.242765Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 163 dropped
+2025-12-29T20:45:24.262102Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 164 dropped
+2025-12-29T20:45:24.281146Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 165 dropped
+2025-12-29T20:45:24.299436Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 166 dropped
+2025-12-29T20:45:24.317815Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 167 dropped
+2025-12-29T20:45:24.336184Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 168 dropped
+2025-12-29T20:45:24.354584Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 169 dropped
+2025-12-29T20:45:24.373123Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 170 dropped
+2025-12-29T20:45:24.391682Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 171 dropped
+2025-12-29T20:45:24.410086Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 172 dropped
+2025-12-29T20:45:24.428459Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 173 dropped
+2025-12-29T20:45:24.446846Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 174 dropped
+2025-12-29T20:45:24.465255Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 175 dropped
+2025-12-29T20:45:24.483592Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 176 dropped
+2025-12-29T20:45:24.501949Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 177 dropped
+2025-12-29T20:45:24.520330Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 178 dropped
+2025-12-29T20:45:24.538545Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 179 dropped
+2025-12-29T20:45:24.556879Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 180 dropped
+2025-12-29T20:45:24.575533Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 181 dropped
+2025-12-29T20:45:24.594141Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 182 dropped
+2025-12-29T20:45:24.612994Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 183 dropped
+2025-12-29T20:45:24.631941Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 184 dropped
+2025-12-29T20:45:24.650952Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 185 dropped
+2025-12-29T20:45:24.669488Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 186 dropped
+2025-12-29T20:45:24.688141Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 187 dropped
+2025-12-29T20:45:24.706552Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 188 dropped
+2025-12-29T20:45:24.724983Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 189 dropped
+2025-12-29T20:45:24.743756Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 190 dropped
+2025-12-29T20:45:24.762283Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 191 dropped
+2025-12-29T20:45:24.780957Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 192 dropped
+2025-12-29T20:45:24.799472Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 193 dropped
+2025-12-29T20:45:24.818023Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 194 dropped
+2025-12-29T20:45:24.836654Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 195 dropped
+2025-12-29T20:45:24.855093Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 196 dropped
+2025-12-29T20:45:24.873531Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 197 dropped
+2025-12-29T20:45:24.891938Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 198 dropped
+2025-12-29T20:45:24.910334Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 199 dropped
+2025-12-29T20:45:24.928785Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 200 dropped
+2025-12-29T20:45:24.947227Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 201 dropped
+2025-12-29T20:45:24.965473Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 202 dropped
+2025-12-29T20:45:24.983755Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 203 dropped
+2025-12-29T20:45:25.002258Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 204 dropped
+2025-12-29T20:45:25.020664Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 205 dropped
+2025-12-29T20:45:25.039243Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 206 dropped
+2025-12-29T20:45:25.057612Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 207 dropped
+2025-12-29T20:45:25.075855Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 208 dropped
+2025-12-29T20:45:25.094236Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 209 dropped
+2025-12-29T20:45:25.112645Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 210 dropped
+2025-12-29T20:45:25.130996Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 211 dropped
+2025-12-29T20:45:25.149328Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 212 dropped
+2025-12-29T20:45:25.168000Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 213 dropped
+2025-12-29T20:45:25.186545Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 214 dropped
+2025-12-29T20:45:25.205290Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 215 dropped
+2025-12-29T20:45:25.224265Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 216 dropped
+2025-12-29T20:45:25.243021Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 217 dropped
+2025-12-29T20:45:25.261947Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 218 dropped
+2025-12-29T20:45:25.280268Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 219 dropped
+2025-12-29T20:45:25.298515Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 220 dropped
+2025-12-29T20:45:25.316891Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 221 dropped
+2025-12-29T20:45:25.335218Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 222 dropped
+2025-12-29T20:45:25.353574Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 223 dropped
+2025-12-29T20:45:25.371944Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 224 dropped
+2025-12-29T20:45:25.390251Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 225 dropped
+2025-12-29T20:45:25.408596Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 226 dropped
+2025-12-29T20:45:25.426911Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 227 dropped
+2025-12-29T20:45:25.445520Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 228 dropped
+2025-12-29T20:45:25.463755Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 229 dropped
+2025-12-29T20:45:25.481980Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 230 dropped
+2025-12-29T20:45:25.500473Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 231 dropped
+2025-12-29T20:45:25.518776Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 232 dropped
+2025-12-29T20:45:25.537088Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 233 dropped
+2025-12-29T20:45:25.555346Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 234 dropped
+2025-12-29T20:45:25.573618Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 235 dropped
+2025-12-29T20:45:25.591900Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 236 dropped
+2025-12-29T20:45:25.610186Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 237 dropped
+2025-12-29T20:45:25.628492Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 238 dropped
+2025-12-29T20:45:25.646792Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 239 dropped
+2025-12-29T20:45:25.665086Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 240 dropped
+2025-12-29T20:45:25.683366Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 241 dropped
+2025-12-29T20:45:25.701752Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 242 dropped
+2025-12-29T20:45:25.720075Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 243 dropped
+2025-12-29T20:45:25.738361Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 244 dropped
+2025-12-29T20:45:25.756647Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 245 dropped
+2025-12-29T20:45:25.775072Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 246 dropped
+2025-12-29T20:45:25.793422Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 247 dropped
+2025-12-29T20:45:25.811972Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 248 dropped
+2025-12-29T20:45:25.830285Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 249 dropped
+2025-12-29T20:45:25.848593Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 250 dropped
+2025-12-29T20:45:25.866862Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 251 dropped
+2025-12-29T20:45:25.885130Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 252 dropped
+2025-12-29T20:45:25.903384Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 253 dropped
+2025-12-29T20:45:25.921621Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 254 dropped
+2025-12-29T20:45:25.939813Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 255 dropped
+2025-12-29T20:45:25.957999Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 256 dropped
+2025-12-29T20:45:25.976198Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 257 dropped
+2025-12-29T20:45:25.994396Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 258 dropped
+2025-12-29T20:45:26.012785Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 259 dropped
+2025-12-29T20:45:26.030974Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 260 dropped
+2025-12-29T20:45:26.049426Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 261 dropped
+2025-12-29T20:45:26.068146Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 262 dropped
+2025-12-29T20:45:26.086557Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 263 dropped
+2025-12-29T20:45:26.105459Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 264 dropped
+2025-12-29T20:45:26.124208Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 265 dropped
+2025-12-29T20:45:26.142839Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 266 dropped
+2025-12-29T20:45:26.162010Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 267 dropped
+2025-12-29T20:45:26.181229Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 268 dropped
+2025-12-29T20:45:26.200883Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 269 dropped
+2025-12-29T20:45:26.219648Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 270 dropped
+2025-12-29T20:45:26.238382Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 271 dropped
+2025-12-29T20:45:26.256964Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 272 dropped
+2025-12-29T20:45:26.275691Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 273 dropped
+2025-12-29T20:45:26.294319Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 274 dropped
+2025-12-29T20:45:26.312686Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 275 dropped
+2025-12-29T20:45:26.331073Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 276 dropped
+2025-12-29T20:45:26.349604Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 277 dropped
+2025-12-29T20:45:26.368077Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 278 dropped
+2025-12-29T20:45:26.386342Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 279 dropped
+2025-12-29T20:45:26.404602Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 280 dropped
+2025-12-29T20:45:26.423076Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 281 dropped
+2025-12-29T20:45:26.441370Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 282 dropped
+2025-12-29T20:45:26.459746Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 283 dropped
+2025-12-29T20:45:26.478202Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 284 dropped
+2025-12-29T20:45:26.496731Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 285 dropped
+2025-12-29T20:45:26.515230Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 286 dropped
+2025-12-29T20:45:26.533616Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 287 dropped
+2025-12-29T20:45:26.552205Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 288 dropped
+2025-12-29T20:45:26.570961Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 289 dropped
+2025-12-29T20:45:26.589282Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 290 dropped
+2025-12-29T20:45:26.607945Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 291 dropped
+2025-12-29T20:45:26.626248Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 292 dropped
+2025-12-29T20:45:26.644649Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 293 dropped
+2025-12-29T20:45:26.663044Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 294 dropped
+2025-12-29T20:45:26.681303Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:26.681519Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 295 frames
+2025-12-29T20:45:26.681540Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152615d00] Opening '/tmp/cap-synthetic-tests/test_10/segments/init.mp4' for writing
+2025-12-29T20:45:26.699522Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_10/segments segment_duration_secs=3
+2025-12-29T20:45:26.710038Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_10/segments
+[h264_videotoolbox @ 0x152615f70] Color range not set for nv12. Using MPEG range.
+2025-12-29T20:45:26.725924Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+[dash @ 0x152615d00] Opening '/tmp/cap-synthetic-tests/test_10/segments/segment_001.m4s.tmp' for writing
+2025-12-29T20:45:26.738524Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152615d00] Opening '/tmp/cap-synthetic-tests/test_10/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:26.800976Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_10/segments/segment_001.m4s with 2321 bytes, estimated duration 5.559694875s
+       ✗ FAILED: Validation failed: frame_count: 4/300; duration: 0.00s/5.00s
+       Duration: 5.64s
+
+[12/60] 1920x1080@60fps + BGRA + 48kHz + stereo
+2025-12-29T20:45:26.829294Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_11/segments
+2025-12-29T20:45:30.153386Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 129 dropped
+2025-12-29T20:45:30.178778Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 130 dropped
+2025-12-29T20:45:30.203835Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 131 dropped
+2025-12-29T20:45:30.228771Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 132 dropped
+2025-12-29T20:45:30.253975Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 133 dropped
+2025-12-29T20:45:30.278824Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 134 dropped
+2025-12-29T20:45:30.303055Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 135 dropped
+2025-12-29T20:45:30.327606Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 136 dropped
+2025-12-29T20:45:30.352301Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 137 dropped
+2025-12-29T20:45:30.377116Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 138 dropped
+2025-12-29T20:45:30.401194Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 139 dropped
+2025-12-29T20:45:30.425719Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 140 dropped
+2025-12-29T20:45:30.450152Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 141 dropped
+2025-12-29T20:45:30.475690Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 142 dropped
+2025-12-29T20:45:30.500384Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 143 dropped
+2025-12-29T20:45:30.525048Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 144 dropped
+2025-12-29T20:45:30.550018Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 145 dropped
+2025-12-29T20:45:30.574233Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 146 dropped
+2025-12-29T20:45:30.598419Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 147 dropped
+2025-12-29T20:45:30.622850Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 148 dropped
+2025-12-29T20:45:30.647508Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 149 dropped
+2025-12-29T20:45:30.672405Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 150 dropped
+2025-12-29T20:45:30.697059Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 151 dropped
+2025-12-29T20:45:30.721348Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 152 dropped
+2025-12-29T20:45:30.745589Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 153 dropped
+2025-12-29T20:45:30.769881Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 154 dropped
+2025-12-29T20:45:30.794895Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 155 dropped
+2025-12-29T20:45:30.819274Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 156 dropped
+2025-12-29T20:45:30.843615Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 157 dropped
+2025-12-29T20:45:30.867899Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 158 dropped
+2025-12-29T20:45:30.892471Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 159 dropped
+2025-12-29T20:45:30.916780Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 160 dropped
+2025-12-29T20:45:30.941034Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 161 dropped
+2025-12-29T20:45:30.965259Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 162 dropped
+2025-12-29T20:45:30.989593Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 163 dropped
+2025-12-29T20:45:31.014081Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 164 dropped
+2025-12-29T20:45:31.038499Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 165 dropped
+2025-12-29T20:45:31.062660Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 166 dropped
+2025-12-29T20:45:31.087061Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 167 dropped
+2025-12-29T20:45:31.111675Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 168 dropped
+2025-12-29T20:45:31.135815Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 169 dropped
+2025-12-29T20:45:31.159937Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 170 dropped
+2025-12-29T20:45:31.184532Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 171 dropped
+2025-12-29T20:45:31.209083Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 172 dropped
+2025-12-29T20:45:31.233523Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 173 dropped
+2025-12-29T20:45:31.257690Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 174 dropped
+2025-12-29T20:45:31.281956Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 175 dropped
+2025-12-29T20:45:31.306129Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 176 dropped
+2025-12-29T20:45:31.330295Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 177 dropped
+2025-12-29T20:45:31.354574Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 178 dropped
+2025-12-29T20:45:31.378946Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 179 dropped
+2025-12-29T20:45:31.402961Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 180 dropped
+2025-12-29T20:45:31.427321Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 181 dropped
+2025-12-29T20:45:31.451626Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 182 dropped
+2025-12-29T20:45:31.476316Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 183 dropped
+2025-12-29T20:45:31.500826Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 184 dropped
+2025-12-29T20:45:31.525400Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 185 dropped
+2025-12-29T20:45:31.549658Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 186 dropped
+2025-12-29T20:45:31.574178Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 187 dropped
+2025-12-29T20:45:31.598454Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 188 dropped
+2025-12-29T20:45:31.622475Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 189 dropped
+2025-12-29T20:45:31.646555Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 190 dropped
+2025-12-29T20:45:31.670670Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 191 dropped
+2025-12-29T20:45:31.694958Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 192 dropped
+2025-12-29T20:45:31.719142Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 193 dropped
+2025-12-29T20:45:31.742995Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 194 dropped
+2025-12-29T20:45:31.766822Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 195 dropped
+2025-12-29T20:45:31.790845Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 196 dropped
+2025-12-29T20:45:31.814761Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 197 dropped
+2025-12-29T20:45:31.839357Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 198 dropped
+2025-12-29T20:45:31.863430Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 199 dropped
+2025-12-29T20:45:31.887703Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 200 dropped
+2025-12-29T20:45:31.911708Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 201 dropped
+2025-12-29T20:45:31.935847Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 202 dropped
+2025-12-29T20:45:31.960001Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 203 dropped
+2025-12-29T20:45:31.984349Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 204 dropped
+2025-12-29T20:45:32.008660Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 205 dropped
+2025-12-29T20:45:32.032859Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 206 dropped
+2025-12-29T20:45:32.056962Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 207 dropped
+2025-12-29T20:45:32.081254Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 208 dropped
+2025-12-29T20:45:32.105488Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 209 dropped
+2025-12-29T20:45:32.129801Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 210 dropped
+2025-12-29T20:45:32.154199Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 211 dropped
+2025-12-29T20:45:32.178558Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 212 dropped
+2025-12-29T20:45:32.202723Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 213 dropped
+2025-12-29T20:45:32.226897Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 214 dropped
+2025-12-29T20:45:32.251120Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 215 dropped
+2025-12-29T20:45:32.275490Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 216 dropped
+2025-12-29T20:45:32.299789Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 217 dropped
+2025-12-29T20:45:32.324387Z  WARN {task="synthetic-video-generator"}: cap_recording::test_sources::video: Video frame channel full, frame 218 dropped
+2025-12-29T20:45:32.330831Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:32.348810Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 219 frames
+2025-12-29T20:45:32.348861Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_11/segments/init.mp4' for writing
+2025-12-29T20:45:32.368406Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_11/segments segment_duration_secs=3
+2025-12-29T20:45:32.379959Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_11/segments
+[h264_videotoolbox @ 0x154109ce0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_11/segments/segment_001.m4s.tmp' for writing
+2025-12-29T20:45:32.479681Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:32.485708Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x154105910] Opening '/tmp/cap-synthetic-tests/test_11/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:32.562163Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_11/segments/segment_001.m4s with 812670 bytes, estimated duration 5.656708584s
+       ✗ FAILED: Validation failed: frame_count: 7/300; duration: 3.00s/5.00s
+       Duration: 5.74s
+
+[13/60] 2560x1440@24fps + NV12 + 48kHz + stereo
+2025-12-29T20:45:32.663096Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_12/segments
+[dash @ 0x142604a00] Opening '/tmp/cap-synthetic-tests/test_12/segments/init.mp4' for writing
+2025-12-29T20:45:32.713990Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_12/segments segment_duration_secs=3
+2025-12-29T20:45:32.725210Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_12/segments
+[h264_videotoolbox @ 0x142604d90] Color range not set for nv12. Using MPEG range.
+[dash @ 0x142604a00] Opening '/tmp/cap-synthetic-tests/test_12/segments/segment_001.m4s.tmp' for writing
+[dash @ 0x142604a00] Opening '/tmp/cap-synthetic-tests/test_12/segments/dash_manifest.mpd.tmp' for writing
+[dash @ 0x142604a00] Opening '/tmp/cap-synthetic-tests/test_12/segments/segment_002.m4s.tmp' for writing
+2025-12-29T20:45:37.656119Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 120 frames
+2025-12-29T20:45:37.656165Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:37.656289Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:37.656369Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:38.165698Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x142604a00] Opening '/tmp/cap-synthetic-tests/test_12/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:38.192760Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_12/segments/segment_001.m4s with 65749 bytes, estimated duration 5.503251958s
+2025-12-29T20:45:38.198261Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_12/segments/segment_002.m4s with 41843 bytes, estimated duration 3s
+       ✓ Frame count: 116/120
+       ✓ A/V sync: 0.0ms offset (< 50ms threshold)
+       ✓ Fragment integrity: 2 segments OK
+       Duration: 5.56s
+
+[14/60] 2560x1440@24fps + BGRA + 48kHz + stereo
+2025-12-29T20:45:38.282698Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_13/segments
+2025-12-29T20:45:43.627273Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 120 frames
+2025-12-29T20:45:43.627327Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x154109200] Opening '/tmp/cap-synthetic-tests/test_13/segments/init.mp4' for writing
+2025-12-29T20:45:43.650089Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_13/segments segment_duration_secs=3
+2025-12-29T20:45:43.660642Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_13/segments
+[h264_videotoolbox @ 0x154109a50] Color range not set for nv12. Using MPEG range.
+[dash @ 0x154109200] Opening '/tmp/cap-synthetic-tests/test_13/segments/segment_001.m4s.tmp' for writing
+2025-12-29T20:45:43.704935Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:43.705939Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:43.784588Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x154109200] Opening '/tmp/cap-synthetic-tests/test_13/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:43.792874Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_13/segments/segment_001.m4s with 867238 bytes, estimated duration 5.502305209s
+       ✗ FAILED: Validation failed: frame_count: 4/120; duration: 7.00s/5.00s
+       Duration: 5.52s
+
+[15/60] 2560x1440@30fps + NV12 + 48kHz + stereo
+2025-12-29T20:45:43.882650Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_14/segments
+[dash @ 0x142604580] Opening '/tmp/cap-synthetic-tests/test_14/segments/init.mp4' for writing
+2025-12-29T20:45:43.933409Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_14/segments segment_duration_secs=3
+2025-12-29T20:45:43.941943Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_14/segments
+[h264_videotoolbox @ 0x15270b9b0] Color range not set for nv12. Using MPEG range.
+[dash @ 0x142604580] Opening '/tmp/cap-synthetic-tests/test_14/segments/segment_001.m4s.tmp' for writing
+2025-12-29T20:45:48.895947Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 150 frames
+2025-12-29T20:45:48.895993Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:48.896084Z  WARN {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Segmented muxer frame drop rate exceeds 5% threshold frames=29 drops=118 drop_rate_pct="80.3%" total_frames=29 total_drops=118
+2025-12-29T20:45:48.896112Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:48.896764Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:49.384405Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x142604580] Opening '/tmp/cap-synthetic-tests/test_14/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:49.402142Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_14/segments/segment_001.m4s with 29431 bytes, estimated duration 5.5031265s
+       ✗ FAILED: Validation failed: frame_count: 44/150; duration: 7.00s/5.00s
+       Duration: 5.54s
+
+[16/60] 2560x1440@30fps + BGRA + 48kHz + stereo
+2025-12-29T20:45:49.463604Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_15/segments
+2025-12-29T20:45:54.965321Z  INFO {task="capture-video"}: cap_recording::output_pipeline::core: Task finished successfully
+2025-12-29T20:45:54.981968Z  INFO {task="synthetic-video-generator"}: cap_recording::test_sources::video: Synthetic video generator finished after 126 frames
+2025-12-29T20:45:54.982004Z  INFO {task="synthetic-video-generator"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152711a00] Opening '/tmp/cap-synthetic-tests/test_15/segments/init.mp4' for writing
+2025-12-29T20:45:54.999702Z  INFO {task="mux-video"}: cap_enc_ffmpeg::mux::segmented_stream: Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments) path=/tmp/cap-synthetic-tests/test_15/segments segment_duration_secs=3
+2025-12-29T20:45:55.010168Z  INFO {task="mux-video"}: cap_recording::output_pipeline::ffmpeg: Started segmented video encoder path=/tmp/cap-synthetic-tests/test_15/segments
+[h264_videotoolbox @ 0x152712250] Color range not set for nv12. Using MPEG range.
+[dash @ 0x152711a00] Opening '/tmp/cap-synthetic-tests/test_15/segments/segment_001.m4s.tmp' for writing
+2025-12-29T20:45:55.052888Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: mux-video stream ended (rx closed)
+2025-12-29T20:45:55.055307Z  INFO {task="mux-video"}: cap_recording::output_pipeline::core: Task finished successfully
+[dash @ 0x152711a00] Opening '/tmp/cap-synthetic-tests/test_15/segments/dash_manifest.mpd.tmp' for writing
+2025-12-29T20:45:55.148944Z  INFO cap_enc_ffmpeg::mux::segmented_stream: Recovered orphaned segment /tmp/cap-synthetic-tests/test_15/segments/segment_001.m4s with 1029910 bytes, estimated duration 5.591957125s
+       ✗ FAILED: Validation failed: frame_count: 5/150; duration: 7.00s/5.00s
+       Duration: 5.70s
+
+[17/60] 2560x1440@60fps + NV12 + 48kHz + stereo
+2025-12-29T20:45:55.236837Z  INFO cap_recording::output_pipeline::core: Built pipeline for output /tmp/cap-synthetic-tests/test_16/segments
+^[^[^C

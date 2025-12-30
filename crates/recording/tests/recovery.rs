@@ -415,26 +415,26 @@ fn test_recovery_error_types() {
         "File not found",
     ));
     assert!(
-        format!("{}", io_error).contains("IO error"),
+        format!("{io_error}").contains("IO error"),
         "IO error should format correctly"
     );
 
     let no_segments_error = RecoveryError::NoRecoverableSegments;
     assert!(
-        format!("{}", no_segments_error).contains("No recoverable segments"),
+        format!("{no_segments_error}").contains("No recoverable segments"),
         "NoRecoverableSegments error should format correctly"
     );
 
     let meta_save_error = RecoveryError::MetaSave;
     assert!(
-        format!("{}", meta_save_error).contains("Meta save failed"),
+        format!("{meta_save_error}").contains("Meta save failed"),
         "MetaSave error should format correctly"
     );
 
     let unplayable_error =
         RecoveryError::UnplayableVideo("Display video has no frames".to_string());
     assert!(
-        format!("{}", unplayable_error).contains("not playable"),
+        format!("{unplayable_error}").contains("not playable"),
         "UnplayableVideo error should format correctly"
     );
 }
@@ -591,8 +591,7 @@ fn test_video_file_extension_check() {
 
         assert_eq!(
             is_video, expected_is_video,
-            "Path {:?} video check failed",
-            path
+            "Path {path:?} video check failed"
         );
     }
 }
@@ -695,8 +694,7 @@ fn test_multiple_segment_recovery_structure() {
             .join("display.mp4");
         assert!(
             display_path.exists(),
-            "Display video should exist for segment {}",
-            i
+            "Display video should exist for segment {i}"
         );
     }
 }
