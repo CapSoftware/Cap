@@ -113,7 +113,7 @@ pub enum UploadMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum RecordingMetaInner {
-    Studio(StudioRecordingMeta),
+    Studio(Box<StudioRecordingMeta>),
     Instant(InstantRecordingMeta),
 }
 

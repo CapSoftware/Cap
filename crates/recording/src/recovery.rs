@@ -745,7 +745,7 @@ impl RecoveryManager {
         let meta = Self::build_recovered_meta(recording)?;
 
         let mut recording_meta = recording.meta.clone();
-        recording_meta.inner = RecordingMetaInner::Studio(meta.clone());
+        recording_meta.inner = RecordingMetaInner::Studio(Box::new(meta.clone()));
         recording_meta
             .save_for_project()
             .map_err(|_| RecoveryError::MetaSave)?;

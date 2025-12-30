@@ -1166,13 +1166,13 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
         project_path: recording_dir.to_path_buf(),
         pretty_name,
         sharing: None,
-        inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
             },
-        }),
+        })),
         upload: None,
     };
 

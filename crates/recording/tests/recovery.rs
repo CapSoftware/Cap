@@ -103,7 +103,7 @@ impl TestRecording {
             pretty_name: "Test Recording".to_string(),
             sharing: None,
             upload: None,
-            inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
                 inner: MultipleSegments {
                     segments: vec![MultipleSegment {
                         display: VideoMeta {
@@ -120,7 +120,7 @@ impl TestRecording {
                     cursors: Cursors::default(),
                     status: Some(status),
                 },
-            }),
+            })),
         };
 
         let meta_path = self.project_path.join("recording-meta.json");
