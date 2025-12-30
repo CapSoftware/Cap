@@ -26,6 +26,7 @@ export type CanvasControls = {
 	resizeCanvas: (width: number, height: number) => void;
 	hasRenderedFrame: () => boolean;
 	initDirectCanvas: (canvas: HTMLCanvasElement) => void;
+	resetFrameState: () => void;
 };
 
 interface ReadyMessage {
@@ -141,6 +142,9 @@ export function createImageDataWS(
 		initDirectCanvas: (canvas: HTMLCanvasElement) => {
 			directCanvas = canvas;
 			directCtx = canvas.getContext("2d", { alpha: false });
+		},
+		resetFrameState: () => {
+			worker.postMessage({ type: "reset-frame-state" });
 		},
 	};
 

@@ -96,6 +96,7 @@ function Inner() {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
+		canvasControls,
 	} = useEditorContext();
 
 	const isExportMode = () => {
@@ -208,6 +209,7 @@ function Inner() {
 	const updateConfigAndRender = throttle(async (time: number) => {
 		const config = serializeProjectConfiguration(project);
 		await commands.updateProjectConfigInMemory(config);
+		canvasControls()?.resetFrameState();
 		renderFrame(time);
 	}, 1000 / FPS);
 	createEffect(

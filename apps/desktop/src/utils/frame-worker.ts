@@ -32,6 +32,10 @@ interface CleanupMessage {
 	type: "cleanup";
 }
 
+interface ResetFrameStateMessage {
+	type: "reset-frame-state";
+}
+
 interface ReadyMessage {
 	type: "ready";
 }
@@ -84,7 +88,8 @@ type IncomingMessage =
 	| InitCanvasMessage
 	| ResizeMessage
 	| InitSharedBufferMessage
-	| CleanupMessage;
+	| CleanupMessage
+	| ResetFrameStateMessage;
 
 interface FrameTiming {
 	frameNumber: number;
@@ -106,6 +111,7 @@ interface PendingFrameWebGPU {
 	height: number;
 	strideBytes: number;
 	timing: FrameTiming;
+	releaseCallback?: () => void;
 }
 
 type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPU;
@@ -209,6 +215,9 @@ function renderLoop() {
 					frame.height,
 					frame.strideBytes,
 				);
+				if (frame.releaseCallback) {
+					frame.releaseCallback();
+				}
 			} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
 				if (
 					offscreenCanvas.width !== frame.width ||
@@ -255,6 +264,12 @@ function stopRenderLoop() {
 
 function cleanup() {
 	stopRenderLoop();
+	if (
+		pendingRenderFrame?.mode === "webgpu" &&
+		pendingRenderFrame.releaseCallback
+	) {
+		pendingRenderFrame.releaseCallback();
+	}
 	if (webgpuRenderer) {
 		disposeWebGPU(webgpuRenderer);
 		webgpuRenderer = null;
@@ -394,7 +409,10 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
 
-async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
+async function processFrameBytes(
+	bytes: Uint8Array,
+	releaseCallback?: () => void,
+): Promise<DecodeResult> {
 	if (bytes.byteLength < 24) {
 		return {
 			type: "error",
@@ -440,6 +458,12 @@ async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
 
 	if (renderMode === "webgpu" && webgpuRenderer) {
 		if (pendingRenderFrame !== null) {
+			if (
+				pendingRenderFrame.mode === "webgpu" &&
+				pendingRenderFrame.releaseCallback
+			) {
+				pendingRenderFrame.releaseCallback();
+			}
 			frameDropCount++;
 			const now = performance.now();
 			if (now - lastFrameDropLogTime > 1000) {
@@ -460,6 +484,7 @@ async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
 			height,
 			strideBytes,
 			timing,
+			releaseCallback,
 		};
 		return { type: "frame-queued", width, height };
 	}
@@ -529,20 +554,37 @@ async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
 async function pollSharedBuffer(): Promise<void> {
 	if (!consumer || !useSharedBuffer) return;
 
-	if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
-		sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
-		sharedReadBufferSize = sharedReadBuffer.byteLength;
-	}
+	if (renderMode === "webgpu" && webgpuRenderer) {
+		const borrowed = consumer.borrow(50);
+		if (borrowed !== null) {
+			const result = await processFrameBytes(borrowed.data, borrowed.release);
+			if (result.type === "decoded") {
+				self.postMessage(result, { transfer: [result.bitmap] });
+			} else if (result.type === "frame-queued") {
+				self.postMessage(result);
+			} else if (result.type === "error") {
+				borrowed.release();
+				self.postMessage(result);
+			}
+		}
+	} else {
+		if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
+			sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
+			sharedReadBufferSize = sharedReadBuffer.byteLength;
+		}
 
-	const size = consumer.readInto(sharedReadBuffer, 50);
-	if (size != null && size > 0) {
-		const result = await processFrameBytes(sharedReadBuffer.subarray(0, size));
-		if (result.type === "decoded") {
-			self.postMessage(result, { transfer: [result.bitmap] });
-		} else if (result.type === "frame-queued") {
-			self.postMessage(result);
-		} else if (result.type === "error") {
-			self.postMessage(result);
+		const size = consumer.readInto(sharedReadBuffer, 50);
+		if (size != null && size > 0) {
+			const result = await processFrameBytes(
+				sharedReadBuffer.subarray(0, size),
+			);
+			if (result.type === "decoded") {
+				self.postMessage(result, { transfer: [result.bitmap] });
+			} else if (result.type === "frame-queued") {
+				self.postMessage(result);
+			} else if (result.type === "error") {
+				self.postMessage(result);
+			}
 		}
 	}
 
@@ -554,6 +596,12 @@ async function pollSharedBuffer(): Promise<void> {
 self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	if (e.data.type === "cleanup") {
 		cleanup();
+		return;
+	}
+
+	if (e.data.type === "reset-frame-state") {
+		lastRenderedFrameNumber = -1;
+		playbackStartTime = null;
 		return;
 	}
 
