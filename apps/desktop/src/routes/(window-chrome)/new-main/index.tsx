@@ -536,9 +536,9 @@ function Page() {
 		return windowTargets.data?.filter((target) => ids.has(target.id));
 	});
 
-	const [recordingsStore, setRecordingsStore] = createStore<RecordingWithPath[]>(
-		[],
-	);
+	const [recordingsStore, setRecordingsStore] = createStore<
+		RecordingWithPath[]
+	>([]);
 	createEffect(() => {
 		const data = recordings.data;
 		if (!data) {
