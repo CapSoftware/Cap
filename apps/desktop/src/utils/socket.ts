@@ -115,6 +115,14 @@ export function createImageDataWS(
 	let directCtx: CanvasRenderingContext2D | null = null;
 	let strideWorker: Worker | null = null;
 
+	let cachedDirectImageData: ImageData | null = null;
+	let cachedDirectWidth = 0;
+	let cachedDirectHeight = 0;
+
+	let cachedStrideImageData: ImageData | null = null;
+	let cachedStrideWidth = 0;
+	let cachedStrideHeight = 0;
+
 	function cleanup() {
 		if (isCleanedUp) return;
 		isCleanedUp = true;
@@ -136,6 +144,13 @@ export function createImageDataWS(
 		pendingFrame = null;
 		nextFrame = null;
 		isProcessing = false;
+
+		cachedDirectImageData = null;
+		cachedDirectWidth = 0;
+		cachedDirectHeight = 0;
+		cachedStrideImageData = null;
+		cachedStrideWidth = 0;
+		cachedStrideHeight = 0;
 
 		setIsConnected(false);
 	}
@@ -162,8 +177,17 @@ export function createImageDataWS(
 				}
 
 				const frameData = new Uint8ClampedArray(buffer);
-				const imageData = new ImageData(frameData, width, height);
-				directCtx.putImageData(imageData, 0, 0);
+				if (
+					!cachedStrideImageData ||
+					cachedStrideWidth !== width ||
+					cachedStrideHeight !== height
+				) {
+					cachedStrideImageData = new ImageData(width, height);
+					cachedStrideWidth = width;
+					cachedStrideHeight = height;
+				}
+				cachedStrideImageData.data.set(frameData);
+				directCtx.putImageData(cachedStrideImageData, 0, 0);
 
 				if (!hasRenderedFrame()) {
 					setHasRenderedFrame(true);
@@ -258,9 +282,8 @@ export function createImageDataWS(
 		const buffer = event.data as ArrayBuffer;
 
 		if (directCanvas && directCtx && strideWorker) {
-			const data = new Uint8Array(buffer);
-			if (data.length >= 24) {
-				const metadataOffset = data.length - 24;
+			if (buffer.byteLength >= 24) {
+				const metadataOffset = buffer.byteLength - 24;
 				const meta = new DataView(buffer, metadataOffset, 24);
 				const strideBytes = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
@@ -284,8 +307,17 @@ export function createImageDataWS(
 							directCanvas.height = height;
 						}
 
-						const imageData = new ImageData(frameData, width, height);
-						directCtx.putImageData(imageData, 0, 0);
+						if (
+							!cachedDirectImageData ||
+							cachedDirectWidth !== width ||
+							cachedDirectHeight !== height
+						) {
+							cachedDirectImageData = new ImageData(width, height);
+							cachedDirectWidth = width;
+							cachedDirectHeight = height;
+						}
+						cachedDirectImageData.data.set(frameData);
+						directCtx.putImageData(cachedDirectImageData, 0, 0);
 
 						if (!hasRenderedFrame()) {
 							setHasRenderedFrame(true);
