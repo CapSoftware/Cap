@@ -347,25 +347,12 @@ pub enum RecordingInputKind {
 #[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
 #[serde(tag = "variant")]
 pub enum RecordingEvent {
-    Countdown {
-        value: u32,
-    },
+    Countdown { value: u32 },
     Started,
     Stopped,
-    Failed {
-        error: String,
-    },
-    InputLost {
-        input: RecordingInputKind,
-    },
-    InputRestored {
-        input: RecordingInputKind,
-    },
-    DiskSpaceLow {
-        available_mb: u32,
-        threshold_mb: u32,
-        path: String,
-    },
+    Failed { error: String },
+    InputLost { input: RecordingInputKind },
+    InputRestored { input: RecordingInputKind },
 }
 
 #[derive(Serialize, Type)]
