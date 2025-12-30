@@ -86,11 +86,17 @@ type IncomingMessage =
 	| InitSharedBufferMessage
 	| CleanupMessage;
 
+interface FrameTiming {
+	frameNumber: number;
+	targetTimeNs: bigint;
+}
+
 interface PendingFrameCanvas2D {
 	mode: "canvas2d";
 	imageData: ImageData;
 	width: number;
 	height: number;
+	timing: FrameTiming;
 }
 
 interface PendingFrameWebGPU {
@@ -99,6 +105,7 @@ interface PendingFrameWebGPU {
 	width: number;
 	height: number;
 	strideBytes: number;
+	timing: FrameTiming;
 }
 
 type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPU;
@@ -138,6 +145,10 @@ let pendingRenderFrame: PendingFrame | null = null;
 let _rafId: number | null = null;
 let rafRunning = false;
 
+let playbackStartTime: number | null = null;
+let playbackStartFrameNumber = 0;
+let lastRenderedFrameNumber = -1;
+
 function renderLoop() {
 	_rafId = null;
 
@@ -153,32 +164,68 @@ function renderLoop() {
 
 	const frame = pendingRenderFrame;
 	if (frame) {
-		pendingRenderFrame = null;
+		const now = performance.now();
+		const frameNum = frame.timing.frameNumber;
 
-		if (frame.mode === "webgpu" && webgpuRenderer) {
-			renderFrameWebGPU(
-				webgpuRenderer,
-				frame.data,
-				frame.width,
-				frame.height,
-				frame.strideBytes,
-			);
-		} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
-			if (
-				offscreenCanvas.width !== frame.width ||
-				offscreenCanvas.height !== frame.height
-			) {
-				offscreenCanvas.width = frame.width;
-				offscreenCanvas.height = frame.height;
-			}
-			offscreenCtx.putImageData(frame.imageData, 0, 0);
+		const isSeek =
+			playbackStartTime !== null &&
+			lastRenderedFrameNumber >= 0 &&
+			(frameNum < lastRenderedFrameNumber ||
+				frameNum > lastRenderedFrameNumber + 10);
+
+		if (playbackStartTime === null || isSeek) {
+			playbackStartTime = now;
+			playbackStartFrameNumber = frameNum;
 		}
 
-		self.postMessage({
-			type: "frame-rendered",
-			width: frame.width,
-			height: frame.height,
-		} satisfies FrameRenderedMessage);
+		let shouldRender = true;
+
+		if (frame.timing.targetTimeNs > 0n) {
+			const elapsedMs = now - playbackStartTime;
+			const startFrameTimeNs =
+				(BigInt(playbackStartFrameNumber) * 1_000_000_000n) / 60n;
+			const adjustedTargetNs = frame.timing.targetTimeNs - startFrameTimeNs;
+			const targetMs = Number(adjustedTargetNs / 1_000_000n);
+			const diffMs = targetMs - elapsedMs;
+
+			if (diffMs > 8) {
+				shouldRender = false;
+			} else if (diffMs < -33) {
+				if (frameNum <= lastRenderedFrameNumber && !isSeek) {
+					shouldRender = false;
+				}
+			}
+		}
+
+		if (shouldRender) {
+			pendingRenderFrame = null;
+			lastRenderedFrameNumber = frameNum;
+
+			if (frame.mode === "webgpu" && webgpuRenderer) {
+				renderFrameWebGPU(
+					webgpuRenderer,
+					frame.data,
+					frame.width,
+					frame.height,
+					frame.strideBytes,
+				);
+			} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
+				if (
+					offscreenCanvas.width !== frame.width ||
+					offscreenCanvas.height !== frame.height
+				) {
+					offscreenCanvas.width = frame.width;
+					offscreenCanvas.height = frame.height;
+				}
+				offscreenCtx.putImageData(frame.imageData, 0, 0);
+			}
+
+			self.postMessage({
+				type: "frame-rendered",
+				width: frame.width,
+				height: frame.height,
+			} satisfies FrameRenderedMessage);
+		}
 	}
 
 	_rafId = requestAnimationFrame(renderLoop);
@@ -230,6 +277,9 @@ function cleanup() {
 	lastRawFrameHeight = 0;
 	frameDropCount = 0;
 	lastFrameDropLogTime = 0;
+	playbackStartTime = null;
+	playbackStartFrameNumber = 0;
+	lastRenderedFrameNumber = -1;
 }
 
 function initWorker() {
@@ -345,22 +395,25 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
 
 async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
-	if (bytes.byteLength < 12) {
+	if (bytes.byteLength < 24) {
 		return {
 			type: "error",
 			message: "Received frame too small to contain metadata",
 		};
 	}
 
-	const metadataOffset = bytes.byteOffset + bytes.byteLength - 12;
-	const meta = new DataView(bytes.buffer, metadataOffset, 12);
+	const metadataOffset = bytes.byteOffset + bytes.byteLength - 24;
+	const meta = new DataView(bytes.buffer, metadataOffset, 24);
 	const strideBytes = meta.getUint32(0, true);
 	const height = meta.getUint32(4, true);
 	const width = meta.getUint32(8, true);
+	const frameNumber = meta.getUint32(12, true);
+	const targetTimeNs = meta.getBigUint64(16, true);
+	const timing: FrameTiming = { frameNumber, targetTimeNs };
 	const frameData = new Uint8ClampedArray(
 		bytes.buffer,
 		bytes.byteOffset,
-		bytes.byteLength - 12,
+		bytes.byteLength - 24,
 	);
 
 	if (!width || !height) {
@@ -406,6 +459,7 @@ async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
 			width,
 			height,
 			strideBytes,
+			timing,
 		};
 		return { type: "frame-queued", width, height };
 	}
@@ -450,6 +504,7 @@ async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
 			imageData: cachedImageData,
 			width,
 			height,
+			timing,
 		};
 
 		return { type: "frame-queued", width, height };

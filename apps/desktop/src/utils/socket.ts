@@ -227,9 +227,9 @@ export function createImageDataWS(
 
 		if (directCanvas && directCtx) {
 			const data = new Uint8Array(buffer);
-			if (data.length >= 12) {
-				const metadataOffset = data.length - 12;
-				const meta = new DataView(buffer, metadataOffset, 12);
+			if (data.length >= 24) {
+				const metadataOffset = data.length - 24;
+				const meta = new DataView(buffer, metadataOffset, 24);
 				const strideBytes = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);

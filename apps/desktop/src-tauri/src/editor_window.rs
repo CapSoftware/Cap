@@ -4,8 +4,6 @@ use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use cap_rendering::RenderedFrame;
-
 use crate::{
     create_editor_instance_impl,
     frame_ws::{WSFrame, create_watch_frame_ws},
@@ -34,12 +32,16 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
             let width = frame.width;
             let height = frame.height;
             let stride = frame.padded_bytes_per_row;
+            let frame_number = frame.frame_number;
+            let target_time_ns = frame.target_time_ns;
             let data = frame.data;
             if let Err(e) = frame_tx.send(Some(WSFrame {
                 data,
                 width,
                 height,
                 stride,
+                frame_number,
+                target_time_ns,
                 created_at: Instant::now(),
             })) {
                 debug!("Frame receiver dropped during prewarm: {e}");
@@ -196,12 +198,16 @@ impl EditorInstances {
                         let width = frame.width;
                         let height = frame.height;
                         let stride = frame.padded_bytes_per_row;
+                        let frame_number = frame.frame_number;
+                        let target_time_ns = frame.target_time_ns;
                         let data = frame.data;
                         if let Err(e) = frame_tx.send(Some(WSFrame {
                             data,
                             width,
                             height,
                             stride,
+                            frame_number,
+                            target_time_ns,
                             created_at: Instant::now(),
                         })) {
                             debug!("Frame receiver dropped in get_or_create: {e}");

@@ -2,11 +2,20 @@ use std::time::Instant;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
-fn pack_frame_data(mut data: Vec<u8>, stride: u32, height: u32, width: u32) -> Vec<u8> {
-    data.reserve_exact(12);
+fn pack_frame_data(
+    mut data: Vec<u8>,
+    stride: u32,
+    height: u32,
+    width: u32,
+    frame_number: u32,
+    target_time_ns: u64,
+) -> Vec<u8> {
+    data.reserve_exact(24);
     data.extend_from_slice(&stride.to_le_bytes());
     data.extend_from_slice(&height.to_le_bytes());
     data.extend_from_slice(&width.to_le_bytes());
+    data.extend_from_slice(&frame_number.to_le_bytes());
+    data.extend_from_slice(&target_time_ns.to_le_bytes());
     data
 }
 
@@ -16,6 +25,8 @@ pub struct WSFrame {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    pub frame_number: u32,
+    pub target_time_ns: u64,
     #[allow(dead_code)]
     pub created_at: Instant,
 }
@@ -50,7 +61,14 @@ pub async fn create_watch_frame_ws(
         {
             let frame_opt = camera_rx.borrow().clone();
             if let Some(frame) = frame_opt {
-                let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                let packed = pack_frame_data(
+                    frame.data,
+                    frame.stride,
+                    frame.height,
+                    frame.width,
+                    frame.frame_number,
+                    frame.target_time_ns,
+                );
 
                 if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
@@ -83,7 +101,14 @@ pub async fn create_watch_frame_ws(
                     }
                     let frame_opt = camera_rx.borrow().clone();
                     if let Some(frame) = frame_opt {
-                        let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                        let packed = pack_frame_data(
+                            frame.data,
+                            frame.stride,
+                            frame.height,
+                            frame.width,
+                            frame.frame_number,
+                            frame.target_time_ns,
+                        );
 
                         if let Err(e) = socket.send(Message::Binary(packed)).await {
                             tracing::error!("Failed to send frame to socket: {:?}", e);
@@ -168,7 +193,14 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                 incoming_frame = camera_rx.recv() => {
                     match incoming_frame {
                         Ok(frame) => {
-                            let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                            let packed = pack_frame_data(
+                                frame.data,
+                                frame.stride,
+                                frame.height,
+                                frame.width,
+                                frame.frame_number,
+                                frame.target_time_ns,
+                            );
 
                             if let Err(e) = socket.send(Message::Binary(packed)).await {
                                 tracing::error!("Failed to send frame to socket: {:?}", e);

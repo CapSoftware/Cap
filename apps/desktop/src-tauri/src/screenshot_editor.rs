@@ -360,6 +360,8 @@ impl ScreenshotEditorInstances {
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
+                                    frame_number: frame.frame_number,
+                                    target_time_ns: frame.target_time_ns,
                                     created_at: Instant::now(),
                                 }));
                             }
