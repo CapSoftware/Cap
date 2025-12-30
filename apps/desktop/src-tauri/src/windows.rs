@@ -922,7 +922,6 @@ impl CapWindow {
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let def = self.def(app);
-        let should_protect = should_protect_window(app, def.title());
 
         let theme = GeneralSettingsStore::get(app)
             .ok()
