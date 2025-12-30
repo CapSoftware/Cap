@@ -58,7 +58,7 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
 
-        let segment_count = match meta {
+        let segment_count = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
         };
@@ -73,7 +73,7 @@ impl EditorInstance {
 
         if project.timeline.is_none() {
             warn!("Project config has no timeline, creating one from recording segments");
-            let timeline_segments = match meta {
+            let timeline_segments = match meta.as_ref() {
                 StudioRecordingMeta::SingleSegment { segment } => {
                     let display_path = recording_meta.path(&segment.display.path);
                     let duration = match Video::new(&display_path, 0.0) {
@@ -142,7 +142,7 @@ impl EditorInstance {
         if project.clips.is_empty() {
             let calibration_store = load_calibration_store(&recording_meta.project_path);
 
-            match meta {
+            match meta.as_ref() {
                 StudioRecordingMeta::MultipleSegments { inner } => {
                     project.clips = inner
                         .segments
@@ -177,15 +177,19 @@ impl EditorInstance {
 
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
-            meta,
+            meta.as_ref(),
         )?);
 
-        let segments = create_segments(&recording_meta, meta).await?;
+        let segments = create_segments(&recording_meta, meta.as_ref()).await?;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
-                .await
-                .map_err(|e| format!("Failed to create render constants: {e}"))?,
+            RenderVideoConstants::new(
+                &recordings.segments,
+                recording_meta.clone(),
+                (**meta).clone(),
+            )
+            .await
+            .map_err(|e| format!("Failed to create render constants: {e}"))?,
         );
 
         let renderer = Arc::new(editor::Renderer::spawn(
@@ -462,7 +466,7 @@ impl EditorInstance {
 
     fn get_studio_meta(&self) -> &StudioRecordingMeta {
         match &self.meta.inner {
-            RecordingMetaInner::Studio(meta) => meta,
+            RecordingMetaInner::Studio(meta) => meta.as_ref(),
             _ => panic!("Not a studio recording"),
         }
     }
