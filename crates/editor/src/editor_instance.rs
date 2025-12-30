@@ -140,15 +140,25 @@ impl EditorInstance {
         }
 
         if project.clips.is_empty() {
+            let calibration_store = load_calibration_store(&recording_meta.project_path);
+
             match meta {
                 StudioRecordingMeta::MultipleSegments { inner } => {
                     project.clips = inner
                         .segments
                         .iter()
                         .enumerate()
-                        .map(|(i, segment)| cap_project::ClipConfiguration {
-                            index: i as u32,
-                            offsets: segment.calculate_audio_offsets(),
+                        .map(|(i, segment)| {
+                            let calibration_offset = get_calibration_offset(
+                                segment.camera_device_id(),
+                                segment.mic_device_id(),
+                                &calibration_store,
+                            );
+                            cap_project::ClipConfiguration {
+                                index: i as u32,
+                                offsets: segment
+                                    .calculate_audio_offsets_with_calibration(calibration_offset),
+                            }
                         })
                         .collect();
                 }
@@ -572,5 +582,26 @@ pub async fn create_segments(
 
             Ok(segments)
         }
+    }
+}
+
+fn load_calibration_store(project_path: &std::path::Path) -> cap_audio::CalibrationStore {
+    let calibration_dir = project_path
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| project_path.to_path_buf());
+
+    cap_audio::CalibrationStore::load(&calibration_dir)
+}
+
+fn get_calibration_offset(
+    camera_id: Option<&str>,
+    mic_id: Option<&str>,
+    store: &cap_audio::CalibrationStore,
+) -> Option<f32> {
+    match (camera_id, mic_id) {
+        (Some(cam), Some(mic)) => store.get_offset(cam, mic).map(|o| o as f32),
+        _ => None,
     }
 }

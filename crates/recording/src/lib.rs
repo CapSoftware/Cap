@@ -10,6 +10,7 @@ pub mod recovery;
 pub mod screenshot;
 pub mod sources;
 pub mod studio_recording;
+pub mod sync_calibration;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_sources;
