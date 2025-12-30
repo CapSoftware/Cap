@@ -262,7 +262,7 @@ export function createImageDataWS(
 					}
 
 					const imageData = new ImageData(
-						frameData.buffer as unknown as ImageDataArray,
+						new Uint8ClampedArray(frameData.buffer),
 						width,
 						height,
 					);
