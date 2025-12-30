@@ -594,7 +594,7 @@ async function pollSharedBuffer(): Promise<void> {
 	}
 
 	if (!consumer.isShutdown()) {
-		setTimeout(pollSharedBuffer, 0);
+		setTimeout(pollSharedBuffer, 1);
 	}
 }
 
