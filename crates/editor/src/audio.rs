@@ -280,6 +280,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.frame_buffer.set_playhead(playhead, project);
     }
 
+    #[allow(dead_code)]
     pub fn current_playhead(&self) -> f64 {
         self.frame_buffer.elapsed_samples_to_playhead()
     }
