@@ -245,11 +245,21 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 		bytes.byteLength - 24,
 	).subarray(0, availableLength);
 
-	lastRenderedFrameNumber = frameNumber;
-	if (playbackStartTime === null || playbackStartTargetTimeNs === null) {
+	const isSeek =
+		lastRenderedFrameNumber >= 0 &&
+		(frameNumber < lastRenderedFrameNumber ||
+			frameNumber > lastRenderedFrameNumber + 30);
+
+	if (
+		playbackStartTime === null ||
+		playbackStartTargetTimeNs === null ||
+		isSeek
+	) {
 		playbackStartTime = performance.now();
 		playbackStartTargetTimeNs = targetTimeNs;
 	}
+
+	lastRenderedFrameNumber = frameNumber;
 
 	renderFrameWebGPU(webgpuRenderer, frameData, width, height, strideBytes);
 	release();
@@ -303,6 +313,7 @@ function queueFrameFromBytes(
 		availableLength,
 	} = meta;
 	const timing: FrameTiming = { frameNumber, targetTimeNs };
+	const expectedRowBytes = width * 4;
 
 	const frameData = new Uint8ClampedArray(
 		bytes.buffer,
@@ -837,6 +848,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	if (e.data.type === "reset-frame-state") {
 		lastRenderedFrameNumber = -1;
 		playbackStartTime = null;
+		playbackStartTargetTimeNs = null;
 		for (const frame of frameQueue) {
 			if (frame.mode === "webgpu" && frame.releaseCallback) {
 				frame.releaseCallback();
