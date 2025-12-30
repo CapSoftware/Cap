@@ -438,8 +438,7 @@ export function ExportPage() {
 				defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
 			});
 			if (!savePath) {
-				setExportState(reconcile({ type: "idle" }));
-				return;
+				throw new SilentError("Save dialog cancelled");
 			}
 
 			setExportState(reconcile({ action: "save", type: "starting" }));
