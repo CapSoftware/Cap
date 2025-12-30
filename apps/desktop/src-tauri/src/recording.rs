@@ -1423,14 +1423,14 @@ async fn handle_recording_finish(
 
                 match post_behaviour {
                     PostStudioRecordingBehaviour::OpenEditor => {
-                        let _ = ShowCapWindow::Editor {
+                        let _ = CapWindow::Editor {
                             project_path: recording_dir.clone(),
                         }
                         .show(app)
                         .await;
                     }
                     PostStudioRecordingBehaviour::ShowOverlay => {
-                        let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+                        let _ = CapWindow::RecordingsOverlay.show(app).await;
 
                         let app_clone = AppHandle::clone(app);
                         let recording_dir_clone = recording_dir.clone();

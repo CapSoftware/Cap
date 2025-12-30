@@ -934,8 +934,8 @@ impl CapWindow {
             })
             .unwrap_or(None);
 
-        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
-            .title(id.title())
+        let mut builder = WebviewWindow::builder(app, def.label(), WebviewUrl::App(url.into()))
+            .title(def.title())
             .visible(false)
             .accept_first_mouse(true)
             .shadow(true)
@@ -1027,8 +1027,8 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
 #[instrument(skip(app))]
 pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
-        if let Ok(id) = CapWindowDef::from_str(&label) {
-            let title = id.title();
+        if let Ok(def) = CapWindowDef::from_str(&label) {
+            let title = def.title();
             window
                 .set_content_protected(should_protect_window(&app, title))
                 .map_err(|e| e.to_string())?;
