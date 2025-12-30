@@ -139,6 +139,32 @@ impl EditorInstance {
             }
         }
 
+        if project.clips.is_empty() {
+            match meta {
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    project.clips = inner
+                        .segments
+                        .iter()
+                        .enumerate()
+                        .map(|(i, segment)| cap_project::ClipConfiguration {
+                            index: i as u32,
+                            offsets: segment.calculate_audio_offsets(),
+                        })
+                        .collect();
+                }
+                StudioRecordingMeta::SingleSegment { .. } => {
+                    project.clips = vec![cap_project::ClipConfiguration {
+                        index: 0,
+                        offsets: cap_project::ClipOffsets::default(),
+                    }];
+                }
+            }
+
+            if let Err(e) = project.write(&recording_meta.project_path) {
+                warn!("Failed to save auto-generated clip offsets: {}", e);
+            }
+        }
+
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
             meta,

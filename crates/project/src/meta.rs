@@ -10,8 +10,8 @@ use std::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
-    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS, CaptionsData, CursorEvents, CursorImage,
+    ProjectConfiguration, XY,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -407,6 +407,40 @@ impl MultipleSegment {
         }
 
         Some(value)
+    }
+
+    pub fn calculate_audio_offsets(&self) -> crate::ClipOffsets {
+        let latest = match self.latest_start_time() {
+            Some(t) => t,
+            None => return crate::ClipOffsets::default(),
+        };
+
+        let camera_offset = self
+            .camera
+            .as_ref()
+            .and_then(|c| c.start_time)
+            .map(|t| (latest - t) as f32)
+            .unwrap_or(0.0);
+
+        let mic_offset = self
+            .mic
+            .as_ref()
+            .and_then(|m| m.start_time)
+            .map(|t| (latest - t) as f32)
+            .unwrap_or(0.0);
+
+        let system_audio_offset = self
+            .system_audio
+            .as_ref()
+            .and_then(|s| s.start_time)
+            .map(|t| (latest - t) as f32)
+            .unwrap_or(0.0);
+
+        crate::ClipOffsets {
+            camera: camera_offset,
+            mic: mic_offset,
+            system_audio: system_audio_offset,
+        }
     }
 }
 
