@@ -29,6 +29,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "instant" });
+							commands.setRecordingMode("instant");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "instant"
@@ -51,6 +52,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "studio" });
+							commands.setRecordingMode("studio");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "studio"
@@ -73,6 +75,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "screenshot" });
+							commands.setRecordingMode("screenshot");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "screenshot"
@@ -90,6 +93,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "instant" });
+							commands.setRecordingMode("instant");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "instant"
@@ -103,6 +107,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "studio" });
+							commands.setRecordingMode("studio");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "studio"
@@ -116,6 +121,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "screenshot" });
+							commands.setRecordingMode("screenshot");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "screenshot"

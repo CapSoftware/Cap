@@ -865,6 +865,7 @@ function RecordingControls(props: {
 					text: "Studio Mode",
 					action: () => {
 						setOptions("mode", "studio");
+						commands.setRecordingMode("studio");
 					},
 					checked: rawOptions.mode === "studio",
 				}),
@@ -872,6 +873,7 @@ function RecordingControls(props: {
 					text: "Instant Mode",
 					action: () => {
 						setOptions("mode", "instant");
+						commands.setRecordingMode("instant");
 					},
 					checked: rawOptions.mode === "instant",
 				}),
@@ -879,6 +881,7 @@ function RecordingControls(props: {
 					text: "Screenshot Mode",
 					action: () => {
 						setOptions("mode", "screenshot");
+						commands.setRecordingMode("screenshot");
 					},
 					checked: rawOptions.mode === "screenshot",
 				}),
