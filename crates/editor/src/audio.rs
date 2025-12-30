@@ -1,13 +1,13 @@
 use cap_audio::{
-    AudioData, AudioRendererTrack, FromSampleBytes, StereoMode, cast_f32_slice_to_bytes,
+    cast_f32_slice_to_bytes, AudioData, AudioRendererTrack, FromSampleBytes, StereoMode,
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, TimelineConfiguration};
-use ffmpeg::{ChannelLayout, format as avformat, frame::Audio as FFAudio, software::resampling};
+use ffmpeg::{format as avformat, frame::Audio as FFAudio, software::resampling, ChannelLayout};
 use ringbuf::{
-    HeapRb,
     traits::{Consumer, Observer, Producer},
+    HeapRb,
 };
 use std::sync::Arc;
 
@@ -132,8 +132,9 @@ impl AudioRenderer {
         };
 
         let cursor_diff = new_cursor.samples as isize - self.cursor.samples as isize;
+        let frame_samples = (AudioData::SAMPLE_RATE as usize) / 30;
         if new_cursor.clip_index != self.cursor.clip_index
-            || cursor_diff.unsigned_abs() > (AudioData::SAMPLE_RATE as usize) / 5
+            || cursor_diff.unsigned_abs() > frame_samples
         {
             self.cursor = new_cursor;
         }
@@ -184,9 +185,22 @@ impl AudioRenderer {
             return None;
         }
 
+        let start = self.cursor;
+
+        let offsets = project
+            .clips
+            .iter()
+            .find(|c| c.index == start.clip_index)
+            .map(|c| c.offsets)
+            .unwrap_or_default();
+
         let max_samples = tracks
             .iter()
-            .map(|t| t.data().sample_count())
+            .map(|t| {
+                let track_offset_samples = (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize;
+                let available = t.data().sample_count() as isize - track_offset_samples;
+                available.max(0) as usize
+            })
             .max()
             .unwrap();
 
@@ -197,31 +211,24 @@ impl AudioRenderer {
 
         let samples = samples.min(max_samples - self.cursor.samples);
 
-        let start = self.cursor;
-
         let mut ret = vec![0.0; samples * 2];
 
         let track_datas = tracks
             .iter()
-            .map(|t| {
-                let offsets = project
-                    .clips
-                    .iter()
-                    .find(|c| c.index == start.clip_index)
-                    .map(|c| c.offsets)
-                    .unwrap_or_default();
-
-                AudioRendererTrack {
-                    data: t.data().as_ref(),
-                    gain: if project.audio.mute {
+            .map(|t| AudioRendererTrack {
+                data: t.data().as_ref(),
+                gain: if project.audio.mute {
+                    f32::NEG_INFINITY
+                } else {
+                    let g = t.gain(&project.audio);
+                    if g < -30.0 {
                         f32::NEG_INFINITY
                     } else {
-                        let g = t.gain(&project.audio);
-                        if g < -30.0 { f32::NEG_INFINITY } else { g }
-                    },
-                    stereo_mode: t.stereo_mode(&project.audio),
-                    offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
-                }
+                        g
+                    }
+                },
+                stereo_mode: t.stereo_mode(&project.audio),
+                offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
             })
             .collect::<Vec<_>>();
 

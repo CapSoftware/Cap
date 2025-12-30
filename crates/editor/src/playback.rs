@@ -934,7 +934,7 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
-            const SYNC_THRESHOLD_SECS: f64 = 0.15;
+            const SYNC_THRESHOLD_SECS: f64 = 0.05;
 
             let stream_result = device.build_output_stream(
                 &config,
