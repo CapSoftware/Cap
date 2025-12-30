@@ -237,7 +237,11 @@ function renderLoop() {
 		}
 	}
 
-	_rafId = requestAnimationFrame(renderLoop);
+	if (pendingRenderFrame !== null) {
+		_rafId = requestAnimationFrame(renderLoop);
+	} else {
+		rafRunning = false;
+	}
 }
 
 function startRenderLoop() {
@@ -486,6 +490,7 @@ async function processFrameBytes(
 			timing,
 			releaseCallback,
 		};
+		startRenderLoop();
 		return { type: "frame-queued", width, height };
 	}
 
@@ -531,7 +536,7 @@ async function processFrameBytes(
 			height,
 			timing,
 		};
-
+		startRenderLoop();
 		return { type: "frame-queued", width, height };
 	}
 
