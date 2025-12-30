@@ -252,8 +252,10 @@ function advanceReadIndexCAS(
 	readIdx: number,
 	nextIdx: number,
 ): void {
+	const MAX_ADVANCE_RETRIES = 16;
 	let expectedIdx = readIdx;
-	while (true) {
+
+	for (let attempt = 0; attempt < MAX_ADVANCE_RETRIES; attempt++) {
 		const exchanged = Atomics.compareExchange(
 			controlView,
 			CONTROL_READ_INDEX,
