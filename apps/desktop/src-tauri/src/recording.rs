@@ -1213,6 +1213,7 @@ pub async fn take_screenshot(
         path: relative_path,
         fps: 0,
         start_time: Some(0.0),
+        device_id: None,
     };
 
     let segment = cap_project::SingleSegment {

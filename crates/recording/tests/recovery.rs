@@ -110,6 +110,7 @@ impl TestRecording {
                             path: RelativePathBuf::from("content/segments/segment-0/display.mp4"),
                             fps: 30,
                             start_time: None,
+                            device_id: None,
                         },
                         camera: None,
                         mic: None,

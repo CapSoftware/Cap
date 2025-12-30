@@ -150,15 +150,5 @@ pub fn analyze_recording_for_sync(
         analyzer.process_audio_samples(chunk, time);
     }
 
-    let frame_count = (video.duration * fps).ceil() as u32;
-    let sample_interval = (frame_count / 100).max(1);
-
-    for frame_idx in (0..frame_count).step_by(sample_interval as usize) {
-        let time = frame_idx as f64 / fps;
-        if let Some(frame) = video.get_frame(time as f32) {
-            analyzer.process_video_frame(&frame.data, time);
-        }
-    }
-
     analyzer.finalize_and_save()
 }

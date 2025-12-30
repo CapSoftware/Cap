@@ -903,6 +903,7 @@ impl AudioPlayback {
             let latency_config = LatencyCorrectionConfig::default();
             let mut latency_corrector = LatencyCorrector::new(static_latency_hint, latency_config);
             let initial_compensation_secs = latency_corrector.initial_compensation_secs();
+            let device_sample_rate = sample_rate;
 
             {
                 let project_snapshot = project.borrow();
@@ -939,13 +940,14 @@ impl AudioPlayback {
             let stream_result = device.build_output_stream(
                 &config,
                 move |buffer: &mut [T], info| {
-                    let _latency_secs = latency_corrector.update_from_callback(info);
+                    let latency_secs = latency_corrector.update_from_callback(info);
 
                     let project = project_for_stream.borrow();
 
                     if playhead_rx_for_stream.has_changed().unwrap_or(false) {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
-                        let audio_playhead = audio_renderer.current_playhead();
+                        let audio_playhead = audio_renderer
+                            .current_audible_playhead(device_sample_rate, latency_secs);
                         let drift = (video_playhead - audio_playhead).abs();
 
                         if drift > SYNC_THRESHOLD_SECS

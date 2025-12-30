@@ -17,6 +17,7 @@ pub struct SyncEvent {
 
 pub struct SyncAnalyzer {
     sample_rate: u32,
+    #[allow(dead_code)]
     fps: f64,
     audio_buffer: Vec<f32>,
     video_motion_scores: Vec<(f64, f64)>,
@@ -34,7 +35,7 @@ impl SyncAnalyzer {
         }
     }
 
-    pub fn add_audio_samples(&mut self, samples: &[f32], start_time_secs: f64) {
+    pub fn add_audio_samples(&mut self, samples: &[f32], _start_time_secs: f64) {
         self.audio_buffer.extend_from_slice(samples);
     }
 
@@ -52,7 +53,6 @@ impl SyncAnalyzer {
         let window_size = (self.sample_rate as usize) / 100;
         let hop_size = window_size / 4;
 
-        let mut prev_energy = 0.0f64;
         let mut energies: VecDeque<f64> = VecDeque::with_capacity(10);
 
         for (i, chunk) in self.audio_buffer.chunks(hop_size).enumerate() {
@@ -81,8 +81,6 @@ impl SyncAnalyzer {
                     transients.push((time_secs, strength.min(3.0)));
                 }
             }
-
-            prev_energy = energy_db;
         }
 
         transients

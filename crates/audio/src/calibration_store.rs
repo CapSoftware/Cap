@@ -1,7 +1,7 @@
 use crate::sync_analysis::DeviceSyncCalibration;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CalibrationStore {
@@ -32,7 +32,7 @@ impl CalibrationStore {
         }
     }
 
-    pub fn load(data_dir: &PathBuf) -> Self {
+    pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(Self::FILENAME);
 
         if !path.exists() {
@@ -51,7 +51,7 @@ impl CalibrationStore {
         }
     }
 
-    pub fn save(&self, data_dir: &PathBuf) -> Result<(), std::io::Error> {
+    pub fn save(&self, data_dir: &Path) -> Result<(), std::io::Error> {
         let path = data_dir.join(Self::FILENAME);
 
         if let Some(parent) = path.parent() {
@@ -65,7 +65,7 @@ impl CalibrationStore {
     }
 
     fn make_key(camera_id: &str, microphone_id: &str) -> String {
-        format!("{}|{}", camera_id, microphone_id)
+        format!("{camera_id}|{microphone_id}")
     }
 
     pub fn get_calibration(

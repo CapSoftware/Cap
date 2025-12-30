@@ -284,6 +284,24 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.frame_buffer.elapsed_samples_to_playhead()
     }
 
+    pub fn current_audible_playhead(
+        &self,
+        device_sample_rate: u32,
+        device_latency_secs: f64,
+    ) -> f64 {
+        let generated_secs = self.frame_buffer.elapsed_samples_to_playhead();
+        let channels = self.resampler.output.channels;
+        let buffered_elements = self.resampled_buffer.occupied_len();
+        let buffered_frames = buffered_elements / channels;
+        let buffered_secs = buffered_frames as f64 / device_sample_rate as f64;
+        let audible = generated_secs - buffered_secs - device_latency_secs.max(0.0);
+        if audible.is_sign_negative() {
+            0.0
+        } else {
+            audible
+        }
+    }
+
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
             <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.resampler.output.channels

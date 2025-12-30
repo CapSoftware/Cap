@@ -795,6 +795,7 @@ impl RecoveryManager {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
                         fps,
                         start_time: original_segment.and_then(|s| s.display.start_time),
+                        device_id: original_segment.and_then(|s| s.display.device_id.clone()),
                     },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
@@ -806,6 +807,9 @@ impl RecoveryManager {
                             start_time: original_segment
                                 .and_then(|s| s.camera.as_ref())
                                 .and_then(|c| c.start_time),
+                            device_id: original_segment
+                                .and_then(|s| s.camera.as_ref())
+                                .and_then(|c| c.device_id.clone()),
                         })
                     } else {
                         None
@@ -816,6 +820,9 @@ impl RecoveryManager {
                             start_time: original_segment
                                 .and_then(|s| s.mic.as_ref())
                                 .and_then(|m| m.start_time),
+                            device_id: original_segment
+                                .and_then(|s| s.mic.as_ref())
+                                .and_then(|m| m.device_id.clone()),
                         })
                     } else {
                         None
@@ -826,6 +833,9 @@ impl RecoveryManager {
                             start_time: original_segment
                                 .and_then(|s| s.system_audio.as_ref())
                                 .and_then(|a| a.start_time),
+                            device_id: original_segment
+                                .and_then(|s| s.system_audio.as_ref())
+                                .and_then(|a| a.device_id.clone()),
                         })
                     } else {
                         None

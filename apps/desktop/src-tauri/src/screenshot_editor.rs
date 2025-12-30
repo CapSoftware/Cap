@@ -214,6 +214,7 @@ impl ScreenshotEditorInstances {
                         path: relative_path.clone(),
                         fps: 30,
                         start_time: Some(0.0),
+                        device_id: None,
                     };
                     let segment = SingleSegment {
                         display: video_meta.clone(),
