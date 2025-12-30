@@ -12,7 +12,7 @@ import {
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
 const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 	slotCount: 4,
-	slotSize: 8 * 1024 * 1024,
+	slotSize: 16 * 1024 * 1024,
 };
 
 export type FrameData = {

@@ -98,6 +98,7 @@ interface PendingFrameWebGPU {
 	data: Uint8ClampedArray;
 	width: number;
 	height: number;
+	strideBytes: number;
 }
 
 type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPU;
@@ -125,14 +126,13 @@ let lastRawFrameData: Uint8ClampedArray | null = null;
 let lastRawFrameWidth = 0;
 let lastRawFrameHeight = 0;
 
-let webgpuFrameBuffer: Uint8ClampedArray | null = null;
-let webgpuFrameBufferSize = 0;
-
 let frameDropCount = 0;
 let lastFrameDropLogTime = 0;
 
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
+let sharedReadBuffer: Uint8Array | null = null;
+let sharedReadBufferSize = 0;
 
 let pendingRenderFrame: PendingFrame | null = null;
 let _rafId: number | null = null;
@@ -156,7 +156,13 @@ function renderLoop() {
 		pendingRenderFrame = null;
 
 		if (frame.mode === "webgpu" && webgpuRenderer) {
-			renderFrameWebGPU(webgpuRenderer, frame.data, frame.width, frame.height);
+			renderFrameWebGPU(
+				webgpuRenderer,
+				frame.data,
+				frame.width,
+				frame.height,
+				frame.strideBytes,
+			);
 		} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
 			if (
 				offscreenCanvas.width !== frame.width ||
@@ -210,6 +216,8 @@ function cleanup() {
 	offscreenCtx = null;
 	consumer = null;
 	useSharedBuffer = false;
+	sharedReadBuffer = null;
+	sharedReadBufferSize = 0;
 	pendingRenderFrame = null;
 	lastImageData = null;
 	cachedImageData = null;
@@ -220,8 +228,6 @@ function cleanup() {
 	lastRawFrameData = null;
 	lastRawFrameWidth = 0;
 	lastRawFrameHeight = 0;
-	webgpuFrameBuffer = null;
-	webgpuFrameBufferSize = 0;
 	frameDropCount = 0;
 	lastFrameDropLogTime = 0;
 }
@@ -298,6 +304,7 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 				lastRawFrameData,
 				lastRawFrameWidth,
 				lastRawFrameHeight,
+				lastRawFrameWidth * 4,
 			);
 			self.postMessage({
 				type: "frame-rendered",
@@ -337,21 +344,24 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
 
-async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
-	const data = new Uint8Array(buffer);
-	if (data.length < 12) {
+async function processFrameBytes(bytes: Uint8Array): Promise<DecodeResult> {
+	if (bytes.byteLength < 12) {
 		return {
 			type: "error",
 			message: "Received frame too small to contain metadata",
 		};
 	}
 
-	const metadataOffset = data.length - 12;
-	const meta = new DataView(buffer, metadataOffset, 12);
+	const metadataOffset = bytes.byteOffset + bytes.byteLength - 12;
+	const meta = new DataView(bytes.buffer, metadataOffset, 12);
 	const strideBytes = meta.getUint32(0, true);
 	const height = meta.getUint32(4, true);
 	const width = meta.getUint32(8, true);
-	const frameData = new Uint8ClampedArray(buffer, 0, metadataOffset);
+	const frameData = new Uint8ClampedArray(
+		bytes.buffer,
+		bytes.byteOffset,
+		bytes.byteLength - 12,
+	);
 
 	if (!width || !height) {
 		return {
@@ -375,6 +385,31 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 		};
 	}
 
+	if (renderMode === "webgpu" && webgpuRenderer) {
+		if (pendingRenderFrame !== null) {
+			frameDropCount++;
+			const now = performance.now();
+			if (now - lastFrameDropLogTime > 1000) {
+				if (frameDropCount > 0) {
+					console.warn(
+						`[frame-worker] Dropped ${frameDropCount} frames in the last second`,
+					);
+				}
+				frameDropCount = 0;
+				lastFrameDropLogTime = now;
+			}
+		}
+
+		pendingRenderFrame = {
+			mode: "webgpu",
+			data: frameData.subarray(0, availableLength),
+			width,
+			height,
+			strideBytes,
+		};
+		return { type: "frame-queued", width, height };
+	}
+
 	let processedFrameData: Uint8ClampedArray;
 	if (strideBytes === expectedRowBytes) {
 		processedFrameData = frameData.subarray(0, expectedLength);
@@ -392,36 +427,6 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 			);
 		}
 		processedFrameData = strideBuffer.subarray(0, expectedLength);
-	}
-
-	if (renderMode === "webgpu" && webgpuRenderer) {
-		if (pendingRenderFrame !== null) {
-			frameDropCount++;
-			const now = performance.now();
-			if (now - lastFrameDropLogTime > 1000) {
-				if (frameDropCount > 0) {
-					console.warn(
-						`[frame-worker] Dropped ${frameDropCount} frames in the last second`,
-					);
-				}
-				frameDropCount = 0;
-				lastFrameDropLogTime = now;
-			}
-		}
-
-		if (!webgpuFrameBuffer || webgpuFrameBufferSize < expectedLength) {
-			webgpuFrameBuffer = new Uint8ClampedArray(expectedLength);
-			webgpuFrameBufferSize = expectedLength;
-		}
-		webgpuFrameBuffer.set(processedFrameData);
-
-		pendingRenderFrame = {
-			mode: "webgpu",
-			data: webgpuFrameBuffer,
-			width,
-			height,
-		};
-		return { type: "frame-queued", width, height };
 	}
 
 	if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {
@@ -469,9 +474,14 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 async function pollSharedBuffer(): Promise<void> {
 	if (!consumer || !useSharedBuffer) return;
 
-	const buffer = consumer.read(50);
-	if (buffer) {
-		const result = await processFrame(buffer);
+	if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
+		sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
+		sharedReadBufferSize = sharedReadBuffer.byteLength;
+	}
+
+	const size = consumer.readInto(sharedReadBuffer, 50);
+	if (size != null && size > 0) {
+		const result = await processFrameBytes(sharedReadBuffer.subarray(0, size));
 		if (result.type === "decoded") {
 			self.postMessage(result, { transfer: [result.bitmap] });
 		} else if (result.type === "frame-queued") {
@@ -495,6 +505,8 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	if (e.data.type === "init-shared-buffer") {
 		consumer = createConsumer(e.data.buffer);
 		useSharedBuffer = true;
+		sharedReadBuffer = null;
+		sharedReadBufferSize = 0;
 
 		if (workerReady) {
 			pollSharedBuffer();
@@ -536,7 +548,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	}
 
 	if (e.data.type === "frame") {
-		const result = await processFrame(e.data.buffer);
+		const result = await processFrameBytes(new Uint8Array(e.data.buffer));
 		if (result.type === "decoded") {
 			self.postMessage(result, { transfer: [result.bitmap] });
 		} else if (result.type === "frame-queued") {
