@@ -1428,6 +1428,7 @@ dependencies = [
  "flume",
  "parking_lot",
  "thiserror 1.0.69",
+ "thread_local",
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
