@@ -134,6 +134,7 @@ function createScreenshotEditorContext() {
 	});
 
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
+	const [isRenderReady, setIsRenderReady] = createSignal(false);
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -198,6 +199,7 @@ function createScreenshotEditorContext() {
 			if (!width || !height) return;
 
 			hasReceivedWebSocketFrame = true;
+			setIsRenderReady(true);
 
 			const expectedRowBytes = width * 4;
 			const frameData = new Uint8ClampedArray(
@@ -414,6 +416,7 @@ function createScreenshotEditorContext() {
 		dialog,
 		setDialog,
 		latestFrame,
+		isRenderReady,
 		editorInstance,
 	};
 }
