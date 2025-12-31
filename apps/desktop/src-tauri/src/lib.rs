@@ -628,6 +628,106 @@ fn spawn_device_watchers(app_handle: AppHandle) {
     spawn_camera_watcher(app_handle);
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct DevicesUpdated {
+    cameras: Vec<cap_camera::CameraInfo>,
+    microphones: Vec<String>,
+    permissions: permissions::OSPermissionsCheck,
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_devices_snapshot() -> DevicesUpdated {
+    let permissions = permissions::do_permissions_check(false);
+    let cameras = if permissions.camera.permitted() {
+        cap_camera::list_cameras().collect()
+    } else {
+        Vec::new()
+    };
+    let microphones = if permissions.microphone.permitted() {
+        MicrophoneFeed::list().keys().cloned().collect()
+    } else {
+        Vec::new()
+    };
+    DevicesUpdated {
+        cameras,
+        microphones,
+        permissions,
+    }
+}
+
+fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
+    tokio::spawn(async move {
+        let mut last_perm_tuple: (u8, u8, u8, u8) = (255, 255, 255, 255);
+        let mut last_camera_ids: Vec<String> = Vec::new();
+        let mut last_mics: Vec<String> = Vec::new();
+        let mut fast_loops = 0u32;
+        loop {
+            let permissions = permissions::do_permissions_check(false);
+            let cameras = if permissions.camera.permitted() {
+                cap_camera::list_cameras().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let microphones = if permissions.microphone.permitted() {
+                MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let perm_tuple = (
+                match permissions.screen_recording {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+                match permissions.microphone {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+                match permissions.camera {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+                match permissions.accessibility {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+            );
+            let camera_ids: Vec<String> =
+                cameras.iter().map(|c| c.device_id().to_string()).collect();
+            let mut changed = perm_tuple != last_perm_tuple;
+            if !changed {
+                changed = camera_ids != last_camera_ids || microphones != last_mics;
+            }
+            if changed {
+                DevicesUpdated {
+                    cameras: cameras.clone(),
+                    microphones: microphones.clone(),
+                    permissions: permissions.clone(),
+                }
+                .emit(&app_handle)
+                .ok();
+                last_perm_tuple = perm_tuple;
+                last_camera_ids = camera_ids;
+                last_mics = microphones;
+            }
+            let dur = if fast_loops < 10 {
+                std::time::Duration::from_millis(500)
+            } else {
+                std::time::Duration::from_secs(5)
+            };
+            fast_loops = fast_loops.saturating_add(1);
+            tokio::time::sleep(dur).await;
+        }
+    });
+}
 async fn cleanup_camera_window(app: AppHandle) {
     let state = app.state::<ArcLock<App>>();
     let mut app_state = state.write().await;
@@ -2422,6 +2522,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
+            get_devices_snapshot,
             upload_exported_video,
             upload_screenshot,
             create_screenshot_editor_instance,
@@ -2497,6 +2598,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
             SetCaptureAreaPending,
+            DevicesUpdated,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -2733,6 +2835,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             spawn_mic_error_handler(app.clone(), mic_error_rx);
             spawn_device_watchers(app.clone());
+            spawn_devices_snapshot_emitter(app.clone());
 
             tokio::spawn(check_notification_permissions(app.clone()));
 

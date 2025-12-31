@@ -149,6 +149,9 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
+async getDevicesSnapshot() : Promise<DevicesUpdated> {
+    return await TAURI_INVOKE("get_devices_snapshot");
+},
 async uploadExportedVideo(path: string, mode: UploadMode, channel: TAURI_CHANNEL<UploadProgress>, organizationId: string | null) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_exported_video", { path, mode, channel, organizationId });
 },
@@ -318,6 +321,7 @@ async discardIncompleteRecording(projectPath: string) : Promise<null> {
 export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
 currentRecordingChanged: CurrentRecordingChanged,
+devicesUpdated: DevicesUpdated,
 downloadProgress: DownloadProgress,
 editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
@@ -340,6 +344,7 @@ uploadProgressEvent: UploadProgressEvent
 }>({
 audioInputLevelChange: "audio-input-level-change",
 currentRecordingChanged: "current-recording-changed",
+devicesUpdated: "devices-updated",
 downloadProgress: "download-progress",
 editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
@@ -411,6 +416,7 @@ export type CursorMeta = { imagePath: string; hotspot: XY<number>; shape?: strin
 export type CursorType = "auto" | "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
+export type DevicesUpdated = { cameras: CameraInfo[]; microphones: string[]; permissions: OSPermissionsCheck }
 export type DisplayId = string
 export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; logical_size: LogicalSize | null; refresh_rate: string }
 export type DownloadProgress = { progress: number; message: string }

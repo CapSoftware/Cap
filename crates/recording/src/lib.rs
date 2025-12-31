@@ -7,10 +7,13 @@ pub mod fragmentation;
 pub mod instant_recording;
 mod output_pipeline;
 pub mod recovery;
+mod resolution_limits;
 pub mod screenshot;
 pub mod sources;
 pub mod studio_recording;
 pub mod sync_calibration;
+
+pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_sources;

@@ -669,6 +669,8 @@ impl ShowCapWindow {
                             error!("Error initializing camera preview: {err}");
                             window.close().ok();
                         }
+                    } else {
+                        window.show().ok();
                     }
 
                     #[cfg(target_os = "macos")]

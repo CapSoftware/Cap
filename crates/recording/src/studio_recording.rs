@@ -1,11 +1,12 @@
 use crate::{
-    ActorError, MediaError, RecordingBaseInputs, RecordingError, SharedPauseState,
+    ActorError, H264_MAX_DIMENSION, MediaError, RecordingBaseInputs, RecordingError,
+    SharedPauseState, calculate_gpu_compatible_size,
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{OggMuxer, SegmentedAudioMuxer, SegmentedAudioMuxerConfig},
+    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
@@ -957,6 +958,10 @@ async fn create_segment_pipeline(
     .await
     .context("screen capture init")?;
 
+    let screen_info = screen_config.info();
+    let output_size =
+        calculate_gpu_compatible_size(screen_info.width, screen_info.height, H264_MAX_DIMENSION);
+
     let (capture_source, system_audio) = screen_config.to_sources().await?;
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
@@ -989,6 +994,7 @@ async fn create_segment_pipeline(
         start_time,
         fragmented,
         shared_pause_state.clone(),
+        output_size,
         #[cfg(windows)]
         encoder_preferences.clone(),
     )
@@ -1053,13 +1059,12 @@ async fn create_segment_pipeline(
 
     let microphone = if let Some(mic_feed) = base_inputs.mic_feed {
         let pipeline = if fragmented {
-            let fragments_dir = dir.join("audio-input");
-            OutputPipeline::builder(fragments_dir)
+            let output_path = dir.join("audio-input.m4a");
+            OutputPipeline::builder(output_path)
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig {
+                .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
-                    ..Default::default()
                 })
                 .instrument(error_span!("mic-out"))
                 .await
@@ -1078,13 +1083,12 @@ async fn create_segment_pipeline(
 
     let system_audio = if let Some(system_audio_source) = system_audio {
         let pipeline = if fragmented {
-            let fragments_dir = dir.join("system_audio");
-            OutputPipeline::builder(fragments_dir)
+            let output_path = dir.join("system_audio.m4a");
+            OutputPipeline::builder(output_path)
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig {
+                .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
-                    ..Default::default()
                 })
                 .instrument(error_span!("system-audio-out"))
                 .await

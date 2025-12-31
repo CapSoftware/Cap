@@ -576,24 +576,67 @@ impl SegmentedVideoEncoder {
             {
                 let final_name = name.trim_end_matches(".tmp");
                 let final_path = self.base_path.join(final_name);
+                let file_size = metadata.len();
 
-                if let Err(e) = std::fs::rename(&path, &final_path) {
-                    tracing::warn!(
-                        "Failed to rename tmp segment {} to {}: {}",
-                        path.display(),
-                        final_path.display(),
-                        e
-                    );
-                } else {
-                    tracing::debug!(
-                        "Finalized pending segment: {} ({} bytes)",
-                        final_path.display(),
-                        metadata.len()
-                    );
-                    sync_file(&final_path);
+                let rename_result = Self::rename_with_retry(&path, &final_path);
+
+                match rename_result {
+                    Ok(()) => {
+                        tracing::debug!(
+                            "Finalized pending segment: {} ({} bytes)",
+                            final_path.display(),
+                            file_size
+                        );
+                        sync_file(&final_path);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to rename tmp segment {} to {}: {}",
+                            path.display(),
+                            final_path.display(),
+                            e
+                        );
+                    }
                 }
             }
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+        const MAX_RETRIES: u32 = 10;
+        const RETRY_DELAY_MS: u64 = 50;
+
+        let mut last_error = None;
+        for attempt in 0..MAX_RETRIES {
+            match std::fs::rename(from, to) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let is_sharing_violation =
+                        e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33);
+
+                    if !is_sharing_violation {
+                        return Err(e);
+                    }
+
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::trace!(
+                            "Rename attempt {} failed (file locked), retrying in {}ms",
+                            attempt + 1,
+                            RETRY_DELAY_MS
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                    }
+                    last_error = Some(e);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| std::io::Error::other("rename failed after retries")))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::rename(from, to)
     }
 
     fn collect_orphaned_segments(

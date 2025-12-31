@@ -111,7 +111,7 @@ pub async fn request_permission(_permission: OSPermission) {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, specta::Type)]
+#[derive(Serialize, Deserialize, Debug, specta::Type, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum OSPermissionStatus {
     // This platform does not require this permission
@@ -130,7 +130,7 @@ impl OSPermissionStatus {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, specta::Type)]
+#[derive(Serialize, Deserialize, Debug, specta::Type, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OSPermissionsCheck {
     pub screen_recording: OSPermissionStatus,

@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::{
     aac::AACEncoder,
-    fragmented_audio::FragmentedAudioFile,
+    fragmented_audio::{FinishError as FragmentedAudioFinishError, FragmentedAudioFile},
     h264::*,
     ogg::*,
     opus::OpusEncoder,
@@ -169,13 +169,21 @@ impl AudioMuxer for OggMuxer {
     }
 }
 
-pub struct FragmentedAudioMuxer(FragmentedAudioFile);
+pub struct FragmentedAudioMuxer {
+    encoder: FragmentedAudioFile,
+    pause: Option<SharedPauseState>,
+}
+
+#[derive(Default)]
+pub struct FragmentedAudioMuxerConfig {
+    pub shared_pause_state: Option<SharedPauseState>,
+}
 
 impl Muxer for FragmentedAudioMuxer {
-    type Config = ();
+    type Config = FragmentedAudioMuxerConfig;
 
     async fn setup(
-        _: Self::Config,
+        config: Self::Config,
         output_path: PathBuf,
         _: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
@@ -188,23 +196,34 @@ impl Muxer for FragmentedAudioMuxer {
         let audio_config =
             audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
 
-        Ok(Self(
-            FragmentedAudioFile::init(output_path, audio_config)
+        Ok(Self {
+            encoder: FragmentedAudioFile::init(output_path, audio_config)
                 .map_err(|e| anyhow!("Failed to initialize fragmented audio encoder: {e}"))?,
-        ))
+            pause: config.shared_pause_state,
+        })
     }
 
     fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        self.0
-            .finish()
-            .map_err(Into::into)
-            .map(|r| r.map_err(Into::into))
+        match self.encoder.finish() {
+            Ok(result) => Ok(result.map_err(Into::into)),
+            Err(FragmentedAudioFinishError::AlreadyFinished) => Ok(Ok(())),
+            Err(FragmentedAudioFinishError::WriteTrailerFailed(error)) => Ok(Err(anyhow!(error))),
+        }
     }
 }
 
 impl AudioMuxer for FragmentedAudioMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        Ok(self.0.queue_frame(frame.inner, timestamp)?)
+        let adjusted_timestamp = if let Some(pause) = &self.pause {
+            match pause.adjust(timestamp)? {
+                Some(ts) => ts,
+                None => return Ok(()),
+            }
+        } else {
+            timestamp
+        };
+
+        Ok(self.encoder.queue_frame(frame.inner, adjusted_timestamp)?)
     }
 }
 

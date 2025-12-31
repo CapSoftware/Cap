@@ -33,15 +33,14 @@ import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { createDevicesQuery } from "~/utils/devices";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
-	listAudioDevices,
 	listDisplaysWithThumbnails,
 	listRecordings,
 	listScreens,
-	listVideoDevices,
 	listWindows,
 	listWindowsWithThumbnails,
 } from "~/utils/queries";
@@ -498,7 +497,8 @@ function Page() {
 					([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
 				);
 			},
-			refetchInterval: 2000,
+			refetchInterval: 10_000,
+			staleTime: 5_000,
 			reconcile: (old, next) => reconcile(next)(old),
 			initialData: [],
 		}),
@@ -662,8 +662,10 @@ function Page() {
 		});
 	});
 
-	const cameras = useQuery(() => listVideoDevices);
-	const mics = useQuery(() => listAudioDevices);
+	const devices = createDevicesQuery();
+	const cameras = createMemo(() => devices.data?.cameras ?? []);
+	const mics = createMemo(() => devices.data?.microphones ?? []);
+	const permissions = createMemo(() => devices.data?.permissions);
 
 	const windowListSignature = createMemo(() =>
 		createWindowSignature(windows.data),
@@ -707,14 +709,16 @@ function Page() {
 		void displayTargets.refetch();
 	});
 
-	cameras.promise.then((cameras) => {
-		if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
+	createEffect(() => {
+		const cameraList = cameras();
+		if (rawOptions.cameraID && findCamera(cameraList, rawOptions.cameraID)) {
 			setOptions("cameraLabel", null);
 		}
 	});
 
-	mics.promise.then((mics) => {
-		if (rawOptions.micName && !mics.includes(rawOptions.micName)) {
+	createEffect(() => {
+		const micList = mics();
+		if (rawOptions.micName && !micList.includes(rawOptions.micName)) {
 			setOptions("micName", null);
 		}
 	});
@@ -747,9 +751,9 @@ function Page() {
 		},
 		camera: () => {
 			if (!rawOptions.cameraID) return undefined;
-			return findCamera(cameras.data || [], rawOptions.cameraID);
+			return findCamera(cameras(), rawOptions.cameraID);
 		},
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
+		micName: () => mics().find((name) => name === rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
 				case "display": {
@@ -827,22 +831,22 @@ function Page() {
 	const BaseControls = () => (
 		<div class="space-y-2">
 			<CameraSelect
-				disabled={cameras.isPending}
-				options={cameras.data ?? []}
+				disabled={devices.isPending}
+				options={cameras()}
 				value={options.camera() ?? null}
 				onChange={(c) => {
 					if (!c) setCamera.mutate(null);
 					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
 					else setCamera.mutate({ DeviceID: c.device_id });
 				}}
+				permissions={permissions()}
 			/>
 			<MicrophoneSelect
-				disabled={mics.isPending}
-				options={mics.isPending ? [] : (mics.data ?? [])}
-				value={
-					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-				}
+				disabled={devices.isPending}
+				options={mics()}
+				value={options.micName() ?? null}
 				onChange={(v) => setMicInput.mutate(v)}
+				permissions={permissions()}
 			/>
 			<SystemAudio />
 		</div>
@@ -889,6 +893,8 @@ function Page() {
 									if (next) {
 										setWindowMenuOpen(false);
 										setHasOpenedDisplayMenu(true);
+										screens.refetch();
+										displayTargets.refetch();
 									}
 									return next;
 								});
@@ -926,6 +932,8 @@ function Page() {
 									if (next) {
 										setDisplayMenuOpen(false);
 										setHasOpenedWindowMenu(true);
+										windows.refetch();
+										windowTargets.refetch();
 									}
 									return next;
 								});
