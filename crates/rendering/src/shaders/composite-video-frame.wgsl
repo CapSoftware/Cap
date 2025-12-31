@@ -17,9 +17,8 @@ struct Uniforms {
     opacity: f32,
     border_enabled: f32,
     border_width: f32,
-    _padding1: vec2<f32>,
+    _padding1: vec4<f32>,
     border_color: vec4<f32>,
-    _padding2: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

@@ -194,6 +194,7 @@ export function useScreenshotExport() {
 				ctx.drawImage(frame.bitmap, 0, 0);
 			} else {
 				const img = new Image();
+				img.crossOrigin = "anonymous";
 				img.src = convertFileSrc(editorCtx.path);
 				await new Promise((resolve, reject) => {
 					img.onload = resolve;

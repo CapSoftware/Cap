@@ -803,14 +803,14 @@ impl AudioPlayback {
 
         let candidate_order = if is_wireless {
             vec![
+                BufferSizeStrategy::DeviceDefault,
                 BufferSizeStrategy::Fixed(wireless_samples_count),
                 BufferSizeStrategy::Fixed(default_samples_count),
-                BufferSizeStrategy::DeviceDefault,
             ]
         } else {
             vec![
-                BufferSizeStrategy::Fixed(default_samples_count),
                 BufferSizeStrategy::DeviceDefault,
+                BufferSizeStrategy::Fixed(default_samples_count),
             ]
         };
 
@@ -935,7 +935,7 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
-            const SYNC_THRESHOLD_SECS: f64 = 0.05;
+            const SYNC_THRESHOLD_SECS: f64 = 0.12;
 
             let stream_result = device.build_output_stream(
                 &config,

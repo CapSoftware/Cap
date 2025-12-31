@@ -367,7 +367,7 @@ impl ScreenshotEditorInstances {
                                 }));
                             }
                             Err(e) => {
-                                eprintln!("Failed to render frame: {e}");
+                                tracing::error!("Failed to render screenshot frame: {e}");
                             }
                         }
 
