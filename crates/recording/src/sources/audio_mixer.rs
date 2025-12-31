@@ -11,7 +11,7 @@ use std::{
     },
     time::Duration,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::output_pipeline::AudioFrame;
 
@@ -32,6 +32,8 @@ struct MixerSource {
     buffer_timeout: Duration,
     buffer: VecDeque<AudioFrame>,
     buffer_last: Option<(Timestamp, Duration)>,
+    input_duration_secs: f64,
+    last_input_timestamp: Option<Timestamp>,
 }
 
 pub struct AudioMixerBuilder {
@@ -64,6 +66,8 @@ impl AudioMixerBuilder {
             buffer_timeout,
             buffer: VecDeque::new(),
             buffer_last: None,
+            input_duration_secs: 0.0,
+            last_input_timestamp: None,
         });
     }
 
@@ -162,6 +166,7 @@ impl AudioMixerBuilder {
             start_timestamp: None,
             timestamps: Timestamps::now(),
             max_buffer_timeout,
+            wall_clock_start: None,
         })
     }
 
@@ -213,7 +218,6 @@ pub struct AudioMixer {
     samples_out: usize,
     output: mpsc::Sender<AudioFrame>,
     last_tick: Option<Timestamp>,
-    // sample_timestamps: VecDeque<(usize, Timestamp)>,
     abuffers: Vec<ffmpeg::filter::Context>,
     abuffersink: ffmpeg::filter::Context,
     _resamplers: Vec<ffmpeg::filter::Context>,
@@ -223,6 +227,7 @@ pub struct AudioMixer {
     timestamps: Timestamps,
     start_timestamp: Option<Timestamp>,
     max_buffer_timeout: Duration,
+    wall_clock_start: Option<Timestamp>,
 }
 
 impl AudioMixer {
@@ -232,10 +237,54 @@ impl AudioMixer {
         2,
     );
 
+    fn calculate_drift_corrected_timestamp(
+        &self,
+        start_timestamp: Timestamp,
+        nominal_output_rate: f64,
+        wall_clock_elapsed: Duration,
+    ) -> Timestamp {
+        let nominal_elapsed_secs = self.samples_out as f64 / nominal_output_rate;
+        let nominal_elapsed = Duration::from_secs_f64(nominal_elapsed_secs);
+
+        let mut max_input_duration_secs: f64 = 0.0;
+        for source in &self.sources {
+            if source.input_duration_secs > max_input_duration_secs {
+                max_input_duration_secs = source.input_duration_secs;
+            }
+        }
+
+        let wall_clock_secs = wall_clock_elapsed.as_secs_f64();
+
+        if max_input_duration_secs < 0.5 || wall_clock_secs < 0.5 {
+            return start_timestamp + nominal_elapsed;
+        }
+
+        if max_input_duration_secs <= 0.0 {
+            return start_timestamp + nominal_elapsed;
+        }
+
+        let drift_ratio = wall_clock_secs / max_input_duration_secs;
+
+        if !(0.95..=1.05).contains(&drift_ratio) {
+            warn!(
+                drift_ratio,
+                wall_clock_secs,
+                max_input_duration_secs,
+                "Extreme audio clock drift detected, clamping"
+            );
+            let clamped_ratio = drift_ratio.clamp(0.95, 1.05);
+            let corrected_secs = nominal_elapsed_secs * clamped_ratio;
+            return start_timestamp + Duration::from_secs_f64(corrected_secs);
+        }
+
+        let corrected_secs = nominal_elapsed_secs * drift_ratio;
+        start_timestamp + Duration::from_secs_f64(corrected_secs)
+    }
+
     fn buffer_sources(&mut self, now: Timestamp) {
         for source in &mut self.sources {
             let rate = source.info.rate();
-            let _buffer_timeout = source.buffer_timeout;
+            let buffer_timeout = source.buffer_timeout;
 
             // Do not inject silence based on wall-clock pacing. We only bridge actual gaps
             // when a new frame arrives (below), to keep emission data-driven.
@@ -245,7 +294,12 @@ impl AudioMixer {
                 timestamp,
             })) = source.rx.try_next()
             {
-                // if gap between incoming and last, insert silence
+                let source_rate = source.info.rate() as f64;
+                if source_rate > 0.0 {
+                    source.input_duration_secs += frame.samples() as f64 / source_rate;
+                }
+                source.last_input_timestamp = Some(timestamp);
+
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
                     let buffer_last_elapsed = buffer_last_timestamp.duration_since(self.timestamps);
@@ -257,13 +311,7 @@ impl AudioMixer {
                         if let Some(diff) =
                             elapsed_since_last_frame.checked_sub(buffer_last_duration)
                         {
-                            let min_gap = if buffer_last_duration.is_zero() {
-                                Duration::from_micros(1)
-                            } else {
-                                buffer_last_duration
-                            };
-
-                            if diff >= min_gap {
+                            if diff >= buffer_timeout {
                                 let gap = diff;
 
                                 debug!(?gap, "Gap between last buffer frame, inserting silence");
@@ -313,6 +361,10 @@ impl AudioMixer {
                         .cmp(&b.timestamp.duration_since(self.timestamps))
                 })
                 .map(|v| v.timestamp);
+
+            if self.start_timestamp.is_some() {
+                self.wall_clock_start = Some(now);
+            }
         }
 
         if let Some(start_timestamp) = self.start_timestamp
@@ -366,6 +418,14 @@ impl AudioMixer {
             return Ok(());
         };
 
+        let Some(wall_clock_start) = self.wall_clock_start else {
+            return Ok(());
+        };
+
+        let wall_clock_elapsed = now
+            .duration_since(self.timestamps)
+            .saturating_sub(wall_clock_start.duration_since(self.timestamps));
+
         for (i, source) in self.sources.iter_mut().enumerate() {
             for buffer in source.buffer.drain(..) {
                 let _ = self.abuffers[i].source().add(&buffer.inner);
@@ -377,13 +437,13 @@ impl AudioMixer {
             let output_rate_i32 = Self::INFO.rate();
             let output_rate = output_rate_i32 as f64;
 
-            // Downstream encoders assume the mixer outputs at AudioMixer::INFO.rate().
-            // Normalize the frame metadata so we don't inherit whatever FFmpeg propagated
-            // from upstream sources (some CoreAudio devices report 16 kHz).
             filtered.set_rate(output_rate_i32 as u32);
 
-            let elapsed = Duration::from_secs_f64(self.samples_out as f64 / output_rate);
-            let output_timestamp = start_timestamp + elapsed;
+            let output_timestamp = self.calculate_drift_corrected_timestamp(
+                start_timestamp,
+                output_rate,
+                wall_clock_elapsed,
+            );
 
             let frame_samples = filtered.samples();
             let mut frame = AudioFrame::new(filtered, output_timestamp);

@@ -19,7 +19,7 @@ use std::{
         Arc,
         atomic::{self, AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -28,6 +28,126 @@ use tracing::*;
 const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
+
+struct AudioDriftTracker {
+    baseline_offset_secs: Option<f64>,
+}
+
+impl AudioDriftTracker {
+    fn new() -> Self {
+        Self {
+            baseline_offset_secs: None,
+        }
+    }
+
+    fn calculate_timestamp(
+        &mut self,
+        samples_before_frame: u64,
+        sample_rate: u32,
+        wall_clock_secs: f64,
+        total_input_duration_secs: f64,
+    ) -> Duration {
+        let sample_time_secs = samples_before_frame as f64 / sample_rate as f64;
+
+        if wall_clock_secs < 2.0 || total_input_duration_secs < 2.0 {
+            return Duration::from_secs_f64(sample_time_secs);
+        }
+
+        if self.baseline_offset_secs.is_none() {
+            let offset = total_input_duration_secs - wall_clock_secs;
+            debug!(
+                wall_clock_secs,
+                total_input_duration_secs,
+                baseline_offset_secs = offset,
+                "Capturing audio baseline offset after warmup"
+            );
+            self.baseline_offset_secs = Some(offset);
+        }
+
+        let baseline = self.baseline_offset_secs.unwrap_or(0.0);
+        let adjusted_input_duration = total_input_duration_secs - baseline;
+        let adjusted_sample_time_secs = (sample_time_secs - baseline).max(0.0);
+
+        let drift_ratio = if adjusted_input_duration > 0.0 {
+            wall_clock_secs / adjusted_input_duration
+        } else {
+            1.0
+        };
+
+        if !(0.95..=1.05).contains(&drift_ratio) {
+            warn!(
+                drift_ratio,
+                wall_clock_secs,
+                adjusted_input_duration,
+                baseline,
+                "Extreme audio clock drift detected after baseline correction, clamping"
+            );
+            let clamped_ratio = drift_ratio.clamp(0.95, 1.05);
+            Duration::from_secs_f64(adjusted_sample_time_secs * clamped_ratio)
+        } else {
+            Duration::from_secs_f64(adjusted_sample_time_secs * drift_ratio)
+        }
+    }
+}
+
+struct VideoDriftTracker {
+    baseline_offset_secs: Option<f64>,
+}
+
+impl VideoDriftTracker {
+    fn new() -> Self {
+        Self {
+            baseline_offset_secs: None,
+        }
+    }
+
+    fn calculate_timestamp(
+        &mut self,
+        camera_duration: Duration,
+        wall_clock_elapsed: Duration,
+    ) -> Duration {
+        let camera_secs = camera_duration.as_secs_f64();
+        let wall_clock_secs = wall_clock_elapsed.as_secs_f64();
+
+        if wall_clock_secs < 2.0 || camera_secs < 2.0 {
+            return camera_duration;
+        }
+
+        if self.baseline_offset_secs.is_none() {
+            let offset = camera_secs - wall_clock_secs;
+            debug!(
+                wall_clock_secs,
+                camera_secs,
+                baseline_offset_secs = offset,
+                "Capturing video baseline offset after warmup"
+            );
+            self.baseline_offset_secs = Some(offset);
+        }
+
+        let baseline = self.baseline_offset_secs.unwrap_or(0.0);
+        let adjusted_camera_secs = (camera_secs - baseline).max(0.0);
+
+        let drift_ratio = if adjusted_camera_secs > 0.0 {
+            wall_clock_secs / adjusted_camera_secs
+        } else {
+            1.0
+        };
+
+        if !(0.95..=1.05).contains(&drift_ratio) {
+            warn!(
+                drift_ratio,
+                wall_clock_secs,
+                adjusted_camera_secs,
+                baseline,
+                "Extreme video clock drift detected after baseline correction, clamping"
+            );
+            let clamped_ratio = drift_ratio.clamp(0.95, 1.05);
+            Duration::from_secs_f64(adjusted_camera_secs * clamped_ratio)
+        } else {
+            Duration::from_secs_f64(adjusted_camera_secs * drift_ratio)
+        }
+    }
+}
 const DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY: usize = 128;
 
 fn get_video_source_channel_capacity() -> usize {
@@ -715,6 +835,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut first_tx = Some(first_tx);
         let mut frame_count = 0u64;
         let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
+        let mut drift_tracker = VideoDriftTracker::new();
 
         let res = stop_token
             .run_until_cancelled(async {
@@ -727,7 +848,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let _ = first_tx.send(timestamp);
                     }
 
-                    let duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                    let raw_duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
                         Ok(d) => d,
                         Err(TimestampAnomalyError::TooManyConsecutiveAnomalies { count }) => {
                             return Err(anyhow!(
@@ -736,6 +857,26 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             ));
                         }
                     };
+
+                    let wall_clock_elapsed = timestamps.instant().elapsed();
+                    let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
+
+                    if frame_count.is_multiple_of(300) {
+                        let drift_ratio = if raw_duration.as_secs_f64() > 0.0 {
+                            wall_clock_elapsed.as_secs_f64() / raw_duration.as_secs_f64()
+                        } else {
+                            1.0
+                        };
+                        debug!(
+                            frame_count,
+                            wall_clock_secs = wall_clock_elapsed.as_secs_f64(),
+                            camera_secs = raw_duration.as_secs_f64(),
+                            corrected_secs = duration.as_secs_f64(),
+                            drift_ratio,
+                            baseline_offset = drift_tracker.baseline_offset_secs,
+                            "Video drift correction status"
+                        );
+                    }
 
                     muxer
                         .lock()
@@ -776,7 +917,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     let _ = first_tx.send(timestamp);
                 }
 
-                let duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                let raw_duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
                     Ok(d) => d,
                     Err(_) => {
                         warn!("Timestamp anomaly during drain, skipping frame");
@@ -784,6 +925,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         continue;
                     }
                 };
+
+                let wall_clock_elapsed = timestamps.instant().elapsed();
+                let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
 
                 match muxer.lock().await.send_video_frame(frame, duration) {
                     Ok(()) => {}
@@ -838,11 +982,15 @@ impl PreparedAudioSources {
         timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
     ) {
+        let sample_rate = self.audio_info.sample_rate;
+
         setup_ctx.tasks().spawn("mux-audio", {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
                 let mut anomaly_tracker = TimestampAnomalyTracker::new("audio");
+                let mut drift_tracker = AudioDriftTracker::new();
+                let mut total_samples: u64 = 0;
 
                 let res = stop_token
                     .run_until_cancelled(async {
@@ -851,23 +999,39 @@ impl PreparedAudioSources {
                                 let _ = first_tx.send(frame.timestamp);
                             }
 
-                            let timestamp =
-                                match anomaly_tracker.process_timestamp(frame.timestamp, timestamps)
-                                {
-                                    Ok(d) => d,
-                                    Err(TimestampAnomalyError::TooManyConsecutiveAnomalies {
-                                        count,
-                                    }) => {
-                                        error!(
-                                            consecutive = count,
-                                            "Audio stream timestamp anomaly threshold exceeded"
-                                        );
-                                        return Err(anyhow!(
-                                            "Audio stream timestamp anomaly: {} consecutive anomalies exceeded threshold",
-                                            count
-                                        ));
-                                    }
+                            let samples_before_frame = total_samples;
+                            let frame_samples = frame.inner.samples() as u64;
+                            total_samples += frame_samples;
+
+                            let _ = anomaly_tracker.process_timestamp(frame.timestamp, timestamps);
+
+                            let wall_clock_secs = timestamps.instant().elapsed().as_secs_f64();
+                            let total_input_duration_secs =
+                                total_samples as f64 / sample_rate as f64;
+
+                            if wall_clock_secs >= 5.0 && (wall_clock_secs as u64) % 10 == 0 {
+                                let drift_ratio = if total_input_duration_secs > 0.0 {
+                                    wall_clock_secs / total_input_duration_secs
+                                } else {
+                                    1.0
                                 };
+                                debug!(
+                                    wall_clock_secs,
+                                    total_input_duration_secs,
+                                    drift_ratio,
+                                    samples_before_frame,
+                                    total_samples,
+                                    baseline_offset = drift_tracker.baseline_offset_secs,
+                                    "Audio drift correction status"
+                                );
+                            }
+
+                            let timestamp = drift_tracker.calculate_timestamp(
+                                samples_before_frame,
+                                sample_rate,
+                                wall_clock_secs,
+                                total_input_duration_secs,
+                            );
 
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
                                 error!("Audio encoder: {e}");
@@ -1237,4 +1401,387 @@ pub trait VideoMuxer: Muxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod audio_drift_tracker {
+        use super::*;
+
+        const SAMPLE_RATE: u32 = 48000;
+
+        fn samples_for_duration(duration_secs: f64) -> u64 {
+            (duration_secs * SAMPLE_RATE as f64) as u64
+        }
+
+        #[test]
+        fn no_correction_during_warmup() {
+            let mut tracker = AudioDriftTracker::new();
+            let samples = samples_for_duration(10.0);
+            let result = tracker.calculate_timestamp(samples, SAMPLE_RATE, 1.5, 1.5);
+            let expected = Duration::from_secs_f64(10.0);
+            assert!(
+                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.001,
+                "During warmup: expected ~{:.3}s, got {:.3}s",
+                expected.as_secs_f64(),
+                result.as_secs_f64()
+            );
+            assert!(
+                tracker.baseline_offset_secs.is_none(),
+                "Baseline should not be set during warmup"
+            );
+        }
+
+        #[test]
+        fn captures_baseline_after_warmup() {
+            let mut tracker = AudioDriftTracker::new();
+            let buffer_delay = 0.05;
+            let wall_clock = 2.0;
+            let input_duration = 2.0 + buffer_delay;
+            let samples = samples_for_duration(input_duration);
+
+            tracker.calculate_timestamp(samples, SAMPLE_RATE, wall_clock, input_duration);
+
+            assert!(tracker.baseline_offset_secs.is_some());
+            let baseline = tracker.baseline_offset_secs.unwrap();
+            assert!(
+                (baseline - buffer_delay).abs() < 0.001,
+                "Baseline should be ~{:.3}s, got {:.3}s",
+                buffer_delay,
+                baseline
+            );
+        }
+
+        #[test]
+        fn baseline_removes_initial_buffer_offset() {
+            let mut tracker = AudioDriftTracker::new();
+            let buffer_delay = 0.05;
+
+            let wall_clock_1 = 2.0;
+            let input_duration_1 = 2.0 + buffer_delay;
+            tracker.calculate_timestamp(
+                samples_for_duration(input_duration_1),
+                SAMPLE_RATE,
+                wall_clock_1,
+                input_duration_1,
+            );
+
+            let wall_clock_2 = 10.0;
+            let input_duration_2 = 10.0 + buffer_delay;
+            let samples_2 = samples_for_duration(input_duration_2);
+            let result =
+                tracker.calculate_timestamp(samples_2, SAMPLE_RATE, wall_clock_2, input_duration_2);
+
+            let expected = Duration::from_secs_f64(wall_clock_2);
+            assert!(
+                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.1,
+                "With baseline correction: expected ~{:.3}s, got {:.3}s",
+                expected.as_secs_f64(),
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn corrects_drift_after_baseline() {
+            let mut tracker = AudioDriftTracker::new();
+            let buffer_delay = 0.05;
+            let drift_factor = 1.005;
+
+            let wall_clock_1 = 2.0;
+            let input_duration_1 = 2.0 * drift_factor + buffer_delay;
+            tracker.calculate_timestamp(
+                samples_for_duration(input_duration_1),
+                SAMPLE_RATE,
+                wall_clock_1,
+                input_duration_1,
+            );
+
+            let wall_clock_2 = 60.0;
+            let input_duration_2 = 60.0 * drift_factor + buffer_delay;
+            let samples_2 = samples_for_duration(input_duration_2);
+            let result =
+                tracker.calculate_timestamp(samples_2, SAMPLE_RATE, wall_clock_2, input_duration_2);
+
+            let expected = Duration::from_secs_f64(wall_clock_2);
+            assert!(
+                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.5,
+                "With drift and baseline correction: expected ~{:.3}s, got {:.3}s",
+                expected.as_secs_f64(),
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn clamps_extreme_drift_after_baseline() {
+            let mut tracker = AudioDriftTracker::new();
+
+            tracker.calculate_timestamp(samples_for_duration(2.0), SAMPLE_RATE, 2.0, 2.0);
+
+            let samples = samples_for_duration(100.0);
+            let result = tracker.calculate_timestamp(samples, SAMPLE_RATE, 100.0, 120.0);
+            let expected_ratio = 0.95;
+            let sample_time = 100.0;
+            let expected_secs = sample_time * expected_ratio;
+            assert!(
+                (result.as_secs_f64() - expected_secs).abs() < 0.1,
+                "Expected ~{:.3}s (clamped to 0.95), got {:.3}s",
+                expected_secs,
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn final_timestamp_matches_wall_clock_with_buffer() {
+            let mut tracker = AudioDriftTracker::new();
+            let buffer_delay = 0.1;
+            let drift_factor = 1.004;
+
+            let wall_clock_1 = 2.0;
+            let input_duration_1 = wall_clock_1 * drift_factor + buffer_delay;
+            tracker.calculate_timestamp(
+                samples_for_duration(input_duration_1),
+                SAMPLE_RATE,
+                wall_clock_1,
+                input_duration_1,
+            );
+
+            let wall_clock_final = 60.0;
+            let input_duration_final = wall_clock_final * drift_factor + buffer_delay;
+            let total_samples = samples_for_duration(input_duration_final);
+            let result = tracker.calculate_timestamp(
+                total_samples,
+                SAMPLE_RATE,
+                wall_clock_final,
+                input_duration_final,
+            );
+
+            let corrected_time = result.as_secs_f64();
+            assert!(
+                (corrected_time - wall_clock_final).abs() < 1.0,
+                "Final timestamp should be close to wall clock. \
+                 Wall clock: {:.3}s, corrected: {:.3}s, input_duration: {:.3}s",
+                wall_clock_final,
+                corrected_time,
+                input_duration_final
+            );
+        }
+
+        #[test]
+        fn simulates_real_world_scenario() {
+            let mut tracker = AudioDriftTracker::new();
+            let initial_buffer = 0.05;
+            let drift_rate = 0.004;
+
+            let mut total_audio = initial_buffer;
+            let mut wall_time = 0.0;
+            let step = 0.5;
+
+            while wall_time < 60.0 {
+                wall_time += step;
+                total_audio += step * (1.0 + drift_rate);
+
+                let samples = samples_for_duration(total_audio);
+                let result =
+                    tracker.calculate_timestamp(samples, SAMPLE_RATE, wall_time, total_audio);
+
+                if wall_time >= 2.0 {
+                    let error = (result.as_secs_f64() - total_audio).abs();
+                    assert!(
+                        error < total_audio * 0.02,
+                        "At wall_time={:.1}s: corrected {:.3}s should be close to audio {:.3}s",
+                        wall_time,
+                        result.as_secs_f64(),
+                        total_audio
+                    );
+                }
+            }
+
+            let final_samples = samples_for_duration(total_audio);
+            let final_result =
+                tracker.calculate_timestamp(final_samples, SAMPLE_RATE, wall_time, total_audio);
+
+            assert!(
+                (final_result.as_secs_f64() - wall_time).abs() < 1.0,
+                "Final timestamp {:.3}s should be close to wall clock {:.3}s",
+                final_result.as_secs_f64(),
+                wall_time
+            );
+        }
+
+        #[test]
+        fn preserves_baseline_across_multiple_calls() {
+            let mut tracker = AudioDriftTracker::new();
+
+            tracker.calculate_timestamp(samples_for_duration(2.1), SAMPLE_RATE, 2.0, 2.1);
+
+            let first_baseline = tracker.baseline_offset_secs;
+
+            tracker.calculate_timestamp(samples_for_duration(10.1), SAMPLE_RATE, 10.0, 10.1);
+
+            assert_eq!(
+                first_baseline, tracker.baseline_offset_secs,
+                "Baseline should not change after initial capture"
+            );
+        }
+    }
+
+    mod video_drift_tracker {
+        use super::*;
+
+        fn dur(secs: f64) -> Duration {
+            Duration::from_secs_f64(secs)
+        }
+
+        #[test]
+        fn no_correction_during_warmup() {
+            let mut tracker = VideoDriftTracker::new();
+            let camera_duration = dur(1.5);
+            let wall_clock = dur(1.5);
+            let result = tracker.calculate_timestamp(camera_duration, wall_clock);
+            assert_eq!(
+                result, camera_duration,
+                "During warmup: should return unmodified camera duration"
+            );
+            assert!(
+                tracker.baseline_offset_secs.is_none(),
+                "Baseline should not be set during warmup"
+            );
+        }
+
+        #[test]
+        fn captures_baseline_after_warmup() {
+            let mut tracker = VideoDriftTracker::new();
+            let buffer_delay = 0.05;
+            let wall_clock = dur(2.0);
+            let camera_duration = dur(2.0 + buffer_delay);
+
+            tracker.calculate_timestamp(camera_duration, wall_clock);
+
+            assert!(tracker.baseline_offset_secs.is_some());
+            let baseline = tracker.baseline_offset_secs.unwrap();
+            assert!(
+                (baseline - buffer_delay).abs() < 0.001,
+                "Baseline should be ~{:.3}s, got {:.3}s",
+                buffer_delay,
+                baseline
+            );
+        }
+
+        #[test]
+        fn baseline_removes_initial_offset() {
+            let mut tracker = VideoDriftTracker::new();
+            let buffer_delay = 0.05;
+
+            let wall_clock_1 = dur(2.0);
+            let camera_1 = dur(2.0 + buffer_delay);
+            tracker.calculate_timestamp(camera_1, wall_clock_1);
+
+            let wall_clock_2 = dur(10.0);
+            let camera_2 = dur(10.0 + buffer_delay);
+            let result = tracker.calculate_timestamp(camera_2, wall_clock_2);
+
+            let expected = wall_clock_2;
+            assert!(
+                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.1,
+                "With baseline correction: expected ~{:.3}s, got {:.3}s",
+                expected.as_secs_f64(),
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn corrects_drift_after_baseline() {
+            let mut tracker = VideoDriftTracker::new();
+            let buffer_delay = 0.05;
+            let drift_factor = 1.005;
+
+            let wall_clock_1 = dur(2.0);
+            let camera_1 = dur(2.0 * drift_factor + buffer_delay);
+            tracker.calculate_timestamp(camera_1, wall_clock_1);
+
+            let wall_clock_2 = dur(60.0);
+            let camera_2 = dur(60.0 * drift_factor + buffer_delay);
+            let result = tracker.calculate_timestamp(camera_2, wall_clock_2);
+
+            let expected = wall_clock_2;
+            assert!(
+                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.5,
+                "With drift and baseline correction: expected ~{:.3}s, got {:.3}s",
+                expected.as_secs_f64(),
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn clamps_extreme_drift() {
+            let mut tracker = VideoDriftTracker::new();
+
+            tracker.calculate_timestamp(dur(2.0), dur(2.0));
+
+            let camera = dur(100.0);
+            let wall_clock = dur(80.0);
+            let result = tracker.calculate_timestamp(camera, wall_clock);
+            let expected_ratio = 0.95;
+            let expected_secs = 100.0 * expected_ratio;
+            assert!(
+                (result.as_secs_f64() - expected_secs).abs() < 0.1,
+                "Expected ~{:.3}s (clamped to 0.95), got {:.3}s",
+                expected_secs,
+                result.as_secs_f64()
+            );
+        }
+
+        #[test]
+        fn simulates_real_world_camera_scenario() {
+            let mut tracker = VideoDriftTracker::new();
+            let initial_offset = 0.03;
+            let drift_rate = 0.003;
+
+            let mut camera_time = initial_offset;
+            let mut wall_time = 0.0;
+            let step = 0.5;
+
+            while wall_time < 60.0 {
+                wall_time += step;
+                camera_time += step * (1.0 + drift_rate);
+
+                let result = tracker.calculate_timestamp(dur(camera_time), dur(wall_time));
+
+                if wall_time >= 2.0 {
+                    let error = (result.as_secs_f64() - wall_time).abs();
+                    assert!(
+                        error < 0.5,
+                        "At wall_time={:.1}s: corrected {:.3}s should be close to wall clock",
+                        wall_time,
+                        result.as_secs_f64()
+                    );
+                }
+            }
+
+            let final_result = tracker.calculate_timestamp(dur(camera_time), dur(wall_time));
+            assert!(
+                (final_result.as_secs_f64() - wall_time).abs() < 1.0,
+                "Final timestamp {:.3}s should be close to wall clock {:.3}s",
+                final_result.as_secs_f64(),
+                wall_time
+            );
+        }
+
+        #[test]
+        fn preserves_baseline_across_multiple_calls() {
+            let mut tracker = VideoDriftTracker::new();
+
+            tracker.calculate_timestamp(dur(2.1), dur(2.0));
+            let first_baseline = tracker.baseline_offset_secs;
+
+            tracker.calculate_timestamp(dur(10.1), dur(10.0));
+
+            assert_eq!(
+                first_baseline, tracker.baseline_offset_secs,
+                "Baseline should not change after initial capture"
+            );
+        }
+    }
 }

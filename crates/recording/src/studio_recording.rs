@@ -6,7 +6,7 @@ use crate::{
     },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{OggMuxer, SegmentedAudioMuxer, SegmentedAudioMuxerConfig},
+    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
@@ -1059,11 +1059,11 @@ async fn create_segment_pipeline(
 
     let microphone = if let Some(mic_feed) = base_inputs.mic_feed {
         let pipeline = if fragmented {
-            let fragments_dir = dir.join("audio-input");
-            OutputPipeline::builder(fragments_dir)
+            let output_path = dir.join("audio-input.m4a");
+            OutputPipeline::builder(output_path)
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig {
+                .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
                     ..Default::default()
                 })
@@ -1084,11 +1084,11 @@ async fn create_segment_pipeline(
 
     let system_audio = if let Some(system_audio_source) = system_audio {
         let pipeline = if fragmented {
-            let fragments_dir = dir.join("system_audio");
-            OutputPipeline::builder(fragments_dir)
+            let output_path = dir.join("system_audio.m4a");
+            OutputPipeline::builder(output_path)
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig {
+                .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
                     ..Default::default()
                 })
