@@ -134,7 +134,6 @@ function createScreenshotEditorContext() {
 	});
 
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
-	const [wsRef, setWsRef] = createSignal<WebSocket | null>(null);
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -177,7 +176,6 @@ function createScreenshotEditorContext() {
 
 		const ws = new WebSocket(instance.framesSocketUrl);
 		ws.binaryType = "arraybuffer";
-		setWsRef(ws);
 		ws.onmessage = async (event) => {
 			const buffer = event.data as ArrayBuffer;
 			if (buffer.byteLength < 24) return;
@@ -240,10 +238,6 @@ function createScreenshotEditorContext() {
 		const frame = latestFrame();
 		if (frame?.bitmap) {
 			frame.bitmap.close();
-		}
-		const ws = wsRef();
-		if (ws) {
-			ws.close();
 		}
 	});
 
