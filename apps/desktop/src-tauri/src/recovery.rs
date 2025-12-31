@@ -1,5 +1,6 @@
 use cap_project::StudioRecordingMeta;
 use cap_recording::recovery::RecoveryManager;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::PathBuf;
@@ -7,6 +8,27 @@ use tauri::{AppHandle, Manager};
 use tracing::info;
 
 use crate::create_screenshot;
+
+const RECOVERY_CUTOFF_DATE: (i32, u32, u32) = (2025, 12, 31);
+
+fn parse_recording_date(pretty_name: &str) -> Option<NaiveDate> {
+    let date_part = pretty_name.strip_prefix("Cap ")?;
+    let date_str = date_part.split(" at ").next()?;
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()
+}
+
+fn is_recording_after_cutoff(pretty_name: &str) -> bool {
+    let Some(recording_date) = parse_recording_date(pretty_name) else {
+        return false;
+    };
+    let cutoff = NaiveDate::from_ymd_opt(
+        RECOVERY_CUTOFF_DATE.0,
+        RECOVERY_CUTOFF_DATE.1,
+        RECOVERY_CUTOFF_DATE.2,
+    )
+    .expect("Invalid cutoff date");
+    recording_date > cutoff
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +58,7 @@ pub async fn find_incomplete_recordings(
 
     let result = incomplete_list
         .into_iter()
+        .filter(|recording| is_recording_after_cutoff(&recording.meta.pretty_name))
         .map(|recording| IncompleteRecordingInfo {
             project_path: recording.project_path.to_string_lossy().to_string(),
             pretty_name: recording.meta.pretty_name.clone(),
