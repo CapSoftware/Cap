@@ -50,6 +50,7 @@ use tracing::*;
 use crate::camera::{CameraPreviewManager, CameraPreviewShape};
 #[cfg(target_os = "macos")]
 use crate::general_settings;
+use crate::permissions;
 use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
@@ -302,6 +303,9 @@ pub async fn list_capture_windows() -> Vec<CaptureWindow> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return vec![];
+    }
     cap_camera::list_cameras().collect()
 }
 
