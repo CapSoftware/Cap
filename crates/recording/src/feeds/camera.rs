@@ -506,14 +506,6 @@ async fn setup_camera(
                 }))
                 .try_send();
 
-            if callback_num.is_multiple_of(30) {
-                tracing::trace!(
-                    "Camera callback: sent frame {} to actor, result={:?}",
-                    callback_num,
-                    send_result.is_ok()
-                );
-            }
-
             if send_result.is_err() && callback_num.is_multiple_of(30) {
                 tracing::warn!(
                     "Camera callback: failed to send frame {} to actor (mailbox full?)",
@@ -613,14 +605,6 @@ async fn setup_camera(
                     timestamp,
                 }))
                 .try_send();
-
-            if callback_num.is_multiple_of(30) {
-                tracing::trace!(
-                    "Camera callback: sent frame {} to actor, result={:?}",
-                    callback_num,
-                    send_result.is_ok()
-                );
-            }
 
             if send_result.is_err() && callback_num.is_multiple_of(30) {
                 tracing::warn!(
@@ -791,14 +775,6 @@ impl Message<NewFrame> for CameraFeed {
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if frame_num.is_multiple_of(30) {
-            trace!(
-                "CameraFeed: received frame {}, broadcasting to {} senders",
-                frame_num,
-                self.senders.len()
-            );
-        }
-
         let mut to_remove = vec![];
 
         for (i, sender) in self.senders.iter().enumerate() {
@@ -844,14 +820,6 @@ impl Message<NewNativeFrame> for CameraFeed {
     ) -> Self::Reply {
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        if frame_num.is_multiple_of(30) {
-            trace!(
-                "CameraFeed: received native frame {}, broadcasting to {} native senders",
-                frame_num,
-                self.native_senders.len()
-            );
-        }
 
         let mut to_remove = vec![];
 
