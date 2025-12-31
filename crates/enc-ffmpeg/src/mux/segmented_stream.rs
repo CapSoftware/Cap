@@ -631,9 +631,7 @@ impl SegmentedVideoEncoder {
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "rename failed after retries")
-        }))
+        Err(last_error.unwrap_or_else(|| std::io::Error::other("rename failed after retries")))
     }
 
     #[cfg(not(target_os = "windows"))]
