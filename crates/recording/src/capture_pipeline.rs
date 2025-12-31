@@ -56,6 +56,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         start_time: Timestamps,
         fragmented: bool,
         shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -83,6 +84,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         start_time: Timestamps,
         fragmented: bool,
         shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
     ) -> anyhow::Result<OutputPipeline> {
         if fragmented {
             let fragments_dir = output_path
@@ -94,6 +96,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
                 .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                    output_size,
                     shared_pause_state,
                     ..Default::default()
                 })
@@ -102,7 +105,9 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
-                .build::<AVFoundationMp4Muxer>(Default::default())
+                .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
+                    output_height: output_size.map(|(_, h)| h),
+                })
                 .await
         }
     }
@@ -141,6 +146,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         start_time: Timestamps,
         fragmented: bool,
         shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         if fragmented {
@@ -155,7 +161,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                     segment_duration: std::time::Duration::from_secs(3),
                     preset: H264Preset::Ultrafast,
-                    output_size: None,
+                    output_size,
                     shared_pause_state,
                     disk_space_callback: None,
                 })
@@ -170,7 +176,10 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     d3d_device,
                     bitrate_multiplier: 0.15f32,
                     frame_rate: 30u32,
-                    output_size: None,
+                    output_size: output_size.map(|(w, h)| windows::Graphics::SizeInt32 {
+                        Width: w as i32,
+                        Height: h as i32,
+                    }),
                     encoder_preferences,
                     fragmented: false,
                     frag_duration_us: 2_000_000,

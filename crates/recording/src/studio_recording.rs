@@ -1,5 +1,6 @@
 use crate::{
-    ActorError, MediaError, RecordingBaseInputs, RecordingError, SharedPauseState,
+    ActorError, H264_MAX_DIMENSION, MediaError, RecordingBaseInputs, RecordingError,
+    SharedPauseState, calculate_gpu_compatible_size,
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
@@ -957,6 +958,10 @@ async fn create_segment_pipeline(
     .await
     .context("screen capture init")?;
 
+    let screen_info = screen_config.info();
+    let output_size =
+        calculate_gpu_compatible_size(screen_info.width, screen_info.height, H264_MAX_DIMENSION);
+
     let (capture_source, system_audio) = screen_config.to_sources().await?;
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
@@ -989,6 +994,7 @@ async fn create_segment_pipeline(
         start_time,
         fragmented,
         shared_pause_state.clone(),
+        output_size,
         #[cfg(windows)]
         encoder_preferences.clone(),
     )
