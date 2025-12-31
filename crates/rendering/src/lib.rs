@@ -1257,9 +1257,7 @@ impl ProjectUniforms {
                         0.0
                     },
                     border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
-                    _padding0: 0.0,
                     _padding1: [0.0; 2],
-                    _padding1b: [0.0; 2],
                     border_color: if let Some(b) = project.background.border.as_ref() {
                         [
                             b.color[0] as f32 / 255.0,
@@ -1426,9 +1424,7 @@ impl ProjectUniforms {
                     opacity: scene.regular_camera_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
-                    _padding0: 0.0,
                     _padding1: [0.0; 2],
-                    _padding1b: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     _padding2: [0.0; 4],
                 }
@@ -1513,9 +1509,7 @@ impl ProjectUniforms {
                     opacity: scene.camera_only_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
-                    _padding0: 0.0,
                     _padding1: [0.0; 2],
-                    _padding1b: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     _padding2: [0.0; 4],
                 }

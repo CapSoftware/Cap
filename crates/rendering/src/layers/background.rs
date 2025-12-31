@@ -64,8 +64,16 @@ impl From<BackgroundSource> for Background {
                         .replace("localhost//", "/");
 
                     if std::path::Path::new(&clean_path).exists() {
+                        tracing::debug!("Background image path resolved: {}", clean_path);
                         return Background::Image { path: clean_path };
                     }
+                    tracing::warn!(
+                        "Background image path does not exist: {} (original: {})",
+                        clean_path,
+                        path
+                    );
+                } else {
+                    tracing::debug!("Background path is empty or None");
                 }
                 Background::Color([1.0, 1.0, 1.0, 1.0])
             }
@@ -121,8 +129,29 @@ impl BackgroundLayer {
                         let texture = match textures.entry(path.clone()) {
                             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                             std::collections::hash_map::Entry::Vacant(e) => {
-                                let img = image::open(&path)
-                                    .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
+                                let img = match image::open(&path) {
+                                    Ok(img) => img,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to load background image '{}': {}. Falling back to white.",
+                                            path,
+                                            e
+                                        );
+                                        let fallback_background =
+                                            Background::Color([1.0, 1.0, 1.0, 1.0]);
+                                        let buffer =
+                                            GradientOrColorUniforms::from(fallback_background)
+                                                .to_buffer(device);
+                                        self.inner = Some(Inner::ColorOrGradient {
+                                            value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
+                                            bind_group: self
+                                                .color_pipeline
+                                                .bind_group(device, &buffer),
+                                            buffer,
+                                        });
+                                        return Ok(());
+                                    }
+                                };
                                 let rgba = img.to_rgba8();
                                 let dimensions = img.dimensions();
 
