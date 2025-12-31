@@ -198,8 +198,8 @@ export function AnnotationLayer(props: {
 			opacity: 1,
 			rotation: 0,
 			text: tool === "text" ? "Text" : null,
-			maskType: tool === "mask" ? "blur" : null,
-			maskLevel: tool === "mask" ? 16 : null,
+			maskType: tool === "mask" ? "pixelate" : null,
+			maskLevel: tool === "mask" ? 7 : null,
 		};
 
 		if (tool === "text") {
