@@ -19,7 +19,7 @@ use std::{
         Arc,
         atomic::{self, AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -1448,9 +1448,7 @@ mod tests {
             let baseline = tracker.baseline_offset_secs.unwrap();
             assert!(
                 (baseline - buffer_delay).abs() < 0.001,
-                "Baseline should be ~{:.3}s, got {:.3}s",
-                buffer_delay,
-                baseline
+                "Baseline should be ~{buffer_delay:.3}s, got {baseline:.3}s"
             );
         }
 
@@ -1561,10 +1559,7 @@ mod tests {
             assert!(
                 (corrected_time - wall_clock_final).abs() < 1.0,
                 "Final timestamp should be close to wall clock. \
-                 Wall clock: {:.3}s, corrected: {:.3}s, input_duration: {:.3}s",
-                wall_clock_final,
-                corrected_time,
-                input_duration_final
+                 Wall clock: {wall_clock_final:.3}s, corrected: {corrected_time:.3}s, input_duration: {input_duration_final:.3}s"
             );
         }
 
@@ -1663,9 +1658,7 @@ mod tests {
             let baseline = tracker.baseline_offset_secs.unwrap();
             assert!(
                 (baseline - buffer_delay).abs() < 0.001,
-                "Baseline should be ~{:.3}s, got {:.3}s",
-                buffer_delay,
-                baseline
+                "Baseline should be ~{buffer_delay:.3}s, got {baseline:.3}s"
             );
         }
 

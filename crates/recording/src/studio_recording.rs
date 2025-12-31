@@ -1065,7 +1065,6 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
-                    ..Default::default()
                 })
                 .instrument(error_span!("mic-out"))
                 .await
@@ -1090,7 +1089,6 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
-                    ..Default::default()
                 })
                 .instrument(error_span!("system-audio-out"))
                 .await

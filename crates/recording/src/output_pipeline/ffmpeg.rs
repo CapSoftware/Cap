@@ -174,16 +174,9 @@ pub struct FragmentedAudioMuxer {
     pause: Option<SharedPauseState>,
 }
 
+#[derive(Default)]
 pub struct FragmentedAudioMuxerConfig {
     pub shared_pause_state: Option<SharedPauseState>,
-}
-
-impl Default for FragmentedAudioMuxerConfig {
-    fn default() -> Self {
-        Self {
-            shared_pause_state: None,
-        }
-    }
 }
 
 impl Muxer for FragmentedAudioMuxer {
