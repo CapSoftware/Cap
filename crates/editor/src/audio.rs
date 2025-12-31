@@ -249,7 +249,7 @@ pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
 }
 
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
-    pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
+    pub const PLAYBACK_SAMPLES_COUNT: u32 = 512;
     pub const WIRELESS_PLAYBACK_SAMPLES_COUNT: u32 = 1024;
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 

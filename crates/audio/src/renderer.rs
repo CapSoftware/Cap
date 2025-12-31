@@ -81,8 +81,10 @@ pub fn render_audio(
             }
         }
 
-        out[out_offset + i * 2] = left;
-        out[out_offset + i * 2 + 1] = right;
+        let l = left.clamp(-1.0, 1.0);
+        let r = right.clamp(-1.0, 1.0);
+        out[out_offset + i * 2] = l;
+        out[out_offset + i * 2 + 1] = r;
     }
 
     samples
