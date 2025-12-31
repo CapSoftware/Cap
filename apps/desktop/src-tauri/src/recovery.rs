@@ -54,18 +54,22 @@ pub async fn find_incomplete_recordings(
         return Ok(Vec::new());
     }
 
-    let incomplete_list = RecoveryManager::find_incomplete(&recordings_dir);
+    let result = tokio::task::spawn_blocking(move || {
+        let incomplete_list = RecoveryManager::find_incomplete(&recordings_dir);
 
-    let result = incomplete_list
-        .into_iter()
-        .filter(|recording| is_recording_after_cutoff(&recording.meta.pretty_name))
-        .map(|recording| IncompleteRecordingInfo {
-            project_path: recording.project_path.to_string_lossy().to_string(),
-            pretty_name: recording.meta.pretty_name.clone(),
-            segment_count: recording.recoverable_segments.len() as u32,
-            estimated_duration_secs: recording.estimated_duration.as_secs_f64(),
-        })
-        .collect();
+        incomplete_list
+            .into_iter()
+            .filter(|recording| is_recording_after_cutoff(&recording.meta.pretty_name))
+            .map(|recording| IncompleteRecordingInfo {
+                project_path: recording.project_path.to_string_lossy().to_string(),
+                pretty_name: recording.meta.pretty_name.clone(),
+                segment_count: recording.recoverable_segments.len() as u32,
+                estimated_duration_secs: recording.estimated_duration.as_secs_f64(),
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| format!("Recovery scan task failed: {e}"))?;
 
     Ok(result)
 }
