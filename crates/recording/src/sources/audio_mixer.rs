@@ -308,36 +308,32 @@ impl AudioMixer {
                         let elapsed_since_last_frame =
                             timestamp_elapsed.saturating_sub(buffer_last_elapsed);
 
-                        if let Some(diff) =
-                            elapsed_since_last_frame.checked_sub(buffer_last_duration)
+                        if let Some(gap) = elapsed_since_last_frame
+                            .checked_sub(buffer_last_duration)
+                            .filter(|&diff| diff >= buffer_timeout)
                         {
-                            if diff >= buffer_timeout {
-                                let gap = diff;
+                            debug!(?gap, "Gap between last buffer frame, inserting silence");
 
-                                debug!(?gap, "Gap between last buffer frame, inserting silence");
+                            let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
+                            let silence_samples_count = silence_samples_needed.ceil() as usize;
 
-                                let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
-                                let silence_samples_count = silence_samples_needed.ceil() as usize;
+                            let mut frame = ffmpeg::frame::Audio::new(
+                                source.info.sample_format,
+                                silence_samples_count,
+                                source.info.channel_layout(),
+                            );
 
-                                let mut frame = ffmpeg::frame::Audio::new(
-                                    source.info.sample_format,
-                                    silence_samples_count,
-                                    source.info.channel_layout(),
-                                );
-
-                                for i in 0..frame.planes() {
-                                    frame.data_mut(i).fill(0);
-                                }
-
-                                frame.set_rate(source.info.rate() as u32);
-
-                                let silence_duration = Duration::from_secs_f64(
-                                    silence_samples_count as f64 / rate as f64,
-                                );
-                                let timestamp = buffer_last_timestamp + buffer_last_duration;
-                                source.buffer_last = Some((timestamp, silence_duration));
-                                source.buffer.push_back(AudioFrame::new(frame, timestamp));
+                            for i in 0..frame.planes() {
+                                frame.data_mut(i).fill(0);
                             }
+
+                            frame.set_rate(source.info.rate() as u32);
+
+                            let silence_duration =
+                                Duration::from_secs_f64(silence_samples_count as f64 / rate as f64);
+                            let timestamp = buffer_last_timestamp + buffer_last_duration;
+                            source.buffer_last = Some((timestamp, silence_duration));
+                            source.buffer.push_back(AudioFrame::new(frame, timestamp));
                         }
                     }
                 }

@@ -1009,7 +1009,8 @@ impl PreparedAudioSources {
                             let total_input_duration_secs =
                                 total_samples as f64 / sample_rate as f64;
 
-                            if wall_clock_secs >= 5.0 && (wall_clock_secs as u64) % 10 == 0 {
+                            if wall_clock_secs >= 5.0 && (wall_clock_secs as u64).is_multiple_of(10)
+                            {
                                 let drift_ratio = if total_input_duration_secs > 0.0 {
                                     wall_clock_secs / total_input_duration_secs
                                 } else {
