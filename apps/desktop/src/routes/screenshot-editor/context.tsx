@@ -135,6 +135,7 @@ function createScreenshotEditorContext() {
 
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 	const [isRenderReady, setIsRenderReady] = createSignal(false);
+	let wsRef: WebSocket | null = null;
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -171,6 +172,7 @@ function createScreenshotEditorContext() {
 						height: img.naturalHeight,
 						bitmap,
 					});
+					setIsRenderReady(true);
 				} catch (e: unknown) {
 					console.error("Failed to create ImageBitmap from fallback image:", e);
 				}
@@ -185,6 +187,7 @@ function createScreenshotEditorContext() {
 		}
 
 		const ws = new WebSocket(instance.framesSocketUrl);
+		wsRef = ws;
 		ws.binaryType = "arraybuffer";
 		ws.onmessage = async (event) => {
 			const buffer = event.data as ArrayBuffer;
@@ -251,6 +254,10 @@ function createScreenshotEditorContext() {
 		const frame = latestFrame();
 		if (frame?.bitmap) {
 			frame.bitmap.close();
+		}
+		if (wsRef) {
+			wsRef.close();
+			wsRef = null;
 		}
 	});
 
