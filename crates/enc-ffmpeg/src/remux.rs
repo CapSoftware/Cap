@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     ptr,
+    sync::atomic::{AtomicI32, Ordering},
     time::Duration,
 };
 
@@ -10,6 +11,25 @@ use cap_media_info::{AudioInfo, AudioInfoError};
 use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, packet::Mut as PacketMut};
 
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
+
+static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
+
+fn suppress_ffmpeg_logs() {
+    unsafe {
+        let current = ffmpeg::ffi::av_log_get_level();
+        ORIGINAL_LOG_LEVEL.store(current, Ordering::SeqCst);
+        ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_QUIET);
+    }
+}
+
+fn restore_ffmpeg_logs() {
+    let original = ORIGINAL_LOG_LEVEL.load(Ordering::SeqCst);
+    if original >= 0 {
+        unsafe {
+            ffmpeg::ffi::av_log_set_level(original);
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RemuxError {
@@ -277,10 +297,20 @@ pub fn stream_copy_fragments(fragments: &[PathBuf], output: &Path) -> Result<(),
 }
 
 pub fn probe_media_valid(path: &Path) -> bool {
-    avformat::input(path).is_ok()
+    suppress_ffmpeg_logs();
+    let result = avformat::input(path).is_ok();
+    restore_ffmpeg_logs();
+    result
 }
 
 pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
+    suppress_ffmpeg_logs();
+    let result = probe_video_can_decode_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
     let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let input_stream = input
@@ -354,6 +384,13 @@ pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
 }
 
 pub fn get_media_duration(path: &Path) -> Option<Duration> {
+    suppress_ffmpeg_logs();
+    let result = get_media_duration_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_media_duration_inner(path: &Path) -> Option<Duration> {
     let input = avformat::input(path).ok()?;
     let duration_ts = input.duration();
     if duration_ts <= 0 {
@@ -363,6 +400,13 @@ pub fn get_media_duration(path: &Path) -> Option<Duration> {
 }
 
 pub fn get_video_fps(path: &Path) -> Option<u32> {
+    suppress_ffmpeg_logs();
+    let result = get_video_fps_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_video_fps_inner(path: &Path) -> Option<u32> {
     let input = avformat::input(path).ok()?;
     let stream = input.streams().best(ffmpeg::media::Type::Video)?;
     let rate = stream.avg_frame_rate();
