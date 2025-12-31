@@ -30,9 +30,8 @@ pub struct CompositeVideoFrameUniforms {
     pub opacity: f32,
     pub border_enabled: f32,
     pub border_width: f32,
-    pub _padding1: [f32; 2],
+    pub _padding1: [f32; 4],
     pub border_color: [f32; 4],
-    pub _padding2: [f32; 4],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -56,9 +55,8 @@ impl Default for CompositeVideoFrameUniforms {
             opacity: 1.0,
             border_enabled: 0.0,
             border_width: 5.0,
-            _padding1: [0.0; 2],
+            _padding1: [0.0; 4],
             border_color: [0.0, 0.0, 0.0, 0.0],
-            _padding2: [0.0; 4],
         }
     }
 }
