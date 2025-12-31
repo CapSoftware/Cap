@@ -145,13 +145,22 @@ function createScreenshotEditorContext() {
 			}
 		}
 
+		let hasReceivedWebSocketFrame = false;
+
 		if (instance.path) {
 			const img = new Image();
 			img.crossOrigin = "anonymous";
 			img.src = convertFileSrc(instance.path);
 			img.onload = async () => {
+				if (hasReceivedWebSocketFrame) {
+					return;
+				}
 				try {
 					const bitmap = await createImageBitmap(img);
+					if (hasReceivedWebSocketFrame) {
+						bitmap.close();
+						return;
+					}
 					const existing = latestFrame();
 					if (existing?.bitmap) {
 						existing.bitmap.close();
@@ -187,6 +196,8 @@ function createScreenshotEditorContext() {
 			const width = meta.getUint32(8, true);
 
 			if (!width || !height) return;
+
+			hasReceivedWebSocketFrame = true;
 
 			const expectedRowBytes = width * 4;
 			const frameData = new Uint8ClampedArray(
