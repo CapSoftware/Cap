@@ -46,7 +46,8 @@ export const listScreens = queryOptions({
 	queryKey: ["capture", "displays"] as const,
 	queryFn: () => commands.listCaptureDisplays(),
 	reconcile: "id",
-	refetchInterval: 1000,
+	refetchInterval: 10_000,
+	staleTime: 5_000,
 });
 
 export const listWindowsWithThumbnails = queryOptions({
@@ -70,7 +71,8 @@ export const listDisplaysWithThumbnails = queryOptions({
 	queryKey: ["capture", "displays-thumbnails"] as const,
 	queryFn: () => commands.listDisplaysWithThumbnails(),
 	reconcile: "id",
-	refetchInterval: 1000,
+	refetchInterval: 10_000,
+	staleTime: 5_000,
 });
 
 const getCurrentRecording = queryOptions({
@@ -90,7 +92,8 @@ export const listRecordings = queryOptions({
 export const listVideoDevices = queryOptions({
 	queryKey: ["videoDevices"] as const,
 	queryFn: () => commands.listCameras(),
-	refetchInterval: 1000,
+	refetchInterval: 5_000,
+	staleTime: 3_000,
 	initialData: [],
 });
 
@@ -110,16 +113,32 @@ export const listAudioDevices = queryOptions({
 	queryKey: ["audioDevices"] as const,
 	queryFn: () => commands.listAudioDevices(),
 	reconcile: "name",
-	refetchInterval: 1000,
-	gcTime: 0,
-	staleTime: 0,
+	refetchInterval: 5_000,
+	staleTime: 3_000,
 });
 
 export const getPermissions = queryOptions({
 	queryKey: ["permissionsOS"] as const,
 	queryFn: () => commands.doPermissionsCheck(true),
-	refetchInterval: 1000,
+	staleTime: 3_000,
 });
+
+export function createPermissionsQuery() {
+	const [refetchInterval, setRefetchInterval] = createStore<{
+		value: number;
+	}>({ value: 5_000 });
+
+	const timeoutId = setTimeout(() => {
+		setRefetchInterval("value", 15_000);
+	}, 30_000);
+
+	onCleanup(() => clearTimeout(timeoutId));
+
+	return createQuery(() => ({
+		...getPermissions,
+		refetchInterval: refetchInterval.value,
+	}));
+}
 
 export const isSystemAudioSupported = queryOptions({
 	queryKey: ["systemAudioSupported"] as const,

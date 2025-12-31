@@ -37,6 +37,7 @@ import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
+	createPermissionsQuery,
 	listAudioDevices,
 	listDisplaysWithThumbnails,
 	listRecordings,
@@ -498,7 +499,8 @@ function Page() {
 					([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
 				);
 			},
-			refetchInterval: 2000,
+			refetchInterval: 10_000,
+			staleTime: 5_000,
 			reconcile: (old, next) => reconcile(next)(old),
 			initialData: [],
 		}),
@@ -664,6 +666,7 @@ function Page() {
 
 	const cameras = useQuery(() => listVideoDevices);
 	const mics = useQuery(() => listAudioDevices);
+	const permissions = createPermissionsQuery();
 
 	const windowListSignature = createMemo(() =>
 		createWindowSignature(windows.data),
@@ -835,6 +838,7 @@ function Page() {
 					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
 					else setCamera.mutate({ DeviceID: c.device_id });
 				}}
+				permissions={permissions.data}
 			/>
 			<MicrophoneSelect
 				disabled={mics.isPending}
@@ -843,6 +847,7 @@ function Page() {
 					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
 				}
 				onChange={(v) => setMicInput.mutate(v)}
+				permissions={permissions.data}
 			/>
 			<SystemAudio />
 		</div>
@@ -889,6 +894,8 @@ function Page() {
 									if (next) {
 										setWindowMenuOpen(false);
 										setHasOpenedDisplayMenu(true);
+										screens.refetch();
+										displayTargets.refetch();
 									}
 									return next;
 								});
@@ -926,6 +933,8 @@ function Page() {
 									if (next) {
 										setDisplayMenuOpen(false);
 										setHasOpenedWindowMenu(true);
+										windows.refetch();
+										windowTargets.refetch();
 									}
 									return next;
 								});
