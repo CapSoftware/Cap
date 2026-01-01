@@ -130,17 +130,25 @@ impl Mp4ExportSettings {
                 let mut audio_sample_cursor = 0u64;
 
                 loop {
-                    let (frame, frame_number) =
-                        match tokio::time::timeout(Duration::from_secs(6), video_rx.recv()).await {
-                            Err(_) => {
-                                warn!("render_task frame receive timed out");
-                                break;
-                            }
-                            Ok(Some(v)) => v,
-                            _ => {
-                                break;
-                            }
-                        };
+                    let timeout_secs = if frame_count == 0 { 120 } else { 60 };
+                    let (frame, frame_number) = match tokio::time::timeout(
+                        Duration::from_secs(timeout_secs),
+                        video_rx.recv(),
+                    )
+                    .await
+                    {
+                        Err(_) => {
+                            warn!(
+                                "render_task frame receive timed out after {}s (frame {})",
+                                timeout_secs, frame_count
+                            );
+                            break;
+                        }
+                        Ok(Some(v)) => v,
+                        _ => {
+                            break;
+                        }
+                    };
 
                     if !(on_progress)(frame_count) {
                         return Err("Export cancelled".to_string());
