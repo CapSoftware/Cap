@@ -2,6 +2,8 @@ import { Button } from "@cap/ui-solid";
 import { makePersisted } from "@solid-primitives/storage";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
 	createEffect,
 	createResource,
@@ -31,24 +33,29 @@ const permissions = [
 	{
 		name: "Screen Recording",
 		key: "screenRecording" as const,
-		description: "This permission is required to record your screen.",
+		description:
+			"Add Cap in System Settings, then restart the app for changes to take effect.",
+		requiresManualGrant: true,
 	},
 	{
 		name: "Accessibility",
 		key: "accessibility" as const,
 		description:
 			"During recording, Cap collects mouse activity locally to generate automatic zoom in segments.",
+		requiresManualGrant: false,
 	},
 	{
 		name: "Microphone",
 		key: "microphone" as const,
 		description: "This permission is required to record audio in your Caps.",
+		requiresManualGrant: false,
 	},
 	{
 		name: "Camera",
 		key: "camera" as const,
 		description:
 			"This permission is required to record your camera in your Caps.",
+		requiresManualGrant: false,
 	},
 ] as const;
 
@@ -71,18 +78,31 @@ export default function () {
 		}
 	});
 
-	const requestPermission = (permission: OSPermission) => {
-		console.log({ permission });
+	const requestPermission = async (permission: OSPermission) => {
 		try {
-			commands.requestPermission(permission);
+			await commands.requestPermission(permission);
 		} catch (err) {
 			console.error(`Error occurred while requesting permission: ${err}`);
 		}
 		setInitialCheck(false);
 	};
 
-	const openSettings = (permission: OSPermission) => {
-		commands.openPermissionSettings(permission);
+	const openSettings = async (permission: OSPermission) => {
+		await commands.openPermissionSettings(permission);
+		if (permission === "screenRecording") {
+			const shouldRestart = await ask(
+				"After adding Cap in System Settings, you'll need to restart the app for the permission to take effect.",
+				{
+					title: "Restart Required",
+					kind: "info",
+					okLabel: "Restart, I've granted permission",
+					cancelLabel: "No, I still need to add it",
+				},
+			);
+			if (shouldRestart) {
+				await relaunch();
+			}
+		}
 		setInitialCheck(false);
 	};
 
@@ -137,17 +157,20 @@ export default function () {
 										<Button
 											class="flex-1 shrink-0"
 											onClick={() =>
-												permissionCheck() !== "denied"
-													? requestPermission(permission.key)
-													: openSettings(permission.key)
+												permission.requiresManualGrant ||
+												permissionCheck() === "denied"
+													? openSettings(permission.key)
+													: requestPermission(permission.key)
 											}
 											disabled={isPermitted(permissionCheck())}
 										>
 											{permissionCheck() === "granted"
 												? "Granted"
-												: permissionCheck() !== "denied"
-													? "Grant Permission"
-													: "Request Permission"}
+												: permission.requiresManualGrant
+													? "Open Settings"
+													: permissionCheck() !== "denied"
+														? "Grant Permission"
+														: "Request Permission"}
 										</Button>
 									</li>
 								</Show>
