@@ -112,6 +112,12 @@ export const DownloadPage = () => {
 								</a>
 							</>
 						)}
+						<Link
+							href="/download/versions"
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							All versions
+						</Link>
 					</div>
 				</div>
 
