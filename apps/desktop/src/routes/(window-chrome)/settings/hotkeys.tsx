@@ -11,7 +11,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { generalSettingsStore, hotkeysStore } from "~/store";
+import { hotkeysStore } from "~/store";
 
 import {
 	commands,
@@ -45,7 +45,6 @@ export default function () {
 
 const MODIFIER_KEYS = new Set(["Meta", "Shift", "Control", "Alt"]);
 function Inner(props: { initialStore: HotkeysStore | null }) {
-	const generalSettings = generalSettingsStore.createQuery();
 	const [hotkeys, setHotkeys] = createStore<{
 		[K in HotkeyAction]?: Hotkey;
 	}>(props.initialStore?.hotkeys ?? {});
@@ -80,20 +79,14 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 
 	const actions = () =>
 		[
-			...(generalSettings.data?.enableNewRecordingFlow
-				? (["openRecordingPicker"] as const)
-				: (["startStudioRecording", "startInstantRecording"] as const)),
+			"openRecordingPicker",
 			"stopRecording",
 			"restartRecording",
 			"togglePauseRecording",
 			"cycleRecordingMode",
-			...(generalSettings.data?.enableNewRecordingFlow
-				? ([
-						"openRecordingPickerDisplay",
-						"openRecordingPickerWindow",
-						"openRecordingPickerArea",
-					] as const)
-				: []),
+			"openRecordingPickerDisplay",
+			"openRecordingPickerWindow",
+			"openRecordingPickerArea",
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (

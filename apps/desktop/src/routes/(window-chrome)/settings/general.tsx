@@ -23,9 +23,6 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
-import themePreviewLegacyAuto from "~/assets/theme-previews/legacy-auto.jpg";
-import themePreviewLegacyDark from "~/assets/theme-previews/legacy-dark.jpg";
-import themePreviewLegacyLight from "~/assets/theme-previews/legacy-light.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
@@ -75,8 +72,6 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	autoCreateShareableLink: false,
 	enableNotifications: true,
 	enableNativeCameraPreview: false,
-	enableNewRecordingFlow: true,
-	recordingPickerPreferenceSet: false,
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
 	excludedWindows: [],
@@ -131,7 +126,6 @@ export default function GeneralSettings() {
 
 function AppearanceSection(props: {
 	currentTheme: AppTheme;
-	newRecordingFlow: boolean;
 	onThemeChange: (theme: AppTheme) => void;
 }) {
 	const options = [
@@ -149,17 +143,11 @@ function AppearanceSection(props: {
 		},
 	] satisfies { id: AppTheme; name: string }[];
 
-	const previews = createMemo(() => {
-		return {
-			system: props.newRecordingFlow
-				? themePreviewAuto
-				: themePreviewLegacyAuto,
-			light: props.newRecordingFlow
-				? themePreviewLight
-				: themePreviewLegacyLight,
-			dark: props.newRecordingFlow ? themePreviewDark : themePreviewLegacyDark,
-		};
-	});
+	const previews = {
+		system: themePreviewAuto,
+		light: themePreviewLight,
+		dark: themePreviewDark,
+	};
 
 	return (
 		<div class="flex flex-col gap-4">
@@ -194,7 +182,7 @@ function AppearanceSection(props: {
 										aria-label={`Select theme: ${theme.name}`}
 									>
 										<div class="flex justify-center items-center w-full h-full">
-											<Show when={previews()[theme.id]} keyed>
+											<Show when={previews[theme.id]} keyed>
 												{(preview) => (
 													<img
 														class="animate-in fade-in duration-300"
@@ -257,16 +245,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
-	const recordingWindowVariant = () =>
-		settings.enableNewRecordingFlow === false ? "old" : "new";
-
-	const updateRecordingWindowVariant = (variant: "new" | "old") => {
-		const shouldUseNew = variant === "new";
-		if (settings.enableNewRecordingFlow === shouldUseNew) return;
-		handleChange("enableNewRecordingFlow", shouldUseNew, {
-			recordingPickerPreferenceSet: true,
-		});
-	};
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -420,7 +398,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<div class="p-4 space-y-6">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
-					newRecordingFlow={settings.enableNewRecordingFlow}
 					onThemeChange={(newTheme) => {
 						setSettings("theme", newTheme);
 						generalSettingsStore.set({ theme: newTheme });
@@ -481,33 +458,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				)}
 
 				<SettingGroup title="Recording">
-					<SettingItem
-						label="Recording window"
-						description="Choose which recording picker experience Cap should open."
-					>
-						<div class="flex gap-1 bg-gray-3 rounded-lg p-1 text-xs font-medium">
-							{(
-								[
-									{ id: "new", label: "New" },
-									{ id: "old", label: "Old" },
-								] as const
-							).map((option) => (
-								<button
-									type="button"
-									class={cx("flex-1 rounded-md px-3 py-1.5 transition-colors", {
-										"bg-gray-12 text-gray-1":
-											recordingWindowVariant() === option.id,
-										"text-gray-11 hover:text-gray-12":
-											recordingWindowVariant() !== option.id,
-									})}
-									aria-pressed={recordingWindowVariant() === option.id}
-									onClick={() => updateRecordingWindowVariant(option.id)}
-								>
-									{option.label}
-								</button>
-							))}
-						</div>
-					</SettingItem>
 					<SelectSettingItem
 						label="Instant mode max resolution"
 						description="Choose the maximum resolution for Instant Mode recordings."

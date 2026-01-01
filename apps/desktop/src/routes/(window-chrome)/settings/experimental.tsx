@@ -24,7 +24,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			autoCreateShareableLink: false,
 			enableNotifications: true,
 			enableNativeCameraPreview: false,
-			enableNewRecordingFlow: true,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
 		},

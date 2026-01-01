@@ -1,6 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { createEventListener } from "@solid-primitives/event-listener";
-import { useNavigate } from "@solidjs/router";
 import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -30,7 +28,7 @@ import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
-import { authStore, generalSettingsStore } from "~/store";
+import { authStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createDevicesQuery } from "~/utils/devices";
@@ -340,13 +338,6 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 }
 
 export default function () {
-	const generalSettings = generalSettingsStore.createQuery();
-
-	const navigate = useNavigate();
-	createEventListener(window, "focus", () => {
-		if (generalSettings.data?.enableNewRecordingFlow === false) navigate("/");
-	});
-
 	return (
 		<RecordingOptionsProvider>
 			<Page />

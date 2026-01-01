@@ -303,17 +303,11 @@ impl ShowCapWindow {
                     return Box::pin(Self::Setup.show(app)).await;
                 }
 
-                let new_recording_flow = GeneralSettingsStore::get(app)
-                    .ok()
-                    .flatten()
-                    .map(|s| s.enable_new_recording_flow)
-                    .unwrap_or_default();
-
                 let title = CapWindowId::Main.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let window = self
-                    .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
+                    .window_builder(app, "/")
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
@@ -332,10 +326,8 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                if new_recording_flow {
-                    #[cfg(target_os = "macos")]
-                    crate::platform::set_window_level(window.as_ref().window(), 50);
-                }
+                #[cfg(target_os = "macos")]
+                crate::platform::set_window_level(window.as_ref().window(), 50);
 
                 #[cfg(target_os = "macos")]
                 {
