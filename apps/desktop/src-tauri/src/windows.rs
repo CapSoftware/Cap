@@ -635,23 +635,23 @@ impl ShowCapWindow {
 
                     let window = window_builder.build()?;
 
-                    if enable_native_camera_preview {
-                        if let Some(id) = state.selected_camera_id.clone()
-                            && !state.camera_in_use
-                        {
-                            match state.camera_feed.ask(feeds::camera::SetInput { id }).await {
-                                Ok(ready_future) => {
-                                    if let Err(err) = ready_future.await {
-                                        error!("Camera failed to initialize: {err}");
-                                    }
-                                }
-                                Err(err) => {
-                                    error!("Failed to send SetInput to camera feed: {err}");
+                    if let Some(id) = state.selected_camera_id.clone()
+                        && !state.camera_in_use
+                    {
+                        match state.camera_feed.ask(feeds::camera::SetInput { id }).await {
+                            Ok(ready_future) => {
+                                if let Err(err) = ready_future.await {
+                                    error!("Camera failed to initialize: {err}");
                                 }
                             }
-                            state.camera_in_use = true;
+                            Err(err) => {
+                                error!("Failed to send SetInput to camera feed: {err}");
+                            }
                         }
+                        state.camera_in_use = true;
+                    }
 
+                    if enable_native_camera_preview {
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
                             .camera_preview
