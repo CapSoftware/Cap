@@ -37,11 +37,13 @@ const WAVEFORM_SAMPLE_STEP = 0.1;
 const WAVEFORM_CONTROL_STEP = 0.05;
 const WAVEFORM_PADDING_SECONDS = 0.3;
 
+const WAVEFORM_MUTE_DB = -30;
+
 function gainToScale(gain?: number) {
 	if (!Number.isFinite(gain)) return 1;
 	const value = gain as number;
-	if (value <= WAVEFORM_MIN_DB) return 0;
-	return Math.max(0, 1 + value / -WAVEFORM_MIN_DB);
+	if (value <= WAVEFORM_MUTE_DB) return 0;
+	return Math.max(0, (value - WAVEFORM_MUTE_DB) / -WAVEFORM_MUTE_DB);
 }
 
 const MAX_WAVEFORM_SAMPLES = 6000;
@@ -202,7 +204,10 @@ function WaveformCanvas(props: {
 			};
 		}
 
-		const renderKey = `${canvasWidth}-${renderSegment.start.toFixed(2)}-${renderSegment.end.toFixed(2)}`;
+		const micScale = gainToScale(project.audio.micVolumeDb);
+		const systemScale = gainToScale(project.audio.systemVolumeDb);
+
+		const renderKey = `${canvasWidth}-${renderSegment.start.toFixed(2)}-${renderSegment.end.toFixed(2)}-${micScale.toFixed(2)}-${systemScale.toFixed(2)}`;
 		if (renderKey === lastRenderKey) {
 			return;
 		}
@@ -230,10 +235,8 @@ function WaveformCanvas(props: {
 			const scale = gainToScale(gain);
 			if (scale <= 0) return;
 			ctx.save();
-			ctx.translate(0, -1);
-			ctx.scale(1, scale);
-			ctx.translate(0, 1);
-			ctx.scale(canvasWidth, canvasHeight);
+			ctx.translate(0, canvasHeight * (1 - scale));
+			ctx.scale(canvasWidth, canvasHeight * scale);
 			ctx.fillStyle = color;
 			ctx.fill(path);
 			ctx.restore();
@@ -436,7 +439,7 @@ export function ClipTrack(
 					const systemAudioWaveform = () => {
 						if (
 							project.audio.systemVolumeDb &&
-							project.audio.systemVolumeDb <= -30
+							project.audio.systemVolumeDb < -30
 						)
 							return;
 
