@@ -2235,7 +2235,6 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 														: "left-1/2 transform -translate-x-1/2",
 												item.y === "top" ? "top-2" : "bottom-2",
 											)}
-											onClick={() => setProject("camera", "position", item)}
 										>
 											<div class="size-[0.5rem] shrink-0 bg-solid-white rounded-full" />
 										</RadioGroup.ItemControl>
