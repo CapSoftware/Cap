@@ -152,7 +152,9 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         HotkeyAction::RestartRecording => recording::restart_recording(app.clone(), app.state())
             .await
             .map(|_| ()),
-        HotkeyAction::TogglePauseRecording => recording::toggle_pause_recording(app.state()).await,
+        HotkeyAction::TogglePauseRecording => {
+            recording::toggle_pause_recording(app.clone(), app.state()).await
+        }
         HotkeyAction::CycleRecordingMode => {
             let current = RecordingSettingsStore::get(&app)
                 .ok()
