@@ -44,6 +44,7 @@ pub enum TrayItem {
     ModeStudio,
     ModeInstant,
     ModeScreenshot,
+    RequestPermissions,
 }
 
 impl From<TrayItem> for MenuId {
@@ -64,6 +65,7 @@ impl From<TrayItem> for MenuId {
             TrayItem::ModeStudio => "mode_studio",
             TrayItem::ModeInstant => "mode_instant",
             TrayItem::ModeScreenshot => "mode_screenshot",
+            TrayItem::RequestPermissions => "request_permissions",
         }
         .into()
     }
@@ -92,6 +94,7 @@ impl TryFrom<MenuId> for TrayItem {
             "mode_studio" => Ok(TrayItem::ModeStudio),
             "mode_instant" => Ok(TrayItem::ModeInstant),
             "mode_screenshot" => Ok(TrayItem::ModeScreenshot),
+            "request_permissions" => Ok(TrayItem::RequestPermissions),
             value => Err(format!("Invalid tray item id {value}")),
         }
     }
@@ -321,6 +324,10 @@ fn get_current_mode(app: &AppHandle) -> RecordingMode {
         .unwrap_or_default()
 }
 
+fn is_setup_window_open(app: &AppHandle) -> bool {
+    app.webview_windows().contains_key("setup")
+}
+
 fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     let current_mode = get_current_mode(app);
 
@@ -352,6 +359,30 @@ fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
 }
 
 fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result<Menu<tauri::Wry>> {
+    if is_setup_window_open(app) {
+        return Menu::with_items(
+            app,
+            &[
+                &MenuItem::with_id(
+                    app,
+                    TrayItem::RequestPermissions,
+                    "Request Permissions",
+                    true,
+                    None::<&str>,
+                )?,
+                &PredefinedMenuItem::separator(app)?,
+                &MenuItem::with_id(
+                    app,
+                    "version",
+                    format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+                    false,
+                    None::<&str>,
+                )?,
+                &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
+            ],
+        );
+    }
+
     let previous_submenu = create_previous_submenu(app, cache)?;
     let mode_submenu = create_mode_submenu(app)?;
 
@@ -627,6 +658,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 Ok(TrayItem::ModeScreenshot) => {
                     handle_mode_selection(app, RecordingMode::Screenshot, &cache);
+                }
+                Ok(TrayItem::RequestPermissions) => {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let _ = ShowCapWindow::Setup.show(&app).await;
+                    });
                 }
                 _ => {}
             }

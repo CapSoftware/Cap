@@ -66,33 +66,33 @@ pub fn open_permission_settings(_permission: OSPermission) {
 pub async fn request_permission(_permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
-        use futures::executor::block_on;
-        use std::thread;
-
         match _permission {
             OSPermission::ScreenRecording => {
-                #[cfg(target_os = "macos")]
                 scap_screencapturekit::request_permission();
             }
             OSPermission::Camera => {
-                thread::spawn(|| {
-                    block_on(av::CaptureDevice::request_access_for_media_type(
+                tauri::async_runtime::spawn_blocking(|| {
+                    futures::executor::block_on(av::CaptureDevice::request_access_for_media_type(
                         av::MediaType::video(),
                     ))
                     .ok();
-                });
+                })
+                .await
+                .ok();
             }
             OSPermission::Microphone => {
-                thread::spawn(|| {
-                    block_on(av::CaptureDevice::request_access_for_media_type(
+                tauri::async_runtime::spawn_blocking(|| {
+                    futures::executor::block_on(av::CaptureDevice::request_access_for_media_type(
                         av::MediaType::audio(),
                     ))
                     .ok();
-                });
+                })
+                .await
+                .ok();
             }
             OSPermission::Accessibility => {
                 use core_foundation::base::TCFType;
-                use core_foundation::dictionary::CFDictionary; // Import CFDictionaryRef
+                use core_foundation::dictionary::CFDictionary;
                 use core_foundation::string::CFString;
 
                 let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");

@@ -99,6 +99,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 libproc = "0.14"
 
+[[test]]
+name = "synthetic_recording"
+required-features = ["test-utils"]
+
 [[example]]
 name = "synthetic-test-runner"
 required-features = ["test-utils"]

@@ -837,6 +837,11 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
+        let segment_start_time = if self.index == 0 {
+            self.start_time
+        } else {
+            Timestamps::now()
+        };
         let pipeline = create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
@@ -847,7 +852,7 @@ impl SegmentPipelineFactory {
             self.custom_cursor_capture,
             self.fragmented,
             self.max_fps,
-            self.start_time,
+            segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
         )

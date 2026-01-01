@@ -666,8 +666,10 @@ impl ShowCapWindow {
                             .init_window(window.clone(), camera_feed)
                             .await
                         {
-                            error!("Error initializing camera preview: {err}");
-                            window.close().ok();
+                            error!(
+                                "Error initializing camera preview, falling back to WebSocket preview: {err}"
+                            );
+                            window.show().ok();
                         }
                     } else {
                         window.show().ok();
