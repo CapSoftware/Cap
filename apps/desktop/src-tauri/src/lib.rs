@@ -3095,6 +3095,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
+                        || label.as_str() == "setup"
                 });
 
                 if has_window {
@@ -3106,6 +3107,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
+                                || label.as_str() == "setup"
                         })
                         .map(|(_, window)| window.clone())
                     {
