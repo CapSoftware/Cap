@@ -79,7 +79,6 @@ export function MicrophoneSelectBase(props: {
 		else setDbs(dbs);
 	});
 
-	// visual audio level from 0 -> 1
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
@@ -98,7 +97,7 @@ export function MicrophoneSelectBase(props: {
 				class={props.class}
 				onClick={() => {
 					if (!permissionGranted()) {
-						requestPermission("microphone");
+						requestPermission("microphone", props.permissions?.microphone);
 						return;
 					}
 
@@ -142,7 +141,9 @@ export function MicrophoneSelectBase(props: {
 					PillComponent={props.PillComponent}
 					value={props.value}
 					permissionGranted={permissionGranted()}
-					requestPermission={() => requestPermission("microphone")}
+					requestPermission={() =>
+						requestPermission("microphone", props.permissions?.microphone)
+					}
 					onClick={(e) => {
 						if (props.value !== null) {
 							e.stopPropagation();

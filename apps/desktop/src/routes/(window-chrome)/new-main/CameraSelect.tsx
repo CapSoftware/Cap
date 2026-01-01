@@ -90,7 +90,7 @@ export function CameraSelectBase(props: {
 
 	const onChange = (cameraLabel: CameraInfo | null) => {
 		if (!cameraLabel && !permissionGranted())
-			return requestPermission("camera");
+			return requestPermission("camera", props.permissions?.camera);
 
 		props.onChange(cameraLabel);
 
@@ -110,7 +110,7 @@ export function CameraSelectBase(props: {
 				disabled={!!currentRecording.data || props.disabled}
 				onClick={() => {
 					if (!permissionGranted()) {
-						requestPermission("camera");
+						requestPermission("camera", props.permissions?.camera);
 						return;
 					}
 
@@ -156,7 +156,9 @@ export function CameraSelectBase(props: {
 						PillComponent={props.PillComponent}
 						value={props.value}
 						permissionGranted={permissionGranted()}
-						requestPermission={() => requestPermission("camera")}
+						requestPermission={() =>
+							requestPermission("camera", props.permissions?.camera)
+						}
 						onClick={(e) => {
 							if (!props.options) return;
 							if (props.value !== null) {
