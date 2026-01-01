@@ -354,6 +354,8 @@ pub enum RecordingEvent {
     Countdown { value: u32 },
     Started,
     Stopped,
+    Paused,
+    Resumed,
     Failed { error: String },
     InputLost { input: RecordingInputKind },
     InputRestored { input: RecordingInputKind },
@@ -943,12 +945,13 @@ pub async fn start_recording(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(state))]
-pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+#[instrument(skip(app, state))]
+pub async fn pause_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
     if let Some(recording) = state.current_recording_mut() {
         recording.pause().await.map_err(|e| e.to_string())?;
+        RecordingEvent::Paused.emit(&app).ok();
     }
 
     Ok(())
@@ -956,12 +959,13 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(state))]
-pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
+#[instrument(skip(app, state))]
+pub async fn resume_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
     if let Some(recording) = state.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
+        RecordingEvent::Resumed.emit(&app).ok();
     }
 
     Ok(())
@@ -969,15 +973,20 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(state))]
-pub async fn toggle_pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+#[instrument(skip(app, state))]
+pub async fn toggle_pause_recording(
+    app: AppHandle,
+    state: MutableState<'_, App>,
+) -> Result<(), String> {
     let state = state.read().await;
 
     if let Some(recording) = state.current_recording() {
         if recording.is_paused().await.map_err(|e| e.to_string())? {
             recording.resume().await.map_err(|e| e.to_string())?;
+            RecordingEvent::Resumed.emit(&app).ok();
         } else {
             recording.pause().await.map_err(|e| e.to_string())?;
+            RecordingEvent::Paused.emit(&app).ok();
         }
     }
 
