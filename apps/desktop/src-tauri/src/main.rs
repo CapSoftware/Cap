@@ -113,8 +113,8 @@ fn main() {
         .with(tracing_subscriber::filter::filter_fn(
             (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
         ))
-        .with(level_filter)
         .with(reload_layer)
+        .with(level_filter)
         .with(otel_layer)
         .with(
             tracing_subscriber::fmt::layer()
