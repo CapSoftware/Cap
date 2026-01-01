@@ -446,6 +446,14 @@ export function AnnotationLayer(props: {
 			setIsDrawing(false);
 			setActiveTool("select");
 			setSelectedAnnotationId(ann.id);
+
+			if (ann.type === "text") {
+				textSnapshot = {
+					project: structuredClone(unwrap(project)),
+					annotations: structuredClone(unwrap(annotations)),
+				};
+				setTextEditingId(ann.id);
+			}
 		}
 
 		if (dragState()) {
