@@ -4,12 +4,15 @@ use cap_audio::{
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, TimelineConfiguration};
-use ffmpeg::{ChannelLayout, format as avformat, frame::Audio as FFAudio, software::resampling};
+use ffmpeg::{
+    ChannelLayout, Dictionary, format as avformat, frame::Audio as FFAudio, software::resampling,
+};
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Observer, Producer},
 };
 use std::sync::Arc;
+use tracing::info;
 
 pub struct AudioRenderer {
     data: Vec<AudioSegment>,
@@ -254,8 +257,12 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
     pub fn new(data: Vec<AudioSegment>, output_info: AudioInfo) -> Self {
-        // println!("Input info: {:?}", data[0][0].info);
-        println!("Output info: {output_info:?}");
+        info!(
+            sample_rate = output_info.sample_rate,
+            channels = output_info.channels,
+            sample_format = ?output_info.sample_format,
+            "Audio playback output configuration"
+        );
 
         let resampler = AudioResampler::new(output_info).unwrap();
 
@@ -380,18 +387,26 @@ pub struct AudioResampler {
 
 impl AudioResampler {
     pub fn new(output_info: AudioInfo) -> Result<Self, MediaError> {
-        let context = ffmpeg::software::resampler(
-            (
-                AudioData::SAMPLE_FORMAT,
-                ChannelLayout::STEREO,
-                AudioData::SAMPLE_RATE,
-            ),
-            (
-                output_info.sample_format,
-                output_info.channel_layout(),
-                output_info.sample_rate,
-            ),
+        let mut options = Dictionary::new();
+        options.set("filter_size", "128");
+        options.set("cutoff", "0.97");
+
+        let context = resampling::Context::get_with(
+            AudioData::SAMPLE_FORMAT,
+            ChannelLayout::STEREO,
+            AudioData::SAMPLE_RATE,
+            output_info.sample_format,
+            output_info.channel_layout(),
+            output_info.sample_rate,
+            options,
         )?;
+
+        info!(
+            input_rate = AudioData::SAMPLE_RATE,
+            output_rate = output_info.sample_rate,
+            output_format = ?output_info.sample_format,
+            "Audio resampler created with high-quality settings (filter_size=128)"
+        );
 
         Ok(Self {
             output: output_info,
