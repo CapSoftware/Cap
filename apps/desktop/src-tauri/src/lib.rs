@@ -2556,7 +2556,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
-            captions::prewarm_whisperx,
             captions::transcribe_audio,
             captions::save_captions,
             captions::load_captions,

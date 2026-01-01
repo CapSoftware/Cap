@@ -52,3 +52,9 @@ tauri.windows.conf.json
 .env*.local
 .docs/
 .claude/
+.claude/settings.local.json
+
+# Release backfill scripts (one-time use)
+scripts/backfill-releases.sh
+scripts/update-github-releases.sh
+scripts/releases-backfill-data.txt

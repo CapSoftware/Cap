@@ -256,9 +256,6 @@ async createDir(path: string, recursive: boolean) : Promise<null> {
 async saveModelFile(path: string, data: number[]) : Promise<null> {
     return await TAURI_INVOKE("save_model_file", { path, data });
 },
-async prewarmWhisperx(modelPath: string) : Promise<boolean> {
-    return await TAURI_INVOKE("prewarm_whisperx", { modelPath });
-},
 async transcribeAudio(videoPath: string, modelPath: string, language: string) : Promise<CaptionData> {
     return await TAURI_INVOKE("transcribe_audio", { videoPath, modelPath, language });
 },

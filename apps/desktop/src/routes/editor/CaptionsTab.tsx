@@ -215,12 +215,6 @@ export function CaptionsTab() {
 				.map((m) => m.name);
 			setDownloadedModels(downloadedModelNames);
 
-			if (downloadedModelNames.length > 0) {
-				const modelToPrewarm = downloadedModelNames[0];
-				const modelPath = await join(modelsPath, `${modelToPrewarm}.bin`);
-				commands.prewarmWhisperx(modelPath).catch(() => {});
-			}
-
 			const savedModel = localStorage.getItem("selectedTranscriptionModel");
 			if (savedModel && MODEL_OPTIONS.some((m) => m.name === savedModel)) {
 				setSelectedModel(savedModel);
