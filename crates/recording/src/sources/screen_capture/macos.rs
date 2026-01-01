@@ -13,7 +13,7 @@ use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
 use std::{
     sync::{
         Arc,
-        atomic::{self, AtomicBool, AtomicU32},
+        atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
     time::Duration,
 };
@@ -24,6 +24,20 @@ use tokio_util::{
 };
 use tracing::{debug, warn};
 
+fn get_screen_buffer_size() -> usize {
+    std::env::var("CAP_SCREEN_BUFFER_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4)
+}
+
+fn get_max_queue_depth() -> isize {
+    std::env::var("CAP_MAX_QUEUE_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4)
+}
+
 #[derive(Debug)]
 pub struct CMSampleBufferCapture;
 
@@ -31,7 +45,7 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
     type VideoFormat = cidre::arc::R<cidre::cm::SampleBuf>;
 
     fn pixel_format() -> ffmpeg::format::Pixel {
-        ffmpeg::format::Pixel::BGRA
+        ffmpeg::format::Pixel::NV12
     }
 
     fn audio_info() -> AudioInfo {
@@ -68,8 +82,10 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = broadcast::channel(1);
-        // Increased from 4 to 12 to provide more buffer tolerance for frame processing delays
-        let (video_tx, video_rx) = flume::bounded(12);
+        let buffer_size = get_screen_buffer_size();
+        debug!(buffer_size = buffer_size, "Screen capture buffer size");
+        let (video_tx, video_rx) = flume::bounded(buffer_size);
+        let drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let (mut audio_tx, audio_rx) = if self.system_audio {
             let (tx, rx) = mpsc::channel(32);
             (Some(tx), Some(rx))
@@ -129,8 +145,14 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         debug!("size: {:?}", size);
 
-        let queue_depth = ((self.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, 8);
-        debug!("Using queue depth: {}", queue_depth);
+        let max_queue_depth = get_max_queue_depth();
+        let queue_depth =
+            ((self.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
+        debug!(
+            queue_depth = queue_depth,
+            max_queue_depth = max_queue_depth,
+            "Screen capture queue depth"
+        );
 
         let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
             .with_width(size.width() as usize)
@@ -141,7 +163,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             .with_queue_depth(queue_depth)
             .build();
 
-        settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+        settings.set_pixel_format(cv::PixelFormat::_420V);
         settings.set_color_space_name(cg::color_space::names::srgb());
 
         if let Some(crop_bounds) = self.config.crop_bounds {
@@ -163,6 +185,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
+                let drop_counter = drop_counter.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -174,7 +197,10 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                     match &frame {
                         scap_screencapturekit::Frame::Screen(frame) => {
-                            if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
+                            let Some(image_buf) = frame.image_buf() else {
+                                return;
+                            };
+                            if image_buf.height() == 0 || image_buf.width() == 0 {
                                 return;
                             }
 
@@ -182,10 +208,15 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                             video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
-                            let _ = video_tx.try_send(VideoFrame {
-                                sample_buf: sample_buffer.retained(),
-                                timestamp,
-                            });
+                            if video_tx
+                                .try_send(VideoFrame {
+                                    sample_buf: sample_buffer.retained(),
+                                    timestamp,
+                                })
+                                .is_err()
+                            {
+                                drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            }
                         }
                         scap_screencapturekit::Frame::Audio(_) => {
                             use ffmpeg::ChannelLayout;
@@ -240,6 +271,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 capturer: capturer.clone(),
                 error_rx: error_rx.resubscribe(),
                 video_frame_counter: video_frame_counter.clone(),
+                drop_counter,
                 cancel_token: cancel_token.clone(),
                 drop_guard: cancel_token.drop_guard(),
             },
@@ -338,12 +370,14 @@ pub struct VideoSourceConfig {
     cancel_token: CancellationToken,
     drop_guard: DropGuard,
     video_frame_counter: Arc<AtomicU32>,
+    drop_counter: Arc<AtomicU64>,
 }
 pub struct VideoSource {
     inner: ChannelVideoSource<VideoFrame>,
     capturer: Capturer,
     cancel_token: CancellationToken,
     video_frame_counter: Arc<AtomicU32>,
+    drop_counter: Arc<AtomicU64>,
     _drop_guard: DropGuard,
 }
 
@@ -366,6 +400,7 @@ impl output_pipeline::VideoSource for VideoSource {
             cancel_token,
             drop_guard,
             video_frame_counter,
+            drop_counter,
         } = config;
 
         let monitor_capturer = capturer.clone();
@@ -412,6 +447,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 cancel_token,
                 _drop_guard: drop_guard,
                 video_frame_counter,
+                drop_counter,
             })
     }
 
@@ -421,13 +457,43 @@ impl output_pipeline::VideoSource for VideoSource {
 
             tokio::spawn({
                 let video_frame_count = self.video_frame_counter.clone();
+                let drop_counter = self.drop_counter.clone();
                 async move {
+                    let mut prev_frames = 0u32;
+                    let mut prev_drops = 0u64;
                     loop {
                         tokio::time::sleep(Duration::from_secs(5)).await;
-                        debug!(
-                            "Captured {} frames",
-                            video_frame_count.load(atomic::Ordering::Relaxed)
-                        );
+                        let current_frames = video_frame_count.load(atomic::Ordering::Relaxed);
+                        let current_drops = drop_counter.load(atomic::Ordering::Relaxed);
+
+                        let frame_delta = current_frames.saturating_sub(prev_frames);
+                        let drop_delta = current_drops.saturating_sub(prev_drops);
+
+                        if frame_delta > 0 {
+                            let drop_rate = 100.0 * drop_delta as f64
+                                / (frame_delta as f64 + drop_delta as f64);
+                            if drop_rate > 5.0 {
+                                warn!(
+                                    frames = frame_delta,
+                                    drops = drop_delta,
+                                    drop_rate_pct = format!("{:.1}%", drop_rate),
+                                    total_frames = current_frames,
+                                    total_drops = current_drops,
+                                    "Screen capture frame drop rate exceeds 5% threshold"
+                                );
+                            } else {
+                                debug!(
+                                    frames = frame_delta,
+                                    drops = drop_delta,
+                                    drop_rate_pct = format!("{:.1}%", drop_rate),
+                                    total_frames = current_frames,
+                                    "Screen capture stats"
+                                );
+                            }
+                        }
+
+                        prev_frames = current_frames;
+                        prev_drops = current_drops;
                     }
                 }
                 .with_cancellation_token_owned(self.cancel_token.clone())

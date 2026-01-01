@@ -23,9 +23,6 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
-import themePreviewLegacyAuto from "~/assets/theme-previews/legacy-auto.jpg";
-import themePreviewLegacyDark from "~/assets/theme-previews/legacy-dark.jpg";
-import themePreviewLegacyLight from "~/assets/theme-previews/legacy-light.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
@@ -75,12 +72,12 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	autoCreateShareableLink: false,
 	enableNotifications: true,
 	enableNativeCameraPreview: false,
-	enableNewRecordingFlow: true,
-	recordingPickerPreferenceSet: false,
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
 	excludedWindows: [],
 	instantModeMaxResolution: 1920,
+	crashRecoveryRecording: true,
+	maxFps: 60,
 });
 
 const deriveInitialSettings = (
@@ -105,6 +102,15 @@ const INSTANT_MODE_RESOLUTION_OPTIONS = [
 	label: string;
 }[];
 
+const MAX_FPS_OPTIONS = [
+	{ value: 30, label: "30 FPS" },
+	{ value: 60, label: "60 FPS (Recommended)" },
+	{ value: 120, label: "120 FPS" },
+] satisfies {
+	value: number;
+	label: string;
+}[];
+
 const DEFAULT_PROJECT_NAME_TEMPLATE =
 	"{target_name} ({target_kind}) {date} {time}";
 
@@ -120,7 +126,6 @@ export default function GeneralSettings() {
 
 function AppearanceSection(props: {
 	currentTheme: AppTheme;
-	newRecordingFlow: boolean;
 	onThemeChange: (theme: AppTheme) => void;
 }) {
 	const options = [
@@ -138,25 +143,16 @@ function AppearanceSection(props: {
 		},
 	] satisfies { id: AppTheme; name: string }[];
 
-	const previews = createMemo(() => {
-		return {
-			system: props.newRecordingFlow
-				? themePreviewAuto
-				: themePreviewLegacyAuto,
-			light: props.newRecordingFlow
-				? themePreviewLight
-				: themePreviewLegacyLight,
-			dark: props.newRecordingFlow ? themePreviewDark : themePreviewLegacyDark,
-		};
-	});
+	const previews = {
+		system: themePreviewAuto,
+		light: themePreviewLight,
+		dark: themePreviewDark,
+	};
 
 	return (
 		<div class="flex flex-col gap-4">
-			<div class="flex flex-col pb-4 border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">General</h2>
-				<p class="text-sm text-gray-10">
-					General settings of your Cap application.
-				</p>
+			<div class="flex flex-col border-b border-gray-2">
+				<h2 class="text-lg font-medium text-gray-12">General Settings</h2>
 			</div>
 			<div
 				class="flex justify-start items-center text-gray-12"
@@ -186,7 +182,7 @@ function AppearanceSection(props: {
 										aria-label={`Select theme: ${theme.name}`}
 									>
 										<div class="flex justify-center items-center w-full h-full">
-											<Show when={previews()[theme.id]} keyed>
+											<Show when={previews[theme.id]} keyed>
 												{(preview) => (
 													<img
 														class="animate-in fade-in duration-300"
@@ -249,16 +245,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
-	const recordingWindowVariant = () =>
-		settings.enableNewRecordingFlow === false ? "old" : "new";
-
-	const updateRecordingWindowVariant = (variant: "new" | "old") => {
-		const shouldUseNew = variant === "new";
-		if (settings.enableNewRecordingFlow === shouldUseNew) return;
-		handleChange("enableNewRecordingFlow", shouldUseNew, {
-			recordingPickerPreferenceSet: true,
-		});
-	};
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -412,7 +398,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<div class="p-4 space-y-6">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
-					newRecordingFlow={settings.enableNewRecordingFlow}
 					onThemeChange={(newTheme) => {
 						setSettings("theme", newTheme);
 						generalSettingsStore.set({ theme: newTheme });
@@ -473,33 +458,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				)}
 
 				<SettingGroup title="Recording">
-					<SettingItem
-						label="Recording window"
-						description="Choose which recording picker experience Cap should open."
-					>
-						<div class="flex gap-1 bg-gray-3 rounded-lg p-1 text-xs font-medium">
-							{(
-								[
-									{ id: "new", label: "New" },
-									{ id: "old", label: "Old" },
-								] as const
-							).map((option) => (
-								<button
-									type="button"
-									class={cx("flex-1 rounded-md px-3 py-1.5 transition-colors", {
-										"bg-gray-12 text-gray-1":
-											recordingWindowVariant() === option.id,
-										"text-gray-11 hover:text-gray-12":
-											recordingWindowVariant() !== option.id,
-									})}
-									aria-pressed={recordingWindowVariant() === option.id}
-									onClick={() => updateRecordingWindowVariant(option.id)}
-								>
-									{option.label}
-								</button>
-							))}
-						</div>
-					</SettingItem>
 					<SelectSettingItem
 						label="Instant mode max resolution"
 						description="Choose the maximum resolution for Instant Mode recordings."
@@ -572,6 +530,30 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							handleChange("deleteInstantRecordingsAfterUpload", v)
 						}
 					/>
+					<ToggleSettingItem
+						label="Crash-recoverable recording"
+						description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
+						value={settings.crashRecoveryRecording ?? true}
+						onChange={(value) => handleChange("crashRecoveryRecording", value)}
+					/>
+					<div class="flex flex-col gap-1">
+						<SelectSettingItem
+							label="Max capture framerate"
+							description="Maximum framerate for screen capture. Higher values may cause instability on some systems."
+							value={settings.maxFps ?? 60}
+							onChange={(value) => handleChange("maxFps", value)}
+							options={MAX_FPS_OPTIONS.map((option) => ({
+								text: option.label,
+								value: option.value,
+							}))}
+						/>
+						{(settings.maxFps ?? 60) > 60 && (
+							<p class="text-xs text-amber-500 px-1 pb-2">
+								⚠️ Higher framerates may cause frame drops or increased CPU usage
+								on some systems.
+							</p>
+						)}
+					</div>
 				</SettingGroup>
 
 				<DefaultProjectNameCard

@@ -990,11 +990,7 @@ mod tests {
             let diff = (*s as i32 - *d as i32).abs();
             assert!(
                 diff <= 2,
-                "Mismatch at index {}: scalar={}, simd={}, diff={}",
-                i,
-                s,
-                d,
-                diff
+                "Mismatch at index {i}: scalar={s}, simd={d}, diff={diff}"
             );
         }
     }
@@ -1064,11 +1060,7 @@ mod tests {
             let diff = (*a as i32 - *b as i32).abs();
             assert!(
                 diff <= 2,
-                "Mismatch at index {}: expected={}, got={}, diff={}",
-                i,
-                a,
-                b,
-                diff
+                "Mismatch at index {i}: expected={a}, got={b}, diff={diff}"
             );
         }
     }
@@ -1119,11 +1111,7 @@ mod tests {
             let diff = (*s as i32 - *d as i32).abs();
             assert!(
                 diff <= 2,
-                "YUV420P mismatch at index {}: scalar={}, simd={}, diff={}",
-                i,
-                s,
-                d,
-                diff
+                "YUV420P mismatch at index {i}: scalar={s}, simd={d}, diff={diff}"
             );
         }
     }

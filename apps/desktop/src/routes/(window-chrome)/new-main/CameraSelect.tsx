@@ -1,9 +1,18 @@
-import { createQuery } from "@tanstack/solid-query";
+import { createTimer } from "@solid-primitives/timer";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
-import type { Component, ComponentProps } from "solid-js";
+import {
+	type Component,
+	type ComponentProps,
+	createEffect,
+	createSignal,
+} from "solid-js";
 import { trackEvent } from "~/utils/analytics";
-import { createCurrentRecordingQuery, getPermissions } from "~/utils/queries";
-import type { CameraInfo } from "~/utils/tauri";
+import { createCurrentRecordingQuery } from "~/utils/queries";
+import {
+	type CameraInfo,
+	commands,
+	type OSPermissionsCheck,
+} from "~/utils/tauri";
 import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
@@ -15,12 +24,13 @@ export default function CameraSelect(props: {
 	options: CameraInfo[];
 	value: CameraInfo | null;
 	onChange: (camera: CameraInfo | null) => void;
+	permissions?: OSPermissionsCheck;
 }) {
 	return (
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 			iconClass="text-gray-10 size-4"
 		/>
 	);
@@ -36,18 +46,51 @@ export function CameraSelectBase(props: {
 	>;
 	class: string;
 	iconClass: string;
+	permissions?: OSPermissionsCheck;
 }) {
 	const currentRecording = createCurrentRecordingQuery();
-	const permissions = createQuery(() => getPermissions);
 	const requestPermission = useRequestPermission();
+	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
+
+	const refreshCameraWindowState = async () => {
+		try {
+			setCameraWindowOpen(await commands.isCameraWindowOpen());
+		} catch {
+			setCameraWindowOpen(false);
+		}
+	};
+
+	createEffect(() => {
+		if (props.value) {
+			void refreshCameraWindowState();
+		} else {
+			setCameraWindowOpen(false);
+		}
+	});
+
+	createTimer(
+		() => {
+			if (props.value) {
+				void refreshCameraWindowState();
+			}
+		},
+		2000,
+		setInterval,
+	);
+
+	const openCameraWindow = async (e: MouseEvent) => {
+		e.stopPropagation();
+		await commands.showWindow("Camera");
+		await refreshCameraWindowState();
+	};
 
 	const permissionGranted = () =>
-		permissions?.data?.camera === "granted" ||
-		permissions?.data?.camera === "notNeeded";
+		props.permissions?.camera === "granted" ||
+		props.permissions?.camera === "notNeeded";
 
 	const onChange = (cameraLabel: CameraInfo | null) => {
 		if (!cameraLabel && !permissionGranted())
-			return requestPermission("camera");
+			return requestPermission("camera", props.permissions?.camera);
 
 		props.onChange(cameraLabel);
 
@@ -57,6 +100,9 @@ export function CameraSelectBase(props: {
 		});
 	};
 
+	const showHiddenIndicator = () =>
+		props.value !== null && permissionGranted() && !cameraWindowOpen();
+
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
@@ -64,7 +110,7 @@ export function CameraSelectBase(props: {
 				disabled={!!currentRecording.data || props.disabled}
 				onClick={() => {
 					if (!permissionGranted()) {
-						requestPermission("camera");
+						requestPermission("camera", props.permissions?.camera);
 						return;
 					}
 
@@ -94,19 +140,34 @@ export function CameraSelectBase(props: {
 				<p class="flex-1 text-sm text-left truncate">
 					{props.value?.display_name ?? NO_CAMERA}
 				</p>
-				<TargetSelectInfoPill
-					PillComponent={props.PillComponent}
-					value={props.value}
-					permissionGranted={permissionGranted()}
-					requestPermission={() => requestPermission("camera")}
-					onClick={(e) => {
-						if (!props.options) return;
-						if (props.value !== null) {
-							e.stopPropagation();
-							props.onChange(null);
+				<div class="flex items-center gap-1">
+					{showHiddenIndicator() && (
+						<button
+							type="button"
+							onClick={openCameraWindow}
+							onPointerDown={(e) => e.stopPropagation()}
+							class="flex items-center justify-center px-2 py-1 rounded-full bg-gray-6 text-gray-11 hover:bg-gray-7 transition-colors"
+							title="Show camera preview"
+						>
+							<IconLucideEyeOff class="size-3.5" />
+						</button>
+					)}
+					<TargetSelectInfoPill
+						PillComponent={props.PillComponent}
+						value={props.value}
+						permissionGranted={permissionGranted()}
+						requestPermission={() =>
+							requestPermission("camera", props.permissions?.camera)
 						}
-					}}
-				/>
+						onClick={(e) => {
+							if (!props.options) return;
+							if (props.value !== null) {
+								e.stopPropagation();
+								props.onChange(null);
+							}
+						}}
+					/>
+				</div>
 			</button>
 		</div>
 	);

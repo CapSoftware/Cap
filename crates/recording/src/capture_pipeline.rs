@@ -1,4 +1,5 @@
 use crate::{
+    SharedPauseState,
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::*,
     sources,
@@ -6,10 +7,12 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-use crate::output_pipeline::{
-    FragmentedAVFoundationMp4Muxer, FragmentedAVFoundationMp4MuxerConfig,
-};
+use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig};
+#[cfg(windows)]
+use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
+#[cfg(windows)]
+use cap_enc_ffmpeg::h264::H264Preset;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
 
@@ -52,6 +55,8 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -78,6 +83,8 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
     ) -> anyhow::Result<OutputPipeline> {
         if fragmented {
             let fragments_dir = output_path
@@ -88,15 +95,19 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             OutputPipeline::builder(fragments_dir)
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
-                .build::<FragmentedAVFoundationMp4Muxer>(
-                    FragmentedAVFoundationMp4MuxerConfig::default(),
-                )
+                .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                    output_size,
+                    shared_pause_state,
+                    ..Default::default()
+                })
                 .await
         } else {
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
-                .build::<AVFoundationMp4Muxer>(Default::default())
+                .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
+                    output_height: output_size.map(|(_, h)| h),
+                })
                 .await
         }
     }
@@ -134,10 +145,10 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
-        let d3d_device = screen_capture.d3d_device.clone();
-
         if fragmented {
             let fragments_dir = output_path
                 .parent()
@@ -147,17 +158,16 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             OutputPipeline::builder(fragments_dir)
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
-                .build::<WindowsSegmentedMuxer>(WindowsSegmentedMuxerConfig {
-                    pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                    d3d_device,
-                    bitrate_multiplier: 0.15f32,
-                    frame_rate: 30u32,
-                    output_size: None,
-                    encoder_preferences,
+                .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                     segment_duration: std::time::Duration::from_secs(3),
+                    preset: H264Preset::Ultrafast,
+                    output_size,
+                    shared_pause_state,
+                    disk_space_callback: None,
                 })
                 .await
         } else {
+            let d3d_device = screen_capture.d3d_device.clone();
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
@@ -166,7 +176,10 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     d3d_device,
                     bitrate_multiplier: 0.15f32,
                     frame_rate: 30u32,
-                    output_size: None,
+                    output_size: output_size.map(|(w, h)| windows::Graphics::SizeInt32 {
+                        Width: w as i32,
+                        Height: h as i32,
+                    }),
                     encoder_preferences,
                     fragmented: false,
                     frag_duration_us: 2_000_000,

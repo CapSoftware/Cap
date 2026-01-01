@@ -1,13 +1,16 @@
 import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "@total-typescript/ts-reset/filter-boolean";
-import { createResource, For, Show, Suspense } from "solid-js";
+import { createResource, For, onMount, Show, Suspense } from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
+
+const WINDOW_SIZE = { width: 700, height: 540 } as const;
 
 export default function Settings(props: RouteSectionProps) {
 	const auth = authStore.createQuery();
@@ -19,6 +22,14 @@ export default function Settings(props: RouteSectionProps) {
 			authStore.set(undefined);
 		}
 	};
+
+	onMount(() => {
+		const currentWindow = getCurrentWindow();
+
+		currentWindow.setSize(
+			new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+		);
+	});
 
 	return (
 		<div class="flex-1 flex flex-row divide-x divide-gray-3 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">

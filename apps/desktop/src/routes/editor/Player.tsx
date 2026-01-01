@@ -81,7 +81,6 @@ export function PlayerContent() {
 							backgroundColor: captionsStore.state.settings.backgroundColor,
 							backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
 							position: captionsStore.state.settings.position,
-							bold: captionsStore.state.settings.bold,
 							italic: captionsStore.state.settings.italic,
 							outline: captionsStore.state.settings.outline,
 							outlineColor: captionsStore.state.settings.outlineColor,

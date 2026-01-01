@@ -40,7 +40,7 @@ pub mod yuv_converter;
 mod zoom;
 
 pub use coord::*;
-pub use decoder::{DecodedFrame, PixelFormat};
+pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
@@ -158,7 +158,7 @@ impl RecordingSegmentDecoders {
                         segment.camera.as_ref().unwrap().fps
                     }
                     StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                        inner.segments[0].camera.as_ref().unwrap().fps
+                        inner.segments[segment_i].camera.as_ref().unwrap().fps
                     }
                 },
                 match &meta {
@@ -464,6 +464,7 @@ pub struct ProjectUniforms {
     pub output_size: (u32, u32),
     pub cursor_size: f32,
     pub frame_rate: u32,
+    pub frame_number: u32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     camera_only: Option<CompositeVideoFrameUniforms>,
@@ -1256,9 +1257,7 @@ impl ProjectUniforms {
                         0.0
                     },
                     border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
-                    _padding0: 0.0,
-                    _padding1: [0.0; 2],
-                    _padding1b: [0.0; 2],
+                    _padding1: [0.0; 4],
                     border_color: if let Some(b) = project.background.border.as_ref() {
                         [
                             b.color[0] as f32 / 255.0,
@@ -1269,7 +1268,6 @@ impl ProjectUniforms {
                     } else {
                         [0.0, 0.0, 0.0, 0.0]
                     },
-                    _padding2: [0.0; 4],
                 },
                 display_parent_motion_px,
             )
@@ -1425,11 +1423,8 @@ impl ProjectUniforms {
                     opacity: scene.regular_camera_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
-                    _padding0: 0.0,
-                    _padding1: [0.0; 2],
-                    _padding1b: [0.0; 2],
+                    _padding1: [0.0; 4],
                     border_color: [0.0, 0.0, 0.0, 0.0],
-                    _padding2: [0.0; 4],
                 }
             });
 
@@ -1512,11 +1507,8 @@ impl ProjectUniforms {
                     opacity: scene.camera_only_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
-                    _padding0: 0.0,
-                    _padding1: [0.0; 2],
-                    _padding1b: [0.0; 2],
+                    _padding1: [0.0; 4],
                     border_color: [0.0, 0.0, 0.0, 0.0],
-                    _padding2: [0.0; 4],
                 }
             });
 
@@ -1557,6 +1549,7 @@ impl ProjectUniforms {
             scene,
             interpolated_cursor,
             frame_rate: fps,
+            frame_number,
             prev_cursor: prev_interpolated_cursor,
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: user_motion_blur,
@@ -1694,25 +1687,25 @@ impl RendererLayers {
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            (|| {
-                Some((
-                    uniforms.camera?,
-                    constants.options.camera_size?,
-                    segment_frames.camera_frame.as_ref()?,
-                ))
-            })(),
+            uniforms.camera,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
         );
 
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
-            (|| {
-                Some((
-                    uniforms.camera_only?,
-                    constants.options.camera_size?,
-                    segment_frames.camera_frame.as_ref()?,
-                ))
-            })(),
+            uniforms.camera_only,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
         );
 
         self.text.prepare(
@@ -1780,12 +1773,6 @@ impl RendererLayers {
         }
 
         let should_render = uniforms.scene.should_render_screen();
-        tracing::trace!(
-            should_render_screen = should_render,
-            screen_opacity = uniforms.scene.screen_opacity,
-            screen_blur = uniforms.scene.screen_blur,
-            "RendererLayers::render - checking should_render_screen"
-        );
 
         if should_render {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);

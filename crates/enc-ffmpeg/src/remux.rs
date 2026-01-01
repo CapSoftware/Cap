@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     ptr,
+    sync::atomic::{AtomicI32, Ordering},
     time::Duration,
 };
 
@@ -10,6 +11,25 @@ use cap_media_info::{AudioInfo, AudioInfoError};
 use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, packet::Mut as PacketMut};
 
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
+
+static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
+
+fn suppress_ffmpeg_logs() {
+    unsafe {
+        let current = ffmpeg::ffi::av_log_get_level();
+        ORIGINAL_LOG_LEVEL.store(current, Ordering::SeqCst);
+        ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_QUIET);
+    }
+}
+
+fn restore_ffmpeg_logs() {
+    let original = ORIGINAL_LOG_LEVEL.load(Ordering::SeqCst);
+    if original >= 0 {
+        unsafe {
+            ffmpeg::ffi::av_log_set_level(original);
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RemuxError {
@@ -103,16 +123,10 @@ fn open_input_with_format(
     }
 }
 
-fn concatenate_with_concat_demuxer(
-    concat_list_path: &Path,
-    output: &Path,
+fn remux_streams(
+    ictx: &mut avformat::context::Input,
+    octx: &mut avformat::context::Output,
 ) -> Result<(), RemuxError> {
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("safe", "0");
-
-    let mut ictx = open_input_with_format(concat_list_path, "concat", options)?;
-    let mut octx = avformat::output(output)?;
-
     let mut stream_mapping: Vec<Option<usize>> = Vec::new();
     let mut output_stream_index = 0usize;
 
@@ -171,13 +185,26 @@ fn concatenate_with_concat_demuxer(
             packet.set_stream(output_index);
             packet.set_position(-1);
 
-            packet.write_interleaved(&mut octx)?;
+            packet.write_interleaved(octx)?;
         }
     }
 
     octx.write_trailer()?;
 
     Ok(())
+}
+
+fn concatenate_with_concat_demuxer(
+    concat_list_path: &Path,
+    output: &Path,
+) -> Result<(), RemuxError> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("safe", "0");
+
+    let mut ictx = open_input_with_format(concat_list_path, "concat", options)?;
+    let mut octx = avformat::output(output)?;
+
+    remux_streams(&mut ictx, &mut octx)
 }
 
 pub fn concatenate_audio_to_ogg(fragments: &[PathBuf], output: &Path) -> Result<(), RemuxError> {
@@ -270,10 +297,20 @@ pub fn stream_copy_fragments(fragments: &[PathBuf], output: &Path) -> Result<(),
 }
 
 pub fn probe_media_valid(path: &Path) -> bool {
-    avformat::input(path).is_ok()
+    suppress_ffmpeg_logs();
+    let result = avformat::input(path).is_ok();
+    restore_ffmpeg_logs();
+    result
 }
 
 pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
+    suppress_ffmpeg_logs();
+    let result = probe_video_can_decode_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
     let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let input_stream = input
@@ -347,6 +384,13 @@ pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
 }
 
 pub fn get_media_duration(path: &Path) -> Option<Duration> {
+    suppress_ffmpeg_logs();
+    let result = get_media_duration_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_media_duration_inner(path: &Path) -> Option<Duration> {
     let input = avformat::input(path).ok()?;
     let duration_ts = input.duration();
     if duration_ts <= 0 {
@@ -356,6 +400,13 @@ pub fn get_media_duration(path: &Path) -> Option<Duration> {
 }
 
 pub fn get_video_fps(path: &Path) -> Option<u32> {
+    suppress_ffmpeg_logs();
+    let result = get_video_fps_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_video_fps_inner(path: &Path) -> Option<u32> {
     let input = avformat::input(path).ok()?;
     let stream = input.streams().best(ffmpeg::media::Type::Video)?;
     let rate = stream.avg_frame_rate();
@@ -363,4 +414,91 @@ pub fn get_video_fps(path: &Path) -> Option<u32> {
         return None;
     }
     Some((rate.numerator() as f64 / rate.denominator() as f64).round() as u32)
+}
+
+pub fn probe_m4s_can_decode_with_init(
+    init_path: &Path,
+    segment_path: &Path,
+) -> Result<bool, String> {
+    let temp_path = segment_path.with_extension("probe_temp.mp4");
+
+    let init_data = std::fs::read(init_path)
+        .map_err(|e| format!("Failed to read init segment {}: {e}", init_path.display()))?;
+    let segment_data = std::fs::read(segment_path)
+        .map_err(|e| format!("Failed to read segment {}: {e}", segment_path.display()))?;
+
+    {
+        let mut temp_file = std::fs::File::create(&temp_path)
+            .map_err(|e| format!("Failed to create temp file: {e}"))?;
+        temp_file
+            .write_all(&init_data)
+            .map_err(|e| format!("Failed to write init data: {e}"))?;
+        temp_file
+            .write_all(&segment_data)
+            .map_err(|e| format!("Failed to write segment data: {e}"))?;
+        temp_file
+            .sync_all()
+            .map_err(|e| format!("Failed to sync temp file: {e}"))?;
+    }
+
+    let result = probe_video_can_decode(&temp_path);
+
+    if let Err(e) = std::fs::remove_file(&temp_path) {
+        tracing::warn!("failed to remove temp file {}: {}", temp_path.display(), e);
+    }
+
+    result
+}
+
+pub fn concatenate_m4s_segments_with_init(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+) -> Result<(), RemuxError> {
+    if segments.is_empty() {
+        return Err(RemuxError::NoFragments);
+    }
+
+    if !init_path.exists() {
+        return Err(RemuxError::FragmentNotFound(init_path.to_path_buf()));
+    }
+
+    for segment in segments {
+        if !segment.exists() {
+            return Err(RemuxError::FragmentNotFound(segment.clone()));
+        }
+    }
+
+    let combined_path = output.with_extension("combined_fmp4.mp4");
+
+    {
+        let init_data = std::fs::read(init_path)?;
+        let mut combined_file = std::fs::File::create(&combined_path)?;
+        combined_file.write_all(&init_data)?;
+
+        for segment in segments {
+            let segment_data = std::fs::read(segment)?;
+            combined_file.write_all(&segment_data)?;
+        }
+        combined_file.sync_all()?;
+    }
+
+    let result = remux_to_regular_mp4(&combined_path, output);
+
+    if let Err(e) = std::fs::remove_file(&combined_path) {
+        tracing::warn!(
+            "failed to remove combined file {}: {}",
+            combined_path.display(),
+            e
+        );
+    }
+
+    result
+}
+
+fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
+    let mut ictx = avformat::input(input_path)?;
+    let mut octx = avformat::output(output_path)?;
+
+    remux_streams(&mut ictx, &mut octx)
 }

@@ -18,6 +18,8 @@ import { Toggle } from "~/components/Toggle";
 import { defaultCaptionSettings } from "~/store/captions";
 import type { CaptionSettings } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
+import IconCapChevronDown from "~icons/cap/chevron-down";
+import IconCapCircleCheck from "~icons/cap/circle-check";
 import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
 import { useEditorContext } from "./context";
@@ -31,6 +33,7 @@ import {
 	Slider,
 	Subfield,
 	topLeftAnimateClasses,
+	topSlideAnimateClasses,
 } from "./ui";
 
 interface ModelOption {
@@ -212,12 +215,6 @@ export function CaptionsTab() {
 				.map((m) => m.name);
 			setDownloadedModels(downloadedModelNames);
 
-			if (downloadedModelNames.length > 0) {
-				const modelToPrewarm = downloadedModelNames[0];
-				const modelPath = await join(modelsPath, `${modelToPrewarm}.bin`);
-				commands.prewarmWhisperx(modelPath).catch(() => {});
-			}
-
 			const savedModel = localStorage.getItem("selectedTranscriptionModel");
 			if (savedModel && MODEL_OPTIONS.some((m) => m.name === savedModel)) {
 				setSelectedModel(savedModel);
@@ -273,16 +270,24 @@ export function CaptionsTab() {
 	);
 
 	createEffect(
-		on(selectedModel, (model) => {
-			if (model) localStorage.setItem("selectedTranscriptionModel", model);
-		}),
+		on(
+			selectedModel,
+			(model) => {
+				if (model) localStorage.setItem("selectedTranscriptionModel", model);
+			},
+			{ defer: true },
+		),
 	);
 
 	createEffect(
-		on(selectedLanguage, (language) => {
-			if (language)
-				localStorage.setItem("selectedTranscriptionLanguage", language);
-		}),
+		on(
+			selectedLanguage,
+			(language) => {
+				if (language)
+					localStorage.setItem("selectedTranscriptionLanguage", language);
+			},
+			{ defer: true },
+		),
 	);
 
 	const checkModelExists = async (modelName: string) => {
@@ -778,32 +783,71 @@ export function CaptionsTab() {
 							</div>
 						</Field>
 
-						<Field name="Style Options" icon={<IconCapMessageBubble />}>
-							<div class="space-y-3">
-								<div class="flex flex-col gap-4">
-									<Subfield name="Outline">
-										<Toggle
-											checked={getSetting("outline")}
-											onChange={(checked) =>
-												updateCaptionSetting("outline", checked)
-											}
-											disabled={!hasCaptions()}
+						<Field name="Font Weight" icon={<IconCapMessageBubble />}>
+							<KSelect
+								options={[
+									{ label: "Normal", value: 400 },
+									{ label: "Medium", value: 500 },
+									{ label: "Bold", value: 700 },
+								]}
+								optionValue="value"
+								optionTextValue="label"
+								value={{
+									label: "Custom",
+									value: getSetting("fontWeight"),
+								}}
+								onChange={(value) => {
+									if (!value) return;
+									updateCaptionSetting("fontWeight", value.value);
+								}}
+								disabled={!hasCaptions()}
+								itemComponent={(selectItemProps) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={selectItemProps.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{selectItemProps.item.rawValue.label}
+										</KSelect.ItemLabel>
+										<KSelect.ItemIndicator class="ml-auto text-blue-9">
+											<IconCapCircleCheck />
+										</KSelect.ItemIndicator>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+									<KSelect.Value<{
+										label: string;
+										value: number;
+									}> class="truncate">
+										{(state) => {
+											const selected = state.selectedOption();
+											if (selected) return selected.label;
+											const weight = getSetting("fontWeight");
+											const option = [
+												{ label: "Normal", value: 400 },
+												{ label: "Medium", value: 500 },
+												{ label: "Bold", value: 700 },
+											].find((o) => o.value === weight);
+											return option ? option.label : "Bold";
+										}}
+									</KSelect.Value>
+									<KSelect.Icon>
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+									</KSelect.Icon>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={cx(topSlideAnimateClasses, "z-50")}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-40"
+											as={KSelect.Listbox}
 										/>
-									</Subfield>
-								</div>
-
-								<Show when={getSetting("outline")}>
-									<div class="flex flex-col gap-2">
-										<span class="text-gray-11 text-sm">Outline Color</span>
-										<RgbInput
-											value={getSetting("outlineColor")}
-											onChange={(value) =>
-												updateCaptionSetting("outlineColor", value)
-											}
-										/>
-									</div>
-								</Show>
-							</div>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
 						</Field>
 
 						<Field name="Export Options" icon={<IconCapMessageBubble />}>

@@ -19,7 +19,6 @@ import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
 const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
-const MainPage = lazy(() => import("./routes/(window-chrome)/(main)"));
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
 const SetupPage = lazy(() => import("./routes/(window-chrome)/setup"));
 const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
@@ -152,8 +151,7 @@ function Inner() {
 					}}
 				>
 					<Route path="/" component={WindowChromeLayout}>
-						<Route path="/" component={MainPage} />
-						<Route path="/new-main" component={NewMainPage} />
+						<Route path="/" component={NewMainPage} />
 						<Route path="/setup" component={SetupPage} />
 						<Route path="/settings" component={SettingsLayout}>
 							<Route path="/" component={SettingsGeneralPage} />
@@ -225,12 +223,21 @@ function createThemeListener(currentWindow: WebviewWindow) {
 
 		if (appTheme === undefined || appTheme === null) return;
 
+		const isDark =
+			appTheme === "dark" ||
+			(appTheme === "system" &&
+				window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+		try {
+			if (appTheme === "system") {
+				localStorage.removeItem("cap-theme");
+			} else {
+				localStorage.setItem("cap-theme", appTheme);
+			}
+		} catch {}
+
 		commands.setTheme(appTheme).then(() => {
-			document.documentElement.classList.toggle(
-				"dark",
-				appTheme === "dark" ||
-					window.matchMedia("(prefers-color-scheme: dark)").matches,
-			);
+			document.documentElement.classList.toggle("dark", isDark);
 		});
 	}
 }

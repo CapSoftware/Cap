@@ -95,21 +95,14 @@ impl Mp4ExportSettings {
 
             info!("Created MP4File encoder");
 
-            let mut encoded_frames = 0;
             while let Ok(frame) = frame_rx.recv() {
                 encoder
-                    .queue_video_frame(
-                        frame.video,
-                        Duration::from_secs_f32(encoded_frames as f32 / fps as f32),
-                    )
+                    .queue_video_frame(frame.video, Duration::MAX)
                     .map_err(|err| err.to_string())?;
-                encoded_frames += 1;
                 if let Some(audio) = frame.audio {
                     encoder.queue_audio_frame(audio);
                 }
             }
-
-            info!("Encoded {encoded_frames} video frames");
 
             let res = encoder
                 .finish()
@@ -132,22 +125,30 @@ impl Mp4ExportSettings {
             async move {
                 let mut frame_count = 0;
                 let mut first_frame = None;
-
-                let audio_samples_per_frame =
-                    (f64::from(AudioRenderer::SAMPLE_RATE) / f64::from(fps)).ceil() as usize;
+                let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
+                let fps_u64 = u64::from(fps);
+                let mut audio_sample_cursor = 0u64;
 
                 loop {
-                    let (frame, frame_number) =
-                        match tokio::time::timeout(Duration::from_secs(6), video_rx.recv()).await {
-                            Err(_) => {
-                                warn!("render_task frame receive timed out");
-                                break;
-                            }
-                            Ok(Some(v)) => v,
-                            _ => {
-                                break;
-                            }
-                        };
+                    let timeout_secs = if frame_count == 0 { 120 } else { 60 };
+                    let (frame, frame_number) = match tokio::time::timeout(
+                        Duration::from_secs(timeout_secs),
+                        video_rx.recv(),
+                    )
+                    .await
+                    {
+                        Err(_) => {
+                            warn!(
+                                "render_task frame receive timed out after {}s (frame {})",
+                                timeout_secs, frame_count
+                            );
+                            break;
+                        }
+                        Ok(Some(v)) => v,
+                        _ => {
+                            break;
+                        }
+                    };
 
                     if !(on_progress)(frame_count) {
                         return Err("Export cancelled".to_string());
@@ -160,14 +161,20 @@ impl Mp4ExportSettings {
                         }
                     }
 
-                    let audio_frame = audio_renderer
-                        .as_mut()
-                        .and_then(|audio| audio.render_frame(audio_samples_per_frame, &project))
-                        .map(|mut frame| {
-                            let pts = ((frame_number * frame.rate()) as f64 / fps as f64) as i64;
+                    let audio_frame = audio_renderer.as_mut().and_then(|audio| {
+                        let n = u64::from(frame_number);
+                        let end = ((n + 1) * sample_rate) / fps_u64;
+                        if end <= audio_sample_cursor {
+                            return None;
+                        }
+                        let pts = audio_sample_cursor as i64;
+                        let samples = (end - audio_sample_cursor) as usize;
+                        audio_sample_cursor = end;
+                        audio.render_frame(samples, &project).map(|mut frame| {
                             frame.set_pts(Some(pts));
                             frame
-                        });
+                        })
+                    });
 
                     if frame_tx
                         .send(MP4Input {
@@ -256,5 +263,31 @@ impl Mp4ExportSettings {
         tokio::try_join!(encoder_thread, render_video_task, render_task)?;
 
         Ok(output_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sum_samples(sample_rate: u64, fps: u64, frames: u64) -> u64 {
+        (0..frames)
+            .map(|n| {
+                let start = (n * sample_rate) / fps;
+                let end = ((n + 1) * sample_rate) / fps;
+                end - start
+            })
+            .sum()
+    }
+
+    #[test]
+    fn audio_samples_match_duration_across_fps() {
+        let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
+
+        for fps in [24u64, 30, 60, 90, 120, 144] {
+            let frames = fps * 10;
+            let expected = (frames * sample_rate) / fps;
+            assert_eq!(sum_samples(sample_rate, fps, frames), expected);
+        }
     }
 }

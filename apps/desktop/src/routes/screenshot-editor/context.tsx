@@ -11,11 +11,7 @@ import {
 	onCleanup,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import {
-	createImageDataWS,
-	createLazySignal,
-	type FrameData,
-} from "~/utils/socket";
+import { createLazySignal, type FrameData } from "~/utils/socket";
 import {
 	type Annotation,
 	type AnnotationType,
@@ -86,8 +82,9 @@ const DEFAULT_HOTKEYS: HotkeysConfiguration = {
 const DEFAULT_PROJECT: ScreenshotProject = {
 	background: {
 		source: {
-			type: "wallpaper",
-			path: "macOS/sequoia-dark",
+			type: "color",
+			value: [255, 255, 255],
+			alpha: 255,
 		},
 		blur: 0,
 		padding: 20,
@@ -137,6 +134,8 @@ function createScreenshotEditorContext() {
 	});
 
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
+	const [isRenderReady, setIsRenderReady] = createSignal(false);
+	let wsRef: WebSocket | null = null;
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -148,13 +147,22 @@ function createScreenshotEditorContext() {
 			}
 		}
 
+		let hasReceivedWebSocketFrame = false;
+
 		if (instance.path) {
 			const img = new Image();
 			img.crossOrigin = "anonymous";
 			img.src = convertFileSrc(instance.path);
 			img.onload = async () => {
+				if (hasReceivedWebSocketFrame) {
+					return;
+				}
 				try {
 					const bitmap = await createImageBitmap(img);
+					if (hasReceivedWebSocketFrame) {
+						bitmap.close();
+						return;
+					}
 					const existing = latestFrame();
 					if (existing?.bitmap) {
 						existing.bitmap.close();
@@ -164,6 +172,7 @@ function createScreenshotEditorContext() {
 						height: img.naturalHeight,
 						bitmap,
 					});
+					setIsRenderReady(true);
 				} catch (e: unknown) {
 					console.error("Failed to create ImageBitmap from fallback image:", e);
 				}
@@ -177,10 +186,58 @@ function createScreenshotEditorContext() {
 			};
 		}
 
-		const [_ws, _isConnected, _isWorkerReady] = createImageDataWS(
-			instance.framesSocketUrl,
-			setLatestFrame,
-		);
+		const ws = new WebSocket(instance.framesSocketUrl);
+		wsRef = ws;
+		ws.binaryType = "arraybuffer";
+		ws.onmessage = async (event) => {
+			const buffer = event.data as ArrayBuffer;
+			if (buffer.byteLength < 24) return;
+
+			const metadataOffset = buffer.byteLength - 24;
+			const meta = new DataView(buffer, metadataOffset, 24);
+			const strideBytes = meta.getUint32(0, true);
+			const height = meta.getUint32(4, true);
+			const width = meta.getUint32(8, true);
+
+			if (!width || !height) return;
+
+			hasReceivedWebSocketFrame = true;
+			setIsRenderReady(true);
+
+			const expectedRowBytes = width * 4;
+			const frameData = new Uint8ClampedArray(
+				buffer,
+				0,
+				buffer.byteLength - 24,
+			);
+
+			let processedData: Uint8ClampedArray;
+			if (strideBytes === expectedRowBytes) {
+				processedData = frameData.subarray(0, expectedRowBytes * height);
+			} else {
+				processedData = new Uint8ClampedArray(expectedRowBytes * height);
+				for (let row = 0; row < height; row++) {
+					const srcStart = row * strideBytes;
+					const destStart = row * expectedRowBytes;
+					processedData.set(
+						frameData.subarray(srcStart, srcStart + expectedRowBytes),
+						destStart,
+					);
+				}
+			}
+
+			try {
+				const imageData = new ImageData(processedData, width, height);
+				const bitmap = await createImageBitmap(imageData);
+				const existing = latestFrame();
+				if (existing?.bitmap && existing.bitmap !== bitmap) {
+					existing.bitmap.close();
+				}
+				setLatestFrame({ width, height, bitmap });
+			} catch (e) {
+				console.error("Failed to create ImageBitmap from frame:", e);
+			}
+		};
 
 		return instance;
 	});
@@ -197,6 +254,10 @@ function createScreenshotEditorContext() {
 		const frame = latestFrame();
 		if (frame?.bitmap) {
 			frame.bitmap.close();
+		}
+		if (wsRef) {
+			wsRef.close();
+			wsRef = null;
 		}
 	});
 
@@ -362,6 +423,7 @@ function createScreenshotEditorContext() {
 		dialog,
 		setDialog,
 		latestFrame,
+		isRenderReady,
 		editorInstance,
 	};
 }

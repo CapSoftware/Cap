@@ -4,8 +4,9 @@ use std::{
 };
 
 use cap_enc_ffmpeg::remux::{
-    concatenate_audio_to_ogg, concatenate_video_fragments, get_media_duration, get_video_fps,
-    probe_media_valid, probe_video_can_decode,
+    concatenate_audio_to_ogg, concatenate_m4s_segments_with_init, concatenate_video_fragments,
+    get_media_duration, get_video_fps, probe_m4s_can_decode_with_init, probe_media_valid,
+    probe_video_can_decode,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
@@ -27,7 +28,9 @@ pub struct IncompleteRecording {
 pub struct RecoverableSegment {
     pub index: u32,
     pub display_fragments: Vec<PathBuf>,
+    pub display_init_segment: Option<PathBuf>,
     pub camera_fragments: Option<Vec<PathBuf>>,
+    pub camera_init_segment: Option<PathBuf>,
     pub mic_fragments: Option<Vec<PathBuf>>,
     pub system_audio_fragments: Option<Vec<PathBuf>>,
     pub cursor_path: Option<PathBuf>,
@@ -37,6 +40,12 @@ pub struct RecoverableSegment {
 pub struct RecoveredRecording {
     pub project_path: PathBuf,
     pub meta: StudioRecordingMeta,
+}
+
+#[derive(Debug, Clone)]
+struct FragmentsInfo {
+    fragments: Vec<PathBuf>,
+    init_segment: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -133,13 +142,16 @@ impl RecoveryManager {
             let segment_path = segment_entry.path();
 
             let display_dir = segment_path.join("display");
-            let mut display_fragments = Self::find_complete_fragments(&display_dir);
+            let display_info = Self::find_complete_fragments_with_init(&display_dir);
+            let mut display_fragments = display_info.fragments;
+            let mut display_init_segment = display_info.init_segment;
 
             if display_fragments.is_empty()
                 && let Some(display_mp4) =
                     Self::probe_single_file(&segment_path.join("display.mp4"))
             {
                 display_fragments = vec![display_mp4];
+                display_init_segment = None;
             }
 
             if display_fragments.is_empty() {
@@ -151,12 +163,15 @@ impl RecoveryManager {
             }
 
             let camera_dir = segment_path.join("camera");
-            let camera_fragments = {
-                let frags = Self::find_complete_fragments(&camera_dir);
-                if frags.is_empty() {
-                    Self::probe_single_file(&segment_path.join("camera.mp4")).map(|p| vec![p])
+            let (camera_fragments, camera_init_segment) = {
+                let camera_info = Self::find_complete_fragments_with_init(&camera_dir);
+                if camera_info.fragments.is_empty() {
+                    (
+                        Self::probe_single_file(&segment_path.join("camera.mp4")).map(|p| vec![p]),
+                        None,
+                    )
                 } else {
-                    Some(frags)
+                    (Some(camera_info.fragments), camera_info.init_segment)
                 }
             };
 
@@ -173,7 +188,9 @@ impl RecoveryManager {
             recoverable_segments.push(RecoverableSegment {
                 index: index as u32,
                 display_fragments,
+                display_init_segment,
                 camera_fragments,
+                camera_init_segment,
                 mic_fragments,
                 system_audio_fragments,
                 cursor_path,
@@ -201,6 +218,10 @@ impl RecoveryManager {
     }
 
     fn find_complete_fragments(dir: &Path) -> Vec<PathBuf> {
+        Self::find_complete_fragments_with_init(dir).fragments
+    }
+
+    fn find_complete_fragments_with_init(dir: &Path) -> FragmentsInfo {
         use crate::fragmentation::CURRENT_MANIFEST_VERSION;
 
         let manifest_path = dir.join("manifest.json");
@@ -208,82 +229,141 @@ impl RecoveryManager {
         if manifest_path.exists()
             && let Ok(content) = std::fs::read_to_string(&manifest_path)
             && let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content)
-            && let Some(fragments) = manifest.get("fragments").and_then(|f| f.as_array())
         {
             let manifest_version = manifest
                 .get("version")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1) as u32;
-            if manifest_version > CURRENT_MANIFEST_VERSION {
+
+            let manifest_type = manifest
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("fragments");
+
+            let max_supported_version = if manifest_type == "m4s_segments" {
+                5
+            } else {
+                CURRENT_MANIFEST_VERSION
+            };
+
+            if manifest_version > max_supported_version {
                 warn!(
-                    "Manifest version {} is newer than supported {}",
-                    manifest_version, CURRENT_MANIFEST_VERSION
+                    "Manifest version {} is newer than supported {} for type {}",
+                    manifest_version, max_supported_version, manifest_type
                 );
             }
 
-            let expected_file_size = |f: &serde_json::Value| -> Option<u64> {
-                f.get("file_size").and_then(|s| s.as_u64())
+            let init_segment = manifest
+                .get("init_segment")
+                .and_then(|i| i.as_str())
+                .map(|name| dir.join(name))
+                .filter(|p| p.exists());
+
+            let entries = if manifest_type == "m4s_segments" {
+                manifest.get("segments").and_then(|s| s.as_array())
+            } else {
+                manifest.get("fragments").and_then(|f| f.as_array())
             };
 
-            let result: Vec<PathBuf> = fragments
-                .iter()
-                .filter(|f| {
-                    f.get("is_complete")
-                        .and_then(|c| c.as_bool())
-                        .unwrap_or(false)
-                })
-                .filter_map(|f| {
-                    let path_str = f.get("path").and_then(|p| p.as_str())?;
-                    let path = dir.join(path_str);
-                    if !path.exists() {
-                        return None;
-                    }
+            if let Some(entries) = entries {
+                let expected_file_size = |f: &serde_json::Value| -> Option<u64> {
+                    f.get("file_size").and_then(|s| s.as_u64())
+                };
 
-                    if let Some(expected_size) = expected_file_size(f)
-                        && let Ok(metadata) = std::fs::metadata(&path)
-                        && metadata.len() != expected_size
-                    {
-                        warn!(
-                            "Fragment {} size mismatch: expected {}, got {}",
-                            path.display(),
-                            expected_size,
-                            metadata.len()
-                        );
-                        return None;
-                    }
-
-                    if Self::is_video_file(&path) {
-                        match probe_video_can_decode(&path) {
-                            Ok(true) => Some(path),
-                            Ok(false) => {
-                                warn!("Fragment {} has no decodable frames", path.display());
-                                None
-                            }
-                            Err(e) => {
-                                warn!("Fragment {} validation failed: {}", path.display(), e);
-                                None
-                            }
+                let result: Vec<PathBuf> = entries
+                    .iter()
+                    .filter(|f| {
+                        f.get("is_complete")
+                            .and_then(|c| c.as_bool())
+                            .unwrap_or(false)
+                    })
+                    .filter_map(|f| {
+                        let path_str = f.get("path").and_then(|p| p.as_str())?;
+                        let path = dir.join(path_str);
+                        if !path.exists() {
+                            return None;
                         }
-                    } else if probe_media_valid(&path) {
-                        Some(path)
-                    } else {
-                        warn!("Fragment {} is not valid media", path.display());
-                        None
-                    }
-                })
-                .collect();
 
-            if !result.is_empty() {
-                return result;
+                        if let Some(expected_size) = expected_file_size(f)
+                            && let Ok(metadata) = std::fs::metadata(&path)
+                            && metadata.len() != expected_size
+                        {
+                            warn!(
+                                "Fragment {} size mismatch: expected {}, got {}",
+                                path.display(),
+                                expected_size,
+                                metadata.len()
+                            );
+                            return None;
+                        }
+
+                        if Self::is_video_file(&path) {
+                            if let Some(init_path) = &init_segment {
+                                match probe_m4s_can_decode_with_init(init_path, &path) {
+                                    Ok(true) => Some(path),
+                                    Ok(false) => {
+                                        warn!(
+                                            "M4S segment {} has no decodable frames (with init)",
+                                            path.display()
+                                        );
+                                        None
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "M4S segment {} validation failed: {}",
+                                            path.display(),
+                                            e
+                                        );
+                                        None
+                                    }
+                                }
+                            } else {
+                                match probe_video_can_decode(&path) {
+                                    Ok(true) => Some(path),
+                                    Ok(false) => {
+                                        warn!(
+                                            "Fragment {} has no decodable frames",
+                                            path.display()
+                                        );
+                                        None
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Fragment {} validation failed: {}",
+                                            path.display(),
+                                            e
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                        } else if probe_media_valid(&path) {
+                            Some(path)
+                        } else {
+                            warn!("Fragment {} is not valid media", path.display());
+                            None
+                        }
+                    })
+                    .collect();
+
+                if !result.is_empty() {
+                    return FragmentsInfo {
+                        fragments: result,
+                        init_segment,
+                    };
+                }
             }
         }
 
-        Self::probe_fragments_in_dir(dir)
+        FragmentsInfo {
+            fragments: Self::probe_fragments_in_dir(dir),
+            init_segment: None,
+        }
     }
 
     fn is_video_file(path: &Path) -> bool {
         path.extension()
-            .map(|e| e.eq_ignore_ascii_case("mp4"))
+            .map(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("m4s"))
             .unwrap_or(false)
     }
 
@@ -301,7 +381,7 @@ impl RecoveryManager {
                     .and_then(|e| e.to_str())
                     .map(|e| e.to_lowercase());
                 match ext.as_deref() {
-                    Some("mp4") => match probe_video_can_decode(p) {
+                    Some("mp4") | Some("m4s") => match probe_video_can_decode(p) {
                         Ok(true) => true,
                         Ok(false) => {
                             debug!("Skipping {} - no decodable frames", p.display());
@@ -398,7 +478,7 @@ impl RecoveryManager {
                 .join(format!("segment-{}", segment.index));
 
             let display_output = segment_dir.join("display.mp4");
-            if segment.display_fragments.len() == 1 {
+            if segment.display_fragments.len() == 1 && segment.display_init_segment.is_none() {
                 let source = &segment.display_fragments[0];
                 if source != &display_output {
                     info!("Moving single display fragment to {:?}", display_output);
@@ -410,19 +490,38 @@ impl RecoveryManager {
                         debug!("Failed to clean up display dir {:?}: {e}", display_dir);
                     }
                 }
-            } else if segment.display_fragments.len() > 1 {
-                info!(
-                    "Concatenating {} display fragments to {:?}",
-                    segment.display_fragments.len(),
-                    display_output
-                );
-                concatenate_video_fragments(&segment.display_fragments, &display_output)
+            } else if !segment.display_fragments.is_empty() {
+                if let Some(init_path) = &segment.display_init_segment {
+                    info!(
+                        "Concatenating {} M4S display segments with init to {:?}",
+                        segment.display_fragments.len(),
+                        display_output
+                    );
+                    concatenate_m4s_segments_with_init(
+                        init_path,
+                        &segment.display_fragments,
+                        &display_output,
+                    )
                     .map_err(RecoveryError::VideoConcat)?;
+                } else {
+                    info!(
+                        "Concatenating {} display fragments to {:?}",
+                        segment.display_fragments.len(),
+                        display_output
+                    );
+                    concatenate_video_fragments(&segment.display_fragments, &display_output)
+                        .map_err(RecoveryError::VideoConcat)?;
+                }
 
                 for fragment in &segment.display_fragments {
                     if let Err(e) = std::fs::remove_file(fragment) {
                         debug!("Failed to remove display fragment {:?}: {e}", fragment);
                     }
+                }
+                if let Some(init_path) = &segment.display_init_segment
+                    && let Err(e) = std::fs::remove_file(init_path)
+                {
+                    debug!("Failed to remove display init segment {:?}: {e}", init_path);
                 }
                 let display_dir = segment_dir.join("display");
                 if display_dir.exists()
@@ -434,7 +533,7 @@ impl RecoveryManager {
 
             if let Some(camera_frags) = &segment.camera_fragments {
                 let camera_output = segment_dir.join("camera.mp4");
-                if camera_frags.len() == 1 {
+                if camera_frags.len() == 1 && segment.camera_init_segment.is_none() {
                     let source = &camera_frags[0];
                     if source != &camera_output {
                         info!("Moving single camera fragment to {:?}", camera_output);
@@ -446,19 +545,34 @@ impl RecoveryManager {
                             debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
                         }
                     }
-                } else if camera_frags.len() > 1 {
-                    info!(
-                        "Concatenating {} camera fragments to {:?}",
-                        camera_frags.len(),
-                        camera_output
-                    );
-                    concatenate_video_fragments(camera_frags, &camera_output)
-                        .map_err(RecoveryError::VideoConcat)?;
+                } else if !camera_frags.is_empty() {
+                    if let Some(init_path) = &segment.camera_init_segment {
+                        info!(
+                            "Concatenating {} M4S camera segments with init to {:?}",
+                            camera_frags.len(),
+                            camera_output
+                        );
+                        concatenate_m4s_segments_with_init(init_path, camera_frags, &camera_output)
+                            .map_err(RecoveryError::VideoConcat)?;
+                    } else {
+                        info!(
+                            "Concatenating {} camera fragments to {:?}",
+                            camera_frags.len(),
+                            camera_output
+                        );
+                        concatenate_video_fragments(camera_frags, &camera_output)
+                            .map_err(RecoveryError::VideoConcat)?;
+                    }
 
                     for fragment in camera_frags {
                         if let Err(e) = std::fs::remove_file(fragment) {
                             debug!("Failed to remove camera fragment {:?}: {e}", fragment);
                         }
+                    }
+                    if let Some(init_path) = &segment.camera_init_segment
+                        && let Err(e) = std::fs::remove_file(init_path)
+                    {
+                        debug!("Failed to remove camera init segment {:?}: {e}", init_path);
                     }
                     let camera_dir = segment_dir.join("camera");
                     if camera_dir.exists()
@@ -631,7 +745,7 @@ impl RecoveryManager {
         let meta = Self::build_recovered_meta(recording)?;
 
         let mut recording_meta = recording.meta.clone();
-        recording_meta.inner = RecordingMetaInner::Studio(meta.clone());
+        recording_meta.inner = RecordingMetaInner::Studio(Box::new(meta.clone()));
         recording_meta
             .save_for_project()
             .map_err(|_| RecoveryError::MetaSave)?;
@@ -652,6 +766,11 @@ impl RecoveryManager {
     fn build_recovered_meta(
         recording: &IncompleteRecording,
     ) -> Result<StudioRecordingMeta, RecoveryError> {
+        let original_segments = match recording.meta.studio_meta() {
+            Some(StudioRecordingMeta::MultipleSegments { inner, .. }) => Some(&inner.segments),
+            _ => None,
+        };
+
         let segments: Vec<MultipleSegment> = recording
             .recoverable_segments
             .iter()
@@ -659,6 +778,9 @@ impl RecoveryManager {
                 let segment_index = seg.index;
                 let segment_base = format!("content/segments/segment-{segment_index}");
                 let segment_dir = recording.project_path.join(&segment_base);
+
+                let original_segment =
+                    original_segments.and_then(|segs| segs.get(segment_index as usize));
 
                 let display_path = segment_dir.join("display.mp4");
                 let fps = get_video_fps(&display_path).unwrap_or(30);
@@ -668,17 +790,34 @@ impl RecoveryManager {
                 let system_audio_path = segment_dir.join("system_audio.ogg");
                 let cursor_path = segment_dir.join("cursor.json");
 
+                let display_start_time = original_segment.and_then(|s| s.display.start_time);
+
+                let get_start_time_or_fallback = |original_time: Option<f64>| -> Option<f64> {
+                    original_time.or_else(|| display_start_time.map(|_| 0.0))
+                };
+
                 MultipleSegment {
                     display: VideoMeta {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
                         fps,
-                        start_time: None,
+                        start_time: display_start_time,
+                        device_id: original_segment.and_then(|s| s.display.device_id.clone()),
                     },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
-                            fps: 30,
-                            start_time: None,
+                            fps: original_segment
+                                .and_then(|s| s.camera.as_ref())
+                                .map(|c| c.fps)
+                                .unwrap_or(30),
+                            start_time: get_start_time_or_fallback(
+                                original_segment
+                                    .and_then(|s| s.camera.as_ref())
+                                    .and_then(|c| c.start_time),
+                            ),
+                            device_id: original_segment
+                                .and_then(|s| s.camera.as_ref())
+                                .and_then(|c| c.device_id.clone()),
                         })
                     } else {
                         None
@@ -686,7 +825,14 @@ impl RecoveryManager {
                     mic: if mic_path.exists() {
                         Some(AudioMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/audio-input.ogg")),
-                            start_time: None,
+                            start_time: get_start_time_or_fallback(
+                                original_segment
+                                    .and_then(|s| s.mic.as_ref())
+                                    .and_then(|m| m.start_time),
+                            ),
+                            device_id: original_segment
+                                .and_then(|s| s.mic.as_ref())
+                                .and_then(|m| m.device_id.clone()),
                         })
                     } else {
                         None
@@ -694,7 +840,14 @@ impl RecoveryManager {
                     system_audio: if system_audio_path.exists() {
                         Some(AudioMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/system_audio.ogg")),
-                            start_time: None,
+                            start_time: get_start_time_or_fallback(
+                                original_segment
+                                    .and_then(|s| s.system_audio.as_ref())
+                                    .and_then(|a| a.start_time),
+                            ),
+                            device_id: original_segment
+                                .and_then(|s| s.system_audio.as_ref())
+                                .and_then(|a| a.device_id.clone()),
                         })
                     } else {
                         None
@@ -855,8 +1008,8 @@ impl RecoveryManager {
         let mut meta =
             RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
 
-        if let RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) =
-            &mut meta.inner
+        if let RecordingMetaInner::Studio(studio) = &mut meta.inner
+            && let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut()
         {
             inner.status = Some(StudioRecordingStatus::NeedsRemux);
             meta.save_for_project()
@@ -870,11 +1023,15 @@ impl RecoveryManager {
         let mut updated_meta = meta.clone();
 
         let status_updated = match &mut updated_meta.inner {
-            RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) => {
-                inner.status = Some(StudioRecordingStatus::Failed {
-                    error: "No recoverable segments found".to_string(),
-                });
-                true
+            RecordingMetaInner::Studio(studio) => {
+                if let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut() {
+                    inner.status = Some(StudioRecordingStatus::Failed {
+                        error: "No recoverable segments found".to_string(),
+                    });
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         };

@@ -214,6 +214,7 @@ impl ScreenshotEditorInstances {
                         path: relative_path.clone(),
                         fps: 30,
                         start_time: Some(0.0),
+                        device_id: None,
                     };
                     let segment = SingleSegment {
                         display: video_meta.clone(),
@@ -227,7 +228,7 @@ impl ScreenshotEditorInstances {
                         project_path: path.parent().unwrap().to_path_buf(),
                         pretty_name: "Screenshot".to_string(),
                         sharing: None,
-                        inner: RecordingMetaInner::Studio(studio_meta.clone()),
+                        inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
                         upload: None,
                     }
                 };
@@ -283,7 +284,7 @@ impl ScreenshotEditorInstances {
                     queue: (*queue).clone(),
                     device: (*device).clone(),
                     options,
-                    meta: studio_meta,
+                    meta: *studio_meta,
                     recording_meta: recording_meta.clone(),
                     background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                     is_software_adapter,
@@ -360,11 +361,13 @@ impl ScreenshotEditorInstances {
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
+                                    frame_number: frame.frame_number,
+                                    target_time_ns: frame.target_time_ns,
                                     created_at: Instant::now(),
                                 }));
                             }
                             Err(e) => {
-                                eprintln!("Failed to render frame: {e}");
+                                tracing::error!("Failed to render screenshot frame: {e}");
                             }
                         }
 

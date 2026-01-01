@@ -90,7 +90,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::{RwLock, oneshot, watch};
 use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
@@ -105,6 +105,43 @@ use crate::{
     upload::InstantMultipartUpload,
 };
 use crate::{recording::start_recording, upload::build_video_meta};
+
+type FinalizingRecordingsMap =
+    std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
+
+#[derive(Default)]
+pub struct FinalizingRecordings {
+    recordings: std::sync::Mutex<FinalizingRecordingsMap>,
+}
+
+impl FinalizingRecordings {
+    pub fn start_finalizing(&self, path: PathBuf) -> watch::Receiver<bool> {
+        let mut recordings = self
+            .recordings
+            .lock()
+            .expect("FinalizingRecordings mutex poisoned");
+        let (tx, rx) = watch::channel(false);
+        recordings.insert(path, (tx, rx.clone()));
+        rx
+    }
+
+    pub fn finish_finalizing(&self, path: &Path) {
+        let mut recordings = self
+            .recordings
+            .lock()
+            .expect("FinalizingRecordings mutex poisoned");
+        if let Some((tx, _)) = recordings.remove(path)
+            && tx.send(true).is_err()
+        {
+            debug!("Finalizing receiver dropped for path: {:?}", path);
+        }
+    }
+
+    pub fn is_finalizing(&self, path: &Path) -> Option<watch::Receiver<bool>> {
+        let recordings = self.recordings.lock().unwrap();
+        recordings.get(path).map(|(_, rx)| rx.clone())
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
@@ -422,6 +459,12 @@ async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
+fn get_system_diagnostics() -> cap_recording::diagnostics::SystemDiagnostics {
+    cap_recording::diagnostics::collect_diagnostics()
+}
+
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(app_handle, state))]
 #[allow(unused_mut)]
 async fn set_camera_input(
@@ -585,6 +628,106 @@ fn spawn_device_watchers(app_handle: AppHandle) {
     spawn_camera_watcher(app_handle);
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct DevicesUpdated {
+    cameras: Vec<cap_camera::CameraInfo>,
+    microphones: Vec<String>,
+    permissions: permissions::OSPermissionsCheck,
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_devices_snapshot() -> DevicesUpdated {
+    let permissions = permissions::do_permissions_check(false);
+    let cameras = if permissions.camera.permitted() {
+        cap_camera::list_cameras().collect()
+    } else {
+        Vec::new()
+    };
+    let microphones = if permissions.microphone.permitted() {
+        MicrophoneFeed::list().keys().cloned().collect()
+    } else {
+        Vec::new()
+    };
+    DevicesUpdated {
+        cameras,
+        microphones,
+        permissions,
+    }
+}
+
+fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
+    tokio::spawn(async move {
+        let mut last_perm_tuple: (u8, u8, u8, u8) = (255, 255, 255, 255);
+        let mut last_camera_ids: Vec<String> = Vec::new();
+        let mut last_mics: Vec<String> = Vec::new();
+        let mut fast_loops = 0u32;
+        loop {
+            let permissions = permissions::do_permissions_check(false);
+            let cameras = if permissions.camera.permitted() {
+                cap_camera::list_cameras().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let microphones = if permissions.microphone.permitted() {
+                MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let perm_tuple = (
+                match permissions.screen_recording {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+                match permissions.microphone {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+                match permissions.camera {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+                match permissions.accessibility {
+                    permissions::OSPermissionStatus::NotNeeded => 0,
+                    permissions::OSPermissionStatus::Empty => 1,
+                    permissions::OSPermissionStatus::Granted => 2,
+                    permissions::OSPermissionStatus::Denied => 3,
+                },
+            );
+            let camera_ids: Vec<String> =
+                cameras.iter().map(|c| c.device_id().to_string()).collect();
+            let mut changed = perm_tuple != last_perm_tuple;
+            if !changed {
+                changed = camera_ids != last_camera_ids || microphones != last_mics;
+            }
+            if changed {
+                DevicesUpdated {
+                    cameras: cameras.clone(),
+                    microphones: microphones.clone(),
+                    permissions: permissions.clone(),
+                }
+                .emit(&app_handle)
+                .ok();
+                last_perm_tuple = perm_tuple;
+                last_camera_ids = camera_ids;
+                last_mics = microphones;
+            }
+            let dur = if fast_loops < 10 {
+                std::time::Duration::from_millis(500)
+            } else {
+                std::time::Duration::from_secs(5)
+            };
+            fast_loops = fast_loops.saturating_add(1);
+            tokio::time::sleep(dur).await;
+        }
+    });
+}
 async fn cleanup_camera_window(app: AppHandle) {
     let state = app.state::<ArcLock<App>>();
     let mut app_state = state.write().await;
@@ -1226,7 +1369,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
         Command::new("explorer")
             .args(["/select,", path_str])
             .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+            .map_err(|e| format!("Failed to open folder: {e}"))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -1248,7 +1391,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
                     .ok_or("Invalid path")?,
             )
             .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+            .map_err(|e| format!("Failed to open folder: {e}"))?;
     }
 
     Ok(())
@@ -1413,7 +1556,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
                 return Err("Unable to get metadata on in-progress recording".to_string());
             }
 
-            match meta {
+            match &**meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
                     vec![recording_meta.path(&segment.display.path)]
                 }
@@ -1845,15 +1988,13 @@ impl RecordingMetaWithMetadata {
                 RecordingMetaInner::Instant(_) => RecordingMode::Instant,
             },
             status: match &inner.inner {
-                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
-                    inner
+                RecordingMetaInner::Studio(meta) => match &**meta {
+                    StudioRecordingMeta::MultipleSegments { inner } => inner
                         .status
                         .clone()
-                        .unwrap_or(StudioRecordingStatus::Complete)
-                }
-                RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment { .. }) => {
-                    StudioRecordingStatus::Complete
-                }
+                        .unwrap_or(StudioRecordingStatus::Complete),
+                    StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Complete,
+                },
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
                     StudioRecordingStatus::InProgress
                 }
@@ -2337,10 +2478,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_camera_input,
             recording_settings::set_recording_mode,
             upload_logs,
+            get_system_diagnostics,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
             recording::resume_recording,
+            recording::toggle_pause_recording,
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
@@ -2359,6 +2502,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_current_recording,
             export::export_video,
             export::get_export_estimates,
+            export::generate_export_preview,
+            export::generate_export_preview_fast,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -2377,6 +2522,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
+            get_devices_snapshot,
             upload_exported_video,
             upload_screenshot,
             create_screenshot_editor_instance,
@@ -2410,7 +2556,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
-            captions::prewarm_whisperx,
             captions::transcribe_audio,
             captions::save_captions,
             captions::load_captions,
@@ -2452,6 +2597,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
             SetCaptureAreaPending,
+            DevicesUpdated,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -2590,6 +2736,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
             app.manage(PendingScreenshots::default());
+            app.manage(FinalizingRecordings::default());
 
             gpu_context::prewarm_gpu();
 
@@ -2687,6 +2834,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             spawn_mic_error_handler(app.clone(), mic_error_rx);
             spawn_device_watchers(app.clone());
+            spawn_devices_snapshot_emitter(app.clone());
 
             tokio::spawn(check_notification_permissions(app.clone()));
 
@@ -2946,6 +3094,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
+                        || label.as_str() == "setup"
                 });
 
                 if has_window {
@@ -2957,6 +3106,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
+                                || label.as_str() == "setup"
                         })
                         .map(|(_, window)| window.clone())
                     {
@@ -3024,8 +3174,10 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                 // Check if recording is still marked as in-progress and if so mark as failed
                 // This should only happen if the application crashes while recording
                 match &mut meta.inner {
-                    RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
-                        if let Some(StudioRecordingStatus::InProgress) = &inner.status {
+                    RecordingMetaInner::Studio(meta_box) => {
+                        if let StudioRecordingMeta::MultipleSegments { inner } = &mut **meta_box
+                            && let Some(StudioRecordingStatus::InProgress) = &inner.status
+                        {
                             inner.status = Some(StudioRecordingStatus::Failed {
                                 error: "Recording crashed".to_string(),
                             });
@@ -3135,6 +3287,8 @@ async fn create_editor_instance_impl(
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
+    wait_for_recording_ready(&app, &path).await?;
+
     let instance = {
         let app = app.clone();
         EditorInstance::new(
@@ -3161,6 +3315,39 @@ async fn create_editor_instance_impl(
     });
 
     Ok(instance)
+}
+
+async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), String> {
+    let finalizing_state = app.state::<FinalizingRecordings>();
+
+    if let Some(mut rx) = finalizing_state.is_finalizing(path) {
+        info!("Recording is being finalized, waiting for completion...");
+        rx.wait_for(|&ready| ready)
+            .await
+            .map_err(|_| "Finalization was cancelled".to_string())?;
+        info!("Recording finalization completed");
+        return Ok(());
+    }
+
+    let meta = match RecordingMeta::load_for_project(path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            return Err(format!("Failed to load recording meta: {e}"));
+        }
+    };
+
+    if let Some(studio_meta) = meta.studio_meta()
+        && recording::needs_fragment_remux(path, studio_meta)
+    {
+        info!("Recording needs remux (crash recovery), starting remux...");
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || recording::remux_fragmented_recording(&path))
+            .await
+            .map_err(|e| format!("Remux task panicked: {e}"))??;
+        info!("Crash recovery remux completed");
+    }
+
+    Ok(())
 }
 
 fn recordings_path(app: &AppHandle) -> PathBuf {

@@ -12,7 +12,7 @@ import InfoPill from "./InfoPill";
 export default function SystemAudio() {
 	return (
 		<SystemAudioToggleRoot
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 			PillComponent={InfoPill}
 			icon={<IconPhMonitorBold class="text-gray-10 size-4" />}
 		/>

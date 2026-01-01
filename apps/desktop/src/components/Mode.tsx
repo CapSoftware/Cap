@@ -4,15 +4,27 @@ import Tooltip from "~/components/Tooltip";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { commands } from "~/utils/tauri";
 
-const Mode = () => {
+interface ModeProps {
+	onInfoClick?: () => void;
+}
+
+const Mode = (props: ModeProps) => {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const [isInfoHovered, setIsInfoHovered] = createSignal(false);
+
+	const handleInfoClick = () => {
+		if (props.onInfoClick) {
+			props.onInfoClick();
+		} else {
+			commands.showWindow("ModeSelect");
+		}
+	};
 
 	return (
 		<div class="flex gap-2 relative justify-end items-center p-1.5 rounded-full bg-gray-3 w-fit">
 			<div
 				class="absolute -left-1.5 -top-2 p-1 rounded-full w-fit bg-gray-5 group"
-				onClick={() => commands.showWindow("ModeSelect")}
+				onClick={handleInfoClick}
 				onMouseEnter={() => setIsInfoHovered(true)}
 				onMouseLeave={() => setIsInfoHovered(false)}
 			>
@@ -29,6 +41,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "instant" });
+							commands.setRecordingMode("instant");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "instant"
@@ -51,6 +64,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "studio" });
+							commands.setRecordingMode("studio");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "studio"
@@ -73,6 +87,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "screenshot" });
+							commands.setRecordingMode("screenshot");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "screenshot"
@@ -90,6 +105,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "instant" });
+							commands.setRecordingMode("instant");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "instant"
@@ -103,6 +119,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "studio" });
+							commands.setRecordingMode("studio");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "studio"
@@ -116,6 +133,7 @@ const Mode = () => {
 					<div
 						onClick={() => {
 							setOptions({ mode: "screenshot" });
+							commands.setRecordingMode("screenshot");
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "screenshot"

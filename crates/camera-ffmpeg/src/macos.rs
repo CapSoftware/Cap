@@ -20,6 +20,8 @@ pub enum AsFFmpegError {
     SwscaleFallbackFailed { format: String, reason: String },
     #[error("{0}")]
     Native(#[from] cidre::os::Error),
+    #[error("No image buffer available")]
+    NoImageBuffer,
 }
 
 struct FourccInfo {
@@ -53,17 +55,39 @@ static FALLBACK_WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 
 impl CapturedFrameExt for CapturedFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-        let native = self.native().clone();
+        let native = self.native();
 
-        let width = native.image_buf().width();
-        let height = native.image_buf().height();
+        let mut image_buf = native.image_buf().ok_or(AsFFmpegError::NoImageBuffer)?;
+
+        let width = image_buf.width();
+        let height = image_buf.height();
+        let plane0_stride = image_buf.plane_bytes_per_row(0);
+        let plane1_stride = image_buf.plane_bytes_per_row(1);
+        let plane_count = image_buf.plane_count();
+        let plane_info: [(usize, usize, usize); 3] = [
+            (
+                image_buf.plane_bytes_per_row(0),
+                image_buf.plane_height(0),
+                image_buf.plane_width(0),
+            ),
+            (
+                image_buf.plane_bytes_per_row(1),
+                image_buf.plane_height(1),
+                image_buf.plane_width(1),
+            ),
+            (
+                image_buf.plane_bytes_per_row(2),
+                image_buf.plane_height(2),
+                image_buf.plane_width(2),
+            ),
+        ];
 
         let format_desc = native.sample_buf().format_desc().unwrap();
 
-        let mut this = native.image_buf().clone();
-
-        let bytes_lock =
-            ImageBufExt::base_addr_lock(this.as_mut(), cv::pixel_buffer::LockFlags::READ_ONLY)?;
+        let bytes_lock = ImageBufExt::base_addr_lock(
+            image_buf.as_mut(),
+            cv::pixel_buffer::LockFlags::READ_ONLY,
+        )?;
 
         let res = match cidre::four_cc_to_str(&mut format_desc.media_sub_type().to_be_bytes()) {
             "2vuy" => {
@@ -73,7 +97,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -96,7 +120,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -110,7 +134,7 @@ impl CapturedFrameExt for CapturedFrame {
                     dest_row.copy_from_slice(src_row);
                 }
 
-                let src_stride = native.image_buf().plane_bytes_per_row(1);
+                let src_stride = plane1_stride;
                 let dest_stride = ff_frame.stride(1);
 
                 let src_bytes = bytes_lock.plane_data(1);
@@ -133,7 +157,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -156,7 +180,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -179,7 +203,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -202,7 +226,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -225,7 +249,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -248,7 +272,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -265,7 +289,6 @@ impl CapturedFrameExt for CapturedFrame {
                 ff_frame
             }
             "y420" => {
-                let plane_count = native.image_buf().plane_count();
                 if plane_count < 3 {
                     return Err(AsFFmpegError::InsufficientPlaneCount {
                         format: "y420".to_string(),
@@ -280,15 +303,13 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                for plane in 0..3 {
-                    let src_stride = native.image_buf().plane_bytes_per_row(plane);
+                for (plane, &(src_stride, plane_height, row_width)) in plane_info.iter().enumerate()
+                {
                     let dest_stride = ff_frame.stride(plane);
-                    let plane_height = native.image_buf().plane_height(plane);
 
                     let src_bytes = bytes_lock.plane_data(plane);
                     let dest_bytes = &mut ff_frame.data_mut(plane);
 
-                    let row_width = native.image_buf().plane_width(plane);
                     for y in 0..plane_height {
                         let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
                         let dest_row =
@@ -306,7 +327,7 @@ impl CapturedFrameExt for CapturedFrame {
                     height as u32,
                 );
 
-                let src_stride = native.image_buf().plane_bytes_per_row(0);
+                let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);
 
                 let src_bytes = bytes_lock.plane_data(0);
@@ -334,7 +355,7 @@ impl CapturedFrameExt for CapturedFrame {
                     let mut src_frame =
                         ffmpeg::frame::Video::new(info.pixel, width as u32, height as u32);
 
-                    let src_stride = native.image_buf().plane_bytes_per_row(0);
+                    let src_stride = plane0_stride;
                     let dest_stride = src_frame.stride(0);
                     let src_bytes = bytes_lock.plane_data(0);
                     let dest_bytes = &mut src_frame.data_mut(0);

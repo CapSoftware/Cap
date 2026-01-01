@@ -39,7 +39,7 @@ impl PauseTracker {
     }
 
     fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
-        if self.flag.load(Ordering::Relaxed) {
+        if self.flag.load(Ordering::Acquire) {
             if self.paused_at.is_none() {
                 self.paused_at = Some(timestamp);
             }
@@ -47,26 +47,42 @@ impl PauseTracker {
         }
 
         if let Some(start) = self.paused_at.take() {
-            let delta = timestamp.checked_sub(start).ok_or_else(|| {
-                anyhow!(
-                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
-                )
-            })?;
+            let delta = match timestamp.checked_sub(start) {
+                Some(d) => d,
+                None => {
+                    warn!(
+                        resume_at = ?start,
+                        current = ?timestamp,
+                        "Timestamp anomaly: frame timestamp went backward during unpause (clock skew?), treating as zero delta"
+                    );
+                    Duration::ZERO
+                }
+            };
 
-            self.offset = self.offset.checked_add(delta).ok_or_else(|| {
-                anyhow!(
-                    "Pause offset overflow (offset={:?}, delta={delta:?})",
-                    self.offset
-                )
-            })?;
+            self.offset = match self.offset.checked_add(delta) {
+                Some(o) => o,
+                None => {
+                    warn!(
+                        offset = ?self.offset,
+                        delta = ?delta,
+                        "Timestamp anomaly: pause offset overflow, clamping to MAX"
+                    );
+                    Duration::MAX
+                }
+            };
         }
 
-        let adjusted = timestamp.checked_sub(self.offset).ok_or_else(|| {
-            anyhow!(
-                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
-                self.offset
-            )
-        })?;
+        let adjusted = match timestamp.checked_sub(self.offset) {
+            Some(t) => t,
+            None => {
+                warn!(
+                    timestamp = ?timestamp,
+                    offset = ?self.offset,
+                    "Timestamp anomaly: adjusted timestamp underflow (clock skew?), using zero"
+                );
+                Duration::ZERO
+            }
+        };
 
         Ok(Some(adjusted))
     }
@@ -113,7 +129,9 @@ impl Muxer for WindowsMuxer {
         let output_size = config.output_size.unwrap_or(input_size);
         let fragmented = config.fragmented;
         let frag_duration_us = config.frag_duration_us;
-        let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
+        let queue_depth = ((config.frame_rate as f32 / 30.0 * 5.0).ceil() as usize).clamp(3, 12);
+        let (video_tx, video_rx) =
+            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(queue_depth);
 
         let mut output = ffmpeg::format::output(&output_path)?;
 
@@ -187,6 +205,12 @@ impl Muxer for WindowsMuxer {
                         config.bitrate_multiplier,
                     ) {
                         Ok(encoder) => {
+                            if let Err(e) = encoder.validate() {
+                                return fallback(Some(format!(
+                                    "Hardware encoder validation failed: {e}"
+                                )));
+                            }
+
                             let width = match u32::try_from(output_size.Width) {
                                 Ok(width) if width > 0 => width,
                                 _ => {
@@ -258,36 +282,57 @@ impl Muxer for WindowsMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder");
                         let mut first_timestamp: Option<Duration> = None;
-                        encoder
-                            .run(
-                                Arc::new(AtomicBool::default()),
-                                || {
-                                    let Ok(Some((frame, timestamp))) = video_rx.recv() else {
-                                        trace!("No more frames available");
-                                        return Ok(None);
-                                    };
+                        let result = encoder.run(
+                            Arc::new(AtomicBool::default()),
+                            || {
+                                let Ok(Some((frame, timestamp))) = video_rx.recv() else {
+                                    trace!("No more frames available");
+                                    return Ok(None);
+                                };
 
-                                    let relative = if let Some(first) = first_timestamp {
-                                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
-                                    } else {
-                                        first_timestamp = Some(timestamp);
-                                        Duration::ZERO
-                                    };
-                                    let frame_time = duration_to_timespan(relative);
+                                let relative = if let Some(first) = first_timestamp {
+                                    timestamp.saturating_sub(first)
+                                } else {
+                                    first_timestamp = Some(timestamp);
+                                    Duration::ZERO
+                                };
+                                let frame_time = duration_to_timespan(relative);
 
-                                    Ok(Some((frame.texture().clone(), frame_time)))
-                                },
-                                |output_sample| {
-                                    let mut output = output.lock().unwrap();
+                                Ok(Some((frame.texture().clone(), frame_time)))
+                            },
+                            |output_sample| {
+                                let Ok(mut output) = output.lock() else {
+                                    tracing::error!("Failed to lock output mutex - poisoned");
+                                    return Ok(());
+                                };
 
-                                    let _ = muxer
-                                        .write_sample(&output_sample, &mut output)
-                                        .map_err(|e| format!("WriteSample: {e}"));
+                                if let Err(e) = muxer.write_sample(&output_sample, &mut output) {
+                                    tracing::error!("WriteSample failed: {e}");
+                                }
 
-                                    Ok(())
-                                },
-                            )
-                            .context("run native encoder")
+                                Ok(())
+                            },
+                        );
+
+                        match result {
+                            Ok(health_status) => {
+                                debug!(
+                                    "Hardware encoder completed: {} frames encoded",
+                                    health_status.total_frames_encoded
+                                );
+                                Ok(())
+                            }
+                            Err(e) => {
+                                if e.should_fallback() {
+                                    error!(
+                                        "Hardware encoder failed with recoverable error, marking for software fallback: {}",
+                                        e
+                                    );
+                                    encoder_preferences.force_software_only();
+                                }
+                                Err(anyhow!("Hardware encoder error: {}", e))
+                            }
+                        }
                     }
                     either::Right(mut encoder) => {
                         while let Ok(Some((frame, time))) = video_rx.recv() {
@@ -433,6 +478,7 @@ pub struct WindowsCameraMuxerConfig {
     pub output_height: Option<u32>,
     pub fragmented: bool,
     pub frag_duration_us: i64,
+    pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 }
 
 impl Default for WindowsCameraMuxerConfig {
@@ -441,6 +487,7 @@ impl Default for WindowsCameraMuxerConfig {
             output_height: None,
             fragmented: false,
             frag_duration_us: 2_000_000,
+            encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
         }
     }
 }
@@ -499,6 +546,7 @@ impl Muxer for WindowsCameraMuxer {
 
         {
             let output = output.clone();
+            let encoder_preferences = config.encoder_preferences;
 
             tasks.spawn_thread("windows-camera-encoder", move || {
                 cap_mediafoundation_utils::thread_init();
@@ -525,132 +573,249 @@ impl Muxer for WindowsCameraMuxer {
 
                 let input_format = first_frame.0.dxgi_format();
 
-                let encoder_result = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
-                    &d3d_device,
-                    input_format,
-                    input_size,
-                    output_size,
-                    frame_rate,
-                    bitrate_multiplier,
-                );
+                let encoder = (|| {
+                    let fallback = |reason: Option<String>| {
+                        encoder_preferences.force_software_only();
+                        if let Some(reason) = reason.as_ref() {
+                            error!(
+                                "Falling back to software H264 encoder for camera: {reason}"
+                            );
+                        } else {
+                            info!("Using software H264 encoder for camera");
+                        }
 
-                let (mut encoder, mut muxer) = match encoder_result {
-                    Ok(encoder) => {
-                        let muxer = {
-                            let mut output_guard = match output.lock() {
-                                Ok(guard) => guard,
-                                Err(poisoned) => {
-                                    let msg = format!("Failed to lock output mutex: {poisoned}");
-                                    let _ = ready_tx.send(Err(anyhow!("{}", msg)));
-                                    return Err(anyhow!("{}", msg));
-                                }
-                            };
-
-                            cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                                &mut output_guard,
-                                cap_mediafoundation_ffmpeg::MuxerConfig {
-                                    width: output_width,
-                                    height: output_height,
-                                    fps: frame_rate,
-                                    bitrate: encoder.bitrate(),
-                                    fragmented,
-                                    frag_duration_us,
-                                },
-                            )
+                        let mut output_guard = match output.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => {
+                                return Err(anyhow!(
+                                    "CameraSoftwareEncoder: failed to lock output mutex: {}",
+                                    poisoned
+                                ));
+                            }
                         };
 
-                        match muxer {
-                            Ok(muxer) => (encoder, muxer),
-                            Err(err) => {
-                                let msg = format!("Failed to create muxer: {err}");
-                                let _ = ready_tx.send(Err(anyhow!("{}", msg)));
-                                return Err(anyhow!("{}", msg));
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        let msg = format!("Failed to create H264 encoder: {err}");
-                        let _ = ready_tx.send(Err(anyhow!("{}", msg)));
-                        return Err(anyhow!("{}", msg));
-                    }
-                };
-
-                if ready_tx.send(Ok(())).is_err() {
-                    error!("Failed to send ready signal - receiver dropped");
-                    return Ok(());
-                }
-
-                info!(
-                    "Windows camera encoder started: {:?} {}x{} -> NV12 {}x{} @ {}fps",
-                    input_format,
-                    input_size.Width,
-                    input_size.Height,
-                    output_size.Width,
-                    output_size.Height,
-                    frame_rate
-                );
-
-                let mut first_timestamp: Option<Duration> = None;
-                let mut frame_count = 0u64;
-
-                let mut process_frame = |frame: NativeCameraFrame,
-                                         timestamp: Duration|
-                 -> windows::core::Result<
-                    Option<(
-                        windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
-                        TimeSpan,
-                    )>,
-                > {
-                    let relative = if let Some(first) = first_timestamp {
-                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
-                    } else {
-                        first_timestamp = Some(timestamp);
-                        Duration::ZERO
+                        cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
+                            .with_output_size(output_width, output_height)
+                            .and_then(|builder| builder.build(&mut output_guard))
+                            .map(either::Right)
+                            .map_err(|e| anyhow!("CameraSoftwareEncoder/{e}"))
                     };
 
-                    let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
-                    Ok(Some((texture, duration_to_timespan(relative))))
+                    if encoder_preferences.should_force_software() {
+                        return fallback(None);
+                    }
+
+                    match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
+                        &d3d_device,
+                        input_format,
+                        input_size,
+                        output_size,
+                        frame_rate,
+                        bitrate_multiplier,
+                    ) {
+                        Ok(encoder) => {
+                            if let Err(e) = encoder.validate() {
+                                return fallback(Some(format!(
+                                    "Camera hardware encoder validation failed: {e}"
+                                )));
+                            }
+
+                            let muxer = {
+                                let mut output_guard = match output.lock() {
+                                    Ok(guard) => guard,
+                                    Err(poisoned) => {
+                                        return fallback(Some(format!(
+                                            "Failed to lock output mutex: {poisoned}"
+                                        )));
+                                    }
+                                };
+
+                                cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+                                    &mut output_guard,
+                                    cap_mediafoundation_ffmpeg::MuxerConfig {
+                                        width: output_width,
+                                        height: output_height,
+                                        fps: frame_rate,
+                                        bitrate: encoder.bitrate(),
+                                        fragmented,
+                                        frag_duration_us,
+                                    },
+                                )
+                            };
+
+                            match muxer {
+                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                                Err(err) => fallback(Some(err.to_string())),
+                            }
+                        }
+                        Err(err) => fallback(Some(err.to_string())),
+                    }
+                })();
+
+                let encoder = match encoder {
+                    Ok(encoder) => {
+                        if ready_tx.send(Ok(())).is_err() {
+                            error!("Failed to send ready signal - receiver dropped");
+                            return Ok(());
+                        }
+                        encoder
+                    }
+                    Err(e) => {
+                        error!("Camera encoder setup failed: {:#}", e);
+                        let _ = ready_tx.send(Err(anyhow!("{e}")));
+                        return Err(anyhow!("{e}"));
+                    }
                 };
 
-                if let Ok(Some((texture, frame_time))) = process_frame(first_frame.0, first_frame.1)
-                {
-                    encoder
-                        .run(
-                            Arc::new(AtomicBool::default()),
-                            || {
-                                if frame_count > 0 {
-                                    let Ok(Some((frame, timestamp))) = video_rx.recv() else {
-                                        trace!("No more camera frames available");
-                                        return Ok(None);
-                                    };
-                                    frame_count += 1;
-                                    if frame_count.is_multiple_of(30) {
-                                        debug!(
-                                            "Windows camera encoder: processed {} frames",
-                                            frame_count
-                                        );
-                                    }
-                                    return process_frame(frame, timestamp);
-                                }
-                                frame_count += 1;
-                                Ok(Some((texture.clone(), frame_time)))
-                            },
-                            |output_sample| {
-                                let mut output = output.lock().unwrap();
-                                let _ = muxer
-                                    .write_sample(&output_sample, &mut output)
-                                    .map_err(|e| format!("WriteSample: {e}"));
-                                Ok(())
-                            },
-                        )
-                        .context("run camera encoder")?;
-                }
+                match encoder {
+                    either::Left((mut encoder, mut muxer)) => {
+                        info!(
+                            "Windows camera encoder started (hardware): {:?} {}x{} -> NV12 {}x{} @ {}fps",
+                            input_format,
+                            input_size.Width,
+                            input_size.Height,
+                            output_size.Width,
+                            output_size.Height,
+                            frame_rate
+                        );
 
-                info!(
-                    "Windows camera encoder finished: {} frames encoded",
-                    frame_count
-                );
-                Ok(())
+                        let mut first_timestamp: Option<Duration> = None;
+                        let mut frame_count = 0u64;
+
+                        let mut process_frame = |frame: NativeCameraFrame,
+                                                 timestamp: Duration|
+                         -> windows::core::Result<
+                            Option<(
+                                windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+                                TimeSpan,
+                            )>,
+                        > {
+                            let relative = if let Some(first) = first_timestamp {
+                                timestamp.saturating_sub(first)
+                            } else {
+                                first_timestamp = Some(timestamp);
+                                Duration::ZERO
+                            };
+
+                            let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
+                            Ok(Some((texture, duration_to_timespan(relative))))
+                        };
+
+                        if let Ok(Some((texture, frame_time))) =
+                            process_frame(first_frame.0, first_frame.1)
+                        {
+                            let result = encoder.run(
+                                Arc::new(AtomicBool::default()),
+                                || {
+                                    if frame_count > 0 {
+                                        let Ok(Some((frame, timestamp))) = video_rx.recv() else {
+                                            trace!("No more camera frames available");
+                                            return Ok(None);
+                                        };
+                                        frame_count += 1;
+                                        if frame_count.is_multiple_of(30) {
+                                            debug!(
+                                                "Windows camera encoder: processed {} frames",
+                                                frame_count
+                                            );
+                                        }
+                                        return process_frame(frame, timestamp);
+                                    }
+                                    frame_count += 1;
+                                    Ok(Some((texture.clone(), frame_time)))
+                                },
+                                |output_sample| {
+                                    let mut output = output.lock().unwrap();
+                                    if let Err(e) = muxer.write_sample(&output_sample, &mut output)
+                                    {
+                                        tracing::error!("Camera WriteSample failed: {e}");
+                                    }
+                                    Ok(())
+                                },
+                            );
+
+                            match result {
+                                Ok(health_status) => {
+                                    info!(
+                                        "Windows camera encoder finished (hardware): {} frames encoded",
+                                        health_status.total_frames_encoded
+                                    );
+                                }
+                                Err(e) => {
+                                    if e.should_fallback() {
+                                        error!(
+                                            "Camera hardware encoder failed with recoverable error, marking for software fallback: {}",
+                                            e
+                                        );
+                                        encoder_preferences.force_software_only();
+                                    }
+                                    return Err(anyhow!("Camera hardware encoder error: {}", e));
+                                }
+                            }
+                        }
+
+                        Ok(())
+                    }
+                    either::Right(mut encoder) => {
+                        info!(
+                            "Windows camera encoder started (software): {}x{} -> {}x{} @ {}fps",
+                            video_config.width,
+                            video_config.height,
+                            output_width,
+                            output_height,
+                            frame_rate
+                        );
+
+                        let mut first_timestamp: Option<Duration> = None;
+                        let mut frame_count = 0u64;
+
+                        let mut process_frame =
+                            |frame: NativeCameraFrame,
+                             timestamp: Duration|
+                             -> anyhow::Result<Option<Duration>> {
+                                let relative = if let Some(first) = first_timestamp {
+                                    timestamp.saturating_sub(first)
+                                } else {
+                                    first_timestamp = Some(timestamp);
+                                    Duration::ZERO
+                                };
+
+                                let ffmpeg_frame = camera_frame_to_ffmpeg(&frame)?;
+
+                                let Ok(mut output_guard) = output.lock() else {
+                                    return Ok(None);
+                                };
+
+                                encoder
+                                    .queue_frame(ffmpeg_frame, relative, &mut output_guard)
+                                    .context("queue camera frame")?;
+
+                                Ok(Some(relative))
+                            };
+
+                        if process_frame(first_frame.0, first_frame.1)?.is_some() {
+                            frame_count += 1;
+                        }
+
+                        while let Ok(Some((frame, timestamp))) = video_rx.recv() {
+                            if process_frame(frame, timestamp)?.is_some() {
+                                frame_count += 1;
+                                if frame_count.is_multiple_of(30) {
+                                    debug!(
+                                        "Windows camera encoder (software): processed {} frames",
+                                        frame_count
+                                    );
+                                }
+                            }
+                        }
+
+                        info!(
+                            "Windows camera encoder finished (software): {} frames encoded",
+                            frame_count
+                        );
+                        Ok(())
+                    }
+                }
             });
         }
 
@@ -722,18 +887,108 @@ impl AudioMuxer for WindowsCameraMuxer {
 
 fn convert_uyvy_to_yuyv(src: &[u8], width: u32, height: u32) -> Vec<u8> {
     let total_bytes = (width * height * 2) as usize;
+    let src_len = src.len().min(total_bytes);
     let mut dst = vec![0u8; total_bytes];
 
-    for i in (0..src.len().min(total_bytes)).step_by(4) {
-        if i + 3 < src.len() && i + 3 < total_bytes {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("ssse3") {
+            unsafe {
+                convert_uyvy_to_yuyv_ssse3(src, &mut dst, src_len);
+            }
+            return dst;
+        }
+    }
+
+    convert_uyvy_to_yuyv_scalar(src, &mut dst, src_len);
+    dst
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn convert_uyvy_to_yuyv_ssse3(src: &[u8], dst: &mut [u8], len: usize) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        let shuffle_mask = _mm_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
+
+        let mut i = 0;
+        let simd_end = len & !15;
+
+        while i < simd_end {
+            let chunk = _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i);
+            let shuffled = _mm_shuffle_epi8(chunk, shuffle_mask);
+            _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, shuffled);
+            i += 16;
+        }
+
+        convert_uyvy_to_yuyv_scalar(&src[i..], &mut dst[i..], len - i);
+    }
+}
+
+fn convert_uyvy_to_yuyv_scalar(src: &[u8], dst: &mut [u8], len: usize) {
+    for i in (0..len).step_by(4) {
+        if i + 3 < src.len() && i + 3 < dst.len() {
             dst[i] = src[i + 1];
             dst[i + 1] = src[i];
             dst[i + 2] = src[i + 3];
             dst[i + 3] = src[i + 2];
         }
     }
+}
 
-    dst
+pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+    use cap_mediafoundation_utils::IMFMediaBufferExt;
+
+    let ffmpeg_format = match frame.pixel_format {
+        cap_camera_windows::PixelFormat::NV12 => ffmpeg::format::Pixel::NV12,
+        cap_camera_windows::PixelFormat::YUYV422 => ffmpeg::format::Pixel::YUYV422,
+        cap_camera_windows::PixelFormat::UYVY422 => ffmpeg::format::Pixel::UYVY422,
+        other => anyhow::bail!("Unsupported camera pixel format: {:?}", other),
+    };
+
+    let buffer_guard = frame
+        .buffer
+        .lock()
+        .map_err(|_| anyhow!("Failed to lock camera buffer"))?;
+    let lock = buffer_guard
+        .lock()
+        .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
+    let data = &*lock;
+
+    let converted_data_storage;
+    let (final_data, final_format): (&[u8], ffmpeg::format::Pixel) =
+        if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
+            converted_data_storage = convert_uyvy_to_yuyv(data, frame.width, frame.height);
+            (
+                converted_data_storage.as_slice(),
+                ffmpeg::format::Pixel::YUYV422,
+            )
+        } else {
+            (data, ffmpeg_format)
+        };
+
+    let mut ffmpeg_frame = ffmpeg::frame::Video::new(final_format, frame.width, frame.height);
+
+    match final_format {
+        ffmpeg::format::Pixel::NV12 => {
+            let y_size = (frame.width * frame.height) as usize;
+            let uv_size = y_size / 2;
+            if final_data.len() >= y_size + uv_size {
+                ffmpeg_frame.data_mut(0)[..y_size].copy_from_slice(&final_data[..y_size]);
+                ffmpeg_frame.data_mut(1)[..uv_size].copy_from_slice(&final_data[y_size..]);
+            }
+        }
+        ffmpeg::format::Pixel::YUYV422 => {
+            let size = (frame.width * frame.height * 2) as usize;
+            if final_data.len() >= size {
+                ffmpeg_frame.data_mut(0)[..size].copy_from_slice(&final_data[..size]);
+            }
+        }
+        _ => {}
+    }
+
+    Ok(ffmpeg_frame)
 }
 
 pub fn upload_mf_buffer_to_texture(
@@ -761,14 +1016,10 @@ pub fn upload_mf_buffer_to_texture(
     let lock = buffer_guard.lock()?;
     let original_data = &*lock;
 
-    let converted_buffer: Option<Vec<u8>>;
+    let converted_buffer_storage;
     let data: &[u8] = if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-        converted_buffer = Some(convert_uyvy_to_yuyv(
-            original_data,
-            frame.width,
-            frame.height,
-        ));
-        converted_buffer.as_ref().unwrap()
+        converted_buffer_storage = convert_uyvy_to_yuyv(original_data, frame.width, frame.height);
+        converted_buffer_storage.as_slice()
     } else {
         original_data
     };

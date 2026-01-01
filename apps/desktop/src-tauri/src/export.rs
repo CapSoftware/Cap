@@ -1,9 +1,18 @@
+use crate::editor_window::WindowEditorInstance;
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::ExporterBase;
-use cap_project::RecordingMeta;
-use serde::Deserialize;
+use cap_project::{RecordingMeta, XY};
+use cap_rendering::{
+    FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
+    RendererLayers,
+};
+use image::codecs::jpeg::JpegEncoder;
+use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::Ordering},
+};
 use tracing::{info, instrument};
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
@@ -162,5 +171,285 @@ pub async fn get_export_estimates(
         duration_seconds,
         estimated_time_seconds,
         estimated_size_mb,
+    })
+}
+
+#[derive(Debug, Deserialize, Type)]
+pub struct ExportPreviewSettings {
+    pub fps: u32,
+    pub resolution_base: XY<u32>,
+    pub compression_bpp: f32,
+}
+
+#[derive(Debug, Serialize, Type)]
+pub struct ExportPreviewResult {
+    pub jpeg_base64: String,
+    pub estimated_size_mb: f64,
+    pub actual_width: u32,
+    pub actual_height: u32,
+    pub frame_render_time_ms: f64,
+    pub total_frames: u32,
+}
+
+fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
+    ((bpp - 0.04) / (0.3 - 0.04) * (95.0 - 40.0) + 40.0).clamp(40.0, 95.0) as u8
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip_all)]
+pub async fn generate_export_preview(
+    project_path: PathBuf,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use cap_editor::create_segments;
+    use std::time::Instant;
+
+    let recording_meta = RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+
+    let cap_project::RecordingMetaInner::Studio(studio_meta) = &recording_meta.inner else {
+        return Err("Cannot preview non-studio recordings".to_string());
+    };
+
+    let project_config = recording_meta.project_config();
+
+    let recordings = Arc::new(
+        ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
+            .map_err(|e| format!("Failed to load recordings: {e}"))?,
+    );
+
+    let render_constants = Arc::new(
+        RenderVideoConstants::new(
+            &recordings.segments,
+            recording_meta.clone(),
+            (**studio_meta).clone(),
+        )
+        .await
+        .map_err(|e| format!("Failed to create render constants: {e}"))?,
+    );
+
+    let segments = create_segments(&recording_meta, studio_meta)
+        .await
+        .map_err(|e| format!("Failed to create segments: {e}"))?;
+
+    let render_segments: Vec<RenderSegment> = segments
+        .iter()
+        .map(|s| RenderSegment {
+            cursor: s.cursor.clone(),
+            decoders: s.decoders.clone(),
+        })
+        .collect();
+
+    let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
+        return Err("Frame time is outside video duration".to_string());
+    };
+
+    let render_segment = &render_segments[segment.recording_clip as usize];
+    let clip_config = project_config
+        .clips
+        .iter()
+        .find(|v| v.index == segment.recording_clip);
+
+    let render_start = Instant::now();
+
+    let segment_frames = render_segment
+        .decoders
+        .get_frames(
+            segment_time as f32,
+            !project_config.camera.hide,
+            clip_config.map(|v| v.offsets).unwrap_or_default(),
+        )
+        .await
+        .ok_or_else(|| "Failed to decode frame".to_string())?;
+
+    let frame_number = (frame_time * settings.fps as f64).floor() as u32;
+
+    let uniforms = ProjectUniforms::new(
+        &render_constants,
+        &project_config,
+        frame_number,
+        settings.fps,
+        settings.resolution_base,
+        &render_segment.cursor,
+        &segment_frames,
+    );
+
+    let mut frame_renderer = FrameRenderer::new(&render_constants);
+    let mut layers = RendererLayers::new_with_options(
+        &render_constants.device,
+        &render_constants.queue,
+        render_constants.is_software_adapter,
+    );
+
+    let frame = frame_renderer
+        .render(
+            segment_frames,
+            uniforms,
+            &render_segment.cursor,
+            &mut layers,
+        )
+        .await
+        .map_err(|e| format!("Failed to render frame: {e}"))?;
+
+    let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+
+    let width = frame.width;
+    let height = frame.height;
+
+    let rgb_data: Vec<u8> = frame
+        .data
+        .chunks(frame.padded_bytes_per_row as usize)
+        .flat_map(|row| {
+            row[0..(frame.width * 4) as usize]
+                .chunks(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        })
+        .collect();
+
+    let jpeg_quality = bpp_to_jpeg_quality(settings.compression_bpp);
+    let mut jpeg_buffer = Vec::new();
+    {
+        let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, jpeg_quality);
+        encoder
+            .encode(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
+            .map_err(|e| format!("Failed to encode JPEG: {e}"))?;
+    }
+
+    let jpeg_base64 = STANDARD.encode(&jpeg_buffer);
+
+    let total_pixels = (settings.resolution_base.x * settings.resolution_base.y) as f64;
+    let fps_f64 = settings.fps as f64;
+
+    let metadata = get_video_metadata(project_path.clone()).await?;
+    let duration_seconds = if let Some(timeline) = &project_config.timeline {
+        timeline.segments.iter().map(|s| s.duration()).sum()
+    } else {
+        metadata.duration
+    };
+    let total_frames = (duration_seconds * fps_f64).ceil() as u32;
+
+    let video_bitrate = total_pixels * settings.compression_bpp as f64 * fps_f64;
+    let audio_bitrate = 192_000.0;
+    let total_bitrate = video_bitrate + audio_bitrate;
+    let estimated_size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+
+    Ok(ExportPreviewResult {
+        jpeg_base64,
+        estimated_size_mb,
+        actual_width: width,
+        actual_height: height,
+        frame_render_time_ms,
+        total_frames,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip_all)]
+pub async fn generate_export_preview_fast(
+    editor: WindowEditorInstance,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::time::Instant;
+
+    let project_config = editor.project_config.1.borrow().clone();
+
+    let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
+        return Err("Frame time is outside video duration".to_string());
+    };
+
+    let segment_media = &editor.segment_medias[segment.recording_clip as usize];
+    let clip_config = project_config
+        .clips
+        .iter()
+        .find(|v| v.index == segment.recording_clip);
+
+    let render_start = Instant::now();
+
+    editor.export_preview_active.store(true, Ordering::Release);
+    let segment_frames = segment_media
+        .decoders
+        .get_frames(
+            segment_time as f32,
+            !project_config.camera.hide,
+            clip_config.map(|v| v.offsets).unwrap_or_default(),
+        )
+        .await;
+    editor.export_preview_active.store(false, Ordering::Release);
+    let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
+
+    let frame_number = (frame_time * settings.fps as f64).floor() as u32;
+
+    let uniforms = ProjectUniforms::new(
+        &editor.render_constants,
+        &project_config,
+        frame_number,
+        settings.fps,
+        settings.resolution_base,
+        &segment_media.cursor,
+        &segment_frames,
+    );
+
+    let mut frame_renderer = FrameRenderer::new(&editor.render_constants);
+    let mut layers = RendererLayers::new_with_options(
+        &editor.render_constants.device,
+        &editor.render_constants.queue,
+        editor.render_constants.is_software_adapter,
+    );
+
+    let frame = frame_renderer
+        .render(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+        .await
+        .map_err(|e| format!("Failed to render frame: {e}"))?;
+
+    let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+
+    let width = frame.width;
+    let height = frame.height;
+
+    let rgb_data: Vec<u8> = frame
+        .data
+        .chunks(frame.padded_bytes_per_row as usize)
+        .flat_map(|row| {
+            row[0..(frame.width * 4) as usize]
+                .chunks(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        })
+        .collect();
+
+    let jpeg_quality = bpp_to_jpeg_quality(settings.compression_bpp);
+    let mut jpeg_buffer = Vec::new();
+    {
+        let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, jpeg_quality);
+        encoder
+            .encode(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
+            .map_err(|e| format!("Failed to encode JPEG: {e}"))?;
+    }
+
+    let jpeg_base64 = STANDARD.encode(&jpeg_buffer);
+
+    let total_pixels = (settings.resolution_base.x * settings.resolution_base.y) as f64;
+    let fps_f64 = settings.fps as f64;
+
+    let duration_seconds = editor.recordings.duration();
+    let total_frames = (duration_seconds * fps_f64).ceil() as u32;
+
+    let video_bitrate = total_pixels * settings.compression_bpp as f64 * fps_f64;
+    let audio_bitrate = 192_000.0;
+    let total_bitrate = video_bitrate + audio_bitrate;
+    let estimated_size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+
+    Ok(ExportPreviewResult {
+        jpeg_base64,
+        estimated_size_mb,
+        actual_width: width,
+        actual_height: height,
+        frame_render_time_ms,
+        total_frames,
     })
 }

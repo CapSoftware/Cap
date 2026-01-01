@@ -198,8 +198,8 @@ export function AnnotationLayer(props: {
 			opacity: 1,
 			rotation: 0,
 			text: tool === "text" ? "Text" : null,
-			maskType: tool === "mask" ? "blur" : null,
-			maskLevel: tool === "mask" ? 16 : null,
+			maskType: tool === "mask" ? "pixelate" : null,
+			maskLevel: tool === "mask" ? 7 : null,
 		};
 
 		if (tool === "text") {
@@ -446,6 +446,14 @@ export function AnnotationLayer(props: {
 			setIsDrawing(false);
 			setActiveTool("select");
 			setSelectedAnnotationId(ann.id);
+
+			if (ann.type === "text") {
+				textSnapshot = {
+					project: structuredClone(unwrap(project)),
+					annotations: structuredClone(unwrap(annotations)),
+				};
+				setTextEditingId(ann.id);
+			}
 		}
 
 		if (dragState()) {
@@ -527,6 +535,15 @@ export function AnnotationLayer(props: {
 			onMouseMove={handleMouseMove}
 			onMouseUp={handleMouseUp}
 		>
+			<style>{`
+				.text-hover-overlay {
+					transition: fill 0.15s, stroke 0.15s;
+				}
+				.group:hover .text-hover-overlay {
+					fill: rgba(59, 130, 246, 0.05);
+					stroke: rgba(59, 130, 246, 0.4);
+				}
+			`}</style>
 			<For each={annotations}>
 				{(ann) => (
 					<g
@@ -558,9 +575,9 @@ export function AnnotationLayer(props: {
 										"line-height": "1",
 									}}
 									ref={(el) => {
+										el.textContent = ann.text ?? "";
 										setTimeout(() => {
 											el.focus();
-											// Select all text
 											const range = document.createRange();
 											range.selectNodeContents(el);
 											const sel = window.getSelection();
@@ -568,42 +585,67 @@ export function AnnotationLayer(props: {
 											sel?.addRange(range);
 										});
 									}}
+									onInput={(e) => {
+										const text = e.currentTarget.textContent ?? "";
+										setAnnotations((a) => a.id === ann.id, "text", text);
+									}}
 									onBlur={(e) => {
-										const text = e.currentTarget.innerText;
-										const originalText = annotations.find(
-											(a) => a.id === ann.id,
-										)?.text;
+										const text = e.currentTarget.textContent ?? "";
 
 										if (!text.trim()) {
-											// If deleting, use snapshot
 											if (textSnapshot) projectHistory.push(textSnapshot);
 											setAnnotations((prev) =>
 												prev.filter((a) => a.id !== ann.id),
 											);
-										} else if (text !== originalText) {
-											// If changed, use snapshot
-											if (textSnapshot) projectHistory.push(textSnapshot);
-											setAnnotations((a) => a.id === ann.id, "text", text);
+										} else if (textSnapshot) {
+											const originalText = textSnapshot.annotations.find(
+												(a) => a.id === ann.id,
+											)?.text;
+											if (text !== originalText) {
+												projectHistory.push(textSnapshot);
+											}
 										}
 
 										textSnapshot = null;
 										setTextEditingId(null);
 									}}
 									onKeyDown={(e) => {
-										e.stopPropagation(); // Prevent deleting annotation
+										e.stopPropagation();
 										if (e.key === "Enter" && !e.shiftKey) {
 											e.preventDefault();
 											e.currentTarget.blur();
 										}
 									}}
-								>
-									{ann.text}
-								</div>
+								/>
 							</foreignObject>
 						</Show>
 
 						<Show when={textEditingId() !== ann.id}>
 							<RenderAnnotation annotation={ann} />
+						</Show>
+
+						{/* Text hover overlay - only shown when not selected */}
+						<Show
+							when={
+								ann.type === "text" &&
+								selectedAnnotationId() !== ann.id &&
+								!textEditingId() &&
+								activeTool() === "select"
+							}
+						>
+							<rect
+								x={ann.x - handleSize() * 0.3}
+								y={ann.y - handleSize() * 0.3}
+								width={Math.abs(ann.width) + handleSize() * 0.6}
+								height={Math.abs(ann.height) + handleSize() * 0.6}
+								fill="transparent"
+								stroke="transparent"
+								stroke-width={2}
+								rx={4}
+								ry={4}
+								class="text-hover-overlay"
+								style={{ "pointer-events": "all" }}
+							/>
 						</Show>
 
 						<Show when={selectedAnnotationId() === ann.id && !textEditingId()}>
@@ -731,86 +773,121 @@ function SelectionHandles(props: {
 }) {
 	const half = createMemo(() => props.handleSize / 2);
 
+	const isText = () => props.annotation.type === "text";
+	const isArrow = () => props.annotation.type === "arrow";
+
+	const padding = createMemo(() => (isText() ? props.handleSize * 0.3 : 0));
+
+	const selectionRect = createMemo(() => {
+		const ann = props.annotation;
+		const p = padding();
+		return {
+			x: Math.min(ann.x, ann.x + ann.width) - p,
+			y: Math.min(ann.y, ann.y + ann.height) - p,
+			width: Math.abs(ann.width) + p * 2,
+			height: Math.abs(ann.height) + p * 2,
+		};
+	});
+
+	const cornerHandles = () => {
+		if (isText()) {
+			return [
+				{ id: "nw", x: 0, y: 0 },
+				{ id: "ne", x: 1, y: 0 },
+				{ id: "sw", x: 0, y: 1 },
+				{ id: "se", x: 1, y: 1 },
+			];
+		}
+		return [
+			{ id: "nw", x: 0, y: 0 },
+			{ id: "n", x: 0.5, y: 0 },
+			{ id: "ne", x: 1, y: 0 },
+			{ id: "w", x: 0, y: 0.5 },
+			{ id: "e", x: 1, y: 0.5 },
+			{ id: "sw", x: 0, y: 1 },
+			{ id: "s", x: 0.5, y: 1 },
+			{ id: "se", x: 1, y: 1 },
+		];
+	};
+
 	return (
 		<Show
-			when={props.annotation.type === "arrow"}
+			when={!isArrow()}
 			fallback={
 				<g>
-					<For
-						each={[
-							{ id: "nw", x: 0, y: 0 },
-							{ id: "n", x: 0.5, y: 0 },
-							{ id: "ne", x: 1, y: 0 },
-							{ id: "w", x: 0, y: 0.5 },
-							{ id: "e", x: 1, y: 0.5 },
-							{ id: "sw", x: 0, y: 1 },
-							{ id: "s", x: 0.5, y: 1 },
-							{ id: "se", x: 1, y: 1 },
-						]}
-					>
-						{(handle) => (
-							<Handle
-								x={
-									props.annotation.x +
-									handle.x * props.annotation.width -
-									half()
-								}
-								y={
-									props.annotation.y +
-									handle.y * props.annotation.height -
-									half()
-								}
-								size={props.handleSize}
-								cursor={`${handle.id}-resize`}
-								onMouseDown={(e) =>
-									props.onResizeStart(e, props.annotation.id, handle.id)
-								}
-							/>
-						)}
-					</For>
+					<Handle
+						cx={props.annotation.x}
+						cy={props.annotation.y}
+						r={half()}
+						cursor="crosshair"
+						isText={false}
+						onMouseDown={(e) =>
+							props.onResizeStart(e, props.annotation.id, "start")
+						}
+					/>
+					<Handle
+						cx={props.annotation.x + props.annotation.width}
+						cy={props.annotation.y + props.annotation.height}
+						r={half()}
+						cursor="crosshair"
+						isText={false}
+						onMouseDown={(e) =>
+							props.onResizeStart(e, props.annotation.id, "end")
+						}
+					/>
 				</g>
 			}
 		>
 			<g>
-				<Handle
-					x={props.annotation.x - half()}
-					y={props.annotation.y - half()}
-					size={props.handleSize}
-					cursor="crosshair"
-					onMouseDown={(e) =>
-						props.onResizeStart(e, props.annotation.id, "start")
-					}
-				/>
-				<Handle
-					x={props.annotation.x + props.annotation.width - half()}
-					y={props.annotation.y + props.annotation.height - half()}
-					size={props.handleSize}
-					cursor="crosshair"
-					onMouseDown={(e) =>
-						props.onResizeStart(e, props.annotation.id, "end")
-					}
-				/>
+				<Show when={isText()}>
+					<rect
+						x={selectionRect().x}
+						y={selectionRect().y}
+						width={selectionRect().width}
+						height={selectionRect().height}
+						fill="rgba(59, 130, 246, 0.1)"
+						stroke="#3b82f6"
+						stroke-width={2}
+						rx={4}
+						ry={4}
+						style={{ "pointer-events": "none" }}
+					/>
+				</Show>
+				<For each={cornerHandles()}>
+					{(handle) => (
+						<Handle
+							cx={selectionRect().x + handle.x * selectionRect().width}
+							cy={selectionRect().y + handle.y * selectionRect().height}
+							r={half()}
+							cursor={`${handle.id}-resize`}
+							isText={isText()}
+							onMouseDown={(e) =>
+								props.onResizeStart(e, props.annotation.id, handle.id)
+							}
+						/>
+					)}
+				</For>
 			</g>
 		</Show>
 	);
 }
 
 function Handle(props: {
-	x: number;
-	y: number;
-	size: number;
+	cx: number;
+	cy: number;
+	r: number;
 	cursor: string;
+	isText: boolean;
 	onMouseDown: (e: MouseEvent) => void;
 }) {
 	return (
-		<rect
-			x={props.x}
-			y={props.y}
-			width={props.size}
-			height={props.size}
-			fill="white"
-			stroke="#00A0FF"
-			stroke-width={1}
+		<circle
+			cx={props.cx}
+			cy={props.cy}
+			r={props.r}
+			fill={props.isText ? "#3b82f6" : "white"}
+			stroke={props.isText ? "white" : "#3b82f6"}
+			stroke-width={props.isText ? 1.5 : 1}
 			class="cursor-pointer"
 			style={{
 				"pointer-events": "all",

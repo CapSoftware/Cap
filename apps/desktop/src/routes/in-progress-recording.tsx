@@ -194,6 +194,23 @@ function InProgressRecordingInner() {
 				setState({ variant: "recording" });
 				setStart(Date.now());
 				break;
+			case "Paused":
+				if (state().variant === "recording") {
+					setPauseResumes((a) => [...a, { pause: Date.now() }]);
+				}
+				setState({ variant: "paused" });
+				setTime(Date.now());
+				break;
+			case "Resumed":
+				setPauseResumes(
+					produce((a) => {
+						if (a.length === 0) return a;
+						a[a.length - 1].resume = Date.now();
+					}),
+				);
+				setState({ variant: "recording" });
+				setTime(Date.now());
+				break;
 			case "InputLost": {
 				const wasDisconnected = hasDisconnectedInput();
 				setDisconnectedInputs(payload.input, () => true);
@@ -298,19 +315,9 @@ function InProgressRecordingInner() {
 		mutationFn: async () => {
 			if (state().variant === "paused") {
 				await commands.resumeRecording();
-				setPauseResumes(
-					produce((a) => {
-						if (a.length === 0) return a;
-						a[a.length - 1].resume = Date.now();
-					}),
-				);
-				setState({ variant: "recording" });
 			} else {
 				await commands.pauseRecording();
-				setPauseResumes((a) => [...a, { pause: Date.now() }]);
-				setState({ variant: "paused" });
 			}
-			setTime(Date.now());
 		},
 	}));
 
@@ -360,9 +367,6 @@ function InProgressRecordingInner() {
 	const pauseRecordingForDeviceChange = async () => {
 		if (state().variant !== "recording") return false;
 		await commands.pauseRecording();
-		setPauseResumes((a) => [...a, { pause: Date.now() }]);
-		setState({ variant: "paused" });
-		setTime(Date.now());
 		return true;
 	};
 

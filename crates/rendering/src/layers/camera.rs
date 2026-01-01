@@ -14,7 +14,7 @@ pub struct CameraLayer {
     bind_groups: [Option<wgpu::BindGroup>; 2],
     pipeline: CompositeVideoFramePipeline,
     hidden: bool,
-    last_frame_ptr: usize,
+    last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
 }
 
@@ -50,7 +50,7 @@ impl CameraLayer {
             bind_groups: [bind_group_0, bind_group_1],
             pipeline,
             hidden: false,
-            last_frame_ptr: 0,
+            last_recording_time: None,
             yuv_converter,
         }
     }
@@ -59,19 +59,31 @@ impl CameraLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        data: Option<(CompositeVideoFrameUniforms, XY<u32>, &DecodedFrame)>,
+        uniforms: Option<CompositeVideoFrameUniforms>,
+        frame_data: Option<(XY<u32>, &DecodedFrame, f32)>,
     ) {
-        self.hidden = data.is_none();
-
-        let Some((uniforms, frame_size, camera_frame)) = data else {
+        let Some(uniforms) = uniforms else {
+            self.hidden = true;
             return;
         };
 
-        let frame_data = camera_frame.data();
-        let frame_ptr = frame_data.as_ptr() as usize;
+        let has_previous_frame = self.last_recording_time.is_some();
+        self.hidden = frame_data.is_none() && !has_previous_frame;
+
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        let Some((frame_size, camera_frame, recording_time)) = frame_data else {
+            return;
+        };
+
+        let frame_data_bytes = camera_frame.data();
         let format = camera_frame.format();
 
-        if frame_ptr != self.last_frame_ptr {
+        let is_same_frame = self
+            .last_recording_time
+            .is_some_and(|last| (last - recording_time).abs() < 0.001);
+
+        if !is_same_frame {
             let next_texture = 1 - self.current_texture;
 
             if self.frame_textures[next_texture].width() != frame_size.x
@@ -104,7 +116,7 @@ impl CameraLayer {
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
-                        frame_data,
+                        frame_data_bytes,
                         wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(src_bytes_per_row),
@@ -162,11 +174,9 @@ impl CameraLayer {
                 }
             }
 
-            self.last_frame_ptr = frame_ptr;
+            self.last_recording_time = Some(recording_time);
             self.current_texture = next_texture;
         }
-
-        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
     }
 
     fn copy_from_yuv_output(

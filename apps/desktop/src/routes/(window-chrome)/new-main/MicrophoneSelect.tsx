@@ -1,4 +1,3 @@
-import { createQuery } from "@tanstack/solid-query";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import {
@@ -10,8 +9,8 @@ import {
 } from "solid-js";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { createCurrentRecordingQuery, getPermissions } from "~/utils/queries";
-import { events } from "~/utils/tauri";
+import { createCurrentRecordingQuery } from "~/utils/queries";
+import { events, type OSPermissionsCheck } from "~/utils/tauri";
 import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
@@ -23,11 +22,12 @@ export default function MicrophoneSelect(props: {
 	options: string[];
 	value: string | null;
 	onChange: (micName: string | null) => void;
+	permissions?: OSPermissionsCheck;
 }) {
 	return (
 		<MicrophoneSelectBase
 			{...props}
-			class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 			levelIndicatorClass="bg-blue-7"
 			iconClass="text-gray-10 size-4"
 			PillComponent={InfoPill}
@@ -46,10 +46,10 @@ export function MicrophoneSelectBase(props: {
 	PillComponent: Component<
 		ComponentProps<"button"> & { variant: "blue" | "red" }
 	>;
+	permissions?: OSPermissionsCheck;
 }) {
 	const DB_SCALE = 40;
 
-	const permissions = createQuery(() => getPermissions);
 	const currentRecording = createCurrentRecordingQuery();
 
 	const [dbs, setDbs] = createSignal<number | undefined>();
@@ -58,8 +58,8 @@ export function MicrophoneSelectBase(props: {
 	const requestPermission = useRequestPermission();
 
 	const permissionGranted = () =>
-		permissions?.data?.microphone === "granted" ||
-		permissions?.data?.microphone === "notNeeded";
+		props.permissions?.microphone === "granted" ||
+		props.permissions?.microphone === "notNeeded";
 
 	type Option = { name: string };
 
@@ -79,7 +79,6 @@ export function MicrophoneSelectBase(props: {
 		else setDbs(dbs);
 	});
 
-	// visual audio level from 0 -> 1
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
@@ -98,7 +97,7 @@ export function MicrophoneSelectBase(props: {
 				class={props.class}
 				onClick={() => {
 					if (!permissionGranted()) {
-						requestPermission("microphone");
+						requestPermission("microphone", props.permissions?.microphone);
 						return;
 					}
 
@@ -142,7 +141,9 @@ export function MicrophoneSelectBase(props: {
 					PillComponent={props.PillComponent}
 					value={props.value}
 					permissionGranted={permissionGranted()}
-					requestPermission={() => requestPermission("microphone")}
+					requestPermission={() =>
+						requestPermission("microphone", props.permissions?.microphone)
+					}
 					onClick={(e) => {
 						if (props.value !== null) {
 							e.stopPropagation();

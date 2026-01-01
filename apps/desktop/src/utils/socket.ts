@@ -8,11 +8,13 @@ import {
 	type Producer,
 	type SharedFrameBufferConfig,
 } from "./shared-frame-buffer";
+import type { StrideCorrectionResponse } from "./stride-correction-worker";
+import StrideCorrectionWorker from "./stride-correction-worker?worker";
 
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
 const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
-	slotCount: 4,
-	slotSize: 8 * 1024 * 1024,
+	slotCount: 6,
+	slotSize: 16 * 1024 * 1024,
 };
 
 export type FrameData = {
@@ -26,6 +28,7 @@ export type CanvasControls = {
 	resizeCanvas: (width: number, height: number) => void;
 	hasRenderedFrame: () => boolean;
 	initDirectCanvas: (canvas: HTMLCanvasElement) => void;
+	resetFrameState: () => void;
 };
 
 interface ReadyMessage {
@@ -110,6 +113,15 @@ export function createImageDataWS(
 
 	let directCanvas: HTMLCanvasElement | null = null;
 	let directCtx: CanvasRenderingContext2D | null = null;
+	let strideWorker: Worker | null = null;
+
+	let cachedDirectImageData: ImageData | null = null;
+	let cachedDirectWidth = 0;
+	let cachedDirectHeight = 0;
+
+	let cachedStrideImageData: ImageData | null = null;
+	let cachedStrideWidth = 0;
+	let cachedStrideHeight = 0;
 
 	function cleanup() {
 		if (isCleanedUp) return;
@@ -123,9 +135,22 @@ export function createImageDataWS(
 		worker.onmessage = null;
 		worker.terminate();
 
+		if (strideWorker) {
+			strideWorker.onmessage = null;
+			strideWorker.terminate();
+			strideWorker = null;
+		}
+
 		pendingFrame = null;
 		nextFrame = null;
 		isProcessing = false;
+
+		cachedDirectImageData = null;
+		cachedDirectWidth = 0;
+		cachedDirectHeight = 0;
+		cachedStrideImageData = null;
+		cachedStrideWidth = 0;
+		cachedStrideHeight = 0;
 
 		setIsConnected(false);
 	}
@@ -141,6 +166,37 @@ export function createImageDataWS(
 		initDirectCanvas: (canvas: HTMLCanvasElement) => {
 			directCanvas = canvas;
 			directCtx = canvas.getContext("2d", { alpha: false });
+			strideWorker = new StrideCorrectionWorker();
+			strideWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
+				if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
+
+				const { buffer, width, height } = e.data;
+				if (directCanvas.width !== width || directCanvas.height !== height) {
+					directCanvas.width = width;
+					directCanvas.height = height;
+				}
+
+				const frameData = new Uint8ClampedArray(buffer);
+				if (
+					!cachedStrideImageData ||
+					cachedStrideWidth !== width ||
+					cachedStrideHeight !== height
+				) {
+					cachedStrideImageData = new ImageData(width, height);
+					cachedStrideWidth = width;
+					cachedStrideHeight = height;
+				}
+				cachedStrideImageData.data.set(frameData);
+				directCtx.putImageData(cachedStrideImageData, 0, 0);
+
+				if (!hasRenderedFrame()) {
+					setHasRenderedFrame(true);
+				}
+				onmessage({ width, height });
+			};
+		},
+		resetFrameState: () => {
+			worker.postMessage({ type: "reset-frame-state" });
 		},
 	};
 
@@ -166,6 +222,8 @@ export function createImageDataWS(
 		}
 
 		if (e.data.type === "frame-rendered") {
+			const { width, height } = e.data;
+			onmessage({ width, height });
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}
@@ -225,49 +283,60 @@ export function createImageDataWS(
 	ws.onmessage = (event) => {
 		const buffer = event.data as ArrayBuffer;
 
-		if (directCanvas && directCtx) {
-			const data = new Uint8Array(buffer);
-			if (data.length >= 12) {
-				const metadataOffset = data.length - 12;
-				const meta = new DataView(buffer, metadataOffset, 12);
+		if (directCanvas && directCtx && strideWorker) {
+			if (buffer.byteLength >= 24) {
+				const metadataOffset = buffer.byteLength - 24;
+				const meta = new DataView(buffer, metadataOffset, 24);
 				const strideBytes = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
 
 				if (width > 0 && height > 0) {
 					const expectedRowBytes = width * 4;
-					let frameData: Uint8ClampedArray;
 
 					if (strideBytes === expectedRowBytes) {
-						frameData = new Uint8ClampedArray(
+						const frameData = new Uint8ClampedArray(
 							buffer,
 							0,
 							expectedRowBytes * height,
 						);
-					} else {
-						frameData = new Uint8ClampedArray(expectedRowBytes * height);
-						for (let row = 0; row < height; row++) {
-							const srcStart = row * strideBytes;
-							const destStart = row * expectedRowBytes;
-							frameData.set(
-								new Uint8ClampedArray(buffer, srcStart, expectedRowBytes),
-								destStart,
-							);
+
+						if (
+							directCanvas.width !== width ||
+							directCanvas.height !== height
+						) {
+							directCanvas.width = width;
+							directCanvas.height = height;
 						}
-					}
 
-					if (directCanvas.width !== width || directCanvas.height !== height) {
-						directCanvas.width = width;
-						directCanvas.height = height;
-					}
+						if (
+							!cachedDirectImageData ||
+							cachedDirectWidth !== width ||
+							cachedDirectHeight !== height
+						) {
+							cachedDirectImageData = new ImageData(width, height);
+							cachedDirectWidth = width;
+							cachedDirectHeight = height;
+						}
+						cachedDirectImageData.data.set(frameData);
+						directCtx.putImageData(cachedDirectImageData, 0, 0);
 
-					const imageData = new ImageData(frameData, width, height);
-					directCtx.putImageData(imageData, 0, 0);
-
-					if (!hasRenderedFrame()) {
-						setHasRenderedFrame(true);
+						if (!hasRenderedFrame()) {
+							setHasRenderedFrame(true);
+						}
+						onmessage({ width, height });
+					} else {
+						strideWorker.postMessage(
+							{
+								type: "correct-stride",
+								buffer,
+								strideBytes,
+								width,
+								height,
+							},
+							[buffer],
+						);
 					}
-					onmessage({ width, height });
 				}
 			}
 			return;

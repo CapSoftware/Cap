@@ -10,10 +10,14 @@ use std::{
     sync::{Arc, mpsc},
 };
 use tokio::sync::oneshot;
+use tracing::info;
 
 use crate::{DecodedFrame, PixelFormat};
 
-use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame};
+use super::{
+    DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage,
+    frame_converter::FrameConverter, pts_to_frame,
+};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -29,16 +33,18 @@ struct ProcessedFrame {
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
         match self.format {
-            PixelFormat::Rgba => DecodedFrame::new((*self.data).clone(), self.width, self.height),
-            PixelFormat::Nv12 => DecodedFrame::new_nv12(
-                (*self.data).clone(),
+            PixelFormat::Rgba => {
+                DecodedFrame::new_with_arc(Arc::clone(&self.data), self.width, self.height)
+            }
+            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
+                Arc::clone(&self.data),
                 self.width,
                 self.height,
                 self.y_stride,
                 self.uv_stride,
             ),
-            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p(
-                (*self.data).clone(),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
+                Arc::clone(&self.data),
                 self.width,
                 self.height,
                 self.y_stride,
@@ -134,29 +140,40 @@ pub struct FfmpegDecoder;
 
 impl FfmpegDecoder {
     pub fn spawn(
-        _name: &'static str,
+        name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
-        ready_tx: oneshot::Sender<Result<(), String>>,
+        ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
     ) -> Result<(), String> {
-        let (continue_tx, continue_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel::<Result<(u32, u32, bool), String>>();
 
         std::thread::spawn(move || {
-            let mut this = match cap_video_decode::FFmpegDecoder::new(
-                path,
-                Some(if cfg!(target_os = "macos") {
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
-                } else {
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2
-                }),
-            ) {
+            let hw_device_type = if cfg!(target_os = "macos") {
+                Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
+            } else if cfg!(target_os = "linux") {
+                Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI)
+            } else if cfg!(target_os = "windows") {
+                Some(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2)
+            } else {
+                None
+            };
+
+            let mut this = match cap_video_decode::FFmpegDecoder::new(path.clone(), hw_device_type)
+            {
                 Err(e) => {
                     let _ = continue_tx.send(Err(e));
                     return;
                 }
                 Ok(v) => {
-                    let _ = continue_tx.send(Ok(()));
+                    let is_hw = v.is_hardware_accelerated();
+                    let width = v.decoder().width();
+                    let height = v.decoder().height();
+                    info!(
+                        "FFmpeg decoder created for '{}': {}x{}, hw_accel={}",
+                        name, width, height, is_hw
+                    );
+                    let _ = continue_tx.send(Ok((width, height, is_hw)));
                     v
                 }
             };
@@ -165,19 +182,29 @@ impl FfmpegDecoder {
             let start_time = this.start_time();
             let video_width = this.decoder().width();
             let video_height = this.decoder().height();
+            let is_hw = this.is_hardware_accelerated();
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
-            // active frame is a frame that triggered decode.
-            // frames that are within render_more_margin of this frame won't trigger decode.
             #[allow(unused)]
             let mut last_active_frame = None::<u32>;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
+            let first_ever_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
             let mut frames = this.frames();
             let mut converter = FrameConverter::new();
 
-            let _ = ready_tx.send(Ok(()));
+            let decoder_type = if is_hw {
+                DecoderType::FFmpegHardware
+            } else {
+                DecoderType::FFmpegSoftware
+            };
+            let init_result = DecoderInitResult {
+                width: video_width,
+                height: video_height,
+                decoder_type,
+            };
+            let _ = ready_tx.send(Ok(init_result));
 
             while let Ok(r) = rx.recv() {
                 match r {
@@ -250,6 +277,14 @@ impl FfmpegDecoder {
                                 frame,
                                 number: current_frame,
                             };
+
+                            if first_ever_frame.borrow().is_none() {
+                                let processed = cache_frame.process(&mut converter);
+                                *first_ever_frame.borrow_mut() = Some(processed);
+                                cache_frame = CachedFrame::Processed(
+                                    first_ever_frame.borrow().as_ref().unwrap().clone(),
+                                );
+                            }
 
                             // Handles frame skips.
                             // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
@@ -333,6 +368,11 @@ impl FfmpegDecoder {
                         if let Some(sender) = sender.take() {
                             if let Some(last_sent_frame) = last_sent_frame {
                                 (sender)(last_sent_frame);
+                            } else if let Some(first_frame) = first_ever_frame.borrow().clone() {
+                                debug!(
+                                    "Returning first decoded frame as fallback for request {requested_frame}"
+                                );
+                                (sender)(first_frame);
                             } else {
                                 debug!(
                                     "No frames available for request {requested_frame}, sending black frame"
@@ -356,9 +396,7 @@ impl FfmpegDecoder {
             }
         });
 
-        continue_rx.recv().map_err(|e| e.to_string())??;
-
-        Ok(())
+        continue_rx.recv().map_err(|e| e.to_string())?.map(|_| ())
     }
 }
 

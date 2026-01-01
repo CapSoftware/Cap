@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
@@ -30,18 +29,17 @@ import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
-import { authStore, generalSettingsStore } from "~/store";
+import { authStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { createDevicesQuery } from "~/utils/devices";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
-	listAudioDevices,
 	listDisplaysWithThumbnails,
 	listRecordings,
 	listScreens,
-	listVideoDevices,
 	listWindows,
 	listWindowsWithThumbnails,
 } from "~/utils/queries";
@@ -77,13 +75,14 @@ import {
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
+import ModeInfoPanel from "./ModeInfoPanel";
 import SystemAudio from "./SystemAudio";
 import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 
-const WINDOW_SIZE = { width: 290, height: 310 } as const;
+const WINDOW_SIZE = { width: 330, height: 345 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -340,13 +339,6 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 }
 
 export default function () {
-	const generalSettings = generalSettingsStore.createQuery();
-
-	const navigate = useNavigate();
-	createEventListener(window, "focus", () => {
-		if (generalSettings.data?.enableNewRecordingFlow === false) navigate("/");
-	});
-
 	return (
 		<RecordingOptionsProvider>
 			<Page />
@@ -406,17 +398,23 @@ function Page() {
 		void getCurrentWindow().show();
 	});
 
+	const handleMouseEnter = () => {
+		getCurrentWindow().setFocus();
+	};
+
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
 	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
+	const [modeInfoMenuOpen, setModeInfoMenuOpen] = createSignal(false);
 	const activeMenu = createMemo<
-		"display" | "window" | "recording" | "screenshot" | null
+		"display" | "window" | "recording" | "screenshot" | "modeInfo" | null
 	>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
 		if (recordingsMenuOpen()) return "recording";
 		if (screenshotsMenuOpen()) return "screenshot";
+		if (modeInfoMenuOpen()) return "modeInfo";
 		return null;
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
@@ -491,9 +489,11 @@ function Page() {
 					([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
 				);
 			},
-			refetchInterval: 2000,
+			refetchInterval: 10_000,
+			staleTime: 5_000,
 			reconcile: (old, next) => reconcile(next)(old),
 			initialData: [],
+			initialDataUpdatedAt: 0,
 		}),
 	);
 
@@ -529,23 +529,34 @@ function Page() {
 		return windowTargets.data?.filter((target) => ids.has(target.id));
 	});
 
-	const recordingsData = createMemo(() => {
+	const [recordingsStore, setRecordingsStore] = createStore<
+		RecordingWithPath[]
+	>([]);
+	createEffect(() => {
 		const data = recordings.data;
-		if (!data) return [];
-		// The Rust backend sorts files descending by creation time (newest first).
-		// See list_recordings in apps/desktop/src-tauri/src/lib.rs
-		// b_time.cmp(&a_time) ensures newest first.
-		// So we just need to take the top 20.
-		return data
+		if (!data) {
+			setRecordingsStore(reconcile([]));
+			return;
+		}
+		const mapped = data
 			.slice(0, 20)
 			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
+		setRecordingsStore(reconcile(mapped));
 	});
+	const recordingsData = () => recordingsStore;
 
-	const screenshotsData = createMemo(() => {
+	const [screenshotsStore, setScreenshotsStore] = createStore<
+		ScreenshotWithPath[]
+	>([]);
+	createEffect(() => {
 		const data = screenshots.data;
-		if (!data) return [];
-		return data.slice(0, 20) as ScreenshotWithPath[];
+		if (!data) {
+			setScreenshotsStore(reconcile([]));
+			return;
+		}
+		setScreenshotsStore(reconcile(data.slice(0, 20)));
 	});
+	const screenshotsData = () => screenshotsStore;
 
 	const displayMenuLoading = () =>
 		!hasDisplayTargetsData() &&
@@ -600,6 +611,7 @@ function Page() {
 		setWindowMenuOpen(false);
 		setRecordingsMenuOpen(false);
 		setScreenshotsMenuOpen(false);
+		setModeInfoMenuOpen(false);
 	});
 
 	createUpdateCheck();
@@ -643,8 +655,10 @@ function Page() {
 		});
 	});
 
-	const cameras = useQuery(() => listVideoDevices);
-	const mics = useQuery(() => listAudioDevices);
+	const devices = createDevicesQuery();
+	const cameras = createMemo(() => devices.data?.cameras ?? []);
+	const mics = createMemo(() => devices.data?.microphones ?? []);
+	const permissions = createMemo(() => devices.data?.permissions);
 
 	const windowListSignature = createMemo(() =>
 		createWindowSignature(windows.data),
@@ -688,14 +702,16 @@ function Page() {
 		void displayTargets.refetch();
 	});
 
-	cameras.promise.then((cameras) => {
-		if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
+	createEffect(() => {
+		const cameraList = cameras();
+		if (rawOptions.cameraID && findCamera(cameraList, rawOptions.cameraID)) {
 			setOptions("cameraLabel", null);
 		}
 	});
 
-	mics.promise.then((mics) => {
-		if (rawOptions.micName && !mics.includes(rawOptions.micName)) {
+	createEffect(() => {
+		const micList = mics();
+		if (rawOptions.micName && !micList.includes(rawOptions.micName)) {
 			setOptions("micName", null);
 		}
 	});
@@ -728,9 +744,9 @@ function Page() {
 		},
 		camera: () => {
 			if (!rawOptions.cameraID) return undefined;
-			return findCamera(cameras.data || [], rawOptions.cameraID);
+			return findCamera(cameras(), rawOptions.cameraID);
 		},
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
+		micName: () => mics().find((name) => name === rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
 				case "display": {
@@ -808,22 +824,22 @@ function Page() {
 	const BaseControls = () => (
 		<div class="space-y-2">
 			<CameraSelect
-				disabled={cameras.isPending}
-				options={cameras.data ?? []}
+				disabled={devices.isPending}
+				options={cameras()}
 				value={options.camera() ?? null}
 				onChange={(c) => {
 					if (!c) setCamera.mutate(null);
 					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
 					else setCamera.mutate({ DeviceID: c.device_id });
 				}}
+				permissions={permissions()}
 			/>
 			<MicrophoneSelect
-				disabled={mics.isPending}
-				options={mics.isPending ? [] : (mics.data ?? [])}
-				value={
-					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-				}
+				disabled={devices.isPending}
+				options={mics()}
+				value={options.micName() ?? null}
 				onChange={(v) => setMicInput.mutate(v)}
+				permissions={permissions()}
 			/>
 			<SystemAudio />
 		</div>
@@ -870,6 +886,8 @@ function Page() {
 									if (next) {
 										setWindowMenuOpen(false);
 										setHasOpenedDisplayMenu(true);
+										screens.refetch();
+										displayTargets.refetch();
 									}
 									return next;
 								});
@@ -907,6 +925,8 @@ function Page() {
 									if (next) {
 										setDisplayMenuOpen(false);
 										setHasOpenedWindowMenu(true);
+										windows.refetch();
+										windowTargets.refetch();
 									}
 									return next;
 								});
@@ -947,7 +967,10 @@ function Page() {
 	onCleanup(() => startSignInCleanup.then((cb) => cb()));
 
 	return (
-		<div class="flex relative flex-col px-3 gap-2 h-full min-h-0 text-[--text-primary]">
+		<div
+			onMouseEnter={handleMouseEnter}
+			class="flex relative flex-col px-[13px] gap-2 pb-[8px] h-full min-h-0 text-[--text-primary]"
+		>
 			<WindowChromeHeader hideMaximize>
 				<div
 					class={cx(
@@ -1026,7 +1049,7 @@ function Page() {
 				</div>
 			</WindowChromeHeader>
 			<Show when={!activeMenu()}>
-				<div class="flex items-center justify-between mt-4">
+				<div class="flex items-center justify-between mt-[18px] mb-[6px]">
 					<div class="flex items-center space-x-1">
 						<a
 							class="*:w-[92px] *:h-auto text-[--text-primary]"
@@ -1064,7 +1087,15 @@ function Page() {
 							</Suspense>
 						</ErrorBoundary>
 					</div>
-					<Mode />
+					<Mode
+						onInfoClick={() => {
+							setModeInfoMenuOpen(true);
+							setDisplayMenuOpen(false);
+							setWindowMenuOpen(false);
+							setRecordingsMenuOpen(false);
+							setScreenshotsMenuOpen(false);
+						}}
+					/>
 				</div>
 			</Show>
 			<div class="flex-1 min-h-0 w-full flex flex-col">
@@ -1165,7 +1196,7 @@ function Page() {
 									onReupload={handleReupload}
 									onRefetch={() => recordings.refetch()}
 								/>
-							) : (
+							) : variant === "screenshot" ? (
 								<TargetMenuPanel
 									variant="screenshot"
 									targets={screenshotsData()}
@@ -1179,7 +1210,6 @@ function Page() {
 												path: screenshot.path,
 											},
 										});
-										// getCurrentWindow().hide(); // Maybe keep open?
 									}}
 									disabled={isRecording()}
 									onBack={() => {
@@ -1190,6 +1220,12 @@ function Page() {
 											Settings: { page: "screenshots" },
 										});
 										getCurrentWindow().hide();
+									}}
+								/>
+							) : (
+								<ModeInfoPanel
+									onBack={() => {
+										setModeInfoMenuOpen(false);
 									}}
 								/>
 							)

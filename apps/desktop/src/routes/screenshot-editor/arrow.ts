@@ -1,7 +1,7 @@
 export function getArrowHeadSize(strokeWidth: number) {
 	const width = Math.max(1, strokeWidth);
-	const length = Math.max(12, width * 3);
-	const headWidth = Math.max(8, width * 2);
+	const length = Math.max(20, width * 6);
+	const headWidth = Math.max(14, width * 5);
 	return { length, width: headWidth };
 }
 

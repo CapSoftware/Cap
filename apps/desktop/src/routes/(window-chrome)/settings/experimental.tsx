@@ -24,10 +24,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			autoCreateShareableLink: false,
 			enableNotifications: true,
 			enableNativeCameraPreview: false,
-			enableNewRecordingFlow: true,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
-			crashRecoveryRecording: false,
 		},
 	);
 
@@ -80,20 +78,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							value={!!settings.autoZoomOnClicks}
 							onChange={(value) => {
 								handleChange("autoZoomOnClicks", value);
-								// This is bad code, but I just want the UI to not jank and can't seem to find the issue.
 								setTimeout(
 									() => window.scrollTo({ top: 0, behavior: "instant" }),
 									5,
 								);
 							}}
-						/>
-						<ToggleSettingItem
-							label="Crash-recoverable recording"
-							description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
-							value={!!settings.crashRecoveryRecording}
-							onChange={(value) =>
-								handleChange("crashRecoveryRecording", value)
-							}
 						/>
 					</div>
 				</div>

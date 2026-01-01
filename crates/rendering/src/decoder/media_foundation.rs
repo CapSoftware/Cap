@@ -2,12 +2,88 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, mpsc},
+    time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
 use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
 
-use super::{DecodedFrame, FRAME_CACHE_SIZE, VideoDecoderMessage};
+use super::{DecodedFrame, DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage};
+
+struct DecoderHealthMonitor {
+    consecutive_errors: u32,
+    consecutive_texture_read_failures: u32,
+    total_frames_decoded: u64,
+    total_errors: u64,
+    last_successful_decode: Instant,
+    frame_decode_times: [Duration; 32],
+    frame_decode_index: usize,
+    slow_frame_count: u32,
+}
+
+impl DecoderHealthMonitor {
+    fn new() -> Self {
+        Self {
+            consecutive_errors: 0,
+            consecutive_texture_read_failures: 0,
+            total_frames_decoded: 0,
+            total_errors: 0,
+            last_successful_decode: Instant::now(),
+            frame_decode_times: [Duration::ZERO; 32],
+            frame_decode_index: 0,
+            slow_frame_count: 0,
+        }
+    }
+
+    fn record_success(&mut self, decode_time: Duration) {
+        self.consecutive_errors = 0;
+        self.consecutive_texture_read_failures = 0;
+        self.total_frames_decoded += 1;
+        self.last_successful_decode = Instant::now();
+
+        self.frame_decode_times[self.frame_decode_index] = decode_time;
+        self.frame_decode_index = (self.frame_decode_index + 1) % 32;
+
+        const SLOW_FRAME_THRESHOLD: Duration = Duration::from_millis(100);
+        if decode_time > SLOW_FRAME_THRESHOLD {
+            self.slow_frame_count += 1;
+        }
+    }
+
+    fn record_error(&mut self) {
+        self.consecutive_errors += 1;
+        self.total_errors += 1;
+    }
+
+    fn record_texture_read_failure(&mut self) {
+        self.consecutive_texture_read_failures += 1;
+    }
+
+    fn is_healthy(&self) -> bool {
+        const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+        const MAX_CONSECUTIVE_TEXTURE_FAILURES: u32 = 5;
+        const MAX_TIME_SINCE_SUCCESS: Duration = Duration::from_secs(5);
+
+        self.consecutive_errors < MAX_CONSECUTIVE_ERRORS
+            && self.consecutive_texture_read_failures < MAX_CONSECUTIVE_TEXTURE_FAILURES
+            && self.last_successful_decode.elapsed() < MAX_TIME_SINCE_SUCCESS
+    }
+
+    #[allow(dead_code)]
+    fn average_decode_time(&self) -> Duration {
+        let sum: Duration = self.frame_decode_times.iter().sum();
+        sum / 32
+    }
+
+    #[allow(dead_code)]
+    fn get_health_summary(&self) -> (u64, u64, u32) {
+        (
+            self.total_frames_decoded,
+            self.total_errors,
+            self.slow_frame_count,
+        )
+    }
+}
 
 #[derive(Clone)]
 struct CachedFrame {
@@ -49,7 +125,7 @@ impl MFDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
-        ready_tx: oneshot::Sender<Result<(), String>>,
+        ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
     ) -> Result<(), String> {
         let (continue_tx, continue_rx) = mpsc::channel();
 
@@ -60,14 +136,34 @@ impl MFDecoder {
                     return;
                 }
                 Ok(v) => {
+                    let width = v.width();
+                    let height = v.height();
+                    let caps = v.capabilities();
+
+                    let exceeds_hw_limits = width > caps.max_width || height > caps.max_height;
+
+                    if exceeds_hw_limits {
+                        warn!(
+                            "Video '{}' dimensions {}x{} exceed hardware decoder limits ({}x{})",
+                            name, width, height, caps.max_width, caps.max_height
+                        );
+                        let _ = continue_tx.send(Err(format!(
+                            "Video dimensions {}x{} exceed hardware decoder limits {}x{}",
+                            width, height, caps.max_width, caps.max_height
+                        )));
+                        return;
+                    }
+
                     info!(
-                        "MediaFoundation decoder created for '{}': {}x{} @ {:?}fps",
+                        "MediaFoundation decoder created for '{}': {}x{} @ {:?}fps (hw max: {}x{})",
                         name,
-                        v.width(),
-                        v.height(),
-                        v.frame_rate()
+                        width,
+                        height,
+                        v.frame_rate(),
+                        caps.max_width,
+                        caps.max_height
                     );
-                    let _ = continue_tx.send(Ok(()));
+                    let _ = continue_tx.send(Ok((width, height)));
                     v
                 }
             };
@@ -77,14 +173,30 @@ impl MFDecoder {
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             let mut last_decoded_frame: Option<u32> = None;
+            let mut health = DecoderHealthMonitor::new();
 
-            let _ = ready_tx.send(Ok(()));
+            let init_result = DecoderInitResult {
+                width: video_width,
+                height: video_height,
+                decoder_type: DecoderType::MediaFoundation,
+            };
+            let _ = ready_tx.send(Ok(init_result));
 
             while let Ok(r) = rx.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
                         if sender.is_closed() {
                             continue;
+                        }
+
+                        if !health.is_healthy() {
+                            warn!(
+                                name = name,
+                                consecutive_errors = health.consecutive_errors,
+                                texture_failures = health.consecutive_texture_read_failures,
+                                total_decoded = health.total_frames_decoded,
+                                "MediaFoundation decoder unhealthy, performance may degrade"
+                            );
                         }
 
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
@@ -123,8 +235,10 @@ impl MFDecoder {
                         let mut last_valid_frame: Option<CachedFrame> = None;
 
                         loop {
+                            let decode_start = Instant::now();
                             match decoder.read_sample() {
                                 Ok(Some(mf_frame)) => {
+                                    let decode_time = decode_start.elapsed();
                                     let frame_number = pts_100ns_to_frame(mf_frame.pts, fps);
 
                                     let nv12_data = match decoder.read_texture_to_cpu(
@@ -133,6 +247,7 @@ impl MFDecoder {
                                         mf_frame.height,
                                     ) {
                                         Ok(data) => {
+                                            health.record_success(decode_time);
                                             debug!(
                                                 frame = frame_number,
                                                 data_len = data.data.len(),
@@ -140,11 +255,13 @@ impl MFDecoder {
                                                 uv_stride = data.uv_stride,
                                                 width = mf_frame.width,
                                                 height = mf_frame.height,
+                                                decode_ms = decode_time.as_millis(),
                                                 "read_texture_to_cpu succeeded"
                                             );
                                             Some(Arc::new(data))
                                         }
                                         Err(e) => {
+                                            health.record_texture_read_failure();
                                             warn!(
                                                 "Failed to read texture to CPU for frame {frame_number}: {e}"
                                             );
@@ -211,7 +328,11 @@ impl MFDecoder {
                                     break;
                                 }
                                 Err(e) => {
-                                    warn!("MediaFoundation read_sample error: {e}");
+                                    health.record_error();
+                                    warn!(
+                                        consecutive_errors = health.consecutive_errors,
+                                        "MediaFoundation read_sample error: {e}"
+                                    );
                                     break;
                                 }
                             }
@@ -243,9 +364,7 @@ impl MFDecoder {
             }
         });
 
-        continue_rx.recv().map_err(|e| e.to_string())??;
-
-        Ok(())
+        continue_rx.recv().map_err(|e| e.to_string())?.map(|_| ())
     }
 }
 

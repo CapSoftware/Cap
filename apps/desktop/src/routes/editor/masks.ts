@@ -30,6 +30,7 @@ export type MaskSegment = {
 	opacity: number;
 	pixelation: number;
 	darkness: number;
+	fadeDuration: number;
 	keyframes: MaskKeyframes;
 };
 
@@ -53,6 +54,7 @@ export const defaultMaskSegment = (
 	opacity: 1,
 	pixelation: 18,
 	darkness: 0.5,
+	fadeDuration: 0.15,
 	keyframes: { position: [], size: [], intensity: [] },
 });
 

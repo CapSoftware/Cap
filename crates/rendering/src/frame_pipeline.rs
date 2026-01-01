@@ -10,6 +10,8 @@ pub struct PendingReadback {
     padded_bytes_per_row: u32,
     width: u32,
     height: u32,
+    frame_number: u32,
+    frame_rate: u32,
 }
 
 impl PendingReadback {
@@ -44,16 +46,22 @@ impl PendingReadback {
 
         let buffer_slice = self.buffer.slice(..);
         let data = buffer_slice.get_mapped_range();
-        let data_vec = data.to_vec();
+        let mut data_vec = Vec::with_capacity(data.len() + 24);
+        data_vec.extend_from_slice(&data);
 
         drop(data);
         self.buffer.unmap();
+
+        let target_time_ns =
+            (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
 
         Ok(RenderedFrame {
             data: data_vec,
             padded_bytes_per_row: self.padded_bytes_per_row,
             width: self.width,
             height: self.height,
+            frame_number: self.frame_number,
+            target_time_ns,
         })
     }
 }
@@ -162,6 +170,8 @@ impl PipelinedGpuReadback {
             padded_bytes_per_row,
             width: uniforms.output_size.0,
             height: uniforms.output_size.1,
+            frame_number: uniforms.frame_number,
+            frame_rate: uniforms.frame_rate,
         });
 
         Ok(())
@@ -309,6 +319,8 @@ pub struct RenderedFrame {
     pub width: u32,
     pub height: u32,
     pub padded_bytes_per_row: u32,
+    pub frame_number: u32,
+    pub target_time_ns: u64,
 }
 
 // impl FramePipelineEncoder {

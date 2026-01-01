@@ -370,13 +370,13 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		socket.onmessage = (event) => {
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
-			if (clamped.length < 12) {
+			if (clamped.length < 24) {
 				console.error("Received frame too small to contain metadata");
 				return;
 			}
 
-			const metadataOffset = clamped.length - 12;
-			const meta = new DataView(buffer, metadataOffset, 12);
+			const metadataOffset = clamped.length - 24;
+			const meta = new DataView(buffer, metadataOffset, 24);
 			const strideBytes = meta.getUint32(0, true);
 			const height = meta.getUint32(4, true);
 			const width = meta.getUint32(8, true);

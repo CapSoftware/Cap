@@ -22,6 +22,8 @@ pub struct VideoMeta {
     pub fps: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 fn legacy_static_video_fps() -> u32 {
@@ -34,6 +36,8 @@ pub struct AudioMeta {
     pub path: RelativePathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -109,7 +113,7 @@ pub enum UploadMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum RecordingMetaInner {
-    Studio(StudioRecordingMeta),
+    Studio(Box<StudioRecordingMeta>),
     Instant(InstantRecordingMeta),
 }
 
@@ -407,6 +411,57 @@ impl MultipleSegment {
         }
 
         Some(value)
+    }
+
+    pub fn calculate_audio_offsets(&self) -> crate::ClipOffsets {
+        self.calculate_audio_offsets_with_calibration(None)
+    }
+
+    pub fn calculate_audio_offsets_with_calibration(
+        &self,
+        calibration_offset: Option<f32>,
+    ) -> crate::ClipOffsets {
+        let latest = match self.latest_start_time() {
+            Some(t) => t,
+            None => return crate::ClipOffsets::default(),
+        };
+
+        let cal_offset = calibration_offset.unwrap_or(0.0);
+
+        let camera_offset = self
+            .camera
+            .as_ref()
+            .and_then(|c| c.start_time)
+            .map(|t| (latest - t) as f32)
+            .unwrap_or(0.0);
+
+        let mic_offset = self
+            .mic
+            .as_ref()
+            .and_then(|m| m.start_time)
+            .map(|t| (latest - t) as f32 + cal_offset)
+            .unwrap_or(0.0);
+
+        let system_audio_offset = self
+            .system_audio
+            .as_ref()
+            .and_then(|s| s.start_time)
+            .map(|t| (latest - t) as f32 + cal_offset)
+            .unwrap_or(0.0);
+
+        crate::ClipOffsets {
+            camera: camera_offset,
+            mic: mic_offset,
+            system_audio: system_audio_offset,
+        }
+    }
+
+    pub fn camera_device_id(&self) -> Option<&str> {
+        self.camera.as_ref().and_then(|c| c.device_id.as_deref())
+    }
+
+    pub fn mic_device_id(&self) -> Option<&str> {
+        self.mic.as_ref().and_then(|m| m.device_id.as_deref())
     }
 }
 

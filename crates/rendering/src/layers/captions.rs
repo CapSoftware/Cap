@@ -426,7 +426,7 @@ impl CaptionsLayer {
     pub fn prepare(
         &mut self,
         uniforms: &ProjectUniforms,
-        segment_frames: &DecodedSegmentFrames,
+        _segment_frames: &DecodedSegmentFrames,
         output_size: XY<u32>,
         constants: &RenderVideoConstants,
     ) {
@@ -444,7 +444,7 @@ impl CaptionsLayer {
             return;
         }
 
-        let current_time = segment_frames.segment_time;
+        let current_time = uniforms.frame_number as f32 / uniforms.frame_rate as f32;
         let fade_duration = caption_data.settings.fade_duration;
         let linger_duration = caption_data.settings.linger_duration;
         let word_transition_duration = caption_data.settings.word_transition_duration;
@@ -542,8 +542,10 @@ impl CaptionsLayer {
             _ => Family::SansSerif,
         };
 
-        let weight = if caption_data.settings.bold {
+        let weight = if caption_data.settings.font_weight >= 700 {
             Weight::BOLD
+        } else if caption_data.settings.font_weight >= 500 {
+            Weight::MEDIUM
         } else {
             Weight::NORMAL
         };
