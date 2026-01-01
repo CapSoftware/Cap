@@ -492,6 +492,7 @@ function Page() {
 			staleTime: 5_000,
 			reconcile: (old, next) => reconcile(next)(old),
 			initialData: [],
+			initialDataUpdatedAt: 0,
 		}),
 	);
 
