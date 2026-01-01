@@ -260,6 +260,8 @@ impl WindowsFragmentedM4SMuxer {
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
+                cap_mediafoundation_utils::thread_init();
+
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
@@ -584,6 +586,8 @@ impl WindowsFragmentedM4SCameraMuxer {
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-camera-segment-encoder".to_string())
             .spawn(move || {
+                cap_mediafoundation_utils::thread_init();
+
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!(
                         "Failed to send ready signal - camera receiver dropped"
