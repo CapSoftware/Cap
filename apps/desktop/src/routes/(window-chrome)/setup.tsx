@@ -166,11 +166,10 @@ export default function () {
 										>
 											{permissionCheck() === "granted"
 												? "Granted"
-												: permission.requiresManualGrant
+												: permission.requiresManualGrant ||
+														permissionCheck() === "denied"
 													? "Open Settings"
-													: permissionCheck() !== "denied"
-														? "Grant Permission"
-														: "Request Permission"}
+													: "Grant Permission"}
 										</Button>
 									</li>
 								</Show>
