@@ -50,6 +50,7 @@ export function PresetsDropdown() {
 										const normalizedConfig = normalizeProject({
 											...preset.config,
 											timeline: project.timeline,
+											clips: project.clips,
 										});
 										setProject(reconcile(normalizedConfig));
 									}
