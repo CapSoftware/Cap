@@ -116,6 +116,16 @@ impl CameraPreviewManager {
         self.preview.is_some()
     }
 
+    pub fn notify_window_resized(&self, width: u32, height: u32) {
+        if let Some(preview) = &self.preview {
+            preview
+                .reconfigure
+                .send(ReconfigureEvent::WindowResized { width, height })
+                .map_err(|err| error!("Error notifying camera preview of resize: {err}"))
+                .ok();
+        }
+    }
+
     /// Initialize the camera preview for a specific Tauri window
     pub async fn init_window(
         &mut self,
@@ -169,6 +179,7 @@ impl CameraPreviewManager {
 #[derive(Clone)]
 enum ReconfigureEvent {
     State(CameraPreviewState),
+    WindowResized { width: u32, height: u32 },
     Shutdown,
 }
 
@@ -603,6 +614,10 @@ impl Renderer {
                     {
                         self.reconfigure_gpu_surface(width, height);
                     }
+                }
+                Err(ReconfigureEvent::WindowResized { width, height }) => {
+                    trace!("CameraPreview/ReconfigureEvent.WindowResized({width}x{height})");
+                    self.reconfigure_gpu_surface(width, height);
                 }
                 Err(ReconfigureEvent::Shutdown) => return,
             }

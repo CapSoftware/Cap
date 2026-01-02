@@ -19,7 +19,10 @@ use windows::{
     Graphics::SizeInt32,
     Win32::Graphics::{
         Direct3D11::ID3D11Device,
-        Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
+        Dxgi::Common::{
+            DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_YUY2,
+        },
     },
 };
 
@@ -462,6 +465,10 @@ impl NativeCameraFrame {
             cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
                 DXGI_FORMAT_YUY2
             }
+            cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
+                DXGI_FORMAT_B8G8R8A8_UNORM
+            }
+            cap_camera_windows::PixelFormat::RGB24 => DXGI_FORMAT_R8G8B8A8_UNORM,
             _ => DXGI_FORMAT_NV12,
         }
     }
@@ -940,10 +947,22 @@ fn convert_uyvy_to_yuyv_scalar(src: &[u8], dst: &mut [u8], len: usize) {
 pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
+    if frame.pixel_format == cap_camera_windows::PixelFormat::MJPEG {
+        return decode_mjpeg_frame(frame);
+    }
+
     let ffmpeg_format = match frame.pixel_format {
         cap_camera_windows::PixelFormat::NV12 => ffmpeg::format::Pixel::NV12,
         cap_camera_windows::PixelFormat::YUYV422 => ffmpeg::format::Pixel::YUYV422,
         cap_camera_windows::PixelFormat::UYVY422 => ffmpeg::format::Pixel::UYVY422,
+        cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
+            ffmpeg::format::Pixel::BGRA
+        }
+        cap_camera_windows::PixelFormat::RGB24 => ffmpeg::format::Pixel::BGR24,
+        cap_camera_windows::PixelFormat::BGR24 => ffmpeg::format::Pixel::BGR24,
+        cap_camera_windows::PixelFormat::YUV420P => ffmpeg::format::Pixel::YUV420P,
+        cap_camera_windows::PixelFormat::YV12 => ffmpeg::format::Pixel::YUV420P,
+        cap_camera_windows::PixelFormat::NV21 => ffmpeg::format::Pixel::NV12,
         other => anyhow::bail!("Unsupported camera pixel format: {:?}", other),
     };
 
@@ -970,8 +989,8 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
 
     let mut ffmpeg_frame = ffmpeg::frame::Video::new(final_format, frame.width, frame.height);
 
-    match final_format {
-        ffmpeg::format::Pixel::NV12 => {
+    match frame.pixel_format {
+        cap_camera_windows::PixelFormat::NV12 => {
             let y_size = (frame.width * frame.height) as usize;
             let uv_size = y_size / 2;
             if final_data.len() >= y_size + uv_size {
@@ -979,16 +998,149 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                 ffmpeg_frame.data_mut(1)[..uv_size].copy_from_slice(&final_data[y_size..]);
             }
         }
-        ffmpeg::format::Pixel::YUYV422 => {
+        cap_camera_windows::PixelFormat::NV21 => {
+            let y_size = (frame.width * frame.height) as usize;
+            let uv_size = y_size / 2;
+            if final_data.len() >= y_size + uv_size {
+                ffmpeg_frame.data_mut(0)[..y_size].copy_from_slice(&final_data[..y_size]);
+                let uv_data = &final_data[y_size..y_size + uv_size];
+                let dest = ffmpeg_frame.data_mut(1);
+                for i in (0..uv_size).step_by(2) {
+                    if i + 1 < uv_data.len() && i + 1 < dest.len() {
+                        dest[i] = uv_data[i + 1];
+                        dest[i + 1] = uv_data[i];
+                    }
+                }
+            }
+        }
+        cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
             let size = (frame.width * frame.height * 2) as usize;
             if final_data.len() >= size {
                 ffmpeg_frame.data_mut(0)[..size].copy_from_slice(&final_data[..size]);
+            }
+        }
+        cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
+            let size = (frame.width * frame.height * 4) as usize;
+            if final_data.len() >= size {
+                ffmpeg_frame.data_mut(0)[..size].copy_from_slice(&final_data[..size]);
+            }
+        }
+        cap_camera_windows::PixelFormat::RGB24 | cap_camera_windows::PixelFormat::BGR24 => {
+            let size = (frame.width * frame.height * 3) as usize;
+            if final_data.len() >= size {
+                ffmpeg_frame.data_mut(0)[..size].copy_from_slice(&final_data[..size]);
+            }
+        }
+        cap_camera_windows::PixelFormat::YUV420P => {
+            let y_size = (frame.width * frame.height) as usize;
+            let uv_size = y_size / 4;
+            if final_data.len() >= y_size + uv_size * 2 {
+                let stride_y = ffmpeg_frame.stride(0);
+                let stride_u = ffmpeg_frame.stride(1);
+                let stride_v = ffmpeg_frame.stride(2);
+                copy_plane(
+                    &final_data[..y_size],
+                    ffmpeg_frame.data_mut(0),
+                    frame.width as usize,
+                    frame.height as usize,
+                    stride_y,
+                );
+                copy_plane(
+                    &final_data[y_size..y_size + uv_size],
+                    ffmpeg_frame.data_mut(1),
+                    (frame.width / 2) as usize,
+                    (frame.height / 2) as usize,
+                    stride_u,
+                );
+                copy_plane(
+                    &final_data[y_size + uv_size..],
+                    ffmpeg_frame.data_mut(2),
+                    (frame.width / 2) as usize,
+                    (frame.height / 2) as usize,
+                    stride_v,
+                );
+            }
+        }
+        cap_camera_windows::PixelFormat::YV12 => {
+            let y_size = (frame.width * frame.height) as usize;
+            let uv_size = y_size / 4;
+            if final_data.len() >= y_size + uv_size * 2 {
+                let stride_y = ffmpeg_frame.stride(0);
+                let stride_u = ffmpeg_frame.stride(1);
+                let stride_v = ffmpeg_frame.stride(2);
+                copy_plane(
+                    &final_data[..y_size],
+                    ffmpeg_frame.data_mut(0),
+                    frame.width as usize,
+                    frame.height as usize,
+                    stride_y,
+                );
+                copy_plane(
+                    &final_data[y_size + uv_size..],
+                    ffmpeg_frame.data_mut(1),
+                    (frame.width / 2) as usize,
+                    (frame.height / 2) as usize,
+                    stride_u,
+                );
+                copy_plane(
+                    &final_data[y_size..y_size + uv_size],
+                    ffmpeg_frame.data_mut(2),
+                    (frame.width / 2) as usize,
+                    (frame.height / 2) as usize,
+                    stride_v,
+                );
             }
         }
         _ => {}
     }
 
     Ok(ffmpeg_frame)
+}
+
+fn copy_plane(src: &[u8], dst: &mut [u8], width: usize, height: usize, stride: usize) {
+    for row in 0..height {
+        let src_start = row * width;
+        let dst_start = row * stride;
+        let copy_len = width.min(src.len().saturating_sub(src_start));
+        if copy_len > 0 && dst_start + copy_len <= dst.len() {
+            dst[dst_start..dst_start + copy_len]
+                .copy_from_slice(&src[src_start..src_start + copy_len]);
+        }
+    }
+}
+
+fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+    use cap_mediafoundation_utils::IMFMediaBufferExt;
+
+    let buffer_guard = frame
+        .buffer
+        .lock()
+        .map_err(|_| anyhow!("Failed to lock camera buffer"))?;
+    let lock = buffer_guard
+        .lock()
+        .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
+    let data = &*lock;
+
+    let codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::MJPEG)
+        .ok_or_else(|| anyhow!("MJPEG codec not found"))?;
+
+    let decoder_context = ffmpeg::codec::context::Context::new_with_codec(codec);
+    let mut decoder = decoder_context
+        .decoder()
+        .video()
+        .map_err(|e| anyhow!("Failed to create MJPEG decoder: {e}"))?;
+
+    let packet = ffmpeg::Packet::copy(data);
+    decoder
+        .send_packet(&packet)
+        .map_err(|e| anyhow!("Failed to send MJPEG packet: {e}"))?;
+
+    let mut decoded_frame = ffmpeg::frame::Video::empty();
+    decoder
+        .receive_frame(&mut decoded_frame)
+        .map_err(|e| anyhow!("Failed to decode MJPEG frame: {e}"))?;
+
+    Ok(decoded_frame)
 }
 
 pub fn upload_mf_buffer_to_texture(
@@ -1006,6 +1158,8 @@ pub fn upload_mf_buffer_to_texture(
     let bytes_per_pixel: u32 = match frame.pixel_format {
         cap_camera_windows::PixelFormat::NV12 => 1,
         cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => 2,
+        cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => 4,
+        cap_camera_windows::PixelFormat::RGB24 => 3,
         _ => 2,
     };
 

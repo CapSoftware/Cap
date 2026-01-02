@@ -205,14 +205,6 @@ impl RecordingSegmentDecoders {
 
         let camera_frame = camera.flatten();
 
-        if needs_camera && camera_frame.is_none() {
-            tracing::debug!(
-                segment_time,
-                has_camera_decoder = self.camera.is_some(),
-                "camera frame missing"
-            );
-        }
-
         Some(DecodedSegmentFrames {
             screen_frame: screen?,
             camera_frame,
@@ -1376,12 +1368,15 @@ impl ProjectUniforms {
 
                 let crop_bounds = match project.camera.shape {
                     CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
-                    CameraShape::Square => [
-                        (frame_size[0] - frame_size[1]) / 2.0,
-                        0.0,
-                        frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
-                        frame_size[1],
-                    ],
+                    CameraShape::Square => {
+                        if frame_size[0] > frame_size[1] {
+                            let offset = (frame_size[0] - frame_size[1]) / 2.0;
+                            [offset, 0.0, frame_size[0] - offset, frame_size[1]]
+                        } else {
+                            let offset = (frame_size[1] - frame_size[0]) / 2.0;
+                            [0.0, offset, frame_size[0], frame_size[1] - offset]
+                        }
+                    }
                 };
 
                 CompositeVideoFrameUniforms {

@@ -9,7 +9,7 @@ use base64::prelude::*;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 
 use crate::{
-    general_settings,
+    App, ArcLock, general_settings,
     window_exclusion::WindowExclusion,
     windows::{CapWindowId, ShowCapWindow},
 };
@@ -163,10 +163,13 @@ pub async fn update_camera_overlay_bounds(
         .get_webview_window("camera")
         .ok_or("Camera window not found")?;
 
+    let width_u32 = width as u32;
+    let height_u32 = height as u32;
+
     window
         .set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            width: width as u32,
-            height: height as u32,
+            width: width_u32,
+            height: height_u32,
         }))
         .map_err(|e| e.to_string())?;
     window
@@ -175,6 +178,16 @@ pub async fn update_camera_overlay_bounds(
             y: y as i32,
         }))
         .map_err(|e| e.to_string())?;
+
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let logical_width = (width / scale_factor) as u32;
+    let logical_height = (height / scale_factor) as u32;
+
+    let state = app.state::<ArcLock<App>>();
+    let app_state = state.read().await;
+    app_state
+        .camera_preview
+        .notify_window_resized(logical_width, logical_height);
 
     Ok(())
 }

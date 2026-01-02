@@ -86,6 +86,7 @@ export function AnnotationLayer(props: {
 	createEffect(() => {
 		const rect = props.imageRect;
 		if (rect.width <= 0 || rect.height <= 0) return;
+		const masksToRemove: string[] = [];
 		for (const ann of annotations) {
 			if (ann.type !== "mask") continue;
 			const left = clampValue(
@@ -110,6 +111,10 @@ export function AnnotationLayer(props: {
 			);
 			const width = Math.max(0, right - left);
 			const height = Math.max(0, bottom - top);
+			if (width < 5 || height < 5) {
+				masksToRemove.push(ann.id);
+				continue;
+			}
 			if (
 				left !== Math.min(ann.x, ann.x + ann.width) ||
 				top !== Math.min(ann.y, ann.y + ann.height) ||
@@ -123,6 +128,11 @@ export function AnnotationLayer(props: {
 					height,
 				});
 			}
+		}
+		if (masksToRemove.length > 0) {
+			setAnnotations((prev) =>
+				prev.filter((a) => !masksToRemove.includes(a.id)),
+			);
 		}
 	});
 

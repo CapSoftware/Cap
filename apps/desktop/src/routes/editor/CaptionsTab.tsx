@@ -150,7 +150,7 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 }
 
 export function CaptionsTab() {
-	const { project, setProject, editorInstance, editorState } =
+	const { project, setProject, editorInstance, editorState, setEditorState } =
 		useEditorContext();
 
 	const getSetting = <K extends keyof CaptionSettings>(
@@ -172,12 +172,18 @@ export function CaptionsTab() {
 	const [selectedLanguage, setSelectedLanguage] = createSignal("auto");
 	const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
 
-	const [isDownloading, setIsDownloading] = createSignal(false);
-	const [downloadProgress, setDownloadProgress] = createSignal(0);
-	const [downloadingModel, setDownloadingModel] = createSignal<string | null>(
-		null,
-	);
-	const [isGenerating, setIsGenerating] = createSignal(false);
+	const isDownloading = () => editorState.captions.isDownloading;
+	const setIsDownloading = (value: boolean) =>
+		setEditorState("captions", "isDownloading", value);
+	const downloadProgress = () => editorState.captions.downloadProgress;
+	const setDownloadProgress = (value: number) =>
+		setEditorState("captions", "downloadProgress", value);
+	const downloadingModel = () => editorState.captions.downloadingModel;
+	const setDownloadingModel = (value: string | null) =>
+		setEditorState("captions", "downloadingModel", value);
+	const isGenerating = () => editorState.captions.isGenerating;
+	const setIsGenerating = (value: boolean) =>
+		setEditorState("captions", "isGenerating", value);
 	const [hasAudio, setHasAudio] = createSignal(false);
 
 	createEffect(
@@ -660,6 +666,27 @@ export function CaptionsTab() {
 										step={1}
 										disabled={!hasCaptions()}
 									/>
+								</div>
+
+								<div class="flex flex-col gap-2">
+									<div class="flex items-center justify-between">
+										<span class="text-gray-11 text-sm">
+											Active Word Highlight
+										</span>
+										<Toggle
+											checked={getSetting("activeWordHighlight")}
+											onChange={(checked) =>
+												updateCaptionSetting("activeWordHighlight", checked)
+											}
+											disabled={!hasCaptions()}
+										/>
+									</div>
+									<p class="text-xs text-gray-10">
+										This is the first version of captions in Cap. Active word
+										highlighting may be inaccurate in some situations. We're
+										working on a fix for this and it will be released in
+										upcoming versions.
+									</p>
 								</div>
 
 								<div class="flex flex-col gap-2">

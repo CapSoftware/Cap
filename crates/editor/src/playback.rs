@@ -1,12 +1,14 @@
-use cap_audio::{
-    FromSampleBytes, LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint,
-};
+use cap_audio::FromSampleBytes;
+#[cfg(not(target_os = "windows"))]
+use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
+#[cfg(not(target_os = "windows"))]
+use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
-    BufferSize, SampleFormat, SupportedBufferSize,
+    SampleFormat,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -23,11 +25,10 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
+#[cfg(not(target_os = "windows"))]
+use crate::audio::AudioPlaybackBuffer;
 use crate::{
-    audio::{AudioPlaybackBuffer, AudioSegment},
-    editor,
-    editor_instance::SegmentMedia,
-    segments::get_audio_segments,
+    audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
 };
 
 const PREFETCH_BUFFER_SIZE: usize = 60;
@@ -343,6 +344,8 @@ impl Playback {
                 project: self.project.clone(),
                 fps,
                 playhead_rx: audio_playhead_rx,
+                #[cfg(target_os = "windows")]
+                duration_secs: duration,
             }
             .spawn();
 
@@ -693,6 +696,8 @@ struct AudioPlayback {
     project: watch::Receiver<ProjectConfiguration>,
     fps: u32,
     playhead_rx: watch::Receiver<f64>,
+    #[cfg(target_os = "windows")]
+    duration_secs: f64,
 }
 
 impl AudioPlayback {
@@ -724,12 +729,45 @@ impl AudioPlayback {
                 }
             };
 
+            #[cfg(target_os = "windows")]
+            let duration_secs = self.duration_secs;
+
             let result = match supported_config.sample_format() {
+                #[cfg(target_os = "windows")]
+                SampleFormat::I16 => {
+                    self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
+                }
+                #[cfg(target_os = "windows")]
+                SampleFormat::I32 => {
+                    self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
+                }
+                #[cfg(target_os = "windows")]
+                SampleFormat::F32 => {
+                    self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
+                }
+                #[cfg(target_os = "windows")]
+                SampleFormat::I64 => {
+                    self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
+                }
+                #[cfg(target_os = "windows")]
+                SampleFormat::U8 => {
+                    self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
+                }
+                #[cfg(target_os = "windows")]
+                SampleFormat::F64 => {
+                    self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
+                }
+                #[cfg(not(target_os = "windows"))]
                 SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
+                #[cfg(not(target_os = "windows"))]
                 SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
+                #[cfg(not(target_os = "windows"))]
                 SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
+                #[cfg(not(target_os = "windows"))]
                 SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
+                #[cfg(not(target_os = "windows"))]
                 SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
+                #[cfg(not(target_os = "windows"))]
                 SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 format => {
                     error!(
@@ -764,6 +802,7 @@ impl AudioPlayback {
         });
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn create_stream<T>(
         self,
         device: cpal::Device,
@@ -779,6 +818,7 @@ impl AudioPlayback {
             segments,
             fps,
             playhead_rx,
+            ..
         } = self;
 
         let mut base_output_info = AudioInfo::from_stream_config(&supported_config);
@@ -862,9 +902,14 @@ impl AudioPlayback {
             let buffer_size = base_output_info.buffer_size;
             let channels = base_output_info.channels;
 
+            #[cfg(target_os = "windows")]
+            let headroom_multiplier = 4usize;
+            #[cfg(not(target_os = "windows"))]
+            let headroom_multiplier = 2usize;
+
             let headroom_samples = (buffer_size as usize)
                 .saturating_mul(channels)
-                .saturating_mul(2)
+                .saturating_mul(headroom_multiplier)
                 .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
 
             let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), base_output_info);
@@ -901,6 +946,7 @@ impl AudioPlayback {
             let static_latency_hint =
                 default_output_latency_hint(sample_rate, buffer_size).or(initial_latency_hint);
             let latency_config = LatencyCorrectionConfig::default();
+            #[allow(unused_mut)]
             let mut latency_corrector = LatencyCorrector::new(static_latency_hint, latency_config);
             let initial_compensation_secs = latency_corrector.initial_compensation_secs();
             let device_sample_rate = sample_rate;
@@ -909,7 +955,13 @@ impl AudioPlayback {
                 let project_snapshot = project.borrow();
                 audio_renderer
                     .set_playhead(playhead + initial_compensation_secs, &project_snapshot);
-                audio_renderer.prefill(&project_snapshot, headroom_samples);
+
+                #[cfg(target_os = "windows")]
+                let initial_prefill = headroom_samples * 4;
+                #[cfg(not(target_os = "windows"))]
+                let initial_prefill = headroom_samples;
+
+                audio_renderer.prefill(&project_snapshot, initial_prefill);
             }
 
             if let Some(hint) = static_latency_hint
@@ -935,27 +987,81 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
+
+            #[cfg(target_os = "windows")]
+            const FIXED_LATENCY_SECS: f64 = 0.08;
+            #[cfg(target_os = "windows")]
+            const SYNC_THRESHOLD_SECS: f64 = 0.20;
+            #[cfg(target_os = "windows")]
+            const HARD_SEEK_THRESHOLD_SECS: f64 = 0.5;
+            #[cfg(target_os = "windows")]
+            const MIN_SYNC_INTERVAL_CALLBACKS: u32 = 50;
+
+            #[cfg(not(target_os = "windows"))]
             const SYNC_THRESHOLD_SECS: f64 = 0.12;
+
+            #[cfg(target_os = "windows")]
+            let mut callbacks_since_last_sync: u32 = MIN_SYNC_INTERVAL_CALLBACKS;
 
             let stream_result = device.build_output_stream(
                 &config,
                 move |buffer: &mut [T], info| {
+                    #[cfg(not(target_os = "windows"))]
                     let latency_secs = latency_corrector.update_from_callback(info);
+                    #[cfg(target_os = "windows")]
+                    let _ = (info, &latency_corrector);
 
                     let project = project_for_stream.borrow();
 
+                    #[cfg(target_os = "windows")]
+                    {
+                        callbacks_since_last_sync = callbacks_since_last_sync.saturating_add(1);
+                    }
+
                     if playhead_rx_for_stream.has_changed().unwrap_or(false) {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
-                        let audio_playhead = audio_renderer
-                            .current_audible_playhead(device_sample_rate, latency_secs);
-                        let drift = (video_playhead - audio_playhead).abs();
 
-                        if drift > SYNC_THRESHOLD_SECS
-                            || (video_playhead - last_video_playhead).abs() > SYNC_THRESHOLD_SECS
+                        #[cfg(target_os = "windows")]
                         {
-                            audio_renderer
-                                .set_playhead(video_playhead + initial_compensation_secs, &project);
+                            let jump = (video_playhead - last_video_playhead).abs();
+                            let audio_playhead = audio_renderer
+                                .current_audible_playhead(device_sample_rate, FIXED_LATENCY_SECS);
+                            let drift = (video_playhead - audio_playhead).abs();
+
+                            if jump > HARD_SEEK_THRESHOLD_SECS {
+                                audio_renderer.set_playhead(
+                                    video_playhead + initial_compensation_secs,
+                                    &project,
+                                );
+                                callbacks_since_last_sync = 0;
+                            } else if drift > SYNC_THRESHOLD_SECS
+                                && callbacks_since_last_sync >= MIN_SYNC_INTERVAL_CALLBACKS
+                            {
+                                audio_renderer.set_playhead_smooth(
+                                    video_playhead + initial_compensation_secs,
+                                    &project,
+                                );
+                                callbacks_since_last_sync = 0;
+                            }
                         }
+
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            let audio_playhead = audio_renderer
+                                .current_audible_playhead(device_sample_rate, latency_secs);
+                            let drift = (video_playhead - audio_playhead).abs();
+
+                            if drift > SYNC_THRESHOLD_SECS
+                                || (video_playhead - last_video_playhead).abs()
+                                    > SYNC_THRESHOLD_SECS
+                            {
+                                audio_renderer.set_playhead(
+                                    video_playhead + initial_compensation_secs,
+                                    &project,
+                                );
+                            }
+                        }
+
                         last_video_playhead = video_playhead;
                     }
 
@@ -986,5 +1092,82 @@ impl AudioPlayback {
         Err(last_error.unwrap_or_else(|| {
             MediaError::TaskLaunch("Failed to build audio output stream".to_string())
         }))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn create_stream_prerendered<T>(
+        self,
+        device: cpal::Device,
+        supported_config: cpal::SupportedStreamConfig,
+        duration_secs: f64,
+    ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
+    where
+        T: FromSampleBytes + cpal::Sample,
+    {
+        use crate::audio::PrerenderedAudioBuffer;
+
+        let AudioPlayback {
+            stop_rx,
+            start_frame_number,
+            project,
+            segments,
+            fps,
+            playhead_rx,
+            ..
+        } = self;
+
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
+        output_info.sample_format = output_info.sample_format.packed();
+
+        let config = supported_config.config();
+        let sample_rate = output_info.sample_rate;
+
+        let playhead = f64::from(start_frame_number) / f64::from(fps);
+
+        info!(
+            duration_secs = duration_secs,
+            start_playhead = playhead,
+            sample_rate = sample_rate,
+            "Creating pre-rendered audio stream for Windows"
+        );
+
+        let project_snapshot = project.borrow().clone();
+        let mut audio_buffer = PrerenderedAudioBuffer::<T>::new(
+            segments,
+            &project_snapshot,
+            output_info,
+            duration_secs,
+        );
+
+        audio_buffer.set_playhead(playhead);
+
+        let mut playhead_rx_for_stream = playhead_rx.clone();
+        let mut last_video_playhead = playhead;
+
+        let stream = device
+            .build_output_stream(
+                &config,
+                move |buffer: &mut [T], _info| {
+                    if playhead_rx_for_stream.has_changed().unwrap_or(false) {
+                        let video_playhead = *playhead_rx_for_stream.borrow_and_update();
+                        let jump = (video_playhead - last_video_playhead).abs();
+
+                        if jump > 0.1 {
+                            audio_buffer.set_playhead(video_playhead);
+                        }
+
+                        last_video_playhead = video_playhead;
+                    }
+
+                    audio_buffer.fill(buffer);
+                },
+                |err| eprintln!("Audio stream error: {err}"),
+                None,
+            )
+            .map_err(|e| MediaError::TaskLaunch(format!("Failed to build audio stream: {e}")))?;
+
+        info!("Pre-rendered audio stream created successfully");
+
+        Ok((stop_rx, stream))
     }
 }

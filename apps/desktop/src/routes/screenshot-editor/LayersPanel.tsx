@@ -35,7 +35,6 @@ export function LayersPanel() {
 		setLayersPanelOpen,
 		projectHistory,
 		setActiveTool,
-		setFocusAnnotationId,
 	} = useScreenshotEditorContext();
 
 	const [dragState, setDragState] = createSignal<{
@@ -176,7 +175,6 @@ export function LayersPanel() {
 		if ((e.target as HTMLElement).closest("[data-grip-handle]")) return;
 		setSelectedAnnotationId(ann.id);
 		setActiveTool("select");
-		setFocusAnnotationId(ann.id);
 	};
 
 	const handleDelete = (id: string, e: MouseEvent) => {

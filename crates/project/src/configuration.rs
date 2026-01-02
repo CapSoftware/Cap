@@ -54,8 +54,9 @@ fn default_alpha() -> u8 {
 
 impl Default for BackgroundSource {
     fn default() -> Self {
-        BackgroundSource::Wallpaper {
-            path: Some("sequoia-dark".to_string()),
+        BackgroundSource::Color {
+            value: [255, 255, 255],
+            alpha: 255,
         }
     }
 }
@@ -816,6 +817,11 @@ pub struct CaptionSettings {
         default = "CaptionSettings::default_word_transition_duration"
     )]
     pub word_transition_duration: f32,
+    #[serde(
+        alias = "activeWordHighlight",
+        default = "CaptionSettings::default_active_word_highlight"
+    )]
+    pub active_word_highlight: bool,
 }
 
 impl CaptionSettings {
@@ -838,6 +844,10 @@ impl CaptionSettings {
     fn default_word_transition_duration() -> f32 {
         0.25
     }
+
+    fn default_active_word_highlight() -> bool {
+        false
+    }
 }
 
 impl Default for CaptionSettings {
@@ -859,6 +869,7 @@ impl Default for CaptionSettings {
             fade_duration: Self::default_fade_duration(),
             linger_duration: Self::default_linger_duration(),
             word_transition_duration: Self::default_word_transition_duration(),
+            active_word_highlight: Self::default_active_word_highlight(),
         }
     }
 }

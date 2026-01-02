@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
 
 use super::{DecodedFrame, DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage};
@@ -202,11 +202,7 @@ impl MFDecoder {
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
 
                         if let Some(cached) = cache.get(&requested_frame) {
-                            if sender.send(cached.to_decoded_frame()).is_err() {
-                                warn!(
-                                    "Failed to send cached frame {requested_frame}: receiver dropped"
-                                );
-                            }
+                            let _ = sender.send(cached.to_decoded_frame());
                             continue;
                         }
 
@@ -222,7 +218,6 @@ impl MFDecoder {
                             .unwrap_or(true);
 
                         if needs_seek {
-                            debug!("MediaFoundation seeking to frame {requested_frame}");
                             let time_100ns = frame_to_100ns(requested_frame, fps);
                             if let Err(e) = decoder.seek(time_100ns) {
                                 warn!("MediaFoundation seek failed: {e}");
@@ -248,16 +243,6 @@ impl MFDecoder {
                                     ) {
                                         Ok(data) => {
                                             health.record_success(decode_time);
-                                            debug!(
-                                                frame = frame_number,
-                                                data_len = data.data.len(),
-                                                y_stride = data.y_stride,
-                                                uv_stride = data.uv_stride,
-                                                width = mf_frame.width,
-                                                height = mf_frame.height,
-                                                decode_ms = decode_time.as_millis(),
-                                                "read_texture_to_cpu succeeded"
-                                            );
                                             Some(Arc::new(data))
                                         }
                                         Err(e) => {
@@ -309,12 +294,8 @@ impl MFDecoder {
 
                                         if let Some(frame) = frame_to_send
                                             && let Some(s) = sender.take()
-                                            && s.send(frame.to_decoded_frame()).is_err()
                                         {
-                                            warn!(
-                                                "Failed to send frame {}: receiver dropped",
-                                                frame.number
-                                            );
+                                            let _ = s.send(frame.to_decoded_frame());
                                         }
                                         break;
                                     }
@@ -324,7 +305,6 @@ impl MFDecoder {
                                     }
                                 }
                                 Ok(None) => {
-                                    debug!("MediaFoundation end of stream");
                                     break;
                                 }
                                 Err(e) => {
@@ -342,21 +322,14 @@ impl MFDecoder {
                             if let Some(frame) = last_valid_frame
                                 .or_else(|| cache.values().max_by_key(|f| f.number).cloned())
                             {
-                                if s.send(frame.to_decoded_frame()).is_err() {
-                                    warn!("Failed to send fallback frame: receiver dropped");
-                                }
+                                let _ = s.send(frame.to_decoded_frame());
                             } else {
-                                debug!(
-                                    "No frames available for request {requested_frame}, sending black frame"
-                                );
                                 let black_frame = DecodedFrame::new(
                                     vec![0u8; (video_width * video_height * 4) as usize],
                                     video_width,
                                     video_height,
                                 );
-                                if s.send(black_frame).is_err() {
-                                    warn!("Failed to send black frame: receiver dropped");
-                                }
+                                let _ = s.send(black_frame);
                             }
                         }
                     }

@@ -6,9 +6,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
+use tracing::info;
 #[cfg(target_os = "windows")]
 use tracing::warn;
-use tracing::{debug, info};
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -467,19 +467,12 @@ impl AsyncVideoDecoderHandle {
             .send(VideoDecoderMessage::GetFrame(adjusted_time, tx))
             .is_err()
         {
-            debug!("Decoder channel closed, receiver dropped");
             return None;
         }
 
         match tokio::time::timeout(std::time::Duration::from_millis(500), rx).await {
             Ok(result) => result.ok(),
-            Err(_) => {
-                debug!(
-                    adjusted_time = adjusted_time,
-                    "get_frame timed out after 500ms"
-                );
-                None
-            }
+            Err(_) => None,
         }
     }
 
@@ -555,8 +548,8 @@ pub async fn spawn_decoder(
         let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
         let (tx, rx) = mpsc::channel();
 
-        match media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
-            Ok(()) => match tokio::time::timeout(timeout_duration, ready_rx).await {
+        if let Ok(()) = media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
+            match tokio::time::timeout(timeout_duration, ready_rx).await {
                 Ok(Ok(Ok(init_result))) => {
                     info!(
                         "Video '{}' using {} decoder ({}x{})",
@@ -592,12 +585,6 @@ pub async fn spawn_decoder(
                         name
                     );
                 }
-            },
-            Err(mf_err) => {
-                debug!(
-                    "MediaFoundation decoder spawn failed for '{}': {}, falling back to FFmpeg",
-                    name, mf_err
-                );
             }
         }
 
