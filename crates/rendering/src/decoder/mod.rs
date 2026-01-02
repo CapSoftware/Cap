@@ -6,9 +6,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
+use tracing::info;
 #[cfg(target_os = "windows")]
 use tracing::warn;
-use tracing::{debug, info};
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -467,19 +467,12 @@ impl AsyncVideoDecoderHandle {
             .send(VideoDecoderMessage::GetFrame(adjusted_time, tx))
             .is_err()
         {
-            debug!("Decoder channel closed, receiver dropped");
             return None;
         }
 
         match tokio::time::timeout(std::time::Duration::from_millis(500), rx).await {
             Ok(result) => result.ok(),
-            Err(_) => {
-                debug!(
-                    adjusted_time = adjusted_time,
-                    "get_frame timed out after 500ms"
-                );
-                None
-            }
+            Err(_) => None,
         }
     }
 
@@ -593,12 +586,7 @@ pub async fn spawn_decoder(
                     );
                 }
             },
-            Err(mf_err) => {
-                debug!(
-                    "MediaFoundation decoder spawn failed for '{}': {}, falling back to FFmpeg",
-                    name, mf_err
-                );
-            }
+            Err(_) => {}
         }
 
         let fallback_reason =

@@ -9,7 +9,6 @@ import {
 } from "solid-js";
 import IconCapZoomIn from "~icons/cap/zoom-in";
 import IconCapZoomOut from "~icons/cap/zoom-out";
-import { ASPECT_RATIOS } from "../editor/projectConfig";
 import { EditorButton, Slider } from "../editor/ui";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { useScreenshotEditorContext } from "./context";
@@ -24,13 +23,8 @@ const gridStyle = {
 };
 
 export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
-	const {
-		project,
-		latestFrame,
-		annotations,
-		focusAnnotationId,
-		setFocusAnnotationId,
-	} = useScreenshotEditorContext();
+	const { latestFrame, annotations, focusAnnotationId, setFocusAnnotationId } =
+		useScreenshotEditorContext();
 	let canvasRef: HTMLCanvasElement | undefined;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
@@ -38,6 +32,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 	const containerBounds = createElementBounds(canvasContainerRef);
 
 	const [pan, setPan] = createSignal({ x: 0, y: 0 });
+	const [isDragging, setIsDragging] = createSignal(false);
+	const [dragStart, setDragStart] = createSignal({
+		x: 0,
+		y: 0,
+		panX: 0,
+		panY: 0,
+	});
 
 	const [previousBitmap, setPreviousBitmap] = createSignal<ImageBitmap | null>(
 		null,
@@ -114,39 +115,61 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		}
 	};
 
+	const handleMouseDown = (e: MouseEvent) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		setIsDragging(true);
+		setDragStart({
+			x: e.clientX,
+			y: e.clientY,
+			panX: pan().x,
+			panY: pan().y,
+		});
+	};
+
+	const handleMiddleMouseDown = (e: MouseEvent) => {
+		if (e.button !== 1) return;
+		e.preventDefault();
+		setIsDragging(true);
+		setDragStart({
+			x: e.clientX,
+			y: e.clientY,
+			panX: pan().x,
+			panY: pan().y,
+		});
+	};
+
+	const handleMouseMove = (e: MouseEvent) => {
+		if (!isDragging()) return;
+		const dx = e.clientX - dragStart().x;
+		const dy = e.clientY - dragStart().y;
+		setPan({
+			x: dragStart().panX + dx,
+			y: dragStart().panY + dy,
+		});
+	};
+
+	const handleMouseUp = () => {
+		setIsDragging(false);
+	};
+
+	createEffect(() => {
+		if (isDragging()) {
+			window.addEventListener("mousemove", handleMouseMove);
+			window.addEventListener("mouseup", handleMouseUp);
+		}
+		onCleanup(() => {
+			window.removeEventListener("mousemove", handleMouseMove);
+			window.removeEventListener("mouseup", handleMouseUp);
+		});
+	});
+
 	createEffect(() => {
 		const frame = latestFrame();
 		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
 				ctx.drawImage(frame.bitmap, 0, 0);
-				const crop = project.background.crop;
-				if (crop) {
-					const width = canvasRef.width;
-					const height = canvasRef.height;
-					const cropX = Math.max(0, Math.round(crop.position.x));
-					const cropY = Math.max(0, Math.round(crop.position.y));
-					const cropW = Math.max(
-						0,
-						Math.min(Math.round(crop.size.x), width - cropX),
-					);
-					const cropH = Math.max(
-						0,
-						Math.min(Math.round(crop.size.y), height - cropY),
-					);
-					const topH = Math.max(0, cropY);
-					const bottomY = cropY + cropH;
-					const bottomH = Math.max(0, height - bottomY);
-					const leftW = Math.max(0, cropX);
-					const rightX = cropX + cropW;
-					const rightW = Math.max(0, width - rightX);
-					ctx.fillStyle = "white";
-					if (topH > 0) ctx.fillRect(0, 0, width, topH);
-					if (bottomH > 0) ctx.fillRect(0, bottomY, width, bottomH);
-					if (cropH > 0 && leftW > 0) ctx.fillRect(0, cropY, leftW, cropH);
-					if (cropH > 0 && rightW > 0)
-						ctx.fillRect(rightX, cropY, rightW, cropH);
-				}
 			}
 		}
 	});
@@ -159,6 +182,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 				class="flex-1 relative flex items-center justify-center overflow-hidden outline-none"
 				style={gridStyle}
 				onWheel={handleWheel}
+				onMouseDown={handleMiddleMouseDown}
 			>
 				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
 					<EditorButton
@@ -206,15 +230,6 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 						const frameHeight = () => frame().height;
 
 						const imageRect = createMemo(() => {
-							const crop = project.background.crop;
-							if (crop) {
-								return {
-									x: crop.position.x,
-									y: crop.position.y,
-									width: crop.size.x,
-									height: crop.size.y,
-								};
-							}
 							return {
 								x: 0,
 								y: 0,
@@ -224,72 +239,11 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 						});
 
 						const bounds = createMemo(() => {
-							const crop = project.background.crop;
-							const workspacePadding = crop
-								? Math.min(
-										500,
-										Math.max(
-											100,
-											Math.round(Math.max(crop.size.x, crop.size.y) * 0.5),
-										),
-									)
-								: 0;
-							let minX = crop ? crop.position.x - workspacePadding : 0;
-							let minY = crop ? crop.position.y - workspacePadding : 0;
-							let maxX = crop
-								? crop.position.x + crop.size.x + workspacePadding
-								: frameWidth();
-							let maxY = crop
-								? crop.position.y + crop.size.y + workspacePadding
-								: frameHeight();
-
-							for (const ann of annotations) {
-								const ax1 = ann.x;
-								const ay1 = ann.y;
-								const ax2 = ann.x + ann.width;
-								const ay2 = ann.y + ann.height;
-
-								const left = Math.min(ax1, ax2);
-								const right = Math.max(ax1, ax2);
-								const top = Math.min(ay1, ay2);
-								const bottom = Math.max(ay1, ay2);
-
-								minX = Math.min(minX, left);
-								maxX = Math.max(maxX, right);
-								minY = Math.min(minY, top);
-								maxY = Math.max(maxY, bottom);
-							}
-
-							let x = minX;
-							let y = minY;
-							let width = maxX - minX;
-							let height = maxY - minY;
-
-							if (project.aspectRatio) {
-								const ratioConf = ASPECT_RATIOS[project.aspectRatio];
-								if (ratioConf) {
-									const targetRatio = ratioConf.ratio[0] / ratioConf.ratio[1];
-									const currentRatio = width / height;
-
-									if (currentRatio > targetRatio) {
-										const newHeight = width / targetRatio;
-										const padY = (newHeight - height) / 2;
-										y -= padY;
-										height = newHeight;
-									} else {
-										const newWidth = height * targetRatio;
-										const padX = (newWidth - width) / 2;
-										x -= padX;
-										width = newWidth;
-									}
-								}
-							}
-
 							return {
-								x,
-								y,
-								width,
-								height,
+								x: 0,
+								y: 0,
+								width: frameWidth(),
+								height: frameHeight(),
 							};
 						});
 
@@ -528,12 +482,25 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 						return (
 							<div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
 								<div
+									class="absolute inset-0 z-0"
+									style={{
+										cursor: isDragging() ? "grabbing" : "grab",
+									}}
+									onMouseDown={handleMouseDown}
+								/>
+								<div
 									style={{
 										width: `${size().width * props.zoom}px`,
 										height: `${size().height * props.zoom}px`,
 										position: "relative",
 										transform: `translate(${pan().x}px, ${pan().y}px)`,
 										"will-change": "transform",
+										"z-index": 1,
+										cursor: "default",
+										overflow: "hidden",
+										"box-shadow":
+											"0 4px 20px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.1)",
+										"border-radius": "4px",
 									}}
 									class="block"
 								>

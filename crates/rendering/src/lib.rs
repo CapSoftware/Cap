@@ -205,14 +205,6 @@ impl RecordingSegmentDecoders {
 
         let camera_frame = camera.flatten();
 
-        if needs_camera && camera_frame.is_none() {
-            tracing::debug!(
-                segment_time,
-                has_camera_decoder = self.camera.is_some(),
-                "camera frame missing"
-            );
-        }
-
         Some(DecodedSegmentFrames {
             screen_frame: screen?,
             camera_frame,

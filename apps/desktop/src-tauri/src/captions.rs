@@ -1050,6 +1050,10 @@ pub async fn save_captions(
             serde_json::Number::from_f64(settings.word_transition_duration as f64).unwrap(),
         ),
     );
+    settings_obj.insert(
+        "activeWordHighlight".to_string(),
+        serde_json::Value::Bool(settings.active_word_highlight),
+    );
 
     json_obj.insert(
         "settings".to_string(),
@@ -1200,6 +1204,12 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.25) as f32;
 
+                    let active_word_highlight = settings_obj
+                        .get("activeWordHighlight")
+                        .or_else(|| settings_obj.get("active_word_highlight"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
                     cap_project::CaptionSettings {
                         enabled,
                         font,
@@ -1217,6 +1227,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         fade_duration,
                         linger_duration,
                         word_transition_duration,
+                        active_word_highlight,
                     }
                 } else {
                     cap_project::CaptionSettings::default()

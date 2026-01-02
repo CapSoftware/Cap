@@ -64,16 +64,8 @@ impl From<BackgroundSource> for Background {
                         .replace("localhost//", "/");
 
                     if std::path::Path::new(&clean_path).exists() {
-                        tracing::debug!("Background image path resolved: {}", clean_path);
                         return Background::Image { path: clean_path };
                     }
-                    tracing::warn!(
-                        "Background image path does not exist: {} (original: {})",
-                        clean_path,
-                        path
-                    );
-                } else {
-                    tracing::debug!("Background path is empty or None");
                 }
                 Background::Color([1.0, 1.0, 1.0, 1.0])
             }

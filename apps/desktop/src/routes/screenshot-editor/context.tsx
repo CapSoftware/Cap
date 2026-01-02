@@ -134,6 +134,10 @@ function createScreenshotEditorContext() {
 	});
 
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
+	const [originalImageSize, setOriginalImageSize] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
 	const [isRenderReady, setIsRenderReady] = createSignal(false);
 	let wsRef: WebSocket | null = null;
 
@@ -150,40 +154,68 @@ function createScreenshotEditorContext() {
 		let hasReceivedWebSocketFrame = false;
 
 		if (instance.path) {
-			const img = new Image();
-			img.crossOrigin = "anonymous";
-			img.src = convertFileSrc(instance.path);
-			img.onload = async () => {
-				if (hasReceivedWebSocketFrame) {
-					return;
-				}
-				try {
-					const bitmap = await createImageBitmap(img);
-					if (hasReceivedWebSocketFrame) {
-						bitmap.close();
-						return;
-					}
-					const existing = latestFrame();
-					if (existing?.bitmap) {
-						existing.bitmap.close();
-					}
-					setLatestFrame({
+			const loadImage = (imagePath: string) => {
+				const img = new Image();
+				img.crossOrigin = "anonymous";
+				img.src = convertFileSrc(imagePath);
+				img.onload = async () => {
+					setOriginalImageSize({
 						width: img.naturalWidth,
 						height: img.naturalHeight,
-						bitmap,
 					});
-					setIsRenderReady(true);
-				} catch (e: unknown) {
-					console.error("Failed to create ImageBitmap from fallback image:", e);
-				}
+					if (hasReceivedWebSocketFrame) {
+						return;
+					}
+					try {
+						const bitmap = await createImageBitmap(img);
+						if (hasReceivedWebSocketFrame) {
+							bitmap.close();
+							return;
+						}
+						const existing = latestFrame();
+						if (existing?.bitmap) {
+							existing.bitmap.close();
+						}
+						setLatestFrame({
+							width: img.naturalWidth,
+							height: img.naturalHeight,
+							bitmap,
+						});
+						setIsRenderReady(true);
+					} catch (e: unknown) {
+						console.error(
+							"Failed to create ImageBitmap from fallback image:",
+							e,
+						);
+					}
+				};
+				return img;
 			};
-			img.onerror = (event) => {
-				console.error("Failed to load screenshot image:", {
-					path: instance.path,
-					src: img.src,
-					event,
-				});
-			};
+
+			const pathStr = instance.path;
+			const isCapDir = pathStr.endsWith(".cap");
+
+			if (isCapDir) {
+				const originalPath = `${pathStr}/original.png`;
+				const img = loadImage(originalPath);
+				img.onerror = () => {
+					const fallbackImg = loadImage(pathStr);
+					fallbackImg.onerror = (event) => {
+						console.error("Failed to load screenshot image:", {
+							path: instance.path,
+							event,
+						});
+					};
+				};
+			} else {
+				const img = loadImage(pathStr);
+				img.onerror = (event) => {
+					console.error("Failed to load screenshot image:", {
+						path: instance.path,
+						event,
+					});
+				};
+			}
 		}
 
 		const ws = new WebSocket(instance.framesSocketUrl);
@@ -423,6 +455,7 @@ function createScreenshotEditorContext() {
 		dialog,
 		setDialog,
 		latestFrame,
+		originalImageSize,
 		isRenderReady,
 		editorInstance,
 	};

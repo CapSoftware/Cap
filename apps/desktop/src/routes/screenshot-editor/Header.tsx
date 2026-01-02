@@ -5,7 +5,7 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { createEffect, onCleanup, Suspense } from "solid-js";
+import { createEffect, createMemo, onCleanup, Show, Suspense } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
@@ -21,6 +21,7 @@ import { BorderPopover } from "./popovers/BorderPopover";
 import { PaddingPopover } from "./popovers/PaddingPopover";
 import { RoundingPopover } from "./popovers/RoundingPopover";
 import { ShadowPopover } from "./popovers/ShadowPopover";
+
 import {
 	DropdownItem,
 	EditorButton,
@@ -32,10 +33,33 @@ import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
 	const ctx = useScreenshotEditorContext();
-	const { setDialog, project, latestFrame } = ctx;
+	const { setDialog, project, originalImageSize } = ctx;
 	const path = () => ctx.editorInstance()?.path ?? "";
 
 	const { exportImage, isExporting } = useScreenshotExport();
+
+	const showStylingControls = createMemo(() => {
+		const source = project.background.source;
+		const sourceType = source.type;
+
+		if (sourceType === "wallpaper") {
+			return source.path !== null && source.path !== "";
+		}
+		if (sourceType === "image") {
+			return source.path !== null && source.path !== "";
+		}
+		if (sourceType === "gradient") {
+			return true;
+		}
+		if (sourceType === "color") {
+			const alpha = source.alpha ?? 255;
+			if (alpha === 0) return false;
+			const value = source.value;
+			const isWhite = value[0] === 255 && value[1] === 255 && value[2] === 255;
+			return !(isWhite && alpha === 255);
+		}
+		return false;
+	});
 
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -65,17 +89,17 @@ export function Header() {
 	});
 
 	const cropDialogHandler = () => {
-		const frame = latestFrame();
-		if (!frame?.bitmap) return;
+		const imgSize = originalImageSize();
+		if (!imgSize) return;
 		setDialog({
 			open: true,
 			type: "crop",
-			originalSize: { x: frame.width, y: frame.height },
+			originalSize: { x: imgSize.width, y: imgSize.height },
 			currentCrop: project.background.crop,
 		});
 	};
 
-	const isCropDisabled = () => !latestFrame()?.bitmap;
+	const isCropDisabled = () => !originalImageSize();
 
 	return (
 		<div
@@ -98,15 +122,17 @@ export function Header() {
 				<AnnotationTools />
 				<div class="w-px h-6 bg-gray-4 mx-1" />
 				<BackgroundSettingsPopover />
-				<PaddingPopover />
-				<RoundingPopover />
-				<ShadowPopover />
-				<BorderPopover />
+				<Show when={showStylingControls()}>
+					<PaddingPopover />
+					<RoundingPopover />
+					<ShadowPopover />
+					<BorderPopover />
+				</Show>
 			</div>
 
 			<div
 				class={cx(
-					"flex flex-row items-center gap-2",
+					"flex flex-row items-center gap-2 h-full",
 					ostype() !== "windows" && "pr-2",
 				)}
 			>

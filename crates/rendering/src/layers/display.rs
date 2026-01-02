@@ -162,25 +162,10 @@ impl DisplayLayer {
                                         });
                                         true
                                     } else {
-                                        tracing::debug!(
-                                            width = frame_size.x,
-                                            height = frame_size.y,
-                                            y_stride,
-                                            "NV12 conversion succeeded but output texture is None, skipping copy"
-                                        );
                                         false
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        error = ?e,
-                                        width = frame_size.x,
-                                        height = frame_size.y,
-                                        y_stride,
-                                        "NV12 to RGBA conversion failed"
-                                    );
-                                    false
-                                }
+                                Err(_) => false,
                             }
                         } else {
                             false
@@ -214,10 +199,7 @@ impl DisplayLayer {
                                     false
                                 }
                             }
-                            Err(e) => {
-                                tracing::debug!(error = ?e, "CPU NV12 conversion failed");
-                                false
-                            }
+                            Err(_) => false,
                         }
                     } else {
                         false
@@ -227,31 +209,10 @@ impl DisplayLayer {
                     {
                         let mut d3d11_succeeded = false;
 
-                        let has_y_handle = screen_frame.d3d11_y_handle().is_some();
-                        let has_uv_handle = screen_frame.d3d11_uv_handle().is_some();
-                        let has_y_plane = screen_frame.y_plane().is_some();
-                        let has_uv_plane = screen_frame.uv_plane().is_some();
-
-                        tracing::debug!(
-                            has_y_handle,
-                            has_uv_handle,
-                            has_y_plane,
-                            has_uv_plane,
-                            data_len = screen_frame.data().len(),
-                            y_stride = screen_frame.y_stride(),
-                            uv_stride = screen_frame.uv_stride(),
-                            actual_width,
-                            actual_height,
-                            frame_size_x = frame_size.x,
-                            frame_size_y = frame_size.y,
-                            "Windows NV12 frame info"
-                        );
-
                         if let (Some(y_handle), Some(uv_handle)) = (
                             screen_frame.d3d11_y_handle(),
                             screen_frame.d3d11_uv_handle(),
                         ) {
-                            tracing::trace!("Using D3D11 zero-copy path for NV12 conversion");
                             match self.yuv_converter.convert_nv12_from_d3d11_shared_handles(
                                 device,
                                 queue,
@@ -270,9 +231,7 @@ impl DisplayLayer {
                                         d3d11_succeeded = true;
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::debug!(error = ?e, "D3D11 zero-copy conversion failed, falling back to CPU path");
-                                }
+                                Err(_) => {}
                             }
                         }
 
@@ -283,17 +242,6 @@ impl DisplayLayer {
                         {
                             let y_stride = screen_frame.y_stride();
                             let uv_stride = screen_frame.uv_stride();
-
-                            tracing::debug!(
-                                y_data_len = y_data.len(),
-                                uv_data_len = uv_data.len(),
-                                y_stride,
-                                uv_stride,
-                                actual_width,
-                                actual_height,
-                                prefer_cpu = self.prefer_cpu_conversion,
-                                "Attempting NV12 conversion"
-                            );
 
                             let convert_result = if self.prefer_cpu_conversion {
                                 self.yuv_converter.convert_nv12_cpu(
@@ -321,7 +269,6 @@ impl DisplayLayer {
 
                             match convert_result {
                                 Ok(_) => {
-                                    tracing::debug!("NV12 conversion succeeded");
                                     if self.yuv_converter.output_texture().is_some() {
                                         self.pending_copy = Some(PendingTextureCopy {
                                             width: actual_width,
@@ -330,21 +277,12 @@ impl DisplayLayer {
                                         });
                                         true
                                     } else {
-                                        tracing::warn!(
-                                            "NV12 conversion succeeded but output texture is None"
-                                        );
                                         false
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::warn!(error = ?e, "NV12 conversion failed");
-                                    false
-                                }
+                                Err(_) => false,
                             }
                         } else {
-                            tracing::warn!(
-                                "No D3D11 handles and no CPU data available for NV12 frame"
-                            );
                             false
                         }
                     }

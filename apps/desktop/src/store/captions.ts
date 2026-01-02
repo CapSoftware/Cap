@@ -29,6 +29,7 @@ export const defaultCaptionSettings: CaptionSettings = {
 	fadeDuration: 0.2,
 	lingerDuration: 0.4,
 	wordTransitionDuration: 0.25,
+	activeWordHighlight: false,
 };
 
 function createCaptionsStore() {
@@ -145,6 +146,7 @@ function createCaptionsStore() {
 						fadeDuration: state.settings.fadeDuration,
 						lingerDuration: state.settings.lingerDuration,
 						wordTransitionDuration: state.settings.wordTransitionDuration,
+						activeWordHighlight: state.settings.activeWordHighlight,
 					},
 				};
 

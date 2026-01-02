@@ -663,6 +663,27 @@ export function CaptionsTab() {
 								</div>
 
 								<div class="flex flex-col gap-2">
+									<div class="flex items-center justify-between">
+										<span class="text-gray-11 text-sm">
+											Active Word Highlight
+										</span>
+										<Toggle
+											checked={getSetting("activeWordHighlight")}
+											onChange={(checked) =>
+												updateCaptionSetting("activeWordHighlight", checked)
+											}
+											disabled={!hasCaptions()}
+										/>
+									</div>
+									<p class="text-xs text-gray-10">
+										This is the first version of captions in Cap. Active word
+										highlighting may be inaccurate in some situations. We're
+										working on a fix for this and it will be released in
+										upcoming versions.
+									</p>
+								</div>
+
+								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Font Color</span>
 									<RgbInput
 										value={getSetting("color")}

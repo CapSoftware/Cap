@@ -173,7 +173,7 @@ function Dialogs() {
 			contentClass=""
 			open={dialog().open}
 			onOpenChange={(o) => {
-				if (!o) setDialog((d) => ({ ...d, open: false }));
+				if (!o) setDialog({ open: false });
 			}}
 		>
 			<Show
@@ -434,7 +434,7 @@ function Dialogs() {
 															y: bounds.height,
 														},
 													});
-													setDialog((d) => ({ ...d, open: false }));
+													setDialog({ open: false });
 												}}
 											>
 												Save

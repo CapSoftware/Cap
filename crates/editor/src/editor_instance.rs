@@ -401,21 +401,13 @@ impl EditorInstance {
                                     if cancel_token.is_cancelled() || *playback_rx.borrow() {
                                         return;
                                     }
-                                    if decoders
+                                    let _ = decoders
                                         .get_frames(
                                             prefetch_segment_time as f32,
                                             !hide_camera,
                                             prefetch_clip_offsets,
                                         )
-                                        .await
-                                        .is_none()
-                                    {
-                                        tracing::warn!(
-                                            prefetch_segment_time,
-                                            hide_camera,
-                                            "prefetch get_frames returned None"
-                                        );
-                                    }
+                                        .await;
                                 });
                             }
                         }
