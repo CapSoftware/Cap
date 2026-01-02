@@ -527,7 +527,14 @@ fn handle_previous_item_click(app: &AppHandle, path_str: &str) {
     }
 }
 
+pub fn get_tray_icon() -> &'static [u8] {
+    include_bytes!("../icons/tray-default-icon.png")
+}
+
 pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
+    if cfg!(target_os = "windows") {
+        return get_tray_icon();
+    }
     match mode {
         RecordingMode::Studio => include_bytes!("../icons/tray-default-icon-studio.png"),
         RecordingMode::Instant => include_bytes!("../icons/tray-default-icon-instant.png"),
@@ -536,6 +543,10 @@ pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
 }
 
 pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
+    if cfg!(target_os = "windows") {
+        return;
+    }
+
     let Some(tray) = app.tray_by_id("tray") else {
         return;
     };
@@ -734,6 +745,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         let is_recording = is_recording.clone();
         move |_| {
             is_recording.store(true, Ordering::Relaxed);
+
+            if cfg!(target_os = "windows") {
+                return;
+            }
+
             let Some(tray) = app.tray_by_id("tray") else {
                 return;
             };
@@ -749,6 +765,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         let is_recording = is_recording.clone();
         move |_| {
             is_recording.store(false, Ordering::Relaxed);
+
+            if cfg!(target_os = "windows") {
+                return;
+            }
+
             let Some(tray) = app_handle.tray_by_id("tray") else {
                 return;
             };

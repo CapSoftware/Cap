@@ -206,12 +206,18 @@ function Inner() {
 		}),
 	);
 
-	const updateConfigAndRender = throttle(async (time: number) => {
+	const doConfigUpdate = async (time: number) => {
 		const config = serializeProjectConfiguration(project);
 		await commands.updateProjectConfigInMemory(config);
 		canvasControls()?.resetFrameState();
 		renderFrame(time);
-	}, 1000 / FPS);
+	};
+	const throttledConfigUpdate = throttle(doConfigUpdate, 1000 / FPS);
+	const trailingConfigUpdate = debounce(doConfigUpdate, 1000 / FPS + 16);
+	const updateConfigAndRender = (time: number) => {
+		throttledConfigUpdate(time);
+		trailingConfigUpdate(time);
+	};
 	createEffect(
 		on(
 			() => trackDeep(project),

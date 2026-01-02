@@ -2931,9 +2931,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             match event {
                 WindowEvent::CloseRequested { .. } => {
-                    if let Ok(CapWindowId::Camera) = CapWindowId::from_str(label) {
-                        tracing::warn!("Camera window CloseRequested event received!");
-                        tokio::spawn(cleanup_camera_window(app.clone()));
+                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                        match window_id {
+                            CapWindowId::Camera => {
+                                tracing::warn!("Camera window CloseRequested event received!");
+                                tokio::spawn(cleanup_camera_window(app.clone()));
+                            }
+                            CapWindowId::Main => {
+                                if let Some(camera_window) = CapWindowId::Camera.get(app) {
+                                    let _ = camera_window.close();
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 WindowEvent::Destroyed => {

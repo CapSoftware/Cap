@@ -1,6 +1,6 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
-import { debounce } from "@solid-primitives/scheduled";
+import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -293,6 +293,16 @@ function createScreenshotEditorContext() {
 		}
 	});
 
+	const FPS = 60;
+	const FRAME_TIME = 1000 / FPS;
+
+	const doRenderUpdate = (config: ProjectConfiguration) => {
+		commands.updateScreenshotConfig(config, false);
+	};
+
+	const throttledRenderUpdate = throttle(doRenderUpdate, FRAME_TIME);
+	const trailingRenderUpdate = debounce(doRenderUpdate, FRAME_TIME + 16);
+
 	const saveConfig = debounce((config: ProjectConfiguration) => {
 		commands.updateScreenshotConfig(config, true);
 	}, 1000);
@@ -312,7 +322,8 @@ function createScreenshotEditorContext() {
 					annotations: unwrap(annotations),
 				};
 
-				commands.updateScreenshotConfig(config, false);
+				throttledRenderUpdate(config);
+				trailingRenderUpdate(config);
 				saveConfig(config);
 			},
 		),
