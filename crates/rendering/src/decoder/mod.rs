@@ -548,8 +548,8 @@ pub async fn spawn_decoder(
         let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
         let (tx, rx) = mpsc::channel();
 
-        match media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
-            Ok(()) => match tokio::time::timeout(timeout_duration, ready_rx).await {
+        if let Ok(()) = media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
+            match tokio::time::timeout(timeout_duration, ready_rx).await {
                 Ok(Ok(Ok(init_result))) => {
                     info!(
                         "Video '{}' using {} decoder ({}x{})",
@@ -585,8 +585,7 @@ pub async fn spawn_decoder(
                         name
                     );
                 }
-            },
-            Err(_) => {}
+            }
         }
 
         let fallback_reason =
