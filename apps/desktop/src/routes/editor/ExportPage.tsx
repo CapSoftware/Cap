@@ -1406,7 +1406,10 @@ export function ExportPage() {
 								<Button
 									variant="gray"
 									class="mt-4 hover:underline"
-									onClick={() => setExportState({ type: "idle" })}
+									onClick={() => {
+										setExportState({ type: "idle" });
+										handleBack();
+									}}
 								>
 									<IconLucideArrowLeft class="size-4" />
 									Back to Editor
