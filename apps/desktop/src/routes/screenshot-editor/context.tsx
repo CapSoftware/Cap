@@ -151,7 +151,7 @@ function createScreenshotEditorContext() {
 			}
 		}
 
-		let hasReceivedWebSocketFrame = { value: false };
+		const hasReceivedWebSocketFrame = { value: false };
 
 		if (instance.path) {
 			const loadImage = (imagePath: string) => {
@@ -233,7 +233,7 @@ function createScreenshotEditorContext() {
 
 			if (!width || !height) return;
 
-			hasReceivedWebSocketFrame = true;
+			hasReceivedWebSocketFrame.value = true;
 			setIsRenderReady(true);
 
 			const expectedRowBytes = width * 4;
@@ -259,7 +259,11 @@ function createScreenshotEditorContext() {
 			}
 
 			try {
-				const imageData = new ImageData(processedData, width, height);
+				const imageData = new ImageData(
+					processedData as unknown as ImageDataArray,
+					width,
+					height,
+				);
 				const bitmap = await createImageBitmap(imageData);
 				const existing = latestFrame();
 				if (existing?.bitmap && existing.bitmap !== bitmap) {
