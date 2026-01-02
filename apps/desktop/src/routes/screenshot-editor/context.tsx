@@ -163,12 +163,12 @@ function createScreenshotEditorContext() {
 						width: img.naturalWidth,
 						height: img.naturalHeight,
 					});
-					if (hasReceivedWebSocketFrame) {
+					if (hasReceivedWebSocketFrame.value) {
 						return;
 					}
 					try {
 						const bitmap = await createImageBitmap(img);
-						if (hasReceivedWebSocketFrame) {
+						if (hasReceivedWebSocketFrame.value) {
 							bitmap.close();
 							return;
 						}
@@ -259,11 +259,7 @@ function createScreenshotEditorContext() {
 			}
 
 			try {
-				const imageData = new ImageData(
-					processedData as unknown as ImageDataArray,
-					width,
-					height,
-				);
+				const imageData = new ImageData(processedData, width, height);
 				const bitmap = await createImageBitmap(imageData);
 				const existing = latestFrame();
 				if (existing?.bitmap && existing.bitmap !== bitmap) {
