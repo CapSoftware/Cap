@@ -343,6 +343,7 @@ impl Playback {
                 project: self.project.clone(),
                 fps,
                 playhead_rx: audio_playhead_rx,
+                #[cfg(target_os = "windows")]
                 duration_secs: duration,
             }
             .spawn();
@@ -694,6 +695,7 @@ struct AudioPlayback {
     project: watch::Receiver<ProjectConfiguration>,
     fps: u32,
     playhead_rx: watch::Receiver<f64>,
+    #[cfg(target_os = "windows")]
     duration_secs: f64,
 }
 

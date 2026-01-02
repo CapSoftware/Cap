@@ -294,6 +294,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.frame_buffer.set_playhead(playhead, project);
     }
 
+    #[cfg(target_os = "windows")]
     pub fn set_playhead_smooth(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.resampled_buffer.clear();
         self.frame_buffer.set_playhead(playhead, project);
