@@ -259,7 +259,11 @@ function createScreenshotEditorContext() {
 			}
 
 			try {
-				const imageData = new ImageData(processedData.buffer as unknown as ImageDataArray, width, height);
+				const imageData = new ImageData(
+					processedData.buffer as unknown as ImageDataArray,
+					width,
+					height,
+				);
 				const bitmap = await createImageBitmap(imageData);
 				const existing = latestFrame();
 				if (existing?.bitmap && existing.bitmap !== bitmap) {
