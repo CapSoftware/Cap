@@ -180,12 +180,14 @@ impl AudioRenderer {
         let channels: usize = 2;
 
         if self.cursor.timescale != 1.0 {
+            self.elapsed_samples += samples;
             return None;
         };
 
         let tracks = &self.data[self.cursor.clip_index as usize].tracks;
 
         if tracks.is_empty() {
+            self.elapsed_samples += samples;
             return None;
         }
 
@@ -444,7 +446,6 @@ impl AudioResampler {
     }
 }
 
-#[cfg(target_os = "windows")]
 pub struct PrerenderedAudioBuffer<T: FromSampleBytes> {
     samples: Vec<T>,
     read_position: usize,
@@ -452,7 +453,6 @@ pub struct PrerenderedAudioBuffer<T: FromSampleBytes> {
     channels: usize,
 }
 
-#[cfg(target_os = "windows")]
 impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
     pub fn new(
         segments: Vec<AudioSegment>,
@@ -464,7 +464,7 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
             duration_secs = duration_secs,
             sample_rate = output_info.sample_rate,
             channels = output_info.channels,
-            "Pre-rendering audio for Windows playback"
+            "Pre-rendering audio for playback"
         );
 
         let mut renderer = AudioRenderer::new(segments);
@@ -481,20 +481,29 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         renderer.set_playhead(0.0, project);
 
         let mut rendered_source_samples = 0usize;
+        let output_chunk_samples = (chunk_size as f64 * output_info.sample_rate as f64
+            / AudioData::SAMPLE_RATE as f64) as usize
+            * output_info.channels;
+
         while rendered_source_samples < total_source_samples {
             let frame_opt = renderer.render_frame(chunk_size, project);
 
-            let resampled = match frame_opt {
-                Some(frame) => resampler.queue_and_process_frame(&frame),
-                None => match resampler.flush_frame() {
-                    Some(data) => data,
-                    None => break,
-                },
-            };
-
-            if !resampled.is_empty() {
-                for chunk in resampled.chunks(bytes_per_sample) {
-                    samples.push(T::from_bytes(chunk));
+            match frame_opt {
+                Some(frame) => {
+                    let resampled = resampler.queue_and_process_frame(&frame);
+                    for chunk in resampled.chunks(bytes_per_sample) {
+                        samples.push(T::from_bytes(chunk));
+                    }
+                }
+                None => {
+                    if let Some(flushed) = resampler.flush_frame() {
+                        for chunk in flushed.chunks(bytes_per_sample) {
+                            samples.push(T::from_bytes(chunk));
+                        }
+                    }
+                    for _ in 0..output_chunk_samples {
+                        samples.push(T::EQUILIBRIUM);
+                    }
                 }
             }
 

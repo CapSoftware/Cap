@@ -344,7 +344,6 @@ impl Playback {
                 project: self.project.clone(),
                 fps,
                 playhead_rx: audio_playhead_rx,
-                #[cfg(target_os = "windows")]
                 duration_secs: duration,
             }
             .spawn();
@@ -696,7 +695,6 @@ struct AudioPlayback {
     project: watch::Receiver<ProjectConfiguration>,
     fps: u32,
     playhead_rx: watch::Receiver<f64>,
-    #[cfg(target_os = "windows")]
     duration_secs: f64,
 }
 
@@ -729,46 +727,27 @@ impl AudioPlayback {
                 }
             };
 
-            #[cfg(target_os = "windows")]
             let duration_secs = self.duration_secs;
 
             let result = match supported_config.sample_format() {
-                #[cfg(target_os = "windows")]
                 SampleFormat::I16 => {
                     self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
                 }
-                #[cfg(target_os = "windows")]
                 SampleFormat::I32 => {
                     self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
                 }
-                #[cfg(target_os = "windows")]
                 SampleFormat::F32 => {
                     self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
                 }
-                #[cfg(target_os = "windows")]
                 SampleFormat::I64 => {
                     self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
                 }
-                #[cfg(target_os = "windows")]
                 SampleFormat::U8 => {
                     self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
                 }
-                #[cfg(target_os = "windows")]
                 SampleFormat::F64 => {
                     self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
                 }
-                #[cfg(not(target_os = "windows"))]
-                SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
-                #[cfg(not(target_os = "windows"))]
-                SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
-                #[cfg(not(target_os = "windows"))]
-                SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
-                #[cfg(not(target_os = "windows"))]
-                SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
-                #[cfg(not(target_os = "windows"))]
-                SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
-                #[cfg(not(target_os = "windows"))]
-                SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 format => {
                     error!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
@@ -803,6 +782,7 @@ impl AudioPlayback {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     fn create_stream<T>(
         self,
         device: cpal::Device,
@@ -1094,7 +1074,6 @@ impl AudioPlayback {
         }))
     }
 
-    #[cfg(target_os = "windows")]
     fn create_stream_prerendered<T>(
         self,
         device: cpal::Device,
@@ -1128,7 +1107,7 @@ impl AudioPlayback {
             duration_secs = duration_secs,
             start_playhead = playhead,
             sample_rate = sample_rate,
-            "Creating pre-rendered audio stream for Windows"
+            "Creating pre-rendered audio stream"
         );
 
         let project_snapshot = project.borrow().clone();
