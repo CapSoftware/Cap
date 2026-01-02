@@ -1,12 +1,14 @@
-use cap_audio::{
-    FromSampleBytes, LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint,
-};
+use cap_audio::FromSampleBytes;
+#[cfg(not(target_os = "windows"))]
+use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
+#[cfg(not(target_os = "windows"))]
+use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
-    BufferSize, SampleFormat, SupportedBufferSize,
+    SampleFormat,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -23,11 +25,10 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
+#[cfg(not(target_os = "windows"))]
+use crate::audio::AudioPlaybackBuffer;
 use crate::{
-    audio::{AudioPlaybackBuffer, AudioSegment},
-    editor,
-    editor_instance::SegmentMedia,
-    segments::get_audio_segments,
+    audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
 };
 
 const PREFETCH_BUFFER_SIZE: usize = 60;
@@ -801,6 +802,7 @@ impl AudioPlayback {
         });
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn create_stream<T>(
         self,
         device: cpal::Device,

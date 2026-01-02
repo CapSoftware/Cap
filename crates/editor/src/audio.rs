@@ -7,6 +7,7 @@ use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, Timelin
 use ffmpeg::{
     ChannelLayout, Dictionary, format as avformat, frame::Audio as FFAudio, software::resampling,
 };
+#[cfg(not(target_os = "windows"))]
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Observer, Producer},
@@ -245,21 +246,17 @@ impl AudioRenderer {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
     frame_buffer: AudioRenderer,
     resampler: AudioResampler,
     resampled_buffer: HeapRb<T>,
 }
 
+#[cfg(not(target_os = "windows"))]
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
-    #[cfg(target_os = "windows")]
-    pub const PLAYBACK_SAMPLES_COUNT: u32 = 1024;
-    #[cfg(not(target_os = "windows"))]
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 512;
 
-    #[cfg(target_os = "windows")]
-    pub const WIRELESS_PLAYBACK_SAMPLES_COUNT: u32 = 2048;
-    #[cfg(not(target_os = "windows"))]
     pub const WIRELESS_PLAYBACK_SAMPLES_COUNT: u32 = 1024;
 
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
@@ -290,12 +287,6 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.resampler.reset();
-        self.resampled_buffer.clear();
-        self.frame_buffer.set_playhead(playhead, project);
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn set_playhead_smooth(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.resampled_buffer.clear();
         self.frame_buffer.set_playhead(playhead, project);
     }
@@ -376,9 +367,6 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    const MAX_CHUNKS_PER_CALLBACK: usize = 4;
-
     pub fn fill(
         &mut self,
         playback_buffer: &mut [T],
@@ -388,19 +376,6 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         let filled = self.resampled_buffer.pop_slice(playback_buffer);
         playback_buffer[filled..].fill(T::EQUILIBRIUM);
 
-        #[cfg(target_os = "windows")]
-        {
-            for _ in 0..Self::MAX_CHUNKS_PER_CALLBACK {
-                if self.resampled_buffer.occupied_len() >= min_headroom_samples {
-                    break;
-                }
-                if !self.render_chunk(project) {
-                    break;
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
         self.prefill(project, min_headroom_samples);
     }
 }
@@ -443,6 +418,7 @@ impl AudioResampler {
         })
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub fn reset(&mut self) {
         *self = Self::new(self.output).unwrap();
     }
@@ -553,6 +529,7 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         self.read_position = sample_position.min(self.samples.len());
     }
 
+    #[allow(dead_code)]
     pub fn current_playhead_secs(&self) -> f64 {
         (self.read_position / self.channels) as f64 / self.sample_rate as f64
     }
