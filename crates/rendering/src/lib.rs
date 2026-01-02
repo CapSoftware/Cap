@@ -1368,12 +1368,15 @@ impl ProjectUniforms {
 
                 let crop_bounds = match project.camera.shape {
                     CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
-                    CameraShape::Square => [
-                        (frame_size[0] - frame_size[1]) / 2.0,
-                        0.0,
-                        frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
-                        frame_size[1],
-                    ],
+                    CameraShape::Square => {
+                        if frame_size[0] > frame_size[1] {
+                            let offset = (frame_size[0] - frame_size[1]) / 2.0;
+                            [offset, 0.0, frame_size[0] - offset, frame_size[1]]
+                        } else {
+                            let offset = (frame_size[1] - frame_size[0]) / 2.0;
+                            [0.0, offset, frame_size[0], frame_size[1] - offset]
+                        }
+                    }
                 };
 
                 CompositeVideoFrameUniforms {

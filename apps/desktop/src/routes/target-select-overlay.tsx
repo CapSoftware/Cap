@@ -536,23 +536,34 @@ function Inner() {
 						const originalLogicalSize = original.size.toLogical(scaleFactor);
 
 						const padding = 16;
+						const TOOLBAR_HEIGHT = 56;
+						const originalContentWidth = originalLogicalSize.width;
+						const originalContentHeight = Math.max(
+							0,
+							originalLogicalSize.height - TOOLBAR_HEIGHT,
+						);
+
 						const selectionMinDim = Math.min(bounds.width, bounds.height);
-						const targetMaxDim = Math.max(
-							150,
+						const targetContentMaxDim = Math.max(
+							100,
 							Math.min(
-								Math.max(originalLogicalSize.width, originalLogicalSize.height),
-								selectionMinDim * 0.5,
+								Math.max(originalContentWidth, originalContentHeight),
+								selectionMinDim * 0.5 - TOOLBAR_HEIGHT,
 							),
 						);
 
-						const originalMaxDim = Math.max(
-							originalLogicalSize.width,
-							originalLogicalSize.height,
+						const originalContentMaxDim = Math.max(
+							originalContentWidth,
+							originalContentHeight,
 						);
-						const scale = targetMaxDim / originalMaxDim;
+						const scale =
+							originalContentMaxDim > 0
+								? targetContentMaxDim / originalContentMaxDim
+								: 1;
 
-						const newWidth = Math.round(originalLogicalSize.width * scale);
-						const newHeight = Math.round(originalLogicalSize.height * scale);
+						const newWidth = Math.round(originalContentWidth * scale);
+						const newHeight =
+							Math.round(originalContentHeight * scale) + TOOLBAR_HEIGHT;
 
 						if (
 							bounds.width > newWidth + padding * 2 &&
@@ -580,6 +591,12 @@ function Inner() {
 						if (original && win) {
 							await win.setPosition(original.position);
 							await win.setSize(original.size);
+							await commands.updateCameraOverlayBounds(
+								original.position.x,
+								original.position.y,
+								original.size.width,
+								original.size.height,
+							);
 							setOriginalCameraBounds(null);
 							setTargetState(null);
 							lastApplied = null;

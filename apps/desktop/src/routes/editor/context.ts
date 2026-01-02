@@ -612,6 +612,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			previewTime: null as number | null,
 			playbackTime: 0,
 			playing: false,
+			captions: {
+				isGenerating: false,
+				isDownloading: false,
+				downloadProgress: 0,
+				downloadingModel: null as string | null,
+			},
 			timeline: {
 				interactMode: "seek" as "seek" | "split",
 				selection: null as

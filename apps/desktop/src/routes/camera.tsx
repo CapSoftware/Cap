@@ -700,6 +700,7 @@ function Canvas(props: {
 	latestFrame: Accessor<{ width: number; data: ImageData } | null | undefined>;
 	state: CameraWindowState;
 	ref: HTMLCanvasElement | undefined;
+	containerSize?: { width: number; height: number };
 }) {
 	const style = () => {
 		const frame = props.latestFrame();
@@ -707,8 +708,10 @@ function Canvas(props: {
 
 		const aspectRatio = frame.data.width / frame.data.height;
 
-		// Use state.size directly for immediate feedback
-		const base = props.state.size;
+		// Use container size if available (for external resize), otherwise use state.size
+		const base = props.containerSize
+			? Math.min(props.containerSize.width, props.containerSize.height)
+			: props.state.size;
 
 		// Replicate window size logic synchronously for the canvas
 		const winWidth =
@@ -741,7 +744,7 @@ function Canvas(props: {
 			else
 				return {
 					width: base,
-					height: base * aspectRatio,
+					height: base / aspectRatio,
 				};
 		})();
 
