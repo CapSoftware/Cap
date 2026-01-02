@@ -151,7 +151,7 @@ function createScreenshotEditorContext() {
 			}
 		}
 
-		let hasReceivedWebSocketFrame = false;
+		let hasReceivedWebSocketFrame = { value: false };
 
 		if (instance.path) {
 			const loadImage = (imagePath: string) => {
