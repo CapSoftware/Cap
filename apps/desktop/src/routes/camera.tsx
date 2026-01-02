@@ -589,16 +589,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
 
-	createEffect(
-		on(
-			() => rawOptions.cameraLabel,
-			(label) => {
-				if (label === null) getCurrentWindow().close();
-			},
-			{ defer: true },
-		),
-	);
-
 	onMount(() => getCurrentWindow().show());
 
 	return (
