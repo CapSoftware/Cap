@@ -325,6 +325,36 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		height: number;
 	} | null>(null);
 
+	const [externalContainerSize, setExternalContainerSize] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
+
+	let containerRef: HTMLDivElement | undefined;
+
+	onMount(() => {
+		if (!containerRef) return;
+
+		const updateContainerSize = () => {
+			if (!containerRef) return;
+			const rect = containerRef.getBoundingClientRect();
+			const currentSize = externalContainerSize();
+			if (
+				!currentSize ||
+				Math.abs(currentSize.width - rect.width) > 1 ||
+				Math.abs(currentSize.height - rect.height) > 1
+			) {
+				setExternalContainerSize({ width: rect.width, height: rect.height });
+			}
+		};
+
+		const resizeObserver = new ResizeObserver(updateContainerSize);
+		resizeObserver.observe(containerRef);
+		updateContainerSize();
+
+		onCleanup(() => resizeObserver.disconnect());
+	});
+
 	function imageDataHandler(imageData: { width: number; data: ImageData }) {
 		setLatestFrame(imageData);
 
@@ -353,17 +383,14 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		socket.binaryType = "arraybuffer";
 
 		socket.addEventListener("open", () => {
-			console.log("WebSocket connected");
 			setIsConnected(true);
 		});
 
 		socket.addEventListener("close", () => {
-			console.log("WebSocket disconnected");
 			setIsConnected(false);
 		});
 
-		socket.addEventListener("error", (error) => {
-			console.error("WebSocket error:", error);
+		socket.addEventListener("error", () => {
 			setIsConnected(false);
 		});
 
@@ -436,7 +463,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 	const reconnectInterval = setInterval(() => {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			console.log("Attempting to reconnect...");
 			if (ws) ws.close();
 			ws = createSocket();
 		}
@@ -666,6 +692,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				onMouseDown={handleResizeStart("se")}
 			/>
 			<div
+				ref={containerRef}
 				class={cx(
 					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
 					state.shape === "round" ? "rounded-full" : "rounded-3xl",
@@ -678,6 +705,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 							latestFrame={latestFrame}
 							state={state}
 							ref={cameraCanvasRef}
+							containerSize={externalContainerSize() ?? undefined}
 						/>
 					</Show>
 				</Suspense>
