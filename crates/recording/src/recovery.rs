@@ -822,35 +822,49 @@ impl RecoveryManager {
                     } else {
                         None
                     },
-                    mic: if mic_path.exists() {
-                        Some(AudioMeta {
-                            path: RelativePathBuf::from(format!("{segment_base}/audio-input.ogg")),
-                            start_time: get_start_time_or_fallback(
-                                original_segment
+                    mic: {
+                        let mic_size = std::fs::metadata(&mic_path).map(|m| m.len()).unwrap_or(0);
+                        const MIN_VALID_AUDIO_SIZE: u64 = 500;
+                        if mic_path.exists() && mic_size > MIN_VALID_AUDIO_SIZE {
+                            Some(AudioMeta {
+                                path: RelativePathBuf::from(format!(
+                                    "{segment_base}/audio-input.ogg"
+                                )),
+                                start_time: get_start_time_or_fallback(
+                                    original_segment
+                                        .and_then(|s| s.mic.as_ref())
+                                        .and_then(|m| m.start_time),
+                                ),
+                                device_id: original_segment
                                     .and_then(|s| s.mic.as_ref())
-                                    .and_then(|m| m.start_time),
-                            ),
-                            device_id: original_segment
-                                .and_then(|s| s.mic.as_ref())
-                                .and_then(|m| m.device_id.clone()),
-                        })
-                    } else {
-                        None
+                                    .and_then(|m| m.device_id.clone()),
+                            })
+                        } else {
+                            None
+                        }
                     },
-                    system_audio: if system_audio_path.exists() {
-                        Some(AudioMeta {
-                            path: RelativePathBuf::from(format!("{segment_base}/system_audio.ogg")),
-                            start_time: get_start_time_or_fallback(
-                                original_segment
+                    system_audio: {
+                        let file_size = std::fs::metadata(&system_audio_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        const MIN_VALID_AUDIO_SIZE: u64 = 500;
+                        if system_audio_path.exists() && file_size > MIN_VALID_AUDIO_SIZE {
+                            Some(AudioMeta {
+                                path: RelativePathBuf::from(format!(
+                                    "{segment_base}/system_audio.ogg"
+                                )),
+                                start_time: get_start_time_or_fallback(
+                                    original_segment
+                                        .and_then(|s| s.system_audio.as_ref())
+                                        .and_then(|a| a.start_time),
+                                ),
+                                device_id: original_segment
                                     .and_then(|s| s.system_audio.as_ref())
-                                    .and_then(|a| a.start_time),
-                            ),
-                            device_id: original_segment
-                                .and_then(|s| s.system_audio.as_ref())
-                                .and_then(|a| a.device_id.clone()),
-                        })
-                    } else {
-                        None
+                                    .and_then(|a| a.device_id.clone()),
+                            })
+                        } else {
+                            None
+                        }
                     },
                     cursor: if cursor_path.exists() {
                         Some(RelativePathBuf::from(format!("{segment_base}/cursor.json")))
