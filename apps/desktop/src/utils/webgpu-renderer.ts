@@ -329,6 +329,12 @@ export function renderNv12FrameWebGPU(
 	if (canvas.width !== width || canvas.height !== height) {
 		canvas.width = width;
 		canvas.height = height;
+		const format = navigator.gpu.getPreferredCanvasFormat();
+		context.configure({
+			device,
+			format,
+			alphaMode: "opaque",
+		});
 	}
 
 	if (

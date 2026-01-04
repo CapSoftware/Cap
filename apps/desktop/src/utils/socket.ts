@@ -10,6 +10,13 @@ import {
 } from "./shared-frame-buffer";
 import type { StrideCorrectionResponse } from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
+import {
+	disposeWebGPU,
+	initWebGPU,
+	isWebGPUSupported,
+	renderNv12FrameWebGPU,
+	type WebGPURenderer,
+} from "./webgpu-renderer";
 
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
 const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
@@ -123,6 +130,10 @@ export function createImageDataWS(
 	let cachedStrideWidth = 0;
 	let cachedStrideHeight = 0;
 
+	let mainThreadWebGPU: WebGPURenderer | null = null;
+	let mainThreadWebGPUInitializing = false;
+	let pendingNv12Frame: ArrayBuffer | null = null;
+
 	function cleanup() {
 		if (isCleanedUp) return;
 		isCleanedUp = true;
@@ -145,6 +156,12 @@ export function createImageDataWS(
 		nextFrame = null;
 		isProcessing = false;
 
+		if (mainThreadWebGPU) {
+			disposeWebGPU(mainThreadWebGPU);
+			mainThreadWebGPU = null;
+		}
+
+		pendingNv12Frame = null;
 		cachedDirectImageData = null;
 		cachedDirectWidth = 0;
 		cachedDirectHeight = 0;
@@ -153,6 +170,51 @@ export function createImageDataWS(
 		cachedStrideHeight = 0;
 
 		setIsConnected(false);
+	}
+
+	function renderPendingNv12Frame() {
+		if (!pendingNv12Frame || !mainThreadWebGPU || !directCanvas) return;
+
+		const buffer = pendingNv12Frame;
+		pendingNv12Frame = null;
+
+		const NV12_MAGIC = 0x4e563132;
+		if (buffer.byteLength < 28) return;
+
+		const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
+		if (formatCheck.getUint32(0, true) !== NV12_MAGIC) return;
+
+		const metadataOffset = buffer.byteLength - 28;
+		const meta = new DataView(buffer, metadataOffset, 28);
+		const yStride = meta.getUint32(0, true);
+		const height = meta.getUint32(4, true);
+		const width = meta.getUint32(8, true);
+
+		if (width > 0 && height > 0) {
+			const ySize = yStride * height;
+			const uvSize = width * (height / 2);
+			const totalSize = ySize + uvSize;
+
+			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
+
+			if (directCanvas.width !== width || directCanvas.height !== height) {
+				directCanvas.width = width;
+				directCanvas.height = height;
+			}
+
+			renderNv12FrameWebGPU(
+				mainThreadWebGPU,
+				frameData,
+				width,
+				height,
+				yStride,
+			);
+
+			if (!hasRenderedFrame()) {
+				setHasRenderedFrame(true);
+			}
+			onmessage({ width, height });
+		}
 	}
 
 	const canvasControls: CanvasControls = {
@@ -165,7 +227,35 @@ export function createImageDataWS(
 		hasRenderedFrame,
 		initDirectCanvas: (canvas: HTMLCanvasElement) => {
 			directCanvas = canvas;
-			directCtx = canvas.getContext("2d", { alpha: false });
+
+			if (!mainThreadWebGPUInitializing && !mainThreadWebGPU) {
+				mainThreadWebGPUInitializing = true;
+				isWebGPUSupported().then((supported) => {
+					if (supported && directCanvas) {
+						initWebGPU(directCanvas as unknown as OffscreenCanvas)
+							.then((renderer) => {
+								mainThreadWebGPU = renderer;
+								mainThreadWebGPUInitializing = false;
+								if (pendingNv12Frame && directCanvas) {
+									renderPendingNv12Frame();
+								} else {
+									onRequestFrame?.();
+								}
+							})
+							.catch((e) => {
+								mainThreadWebGPUInitializing = false;
+								console.error("[socket] Main thread WebGPU init failed:", e);
+								directCtx =
+									directCanvas?.getContext("2d", { alpha: false }) ?? null;
+							});
+					} else {
+						mainThreadWebGPUInitializing = false;
+						directCtx =
+							directCanvas?.getContext("2d", { alpha: false }) ?? null;
+					}
+				});
+			}
+
 			strideWorker = new StrideCorrectionWorker();
 			strideWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
 				if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
@@ -359,6 +449,54 @@ export function createImageDataWS(
 		lastFrameTime = now;
 
 		if (isNv12Format) {
+			if (mainThreadWebGPU && directCanvas) {
+				const metadataOffset = buffer.byteLength - 28;
+				const meta = new DataView(buffer, metadataOffset, 28);
+				const yStride = meta.getUint32(0, true);
+				const height = meta.getUint32(4, true);
+				const width = meta.getUint32(8, true);
+
+				if (width > 0 && height > 0) {
+					const ySize = yStride * height;
+					const uvSize = width * (height / 2);
+					const totalSize = ySize + uvSize;
+
+					const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
+
+					if (directCanvas.width !== width || directCanvas.height !== height) {
+						directCanvas.width = width;
+						directCanvas.height = height;
+					}
+
+					renderNv12FrameWebGPU(
+						mainThreadWebGPU,
+						frameData,
+						width,
+						height,
+						yStride,
+					);
+					actualRendersCount++;
+
+					if (!hasRenderedFrame()) {
+						setHasRenderedFrame(true);
+					}
+					onmessage({ width, height });
+				}
+				return;
+			}
+
+			if (mainThreadWebGPUInitializing || !directCanvas) {
+				pendingNv12Frame = buffer;
+				const metadataOffset = buffer.byteLength - 28;
+				const meta = new DataView(buffer, metadataOffset, 28);
+				const height = meta.getUint32(4, true);
+				const width = meta.getUint32(8, true);
+				if (width > 0 && height > 0) {
+					onmessage({ width, height });
+				}
+				return;
+			}
+
 			if (isProcessing) {
 				framesDropped++;
 				nextFrame = buffer;
