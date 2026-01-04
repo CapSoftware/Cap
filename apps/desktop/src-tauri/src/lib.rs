@@ -2895,10 +2895,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(async move {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = state.read().await;
-                                    if !app_state.is_recording_active_or_pending() {
-                                        if let Some(camera_window) = CapWindowId::Camera.get(&app) {
-                                            let _ = camera_window.close();
-                                        }
+                                    if !app_state.is_recording_active_or_pending()
+                                        && let Some(camera_window) = CapWindowId::Camera.get(&app)
+                                    {
+                                        let _ = camera_window.close();
                                     }
                                 });
                             }
