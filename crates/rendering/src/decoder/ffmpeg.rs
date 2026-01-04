@@ -133,12 +133,14 @@ impl CachedFrame {
                 data
             }
             Self::Processed(data) => data.clone(),
+            #[cfg(target_os = "windows")]
             Self::Gpu { .. } => unreachable!(),
         }
     }
 
     fn produce(&mut self, converter: &mut FrameConverter) -> OutputFrame {
         match self {
+            #[cfg(target_os = "windows")]
             Self::Gpu { frame, number, .. } => OutputFrame {
                 number: *number,
                 frame: frame.clone(),
@@ -165,6 +167,7 @@ enum CachedFrame {
         number: u32,
     },
     Processed(ProcessedFrame),
+    #[cfg(target_os = "windows")]
     Gpu {
         frame: DecodedFrame,
         number: u32,
