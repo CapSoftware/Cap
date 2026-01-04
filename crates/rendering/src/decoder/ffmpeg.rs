@@ -249,7 +249,7 @@ impl FfmpegDecoder {
             let mut frames = this.frames();
             let mut converter = FrameConverter::new();
 
-            for frame in (&mut frames).flatten() {
+            if let Some(frame) = (&mut frames).flatten().next() {
                 let current_frame =
                     pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
                 let mut cache_frame = CachedFrame::Raw {
@@ -264,7 +264,6 @@ impl FfmpegDecoder {
                     "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
                     name, current_frame, video_width, video_height
                 );
-                break;
             }
 
             let decoder_type = if is_hw {
