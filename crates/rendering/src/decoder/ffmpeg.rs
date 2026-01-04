@@ -300,9 +300,7 @@ impl FfmpegDecoder {
 
                             if sender.send(data.frame.clone()).is_err() {
                                 log::warn!(
-                                    "FFmpeg '{}': Failed to send cached frame {}: receiver dropped",
-                                    name,
-                                    requested_frame
+                                    "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
                                 );
                             }
                             *last_sent_frame.borrow_mut() = Some(data);
@@ -327,12 +325,12 @@ impl FfmpegDecoder {
                                 continue;
                             }
 
-                            if requested_frame <= MAX_FRAME_TOLERANCE {
-                                if let Some(first_frame) = first_ever_frame.borrow().clone() {
-                                    *last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                                    let _ = sender.send(first_frame.frame);
-                                    continue;
-                                }
+                            if requested_frame <= MAX_FRAME_TOLERANCE
+                                && let Some(first_frame) = first_ever_frame.borrow().clone()
+                            {
+                                *last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                                let _ = sender.send(first_frame.frame);
+                                continue;
                             }
 
                             let _ = this.reset(requested_time);
