@@ -102,6 +102,23 @@ export default function FeedbackTab() {
 
 					<div class="pt-6 border-t border-gray-2">
 						<h3 class="text-sm font-medium text-gray-12 mb-2">
+							Join the Community
+						</h3>
+						<p class="text-sm text-gray-10 mb-3">
+							Have questions, want to share ideas, or just hang out? Join the
+							Cap Discord community.
+						</p>
+						<Button
+							onClick={() => window.open("https://cap.link/discord", "_blank")}
+							size="md"
+							variant="gray"
+						>
+							Join Discord
+						</Button>
+					</div>
+
+					<div class="pt-6 border-t border-gray-2">
+						<h3 class="text-sm font-medium text-gray-12 mb-2">
 							Debug Information
 						</h3>
 						<p class="text-sm text-gray-10 mb-3">

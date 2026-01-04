@@ -60,6 +60,9 @@ export async function maybeProtectedHeaders() {
 
 export async function protectedHeaders() {
 	const { authorization } = await maybeProtectedHeaders();
-	if (!authorization) throw new Error("Not authorized");
+	if (!authorization)
+		throw new Error(
+			"Please sign in to continue. Alternatively, email hello@cap.so or join our Discord at cap.link/discord",
+		);
 	return { authorization };
 }
