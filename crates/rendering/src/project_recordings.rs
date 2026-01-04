@@ -154,6 +154,18 @@ impl ProjectRecordingsMeta {
                         })
                     };
 
+                    let system_audio = match Option::map(s.system_audio.as_ref(), load_audio)
+                        .transpose()
+                    {
+                        Ok(audio) => audio,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to load system audio for segment, treating as no audio: {e}"
+                            );
+                            None
+                        }
+                    };
+
                     Ok::<_, String>(SegmentRecordings {
                         display: load_video(&s.display).map_err(|e| format!("video / {e}"))?,
                         camera: Option::map(s.camera.as_ref(), load_video)
@@ -162,9 +174,7 @@ impl ProjectRecordingsMeta {
                         mic: Option::map(s.mic.as_ref(), load_audio)
                             .transpose()
                             .map_err(|e| format!("mic / {e}"))?,
-                        system_audio: Option::map(s.system_audio.as_ref(), load_audio)
-                            .transpose()
-                            .map_err(|e| format!("system audio / {e}"))?,
+                        system_audio,
                     })
                 })
                 .enumerate()

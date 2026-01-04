@@ -7,8 +7,6 @@ use std::{
 };
 use tokio::sync::oneshot;
 use tracing::info;
-#[cfg(target_os = "windows")]
-use tracing::warn;
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -548,65 +546,20 @@ pub async fn spawn_decoder(
         let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
         let (tx, rx) = mpsc::channel();
 
-        if let Ok(()) = media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
-            match tokio::time::timeout(timeout_duration, ready_rx).await {
-                Ok(Ok(Ok(init_result))) => {
-                    info!(
-                        "Video '{}' using {} decoder ({}x{})",
-                        name, init_result.decoder_type, init_result.width, init_result.height
-                    );
-                    let status = DecoderStatus {
-                        decoder_type: init_result.decoder_type,
-                        video_width: init_result.width,
-                        video_height: init_result.height,
-                        fallback_reason: None,
-                    };
-                    return Ok(AsyncVideoDecoderHandle {
-                        sender: tx,
-                        offset,
-                        status,
-                    });
-                }
-                Ok(Ok(Err(e))) => {
-                    warn!(
-                        "MediaFoundation decoder ready but failed for '{}': {}, falling back to FFmpeg",
-                        name, e
-                    );
-                }
-                Ok(Err(e)) => {
-                    warn!(
-                        "MediaFoundation decoder channel closed for '{}': {}, falling back to FFmpeg",
-                        name, e
-                    );
-                }
-                Err(_) => {
-                    warn!(
-                        "MediaFoundation decoder timed out for '{}', falling back to FFmpeg",
-                        name
-                    );
-                }
-            }
-        }
-
-        let fallback_reason =
-            format!("MediaFoundation decoder unavailable for '{name}', using FFmpeg fallback");
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
-        let (tx, rx) = mpsc::channel();
-
         ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
-            .map_err(|e| format!("'{name}' FFmpeg fallback decoder / {e}"))?;
+            .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
 
         match tokio::time::timeout(timeout_duration, ready_rx).await {
             Ok(Ok(Ok(init_result))) => {
                 info!(
-                    "Video '{}' using {} decoder ({}x{}) [fallback]",
+                    "Video '{}' using {} decoder ({}x{})",
                     name, init_result.decoder_type, init_result.width, init_result.height
                 );
                 let status = DecoderStatus {
                     decoder_type: init_result.decoder_type,
                     video_width: init_result.width,
                     video_height: init_result.height,
-                    fallback_reason: Some(fallback_reason),
+                    fallback_reason: None,
                 };
                 Ok(AsyncVideoDecoderHandle {
                     sender: tx,

@@ -33,6 +33,7 @@ tracing.workspace = true
 resvg = "0.45"
 tiny-skia = "0.11"
 clap = { version = "4.5", features = ["derive"] }
+dirs = "5.0"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -54,6 +55,10 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_System_Threading",
+] }
+windows_0_58 = { package = "windows", version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
 ] }
 
 [dev-dependencies]

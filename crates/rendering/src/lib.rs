@@ -191,6 +191,7 @@ impl RecordingSegmentDecoders {
         needs_camera: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
+        let camera_request_time = segment_time + offsets.camera;
         let (screen, camera) = tokio::join!(
             self.screen.get_frame(segment_time),
             OptionFuture::from(
@@ -198,7 +199,7 @@ impl RecordingSegmentDecoders {
                     .then(|| self
                         .camera
                         .as_ref()
-                        .map(|d| d.get_frame(segment_time + offsets.camera)))
+                        .map(|d| d.get_frame(camera_request_time)))
                     .flatten()
             )
         );

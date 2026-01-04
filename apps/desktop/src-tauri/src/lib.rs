@@ -984,55 +984,36 @@ struct CurrentRecording {
 async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
-    tracing::debug!("get_current_recording called");
     let state = state.read().await;
 
     let (mode, capture_target, status) = match &state.recording_state {
         RecordingState::None => {
-            tracing::debug!("get_current_recording: state is None");
             return Ok(JsonValue::new(&None));
         }
-        RecordingState::Pending { mode, target } => {
-            tracing::debug!("get_current_recording: state is Pending");
-            (*mode, target, RecordingStatus::Pending)
-        }
-        RecordingState::Active(inner) => {
-            tracing::debug!("get_current_recording: state is Active");
-            (
-                inner.mode(),
-                inner.capture_target(),
-                RecordingStatus::Recording,
-            )
-        }
+        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
+        RecordingState::Active(inner) => (
+            inner.mode(),
+            inner.capture_target(),
+            RecordingStatus::Recording,
+        ),
     };
 
     let target = match capture_target {
-        ScreenCaptureTarget::Display { id } => {
-            tracing::debug!("get_current_recording: target is Display");
-            CurrentRecordingTarget::Screen { id: id.clone() }
-        }
+        ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: id.clone() },
         ScreenCaptureTarget::Window { id } => {
             let bounds =
                 scap_targets::Window::from_id(id).and_then(|w| w.display_relative_logical_bounds());
-            tracing::debug!(
-                "get_current_recording: target is Window, bounds={:?}",
-                bounds
-            );
             CurrentRecordingTarget::Window {
                 id: id.clone(),
                 bounds,
             }
         }
-        ScreenCaptureTarget::Area { screen, bounds } => {
-            tracing::debug!("get_current_recording: target is Area");
-            CurrentRecordingTarget::Area {
-                screen: screen.clone(),
-                bounds: *bounds,
-            }
-        }
+        ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+            screen: screen.clone(),
+            bounds: *bounds,
+        },
     };
 
-    tracing::debug!("get_current_recording: returning Some(CurrentRecording)");
     Ok(JsonValue::new(&Some(CurrentRecording {
         target,
         mode,
@@ -1048,32 +1029,20 @@ async fn create_screenshot(
     output: PathBuf,
     size: Option<(u32, u32)>,
 ) -> Result<(), String> {
-    println!("Creating screenshot: input={input:?}, output={output:?}, size={size:?}");
-
     let result: Result<(), String> = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut ictx = ffmpeg::format::input(&input).map_err(|e| {
-            eprintln!("Failed to create input context: {e}");
-            e.to_string()
-        })?;
+        let mut ictx = ffmpeg::format::input(&input).map_err(|e| e.to_string())?;
         let input_stream = ictx
             .streams()
             .best(ffmpeg::media::Type::Video)
             .ok_or("No video stream found")?;
         let video_stream_index = input_stream.index();
-        println!("Found video stream at index {video_stream_index}");
 
         let mut decoder =
             ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())
-                .map_err(|e| {
-                    eprintln!("Failed to create decoder context: {e}");
-                    e.to_string()
-                })?
+                .map_err(|e| e.to_string())?
                 .decoder()
                 .video()
-                .map_err(|e| {
-                    eprintln!("Failed to create video decoder: {e}");
-                    e.to_string()
-                })?;
+                .map_err(|e| e.to_string())?;
 
         let mut scaler = ffmpeg::software::scaling::context::Context::get(
             decoder.format(),
@@ -1084,27 +1053,17 @@ async fn create_screenshot(
             size.map_or(decoder.height(), |s| s.1),
             ffmpeg::software::scaling::flag::Flags::BILINEAR,
         )
-        .map_err(|e| {
-            eprintln!("Failed to create scaler: {e}");
-            e.to_string()
-        })?;
-
-        println!("Decoder and scaler initialized");
+        .map_err(|e| e.to_string())?;
 
         let mut frame = ffmpeg::frame::Video::empty();
         for (stream, packet) in ictx.packets() {
             if stream.index() == video_stream_index {
-                decoder.send_packet(&packet).map_err(|e| {
-                    eprintln!("Failed to send packet to decoder: {e}");
-                    e.to_string()
-                })?;
+                decoder.send_packet(&packet).map_err(|e| e.to_string())?;
                 if decoder.receive_frame(&mut frame).is_ok() {
-                    println!("Frame received, scaling...");
                     let mut rgb_frame = ffmpeg::frame::Video::empty();
-                    scaler.run(&frame, &mut rgb_frame).map_err(|e| {
-                        eprintln!("Failed to scale frame: {e}");
-                        e.to_string()
-                    })?;
+                    scaler
+                        .run(&frame, &mut rgb_frame)
+                        .map_err(|e| e.to_string())?;
 
                     let width = rgb_frame.width() as usize;
                     let height = rgb_frame.height() as usize;
@@ -1123,21 +1082,15 @@ async fn create_screenshot(
 
                     let img = image::RgbImage::from_raw(width as u32, height as u32, img_buffer)
                         .ok_or("Failed to create image from frame data")?;
-                    println!("Saving image to {output:?}");
 
                     img.save_with_format(&output, image::ImageFormat::Jpeg)
-                        .map_err(|e| {
-                            eprintln!("Failed to save image: {e}");
-                            e.to_string()
-                        })?;
+                        .map_err(|e| e.to_string())?;
 
-                    println!("Screenshot created successfully");
                     return Ok(());
                 }
             }
         }
 
-        eprintln!("Failed to create screenshot: No suitable frame found");
         Err("Failed to create screenshot".to_string())
     })
     .await
@@ -2938,9 +2891,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(cleanup_camera_window(app.clone()));
                             }
                             CapWindowId::Main => {
-                                if let Some(camera_window) = CapWindowId::Camera.get(app) {
-                                    let _ = camera_window.close();
-                                }
+                                let app = app.clone();
+                                tokio::spawn(async move {
+                                    let state = app.state::<ArcLock<App>>();
+                                    let app_state = state.read().await;
+                                    if !app_state.is_recording_active_or_pending()
+                                        && let Some(camera_window) = CapWindowId::Camera.get(&app)
+                                    {
+                                        let _ = camera_window.close();
+                                    }
+                                });
                             }
                             _ => {}
                         }

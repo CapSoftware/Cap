@@ -121,15 +121,6 @@ fn validate_dimensions(
     let new_width = ((width as f32 * scale) as u32).max(2) & !1;
     let new_height = ((height as f32 * scale) as u32).max(2) & !1;
 
-    tracing::warn!(
-        original_width = width,
-        original_height = height,
-        scaled_width = new_width,
-        scaled_height = new_height,
-        gpu_max = gpu_max_texture_size,
-        "Video dimensions exceed GPU limits, downscaling enabled"
-    );
-
     Ok((new_width, new_height, true))
 }
 
@@ -249,46 +240,18 @@ impl BindGroupCache {
     }
 }
 
-pub struct YuvToRgbaConverter {
-    nv12_pipeline: wgpu::ComputePipeline,
-    yuv420p_pipeline: wgpu::ComputePipeline,
-    nv12_bind_group_layout: wgpu::BindGroupLayout,
-    yuv420p_bind_group_layout: wgpu::BindGroupLayout,
-    y_texture: wgpu::Texture,
-    y_view: wgpu::TextureView,
-    uv_texture: wgpu::Texture,
-    uv_view: wgpu::TextureView,
-    u_texture: wgpu::Texture,
-    u_view: wgpu::TextureView,
-    v_texture: wgpu::Texture,
-    v_view: wgpu::TextureView,
-    output_textures: [wgpu::Texture; 2],
-    output_views: [wgpu::TextureView; 2],
-    current_output: usize,
-    allocated_width: u32,
-    allocated_height: u32,
-    gpu_max_texture_size: u32,
-    bind_group_cache: BindGroupCache,
-    #[cfg(target_os = "macos")]
-    iosurface_cache: Option<IOSurfaceTextureCache>,
-    #[cfg(target_os = "windows")]
-    d3d11_staging_texture: Option<ID3D11Texture2D>,
-    #[cfg(target_os = "windows")]
-    d3d11_staging_width: u32,
-    #[cfg(target_os = "windows")]
-    d3d11_staging_height: u32,
-    #[cfg(target_os = "windows")]
-    zero_copy_failed: bool,
+use std::sync::Arc;
+
+pub struct YuvConverterPipelines {
+    pub nv12_pipeline: wgpu::ComputePipeline,
+    pub yuv420p_pipeline: wgpu::ComputePipeline,
+    pub nv12_bind_group_layout: wgpu::BindGroupLayout,
+    pub yuv420p_bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl YuvToRgbaConverter {
+impl YuvConverterPipelines {
     pub fn new(device: &wgpu::Device) -> Self {
-        let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
-
-        tracing::info!(
-            gpu_max_texture_size = gpu_max_texture_size,
-            "Initializing YUV converter with GPU texture limit"
-        );
+        tracing::info!("Creating shared YUV converter pipelines (shader compilation)");
 
         let nv12_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("NV12 to RGBA Converter"),
@@ -419,6 +382,63 @@ impl YuvToRgbaConverter {
             cache: None,
         });
 
+        tracing::info!("Shared YUV converter pipelines created successfully");
+
+        Self {
+            nv12_pipeline,
+            yuv420p_pipeline,
+            nv12_bind_group_layout,
+            yuv420p_bind_group_layout,
+        }
+    }
+}
+
+pub struct YuvToRgbaConverter {
+    pipelines: Arc<YuvConverterPipelines>,
+    y_texture: wgpu::Texture,
+    y_view: wgpu::TextureView,
+    uv_texture: wgpu::Texture,
+    uv_view: wgpu::TextureView,
+    u_texture: wgpu::Texture,
+    u_view: wgpu::TextureView,
+    v_texture: wgpu::Texture,
+    v_view: wgpu::TextureView,
+    output_textures: [wgpu::Texture; 2],
+    output_views: [wgpu::TextureView; 2],
+    current_output: usize,
+    allocated_width: u32,
+    allocated_height: u32,
+    gpu_max_texture_size: u32,
+    bind_group_cache: BindGroupCache,
+    #[cfg(target_os = "macos")]
+    iosurface_cache: Option<IOSurfaceTextureCache>,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_texture: Option<ID3D11Texture2D>,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_width: u32,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_height: u32,
+    #[cfg(target_os = "windows")]
+    zero_copy_failed: bool,
+}
+
+impl YuvToRgbaConverter {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let pipelines = Arc::new(YuvConverterPipelines::new(device));
+        Self::new_with_shared_pipelines(device, pipelines)
+    }
+
+    pub fn new_with_shared_pipelines(
+        device: &wgpu::Device,
+        pipelines: Arc<YuvConverterPipelines>,
+    ) -> Self {
+        let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
+
+        tracing::info!(
+            gpu_max_texture_size = gpu_max_texture_size,
+            "Initializing YUV converter textures (using shared pipelines)"
+        );
+
         let initial_width = INITIAL_TEXTURE_WIDTH;
         let initial_height = INITIAL_TEXTURE_HEIGHT;
 
@@ -430,10 +450,7 @@ impl YuvToRgbaConverter {
             Self::create_output_textures(device, initial_width, initial_height);
 
         Self {
-            nv12_pipeline,
-            yuv420p_pipeline,
-            nv12_bind_group_layout,
-            yuv420p_bind_group_layout,
+            pipelines,
             y_texture,
             y_view,
             uv_texture,
@@ -632,6 +649,18 @@ impl YuvToRgbaConverter {
         self.gpu_max_texture_size
     }
 
+    pub fn prepare_for_dimensions(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Result<(), YuvConversionError> {
+        let (effective_width, effective_height, _) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        Ok(())
+    }
+
     fn swap_output_buffer(&mut self) {
         self.current_output = 1 - self.current_output;
     }
@@ -696,7 +725,7 @@ impl YuvToRgbaConverter {
         let output_index = self.current_output;
         let bind_group = self.bind_group_cache.get_or_create_nv12(
             device,
-            &self.nv12_bind_group_layout,
+            &self.pipelines.nv12_bind_group_layout,
             &self.y_view,
             &self.uv_view,
             &self.output_views[output_index],
@@ -714,7 +743,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -774,7 +803,7 @@ impl YuvToRgbaConverter {
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 IOSurface Converter Bind Group"),
-            layout: &self.nv12_bind_group_layout,
+            layout: &self.pipelines.nv12_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -800,7 +829,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 IOSurface Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -855,7 +884,7 @@ impl YuvToRgbaConverter {
         let output_index = self.current_output;
         let bind_group = self.bind_group_cache.get_or_create_yuv420p(
             device,
-            &self.yuv420p_bind_group_layout,
+            &self.pipelines.yuv420p_bind_group_layout,
             &self.y_view,
             &self.u_view,
             &self.v_view,
@@ -874,7 +903,7 @@ impl YuvToRgbaConverter {
                 label: Some("YUV420P Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.yuv420p_pipeline);
+            compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -899,6 +928,11 @@ impl YuvToRgbaConverter {
         let (effective_width, effective_height, _downscaled) =
             validate_dimensions(width, height, self.gpu_max_texture_size)?;
         self.ensure_texture_size(wgpu_device, effective_width, effective_height);
+        tracing::debug!(
+            width = width,
+            height = height,
+            "Using staging NV12 conversion path"
+        );
 
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 
@@ -1006,7 +1040,7 @@ impl YuvToRgbaConverter {
 
         let bind_group = wgpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 D3D11 Converter Bind Group"),
-            layout: &self.nv12_bind_group_layout,
+            layout: &self.pipelines.nv12_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1032,7 +1066,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 D3D11 Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -1083,6 +1117,13 @@ impl YuvToRgbaConverter {
                 tracing::debug!(
                     width = width,
                     height = height,
+                    y_handle = y_handle.0 as usize,
+                    uv_handle = uv_handle.0 as usize,
+                    "Zero-copy D3D11 texture import starting"
+                );
+                tracing::debug!(
+                    width = width,
+                    height = height,
                     "Zero-copy D3D11 texture import succeeded"
                 );
 
@@ -1091,7 +1132,7 @@ impl YuvToRgbaConverter {
 
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
-                    layout: &self.nv12_bind_group_layout,
+                    layout: &self.pipelines.nv12_bind_group_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
@@ -1120,7 +1161,7 @@ impl YuvToRgbaConverter {
                             label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
                             ..Default::default()
                         });
-                    compute_pass.set_pipeline(&self.nv12_pipeline);
+                    compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
                     compute_pass.set_bind_group(0, &bind_group, &[]);
                     compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
                 }

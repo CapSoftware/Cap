@@ -1,12 +1,66 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::{include_wgsl, util::DeviceExt};
 
-use crate::create_shader_render_pipeline;
-
 pub struct CompositeVideoFramePipeline {
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub render_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+}
+
+static PIPELINE_CACHE_DATA: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+fn get_cache_path() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|p| p.join("Cap").join("shader_cache.bin"))
+}
+
+fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
+    if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+        return None;
+    }
+
+    if let Some(cached_data) = PIPELINE_CACHE_DATA.get() {
+        return Some(unsafe {
+            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                label: Some("Cap Pipeline Cache"),
+                data: Some(cached_data),
+                fallback: true,
+            })
+        });
+    }
+
+    let cache_path = get_cache_path()?;
+    if cache_path.exists()
+        && let Ok(data) = std::fs::read(&cache_path)
+    {
+        let _ = PIPELINE_CACHE_DATA.set(data.clone());
+        return Some(unsafe {
+            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                label: Some("Cap Pipeline Cache"),
+                data: Some(&data),
+                fallback: true,
+            })
+        });
+    }
+
+    Some(unsafe {
+        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+            label: Some("Cap Pipeline Cache"),
+            data: None,
+            fallback: true,
+        })
+    })
+}
+
+fn save_pipeline_cache(cache: &wgpu::PipelineCache) {
+    if let Some(data) = cache.get_data() {
+        let _ = PIPELINE_CACHE_DATA.set(data.clone());
+        if let Some(cache_path) = get_cache_path() {
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(cache_path, &data);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -86,12 +140,64 @@ impl CompositeVideoFrameUniforms {
 
 impl CompositeVideoFramePipeline {
     pub fn new(device: &wgpu::Device) -> Self {
+        let pipeline_cache = load_pipeline_cache(device);
         let bind_group_layout = Self::bind_group_layout(device);
-        let render_pipeline = create_shader_render_pipeline(
-            device,
-            &bind_group_layout,
-            include_wgsl!("shaders/composite-video-frame.wgsl"),
-        );
+        let shader_desc = include_wgsl!("shaders/composite-video-frame.wgsl");
+        let shader = device.create_shader_module(shader_desc);
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Composite Render Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Composite Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[],
+                    zero_initialize_workgroup_memory: false,
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[],
+                    zero_initialize_workgroup_memory: false,
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: pipeline_cache.as_ref(),
+        });
+
+        if let Some(cache) = &pipeline_cache {
+            save_pipeline_cache(cache);
+        }
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,

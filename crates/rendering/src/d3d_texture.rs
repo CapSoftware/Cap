@@ -6,6 +6,8 @@ pub enum D3DTextureError {
     WgpuImportFailed(String),
     UnsupportedFormat,
     DeviceMismatch,
+    OpenSharedHandleFailed(String),
+    HalTextureCreationFailed(String),
     #[cfg(not(target_os = "windows"))]
     NotSupported,
 }
@@ -19,6 +21,8 @@ impl std::fmt::Display for D3DTextureError {
             Self::WgpuImportFailed(e) => write!(f, "Failed to import texture to wgpu: {e}"),
             Self::UnsupportedFormat => write!(f, "Unsupported pixel format for zero-copy"),
             Self::DeviceMismatch => write!(f, "D3D11 and D3D12 device mismatch"),
+            Self::OpenSharedHandleFailed(e) => write!(f, "Failed to open shared handle: {e}"),
+            Self::HalTextureCreationFailed(e) => write!(f, "Failed to create HAL texture: {e}"),
             #[cfg(not(target_os = "windows"))]
             Self::NotSupported => write!(f, "D3D textures are only supported on Windows"),
         }
@@ -30,6 +34,8 @@ impl std::error::Error for D3DTextureError {}
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::D3DTextureError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use wgpu_hal::api::Dx12 as dx12;
     use windows::{
         Win32::{
             Foundation::HANDLE,
@@ -185,7 +191,8 @@ mod windows_impl {
         }
     }
 
-    #[allow(unused_variables)]
+    static ZERO_COPY_LOGGED: AtomicBool = AtomicBool::new(false);
+
     pub fn import_d3d11_texture_to_wgpu(
         device: &wgpu::Device,
         shared_handle: HANDLE,
@@ -194,26 +201,115 @@ mod windows_impl {
         height: u32,
         label: Option<&str>,
     ) -> Result<wgpu::Texture, D3DTextureError> {
-        Err(D3DTextureError::WgpuImportFailed(
-            "D3D11-to-wgpu HAL interop not yet implemented - requires wgpu HAL API updates"
-                .to_string(),
-        ))
+        let dxgi_format = wgpu_to_dxgi_format(format);
+        if dxgi_format == DXGI_FORMAT_UNKNOWN {
+            return Err(D3DTextureError::UnsupportedFormat);
+        }
+
+        let handle_raw_value = shared_handle.0 as isize;
+
+        let result: Result<wgpu::Texture, D3DTextureError> = unsafe {
+            device.as_hal::<dx12, _, _>(|hal_device| {
+                let hal_device = hal_device.ok_or(D3DTextureError::NoD3D12Device)?;
+
+                let d3d12_device = hal_device.raw_device();
+
+                use windows_0_58::Win32::Foundation::HANDLE as HAL_HANDLE;
+                use windows_0_58::Win32::Graphics::Direct3D12::ID3D12Resource;
+
+                let hal_handle = HAL_HANDLE(handle_raw_value as *mut std::ffi::c_void);
+
+                let mut d3d12_resource: Option<ID3D12Resource> = None;
+                d3d12_device
+                    .OpenSharedHandle(hal_handle, &mut d3d12_resource)
+                    .map_err(|e| D3DTextureError::OpenSharedHandleFailed(format!("{e:?}")))?;
+                let d3d12_resource = d3d12_resource.ok_or_else(|| {
+                    D3DTextureError::OpenSharedHandleFailed(
+                        "OpenSharedHandle returned null".to_string(),
+                    )
+                })?;
+
+                let hal_texture = wgpu_hal::dx12::Device::texture_from_raw(
+                    d3d12_resource,
+                    format,
+                    wgpu::TextureDimension::D2,
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    1,
+                    1,
+                );
+
+                if !ZERO_COPY_LOGGED.swap(true, Ordering::Relaxed) {
+                    tracing::info!(
+                        "D3D11→D3D12 zero-copy texture sharing enabled via shared handles"
+                    );
+                }
+
+                tracing::debug!(
+                    width = width,
+                    height = height,
+                    format = ?format,
+                    "Opened D3D12 shared texture from D3D11 handle"
+                );
+
+                let wgpu_texture = device.create_texture_from_hal::<dx12>(
+                    hal_texture,
+                    &wgpu::TextureDescriptor {
+                        label,
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    },
+                );
+
+                Ok(wgpu_texture)
+            })
+        };
+
+        result
     }
 
-    #[derive(Default)]
     pub struct D3D11WgpuInterop {
-        _cached_width: u32,
-        _cached_height: u32,
-        _y_wgpu_texture: Option<wgpu::Texture>,
-        _uv_wgpu_texture: Option<wgpu::Texture>,
+        cached_width: u32,
+        cached_height: u32,
+        y_wgpu_texture: Option<wgpu::Texture>,
+        uv_wgpu_texture: Option<wgpu::Texture>,
+        last_y_handle: Option<isize>,
+        last_uv_handle: Option<isize>,
+    }
+
+    unsafe impl Send for D3D11WgpuInterop {}
+    unsafe impl Sync for D3D11WgpuInterop {}
+
+    impl Default for D3D11WgpuInterop {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl D3D11WgpuInterop {
         pub fn new() -> Self {
-            Self::default()
+            Self {
+                cached_width: 0,
+                cached_height: 0,
+                y_wgpu_texture: None,
+                uv_wgpu_texture: None,
+                last_y_handle: None,
+                last_uv_handle: None,
+            }
         }
 
-        #[allow(unused_variables)]
         pub fn import_nv12_planes(
             &mut self,
             device: &wgpu::Device,
@@ -222,9 +318,58 @@ mod windows_impl {
             width: u32,
             height: u32,
         ) -> Result<(&wgpu::Texture, &wgpu::Texture), D3DTextureError> {
-            Err(D3DTextureError::WgpuImportFailed(
-                "D3D11-to-wgpu HAL interop not yet implemented".to_string(),
+            let y_handle_value = y_handle.0 as isize;
+            let uv_handle_value = uv_handle.0 as isize;
+
+            let need_recreate = self.cached_width != width
+                || self.cached_height != height
+                || self.last_y_handle != Some(y_handle_value)
+                || self.last_uv_handle != Some(uv_handle_value)
+                || self.y_wgpu_texture.is_none()
+                || self.uv_wgpu_texture.is_none();
+
+            if need_recreate {
+                self.y_wgpu_texture = Some(import_d3d11_texture_to_wgpu(
+                    device,
+                    y_handle,
+                    wgpu::TextureFormat::R8Unorm,
+                    width,
+                    height,
+                    Some("D3D11 Y Plane Zero-Copy"),
+                )?);
+
+                self.uv_wgpu_texture = Some(import_d3d11_texture_to_wgpu(
+                    device,
+                    uv_handle,
+                    wgpu::TextureFormat::Rg8Unorm,
+                    width / 2,
+                    height / 2,
+                    Some("D3D11 UV Plane Zero-Copy"),
+                )?);
+
+                self.cached_width = width;
+                self.cached_height = height;
+                self.last_y_handle = Some(y_handle_value);
+                self.last_uv_handle = Some(uv_handle_value);
+
+                tracing::debug!(
+                    width = width,
+                    height = height,
+                    "Created zero-copy NV12 textures from D3D11 shared handles"
+                );
+            }
+
+            Ok((
+                self.y_wgpu_texture.as_ref().unwrap(),
+                self.uv_wgpu_texture.as_ref().unwrap(),
             ))
+        }
+
+        pub fn invalidate(&mut self) {
+            self.y_wgpu_texture = None;
+            self.uv_wgpu_texture = None;
+            self.last_y_handle = None;
+            self.last_uv_handle = None;
         }
     }
 }

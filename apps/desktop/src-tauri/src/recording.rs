@@ -607,28 +607,9 @@ pub async fn start_recording(
             win.close().ok();
         }
     }
-    #[cfg(windows)]
-    let had_camera_window = CapWindowId::Camera.get(&app).is_some();
-    #[cfg(windows)]
-    if had_camera_window {
-        tracing::info!(
-            "Closing camera window BEFORE InProgressRecording show (will recreate after)"
-        );
-        if let Some(cam_win) = CapWindowId::Camera.get(&app) {
-            cam_win.close().ok();
-        }
-    }
-
     let _ = ShowCapWindow::InProgressRecording { countdown }
         .show(&app)
         .await;
-
-    #[cfg(windows)]
-    if had_camera_window {
-        tracing::info!("Recreating camera window after InProgressRecording");
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        ShowCapWindow::Camera.show(&app).await.ok();
-    }
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         let _ = general_settings

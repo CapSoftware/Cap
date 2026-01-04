@@ -441,9 +441,11 @@ impl EditorInstance {
                                     &segment_medias.cursor,
                                     &segment_frames,
                                 );
+                                tracing::debug!(frame_number, "Preview: sending frame to renderer");
                                 self.renderer
                                     .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
                                     .await;
+                                tracing::debug!(frame_number, "Preview: renderer accepted frame");
                             } else {
                                 warn!("Preview renderer: no frames returned for frame {}", frame_number);
                             }

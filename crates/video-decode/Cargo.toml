@@ -9,7 +9,7 @@ workspace = true
 [dependencies]
 ffmpeg.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
-num_cpus = "1.16"
+num_cpus = "1.17.0"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
@@ -22,6 +22,7 @@ windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Media",

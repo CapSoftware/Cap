@@ -1,5 +1,6 @@
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_HEIGHT = 328;
@@ -23,23 +24,33 @@ function SkeletonButton(props: { class?: string; width?: string }) {
 
 function HeaderSkeleton() {
 	return (
-		<div class="flex relative flex-row items-center w-full h-14">
-			<div class="flex flex-row flex-1 gap-2 items-center px-4 h-full">
+		<div
+			data-tauri-drag-region
+			class="flex relative flex-row items-center w-full h-14"
+		>
+			<div
+				data-tauri-drag-region
+				class="flex flex-row flex-1 gap-2 items-center px-4 h-full"
+			>
 				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
 				<SkeletonButton />
 				<SkeletonButton />
 				<SkeletonPulse class="h-5 w-32" />
 				<SkeletonPulse class="h-5 w-8" />
-				<div class="flex-1" />
+				<div data-tauri-drag-region class="flex-1 h-full" />
 				<SkeletonButton />
 				<SkeletonButton />
 			</div>
 
-			<div class="flex flex-col justify-center px-4 border-x border-black-transparent-10">
+			<div
+				data-tauri-drag-region
+				class="flex flex-col justify-center px-4 border-x border-black-transparent-10"
+			>
 				<SkeletonPulse class="h-9 w-28 rounded-lg" />
 			</div>
 
 			<div
+				data-tauri-drag-region
 				class={cx(
 					"flex-1 h-full flex flex-row items-center gap-2 pl-2",
 					ostype() !== "windows" && "pr-2",
@@ -47,8 +58,9 @@ function HeaderSkeleton() {
 			>
 				<SkeletonButton />
 				<SkeletonButton />
-				<div class="flex-1" />
+				<div data-tauri-drag-region class="flex-1 h-full" />
 				<SkeletonPulse class="h-[40px] w-[100px] rounded-[0.5rem]" />
+				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
 		</div>
 	);
@@ -204,9 +216,12 @@ function TimelineSkeleton() {
 
 export function EditorSkeleton() {
 	return (
-		<>
+		<div class="flex flex-col flex-1 min-h-0">
 			<HeaderSkeleton />
-			<div class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5">
+			<div
+				data-tauri-drag-region
+				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
+			>
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
 					<div
 						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
@@ -227,6 +242,6 @@ export function EditorSkeleton() {
 					</div>
 				</div>
 			</div>
-		</>
+		</div>
 	);
 }
