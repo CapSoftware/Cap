@@ -249,24 +249,22 @@ impl FfmpegDecoder {
             let mut frames = this.frames();
             let mut converter = FrameConverter::new();
 
-            for frame in &mut frames {
-                if let Ok(frame) = frame {
-                    let current_frame =
-                        pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
-                    let mut cache_frame = CachedFrame::Raw {
-                        frame,
-                        number: current_frame,
-                    };
-                    let output = cache_frame.produce(&mut converter);
-                    cache.insert(current_frame, cache_frame);
-                    *first_ever_frame.borrow_mut() = Some(output.clone());
-                    *last_sent_frame.borrow_mut() = Some(output);
-                    info!(
-                        "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
-                        name, current_frame, video_width, video_height
-                    );
-                    break;
-                }
+            for frame in (&mut frames).flatten() {
+                let current_frame =
+                    pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
+                let mut cache_frame = CachedFrame::Raw {
+                    frame,
+                    number: current_frame,
+                };
+                let output = cache_frame.produce(&mut converter);
+                cache.insert(current_frame, cache_frame);
+                *first_ever_frame.borrow_mut() = Some(output.clone());
+                *last_sent_frame.borrow_mut() = Some(output);
+                info!(
+                    "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
+                    name, current_frame, video_width, video_height
+                );
+                break;
             }
 
             let decoder_type = if is_hw {
@@ -316,13 +314,13 @@ impl FfmpegDecoder {
                             let best_cached_frame =
                                 cache.range(..=requested_frame).next_back().map(|(k, _)| *k);
 
-                            if let Some(frame_num) = best_cached_frame {
-                                if let Some(cached) = cache.get_mut(&frame_num) {
-                                    let data = cached.produce(&mut converter);
-                                    *last_sent_frame.borrow_mut() = Some(data.clone());
-                                    let _ = sender.send(data.frame);
-                                    continue;
-                                }
+                            if let Some(frame_num) = best_cached_frame
+                                && let Some(cached) = cache.get_mut(&frame_num)
+                            {
+                                let data = cached.produce(&mut converter);
+                                *last_sent_frame.borrow_mut() = Some(data.clone());
+                                let _ = sender.send(data.frame);
+                                continue;
                             }
 
                             if let Some(last_frame) = last_sent_frame.borrow().clone() {
@@ -378,8 +376,6 @@ impl FfmpegDecoder {
                             *last_sent_frame.borrow_mut() = None;
                             cache.clear();
                         }
-
-                        last_active_frame = Some(requested_frame);
 
                         let mut exit = false;
 
@@ -471,6 +467,8 @@ impl FfmpegDecoder {
                                 break;
                             }
                         }
+
+                        last_active_frame = Some(requested_frame);
 
                         let last_sent_frame_final = last_sent_frame.borrow().clone();
                         if let Some(sender) = sender.take() {

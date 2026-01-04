@@ -29,17 +29,17 @@ fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     }
 
     let cache_path = get_cache_path()?;
-    if cache_path.exists() {
-        if let Ok(data) = std::fs::read(&cache_path) {
-            let _ = PIPELINE_CACHE_DATA.set(data.clone());
-            return Some(unsafe {
-                device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
-                    label: Some("Cap Pipeline Cache"),
-                    data: Some(&data),
-                    fallback: true,
-                })
-            });
-        }
+    if cache_path.exists()
+        && let Ok(data) = std::fs::read(&cache_path)
+    {
+        let _ = PIPELINE_CACHE_DATA.set(data.clone());
+        return Some(unsafe {
+            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                label: Some("Cap Pipeline Cache"),
+                data: Some(&data),
+                fallback: true,
+            })
+        });
     }
 
     Some(unsafe {

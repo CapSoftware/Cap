@@ -477,6 +477,7 @@ export function createImageDataWS(
 						yStride,
 					);
 					actualRendersCount++;
+					renderFrameCount++;
 
 					if (!hasRenderedFrame()) {
 						setHasRenderedFrame(true);

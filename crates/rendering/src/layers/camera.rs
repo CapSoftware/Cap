@@ -29,14 +29,6 @@ impl CameraLayer {
         )
     }
 
-    pub fn new_with_shared_pipelines(
-        device: &wgpu::Device,
-        yuv_pipelines: Arc<YuvConverterPipelines>,
-        composite_pipeline: Arc<CompositeVideoFramePipeline>,
-    ) -> Self {
-        Self::new_with_all_shared_pipelines(device, yuv_pipelines, composite_pipeline)
-    }
-
     pub fn new_with_all_shared_pipelines(
         device: &wgpu::Device,
         yuv_pipelines: Arc<YuvConverterPipelines>,
