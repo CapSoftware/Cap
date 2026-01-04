@@ -33,7 +33,7 @@ use crate::{
 
 const PREFETCH_BUFFER_SIZE: usize = 60;
 const PARALLEL_DECODE_TASKS: usize = 4;
-const MAX_PREFETCH_AHEAD: u32 = 90;
+const MAX_PREFETCH_AHEAD: u32 = 60;
 const PREFETCH_BEHIND: u32 = 15;
 const FRAME_CACHE_SIZE: usize = 60;
 
@@ -359,7 +359,7 @@ impl Playback {
             let mut total_frames_rendered = 0u64;
             let mut _total_frames_skipped = 0u64;
 
-            let warmup_target_frames = 60usize;
+            let warmup_target_frames = 20usize;
             let warmup_after_first_timeout = Duration::from_millis(1000);
             let mut first_frame_time: Option<Instant> = None;
 
