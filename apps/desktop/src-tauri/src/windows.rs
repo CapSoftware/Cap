@@ -598,14 +598,11 @@ impl ShowCapWindow {
                     let mut state = state.write().await;
 
                     if enable_native_camera_preview && state.camera_preview.is_initialized() {
-                        error!("Unable to initialize camera preview as one already exists!");
+                        warn!("Cleaning up stale camera preview before creating new one");
+                        state.camera_preview.on_window_close();
                         if let Some(window) = CapWindowId::Camera.get(app) {
-                            window.show().ok();
+                            window.close().ok();
                         }
-                        return Err(anyhow!(
-                            "Unable to initialize camera preview as one already exists!"
-                        )
-                        .into());
                     }
 
                     let mut window_builder = self
