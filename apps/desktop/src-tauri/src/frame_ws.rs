@@ -7,7 +7,7 @@ static TOTAL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 static TOTAL_FRAMES_SENT: AtomicU32 = AtomicU32::new(0);
 static LAST_LOG_TIME: AtomicU64 = AtomicU64::new(0);
 
-const DOWNSCALE_PERCENT: u32 = 50;
+const DOWNSCALE_PERCENT: u32 = 75;
 const NV12_FORMAT_MAGIC: u32 = 0x4e563132;
 
 fn downscale_and_convert_to_nv12(
