@@ -224,6 +224,7 @@ export function createImageDataWS(
 		if (e.data.type === "frame-rendered") {
 			const { width, height } = e.data;
 			onmessage({ width, height });
+			actualRendersCount++;
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}
@@ -279,9 +280,95 @@ export function createImageDataWS(
 		cleanup();
 	});
 
+	let lastFrameTime = 0;
+	let frameCount = 0;
+	let frameTimeSum = 0;
+	let totalBytesReceived = 0;
+	let lastLogTime = 0;
+	let framesReceived = 0;
+	let framesDropped = 0;
+	let framesSentToWorker = 0;
+	let actualRendersCount = 0;
+	let minFrameTime = Number.MAX_VALUE;
+	let maxFrameTime = 0;
+
+	const getFpsStats = () => ({
+		fps:
+			frameCount > 0 && frameTimeSum > 0
+				? 1000 / (frameTimeSum / frameCount)
+				: 0,
+		renderFps: actualRendersCount,
+		avgFrameMs: frameCount > 0 ? frameTimeSum / frameCount : 0,
+		minFrameMs: minFrameTime === Number.MAX_VALUE ? 0 : minFrameTime,
+		maxFrameMs: maxFrameTime,
+		mbPerSec: totalBytesReceived / 1_000_000,
+	});
+
+	(globalThis as Record<string, unknown>).__capFpsStats = getFpsStats;
+
+	const NV12_MAGIC = 0x4e563132;
+
 	ws.binaryType = "arraybuffer";
 	ws.onmessage = (event) => {
 		const buffer = event.data as ArrayBuffer;
+		const now = performance.now();
+		totalBytesReceived += buffer.byteLength;
+		framesReceived++;
+
+		let isNv12Format = false;
+		if (buffer.byteLength >= 28) {
+			const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
+			isNv12Format = formatCheck.getUint32(0, true) === NV12_MAGIC;
+		}
+
+		if (lastFrameTime > 0) {
+			const delta = now - lastFrameTime;
+			frameCount++;
+			frameTimeSum += delta;
+			minFrameTime = Math.min(minFrameTime, delta);
+			maxFrameTime = Math.max(maxFrameTime, delta);
+
+			if (frameCount % 60 === 0) {
+				const avgDelta = frameTimeSum / 60;
+				const elapsedSec = (now - lastLogTime) / 1000;
+				const mbPerSec = totalBytesReceived / 1_000_000 / elapsedSec;
+				const recvFps = framesReceived / elapsedSec;
+				const sentFps = framesSentToWorker / elapsedSec;
+				const actualFps = actualRendersCount / elapsedSec;
+				const dropRate =
+					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
+
+				console.log(
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, ${isNv12Format ? "NV12" : "RGBA"}`,
+				);
+
+				frameCount = 0;
+				frameTimeSum = 0;
+				totalBytesReceived = 0;
+				lastLogTime = now;
+				framesReceived = 0;
+				framesDropped = 0;
+				framesSentToWorker = 0;
+				actualRendersCount = 0;
+				minFrameTime = Number.MAX_VALUE;
+				maxFrameTime = 0;
+			}
+		} else {
+			lastLogTime = now;
+		}
+		lastFrameTime = now;
+
+		if (isNv12Format) {
+			if (isProcessing) {
+				framesDropped++;
+				nextFrame = buffer;
+			} else {
+				framesSentToWorker++;
+				pendingFrame = buffer;
+				processNextFrame();
+			}
+			return;
+		}
 
 		if (directCanvas && directCtx && strideWorker) {
 			if (buffer.byteLength >= 24) {
@@ -293,8 +380,35 @@ export function createImageDataWS(
 
 				if (width > 0 && height > 0) {
 					const expectedRowBytes = width * 4;
+					const needsStrideCorrection = strideBytes !== expectedRowBytes;
 
-					if (strideBytes === expectedRowBytes) {
+					if (lastFrameTime > 0) {
+						const delta = now - lastFrameTime;
+						frameCount++;
+						frameTimeSum += delta;
+						minFrameTime = Math.min(minFrameTime, delta);
+						maxFrameTime = Math.max(maxFrameTime, delta);
+						if (frameCount % 60 === 0) {
+							const avgDelta = frameTimeSum / 60;
+							const elapsedSec = (now - lastLogTime) / 1000;
+							const mbPerSec = totalBytesReceived / 1_000_000 / elapsedSec;
+							const actualRenderFps = renderFrameCount / elapsedSec;
+							console.log(
+								`[Frame] recv_fps: ${(1000 / avgDelta).toFixed(1)}, render_fps: ${actualRenderFps.toFixed(1)}, mb/s: ${mbPerSec.toFixed(1)}, frame_ms: ${avgDelta.toFixed(1)} (min: ${minFrameTime.toFixed(1)}, max: ${maxFrameTime.toFixed(1)}), size: ${(buffer.byteLength / 1024).toFixed(0)}KB, format: ${isNv12Format ? "NV12" : "RGBA"}`,
+							);
+							frameTimeSum = 0;
+							totalBytesReceived = 0;
+							lastLogTime = now;
+							renderFrameCount = 0;
+							minFrameTime = Number.MAX_VALUE;
+							maxFrameTime = 0;
+						}
+					} else {
+						lastLogTime = now;
+					}
+					lastFrameTime = now;
+
+					if (!needsStrideCorrection) {
 						const frameData = new Uint8ClampedArray(
 							buffer,
 							0,
