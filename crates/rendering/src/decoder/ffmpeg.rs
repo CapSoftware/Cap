@@ -238,7 +238,6 @@ impl FfmpegDecoder {
             let is_hw = this.is_hardware_accelerated();
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
-            #[allow(unused)]
             let mut last_active_frame = None::<u32>;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
@@ -259,7 +258,6 @@ impl FfmpegDecoder {
                     cache.insert(current_frame, cache_frame);
                     *first_ever_frame.borrow_mut() = Some(output.clone());
                     *last_sent_frame.borrow_mut() = Some(output);
-                    last_active_frame = Some(current_frame);
                     info!(
                         "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
                         name, current_frame, video_width, video_height

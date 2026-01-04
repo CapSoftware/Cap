@@ -379,6 +379,7 @@ export function createImageDataWS(
 	let framesDropped = 0;
 	let framesSentToWorker = 0;
 	let actualRendersCount = 0;
+	let renderFrameCount = 0;
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
 
@@ -572,6 +573,7 @@ export function createImageDataWS(
 						}
 						cachedDirectImageData.data.set(frameData);
 						directCtx.putImageData(cachedDirectImageData, 0, 0);
+						renderFrameCount++;
 
 						if (!hasRenderedFrame()) {
 							setHasRenderedFrame(true);
