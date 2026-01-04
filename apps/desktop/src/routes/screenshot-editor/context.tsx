@@ -199,22 +199,10 @@ function createScreenshotEditorContext() {
 				const originalPath = `${pathStr}/original.png`;
 				const img = loadImage(originalPath);
 				img.onerror = () => {
-					const fallbackImg = loadImage(pathStr);
-					fallbackImg.onerror = (event) => {
-						console.error("Failed to load screenshot image:", {
-							path: instance.path,
-							event,
-						});
-					};
+					loadImage(pathStr);
 				};
 			} else {
-				const img = loadImage(pathStr);
-				img.onerror = (event) => {
-					console.error("Failed to load screenshot image:", {
-						path: instance.path,
-						event,
-					});
-				};
+				loadImage(pathStr);
 			}
 		}
 
@@ -266,9 +254,7 @@ function createScreenshotEditorContext() {
 					existing.bitmap.close();
 				}
 				setLatestFrame({ width, height, bitmap });
-			} catch (e) {
-				console.error("Failed to create ImageBitmap from frame:", e);
-			}
+			} catch {}
 		};
 
 		return instance;
