@@ -248,13 +248,6 @@ impl EditorInstance {
 
         self.renderer.stop().await;
 
-        // // Clear audio data
-        // if self.audio.lock().unwrap().is_some() {
-        //     println!("Clearing audio data");
-        //     *self.audio.lock().unwrap() = None; // Explicitly drop the audio data
-        // }
-
-        // Cancel any remaining tasks
         tokio::task::yield_now().await;
 
         drop(state);
@@ -377,7 +370,7 @@ impl EditorInstance {
                     let export_preview_is_active =
                         self.export_preview_active.load(Ordering::Acquire);
                     if !playback_is_active && !export_preview_is_active {
-                        let prefetch_frames_count = 5u32;
+                        let prefetch_frames_count = 15u32;
                         let hide_camera = project.camera.hide;
                         let playback_rx = self.playback_active_rx.clone();
                         for offset in 1..=prefetch_frames_count {
