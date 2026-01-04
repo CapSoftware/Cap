@@ -837,11 +837,7 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
-        let segment_start_time = if self.index == 0 {
-            self.start_time
-        } else {
-            Timestamps::now()
-        };
+        let segment_start_time = self.start_time;
         let pipeline = create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
