@@ -284,6 +284,62 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 	};
 }
 
+let nv12ConversionBuffer: Uint8ClampedArray | null = null;
+let nv12ConversionBufferSize = 0;
+
+function convertNv12ToRgba(
+	nv12Data: Uint8ClampedArray,
+	width: number,
+	height: number,
+	yStride: number,
+): Uint8ClampedArray {
+	const rgbaSize = width * height * 4;
+	if (!nv12ConversionBuffer || nv12ConversionBufferSize < rgbaSize) {
+		nv12ConversionBuffer = new Uint8ClampedArray(rgbaSize);
+		nv12ConversionBufferSize = rgbaSize;
+	}
+	const rgba = nv12ConversionBuffer;
+
+	const ySize = yStride * height;
+	const yPlane = nv12Data;
+	const uvPlane = nv12Data.subarray(ySize);
+	const uvStride = width;
+
+	for (let row = 0; row < height; row++) {
+		const yRowOffset = row * yStride;
+		const uvRowOffset = Math.floor(row / 2) * uvStride;
+		const rgbaRowOffset = row * width * 4;
+
+		for (let col = 0; col < width; col++) {
+			const y = yPlane[yRowOffset + col] - 16;
+
+			const uvCol = Math.floor(col / 2) * 2;
+			const u = uvPlane[uvRowOffset + uvCol] - 128;
+			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
+
+			const c = 298 * y;
+			const d = u;
+			const e = v;
+
+			let r = (c + 409 * e + 128) >> 8;
+			let g = (c - 100 * d - 208 * e + 128) >> 8;
+			let b = (c + 516 * d + 128) >> 8;
+
+			r = r < 0 ? 0 : r > 255 ? 255 : r;
+			g = g < 0 ? 0 : g > 255 ? 255 : g;
+			b = b < 0 ? 0 : b > 255 ? 255 : b;
+
+			const rgbaOffset = rgbaRowOffset + col * 4;
+			rgba[rgbaOffset] = r;
+			rgba[rgbaOffset + 1] = g;
+			rgba[rgbaOffset + 2] = b;
+			rgba[rgbaOffset + 3] = 255;
+		}
+	}
+
+	return rgba.subarray(0, rgbaSize);
+}
+
 function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 	if (
 		(renderMode !== "webgpu" && renderMode !== "pending") ||
@@ -865,39 +921,46 @@ function processFrameBytesSync(
 		return { type: "frame-queued", width, height };
 	}
 
-	if (meta.format !== "rgba") {
-		releaseCallback?.();
-		return {
-			type: "error",
-			message: "Canvas2D mode does not support NV12 format",
-		};
-	}
-
 	const expectedRowBytes = width * 4;
 	const expectedLength = expectedRowBytes * height;
-	const frameData = new Uint8ClampedArray(
-		bytes.buffer,
-		bytes.byteOffset,
-		bytes.byteLength - 24,
-	);
-
 	let processedFrameData: Uint8ClampedArray;
-	if (meta.strideBytes === expectedRowBytes) {
-		processedFrameData = frameData.subarray(0, expectedLength);
+
+	if (meta.format === "nv12") {
+		const nv12FrameData = new Uint8ClampedArray(
+			bytes.buffer,
+			bytes.byteOffset,
+			meta.totalSize,
+		);
+		processedFrameData = convertNv12ToRgba(
+			nv12FrameData,
+			width,
+			height,
+			meta.yStride,
+		);
 	} else {
-		if (!strideBuffer || strideBufferSize < expectedLength) {
-			strideBuffer = new Uint8ClampedArray(expectedLength);
-			strideBufferSize = expectedLength;
+		const frameData = new Uint8ClampedArray(
+			bytes.buffer,
+			bytes.byteOffset,
+			bytes.byteLength - 24,
+		);
+
+		if (meta.strideBytes === expectedRowBytes) {
+			processedFrameData = frameData.subarray(0, expectedLength);
+		} else {
+			if (!strideBuffer || strideBufferSize < expectedLength) {
+				strideBuffer = new Uint8ClampedArray(expectedLength);
+				strideBufferSize = expectedLength;
+			}
+			for (let row = 0; row < height; row += 1) {
+				const srcStart = row * meta.strideBytes;
+				const destStart = row * expectedRowBytes;
+				strideBuffer.set(
+					frameData.subarray(srcStart, srcStart + expectedRowBytes),
+					destStart,
+				);
+			}
+			processedFrameData = strideBuffer.subarray(0, expectedLength);
 		}
-		for (let row = 0; row < height; row += 1) {
-			const srcStart = row * meta.strideBytes;
-			const destStart = row * expectedRowBytes;
-			strideBuffer.set(
-				frameData.subarray(srcStart, srcStart + expectedRowBytes),
-				destStart,
-			);
-		}
-		processedFrameData = strideBuffer.subarray(0, expectedLength);
 	}
 
 	if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {

@@ -24,6 +24,62 @@ const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 	slotSize: 16 * 1024 * 1024,
 };
 
+let mainThreadNv12Buffer: Uint8ClampedArray | null = null;
+let mainThreadNv12BufferSize = 0;
+
+function convertNv12ToRgbaMainThread(
+	nv12Data: Uint8ClampedArray,
+	width: number,
+	height: number,
+	yStride: number,
+): Uint8ClampedArray {
+	const rgbaSize = width * height * 4;
+	if (!mainThreadNv12Buffer || mainThreadNv12BufferSize < rgbaSize) {
+		mainThreadNv12Buffer = new Uint8ClampedArray(rgbaSize);
+		mainThreadNv12BufferSize = rgbaSize;
+	}
+	const rgba = mainThreadNv12Buffer;
+
+	const ySize = yStride * height;
+	const yPlane = nv12Data;
+	const uvPlane = nv12Data.subarray(ySize);
+	const uvStride = width;
+
+	for (let row = 0; row < height; row++) {
+		const yRowOffset = row * yStride;
+		const uvRowOffset = Math.floor(row / 2) * uvStride;
+		const rgbaRowOffset = row * width * 4;
+
+		for (let col = 0; col < width; col++) {
+			const y = yPlane[yRowOffset + col] - 16;
+
+			const uvCol = Math.floor(col / 2) * 2;
+			const u = uvPlane[uvRowOffset + uvCol] - 128;
+			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
+
+			const c = 298 * y;
+			const d = u;
+			const e = v;
+
+			let r = (c + 409 * e + 128) >> 8;
+			let g = (c - 100 * d - 208 * e + 128) >> 8;
+			let b = (c + 516 * d + 128) >> 8;
+
+			r = r < 0 ? 0 : r > 255 ? 255 : r;
+			g = g < 0 ? 0 : g > 255 ? 255 : g;
+			b = b < 0 ? 0 : b > 255 ? 255 : b;
+
+			const rgbaOffset = rgbaRowOffset + col * 4;
+			rgba[rgbaOffset] = r;
+			rgba[rgbaOffset + 1] = g;
+			rgba[rgbaOffset + 2] = b;
+			rgba[rgbaOffset + 3] = 255;
+		}
+	}
+
+	return rgba.subarray(0, rgbaSize);
+}
+
 export type FrameData = {
 	width: number;
 	height: number;
@@ -494,6 +550,53 @@ export function createImageDataWS(
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
 				if (width > 0 && height > 0) {
+					onmessage({ width, height });
+				}
+				return;
+			}
+
+			if (directCanvas && directCtx) {
+				const metadataOffset = buffer.byteLength - 28;
+				const meta = new DataView(buffer, metadataOffset, 28);
+				const yStride = meta.getUint32(0, true);
+				const height = meta.getUint32(4, true);
+				const width = meta.getUint32(8, true);
+
+				if (width > 0 && height > 0) {
+					const ySize = yStride * height;
+					const uvSize = width * (height / 2);
+					const totalSize = ySize + uvSize;
+
+					const nv12Data = new Uint8ClampedArray(buffer, 0, totalSize);
+					const rgbaData = convertNv12ToRgbaMainThread(
+						nv12Data,
+						width,
+						height,
+						yStride,
+					);
+
+					if (directCanvas.width !== width || directCanvas.height !== height) {
+						directCanvas.width = width;
+						directCanvas.height = height;
+					}
+
+					if (
+						!cachedDirectImageData ||
+						cachedDirectWidth !== width ||
+						cachedDirectHeight !== height
+					) {
+						cachedDirectImageData = new ImageData(width, height);
+						cachedDirectWidth = width;
+						cachedDirectHeight = height;
+					}
+					cachedDirectImageData.data.set(rgbaData);
+					directCtx.putImageData(cachedDirectImageData, 0, 0);
+					actualRendersCount++;
+					renderFrameCount++;
+
+					if (!hasRenderedFrame()) {
+						setHasRenderedFrame(true);
+					}
 					onmessage({ width, height });
 				}
 				return;

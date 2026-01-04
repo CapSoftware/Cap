@@ -10,28 +10,27 @@ use windows::{
         Foundation::{HANDLE, HMODULE},
         Graphics::{
             Direct3D::{
-                D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
+                D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
+                D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
             },
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
                 D3D11_BIND_UNORDERED_ACCESS, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 D3D11_DECODER_PROFILE_H264_VLD_NOFGT, D3D11_DECODER_PROFILE_HEVC_VLD_MAIN,
-                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
-                D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC1,
-                D3D11_SHADER_RESOURCE_VIEW_DESC1_0, D3D11_TEX2D_SRV1, D3D11_TEX2D_UAV,
-                D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_TEXTURE2D,
-                D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0,
-                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_DECODER_DESC,
-                D3D11CreateDevice, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11Device3,
-                ID3D11DeviceContext, ID3D11DeviceContext1, ID3D11ShaderResourceView,
-                ID3D11ShaderResourceView1, ID3D11Texture2D, ID3D11UnorderedAccessView,
-                ID3D11VideoDevice,
+                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION,
+                D3D11_SHADER_RESOURCE_VIEW_DESC1, D3D11_SHADER_RESOURCE_VIEW_DESC1_0,
+                D3D11_TEX2D_SRV1, D3D11_TEX2D_UAV, D3D11_TEXTURE2D_DESC,
+                D3D11_UAV_DIMENSION_TEXTURE2D, D3D11_UNORDERED_ACCESS_VIEW_DESC,
+                D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+                D3D11_VIDEO_DECODER_DESC, D3D11CreateDevice, ID3D11Buffer, ID3D11ComputeShader,
+                ID3D11Device, ID3D11Device3, ID3D11DeviceContext, ID3D11DeviceContext1,
+                ID3D11ShaderResourceView, ID3D11ShaderResourceView1, ID3D11Texture2D,
+                ID3D11UnorderedAccessView, ID3D11VideoDevice,
             },
             Dxgi::Common::{
                 DXGI_FORMAT_NV12, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_SAMPLE_DESC,
             },
-            Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource1},
         },
         Media::MediaFoundation::{
             IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFSample, IMFSourceReader,
@@ -480,43 +479,6 @@ fn create_constant_buffer(device: &ID3D11Device3) -> Result<ID3D11Buffer, String
     }
 }
 
-fn create_nv12_texture(
-    device: &ID3D11Device,
-    width: u32,
-    height: u32,
-) -> Result<FrameTexture, String> {
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_NV12,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-
-    let texture = unsafe {
-        let mut tex: Option<ID3D11Texture2D> = None;
-        device
-            .CreateTexture2D(&desc, None, Some(&mut tex))
-            .map_err(|e| format!("CreateTexture2D NV12 failed: {e:?}"))?;
-        tex.ok_or("CreateTexture2D NV12 returned null")?
-    };
-
-    Ok(FrameTexture {
-        texture,
-        handle: HANDLE::default(),
-        width,
-        height,
-    })
-}
-
 fn create_internal_texture(
     device: &ID3D11Device,
     width: u32,
@@ -551,58 +513,6 @@ fn create_internal_texture(
     Ok(FrameTexture {
         texture,
         handle: HANDLE::default(),
-        width,
-        height,
-    })
-}
-
-fn create_shared_texture(
-    device: &ID3D11Device,
-    width: u32,
-    height: u32,
-    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
-    bind: u32,
-) -> Result<FrameTexture, String> {
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: format,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: bind,
-        CPUAccessFlags: 0,
-        MiscFlags: D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 as u32,
-    };
-
-    let texture = unsafe {
-        let mut tex: Option<ID3D11Texture2D> = None;
-        if let Err(e) = device.CreateTexture2D(&desc, None, Some(&mut tex)) {
-            return Err(format!("CreateTexture2D failed: {e:?}"));
-        }
-        tex.ok_or("CreateTexture2D returned null")?
-    };
-
-    let handle = unsafe {
-        let resource: IDXGIResource1 = texture
-            .cast()
-            .map_err(|e| format!("Failed to cast texture to IDXGIResource1: {e:?}"))?;
-        resource
-            .CreateSharedHandle(
-                None,
-                DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
-                None,
-            )
-            .map_err(|e| format!("CreateSharedHandle failed: {e:?}"))?
-    };
-
-    Ok(FrameTexture {
-        texture,
-        handle,
         width,
         height,
     })
@@ -979,35 +889,67 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
         windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_10_0,
     ];
 
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
+    let driver_types = [
+        (D3D_DRIVER_TYPE_HARDWARE, "hardware"),
+        (D3D_DRIVER_TYPE_WARP, "WARP (software)"),
+    ];
 
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE::default(),
-            flags,
-            Some(&feature_levels),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-        .map_err(|e| format!("D3D11CreateDevice failed: {e:?}"))?;
+    let mut last_error = String::new();
+
+    for (driver_type, driver_name) in driver_types {
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+
+        let result = unsafe {
+            D3D11CreateDevice(
+                None,
+                driver_type,
+                HMODULE::default(),
+                flags,
+                Some(&feature_levels),
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )
+        };
+
+        match result {
+            Ok(()) => {
+                if let (Some(device), Some(context)) = (device, context) {
+                    if driver_type == D3D_DRIVER_TYPE_WARP {
+                        warn!(
+                            "Using WARP software rasterizer for D3D11 - hardware GPU unavailable"
+                        );
+                    } else {
+                        info!("D3D11 device created using {} adapter", driver_name);
+                    }
+
+                    let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread =
+                        device
+                            .cast()
+                            .map_err(|e| format!("Failed to get ID3D11Multithread: {e:?}"))?;
+                    unsafe {
+                        let _ = multithread.SetMultithreadProtected(true);
+                    }
+
+                    return Ok((device, context));
+                }
+                last_error = format!(
+                    "D3D11CreateDevice ({}) returned null device/context",
+                    driver_name
+                );
+            }
+            Err(e) => {
+                last_error = format!("D3D11CreateDevice ({}) failed: {e:?}", driver_name);
+                if driver_type == D3D_DRIVER_TYPE_HARDWARE {
+                    warn!("{}, trying WARP fallback", last_error);
+                }
+            }
+        }
     }
 
-    let device = device.ok_or("D3D11CreateDevice returned null device")?;
-    let context = context.ok_or("D3D11CreateDevice returned null context")?;
-
-    let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread = device
-        .cast()
-        .map_err(|e| format!("Failed to get ID3D11Multithread: {e:?}"))?;
-    unsafe {
-        let _ = multithread.SetMultithreadProtected(true);
-    }
-
-    Ok((device, context))
+    Err(last_error)
 }
 
 unsafe fn create_dxgi_device_manager(

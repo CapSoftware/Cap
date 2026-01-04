@@ -1,7 +1,6 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
-use tokio::sync::{Mutex, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
 static TOTAL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
@@ -66,7 +65,7 @@ fn downscale_and_convert_to_nv12(
                 let y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
                 y_plane[y_row_start + dst_x] = y.clamp(0, 255) as u8;
 
-                if is_uv_row && dst_x % 2 == 0 && dst_x + 1 < new_width as usize {
+                if is_uv_row && dst_x.is_multiple_of(2) && dst_x + 1 < new_width as usize {
                     let src_x1 = (((dst_x + 1) as u32 * scale_x) >> 16) as usize;
                     let px1 = src_row + src_x1 * 4;
 
@@ -97,95 +96,6 @@ fn downscale_and_convert_to_nv12(
     (output, new_width, new_height)
 }
 
-fn downscale_rgba_fast(data: &[u8], width: u32, height: u32, stride: u32) -> (Vec<u8>, u32, u32) {
-    let new_width = ((width * DOWNSCALE_PERCENT) / 100) & !1;
-    let new_height = ((height * DOWNSCALE_PERCENT) / 100) & !1;
-
-    if new_width == 0 || new_height == 0 {
-        return (Vec::new(), 0, 0);
-    }
-
-    let new_stride = new_width * 4;
-    let output_size = (new_stride * new_height) as usize;
-
-    let stride_bytes = stride as usize;
-    let dst_width = new_width as usize;
-    let dst_height = new_height as usize;
-
-    let scale_x = (width << 16) / new_width;
-    let scale_y = (height << 16) / new_height;
-
-    let mut output = vec![0u8; output_size];
-
-    let chunks_of_4 = dst_width / 4;
-    let remainder = dst_width % 4;
-
-    for dst_y in 0..dst_height {
-        let src_y = ((dst_y as u32 * scale_y) >> 16) as usize;
-        let src_row = src_y * stride_bytes;
-        let dst_row = dst_y * (new_stride as usize);
-
-        if src_row + stride_bytes > data.len() {
-            continue;
-        }
-
-        let mut dst_x = 0usize;
-        for _ in 0..chunks_of_4 {
-            let src_x0 = ((dst_x as u32 * scale_x) >> 16) as usize;
-            let src_x1 = (((dst_x + 1) as u32 * scale_x) >> 16) as usize;
-            let src_x2 = (((dst_x + 2) as u32 * scale_x) >> 16) as usize;
-            let src_x3 = (((dst_x + 3) as u32 * scale_x) >> 16) as usize;
-
-            let px0 = src_row + src_x0 * 4;
-            let px1 = src_row + src_x1 * 4;
-            let px2 = src_row + src_x2 * 4;
-            let px3 = src_row + src_x3 * 4;
-
-            let dst_base = dst_row + dst_x * 4;
-
-            if px3 + 3 < data.len() && dst_base + 15 < output.len() {
-                output[dst_base] = data[px0];
-                output[dst_base + 1] = data[px0 + 1];
-                output[dst_base + 2] = data[px0 + 2];
-                output[dst_base + 3] = 255;
-
-                output[dst_base + 4] = data[px1];
-                output[dst_base + 5] = data[px1 + 1];
-                output[dst_base + 6] = data[px1 + 2];
-                output[dst_base + 7] = 255;
-
-                output[dst_base + 8] = data[px2];
-                output[dst_base + 9] = data[px2 + 1];
-                output[dst_base + 10] = data[px2 + 2];
-                output[dst_base + 11] = 255;
-
-                output[dst_base + 12] = data[px3];
-                output[dst_base + 13] = data[px3 + 1];
-                output[dst_base + 14] = data[px3 + 2];
-                output[dst_base + 15] = 255;
-            }
-
-            dst_x += 4;
-        }
-
-        for _ in 0..remainder {
-            let src_x = ((dst_x as u32 * scale_x) >> 16) as usize;
-            let px = src_row + src_x * 4;
-            let dst_px = dst_row + dst_x * 4;
-
-            if px + 3 < data.len() && dst_px + 3 < output.len() {
-                output[dst_px] = data[px];
-                output[dst_px + 1] = data[px + 1];
-                output[dst_px + 2] = data[px + 2];
-                output[dst_px + 3] = 255;
-            }
-            dst_x += 1;
-        }
-    }
-
-    (output, new_width, new_height)
-}
-
 fn pack_nv12_frame(
     data: Vec<u8>,
     width: u32,
@@ -203,26 +113,6 @@ fn pack_nv12_frame(
     output.extend_from_slice(&frame_number.to_le_bytes());
     output.extend_from_slice(&target_time_ns.to_le_bytes());
     output.extend_from_slice(&NV12_FORMAT_MAGIC.to_le_bytes());
-
-    output
-}
-
-fn pack_downscaled_rgba_frame(
-    data: Vec<u8>,
-    width: u32,
-    height: u32,
-    frame_number: u32,
-    target_time_ns: u64,
-) -> Vec<u8> {
-    let stride = width * 4;
-    let metadata_size = 24;
-    let mut output = Vec::with_capacity(data.len() + metadata_size);
-    output.extend_from_slice(&data);
-    output.extend_from_slice(&stride.to_le_bytes());
-    output.extend_from_slice(&height.to_le_bytes());
-    output.extend_from_slice(&width.to_le_bytes());
-    output.extend_from_slice(&frame_number.to_le_bytes());
-    output.extend_from_slice(&target_time_ns.to_le_bytes());
 
     output
 }
@@ -413,103 +303,6 @@ pub async fn create_watch_frame_ws(
             _ = server => {},
             _ = cancel_token.cancelled() => {
                 println!("WebSocket server shutting down");
-            }
-        }
-    });
-
-    (port, cancel_token_child)
-}
-
-pub async fn create_mpsc_frame_ws(
-    frame_rx: Arc<Mutex<mpsc::Receiver<WSFrame>>>,
-) -> (u16, CancellationToken) {
-    use axum::{
-        extract::{
-            State,
-            ws::{Message, WebSocket, WebSocketUpgrade},
-        },
-        response::IntoResponse,
-        routing::get,
-    };
-
-    type RouterState = Arc<Mutex<mpsc::Receiver<WSFrame>>>;
-
-    #[axum::debug_handler]
-    async fn ws_handler(
-        ws: WebSocketUpgrade,
-        State(state): State<RouterState>,
-    ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_socket(socket, state))
-    }
-
-    async fn handle_socket(mut socket: WebSocket, frame_rx: RouterState) {
-        tracing::info!("Socket connection established (mpsc)");
-        let now = std::time::Instant::now();
-
-        loop {
-            let frame_opt = {
-                let mut rx = frame_rx.lock().await;
-                tokio::select! {
-                    biased;
-                    msg = socket.recv() => {
-                        match msg {
-                            Some(Ok(Message::Close(_))) | None => {
-                                tracing::info!("WebSocket closed");
-                                break;
-                            }
-                            Some(Ok(_)) => {
-                                continue;
-                            }
-                            Some(Err(e)) => {
-                                tracing::error!("WebSocket error: {:?}", e);
-                                break;
-                            }
-                        }
-                    },
-                    frame = rx.recv() => frame,
-                }
-            };
-
-            let Some(frame) = frame_opt else {
-                tracing::info!("Frame channel closed");
-                break;
-            };
-
-            let packed = pack_frame_data(
-                frame.data,
-                frame.stride,
-                frame.height,
-                frame.width,
-                frame.frame_number,
-                frame.target_time_ns,
-            );
-
-            if let Err(e) = socket.send(Message::Binary(packed)).await {
-                tracing::error!("Failed to send frame to socket: {:?}", e);
-                break;
-            }
-        }
-
-        let elapsed = now.elapsed();
-        tracing::info!("Websocket closing after {elapsed:.2?}");
-    }
-
-    let router = axum::Router::new()
-        .route("/", get(ws_handler))
-        .with_state(frame_rx);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tracing::info!("WebSocket server (mpsc) listening on port {}", port);
-
-    let cancel_token = CancellationToken::new();
-    let cancel_token_child = cancel_token.child_token();
-    tokio::spawn(async move {
-        let server = axum::serve(listener, router.into_make_service());
-        tokio::select! {
-            _ = server => {},
-            _ = cancel_token.cancelled() => {
-                tracing::info!("WebSocket server shutting down");
             }
         }
     });
