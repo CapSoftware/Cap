@@ -129,10 +129,7 @@ fn query_mf_decoder_capabilities(device: &ID3D11Device) -> MFDecoderCapabilities
         })
     })();
 
-    match result {
-        Ok(caps) => caps,
-        Err(_) => MFDecoderCapabilities::default(),
-    }
+    result.unwrap_or_default()
 }
 
 pub fn get_mf_decoder_capabilities() -> Option<&'static MFDecoderCapabilities> {
@@ -168,6 +165,9 @@ pub struct FrameTextures {
     pub y_uav: ID3D11UnorderedAccessView,
     pub uv_uav: ID3D11UnorderedAccessView,
 }
+
+unsafe impl Send for FrameTextures {}
+unsafe impl Sync for FrameTextures {}
 
 impl FrameTextures {
     fn create(device: &ID3D11Device, width: u32, height: u32) -> Result<Self, String> {
@@ -211,6 +211,7 @@ impl FrameTextures {
     }
 }
 
+#[derive(Default)]
 pub struct FramePool {
     free: Vec<FrameTextures>,
     width: u32,
@@ -219,11 +220,7 @@ pub struct FramePool {
 
 impl FramePool {
     pub fn new() -> Self {
-        Self {
-            free: Vec::new(),
-            width: 0,
-            height: 0,
-        }
+        Self::default()
     }
 
     pub fn acquire(
@@ -430,8 +427,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             None,
             None,
             None,
-            PCSTR(b"main\0".as_ptr()),
-            PCSTR(b"cs_5_0\0".as_ptr()),
+            PCSTR(c"main".as_ptr().cast()),
+            PCSTR(c"cs_5_0".as_ptr().cast()),
             0,
             0,
             shader_blob_ptr,
@@ -746,10 +743,10 @@ impl MediaFoundationDecoder {
     }
 
     pub fn recycle_textures(&mut self, textures: Arc<FrameTextures>) {
-        if Arc::strong_count(&textures) == 1 {
-            if let Ok(textures) = Arc::try_unwrap(textures) {
-                self.frame_pool.recycle(textures);
-            }
+        if Arc::strong_count(&textures) == 1
+            && let Ok(textures) = Arc::try_unwrap(textures)
+        {
+            self.frame_pool.recycle(textures);
         }
     }
 
@@ -935,13 +932,11 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
 
                     return Ok((device, context));
                 }
-                last_error = format!(
-                    "D3D11CreateDevice ({}) returned null device/context",
-                    driver_name
-                );
+                last_error =
+                    format!("D3D11CreateDevice ({driver_name}) returned null device/context");
             }
             Err(e) => {
-                last_error = format!("D3D11CreateDevice ({}) failed: {e:?}", driver_name);
+                last_error = format!("D3D11CreateDevice ({driver_name}) failed: {e:?}");
                 if driver_type == D3D_DRIVER_TYPE_HARDWARE {
                     warn!("{}, trying WARP fallback", last_error);
                 }
