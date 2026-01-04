@@ -617,7 +617,7 @@ impl AVAssetReaderDecoder {
 
                     exit = exit || exceeds_cache_bounds;
 
-                    if is_scrubbing && frames_iterated > 3 {
+                    if is_scrubbing && frames_iterated > 6 {
                         break;
                     }
 
