@@ -7,7 +7,7 @@ static TOTAL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 static TOTAL_FRAMES_SENT: AtomicU32 = AtomicU32::new(0);
 static LAST_LOG_TIME: AtomicU64 = AtomicU64::new(0);
 
-const DOWNSCALE_PERCENT: u32 = 50;
+const DOWNSCALE_PERCENT: u32 = 75;
 const NV12_FORMAT_MAGIC: u32 = 0x4e563132;
 
 fn downscale_and_convert_to_nv12(
@@ -197,8 +197,6 @@ pub async fn create_watch_frame_ws(
             }
         }
 
-        let mut last_frame_number: Option<u32> = None;
-
         loop {
             tokio::select! {
                 msg = socket.recv() => {
@@ -217,10 +215,6 @@ pub async fn create_watch_frame_ws(
                 _ = camera_rx.changed() => {
                     let frame_opt = camera_rx.borrow_and_update().clone();
                     if let Some(frame) = frame_opt {
-                        if last_frame_number == Some(frame.frame_number) {
-                            continue;
-                        }
-                        last_frame_number = Some(frame.frame_number);
 
                         let (nv12_data, scaled_width, scaled_height) = downscale_and_convert_to_nv12(
                             &frame.data,

@@ -461,7 +461,10 @@ function PreviewCanvas() {
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
 
-	const canvasTransferredRef = { current: false };
+	const canvasInitializedRef = { current: false };
+	const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
+		null,
+	);
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
@@ -487,27 +490,63 @@ function PreviewCanvas() {
 		}
 	});
 
-	const isWindows = navigator.userAgent.includes("Windows");
-
-	const initCanvas = (canvas: HTMLCanvasElement) => {
-		if (canvasTransferredRef.current) return;
+	createEffect(() => {
+		const canvas = canvasRef();
 		const controls = canvasControls();
-		if (!controls) return;
+		console.warn("[Player] Canvas init effect", {
+			hasCanvas: !!canvas,
+			hasControls: !!controls,
+			alreadyInit: canvasInitializedRef.current,
+		});
+		if (canvasInitializedRef.current || !canvas || !controls) return;
 
-		if (isWindows) {
-			controls.initDirectCanvas(canvas);
-			canvasTransferredRef.current = true;
-			return;
-		}
+		console.warn("[Player] Initializing canvas", {
+			canvasId: canvas.id,
+			isConnected: canvas.isConnected,
+		});
+		controls.initDirectCanvas(canvas);
+		canvasInitializedRef.current = true;
+		console.warn("[Player] Canvas initialized successfully");
+	});
 
-		try {
-			const offscreen = canvas.transferControlToOffscreen();
-			controls.initCanvas(offscreen);
-			canvasTransferredRef.current = true;
-		} catch (e) {
-			console.error("[PreviewCanvas] Failed to transfer canvas:", e);
-		}
+	const padding = 4;
+	const frameWidth = () => latestFrame()?.width ?? 1920;
+	const frameHeight = () => latestFrame()?.height ?? 1080;
+
+	const availableWidth = () =>
+		Math.max(debouncedBounds().width - padding * 2, 0);
+	const availableHeight = () =>
+		Math.max(debouncedBounds().height - padding * 2, 0);
+
+	const containerAspect = () => {
+		const width = availableWidth();
+		const height = availableHeight();
+		if (width === 0 || height === 0) return 1;
+		return width / height;
 	};
+
+	const frameAspect = () => {
+		const width = frameWidth();
+		const height = frameHeight();
+		if (width === 0 || height === 0) return containerAspect();
+		return width / height;
+	};
+
+	const size = () => {
+		let width: number;
+		let height: number;
+		if (frameAspect() < containerAspect()) {
+			height = availableHeight();
+			width = height * frameAspect();
+		} else {
+			width = availableWidth();
+			height = width / frameAspect();
+		}
+
+		return { width, height };
+	};
+
+	const hasFrame = () => !!latestFrame();
 
 	return (
 		<div
@@ -515,75 +554,35 @@ function PreviewCanvas() {
 			class="relative flex-1 justify-center items-center"
 			style={{ contain: "layout style" }}
 		>
-			<Show when={latestFrame()}>
-				{(currentFrame) => {
-					const padding = 4;
-					const frameWidth = () => currentFrame().width;
-					const frameHeight = () => currentFrame().height;
-
-					const availableWidth = () =>
-						Math.max(debouncedBounds().width - padding * 2, 0);
-					const availableHeight = () =>
-						Math.max(debouncedBounds().height - padding * 2, 0);
-
-					const containerAspect = () => {
-						const width = availableWidth();
-						const height = availableHeight();
-						if (width === 0 || height === 0) return 1;
-						return width / height;
-					};
-
-					const frameAspect = () => {
-						const width = frameWidth();
-						const height = frameHeight();
-						if (width === 0 || height === 0) return containerAspect();
-						return width / height;
-					};
-
-					const size = () => {
-						let width: number;
-						let height: number;
-						if (frameAspect() < containerAspect()) {
-							height = availableHeight();
-							width = height * frameAspect();
-						} else {
-							width = availableWidth();
-							height = width / frameAspect();
-						}
-
-						return { width, height };
-					};
-
-					return (
-						<div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
-							<div
-								class="relative"
-								style={{
-									width: `${size().width}px`,
-									height: `${size().height}px`,
-									contain: "strict",
-								}}
-							>
-								<canvas
-									style={{
-										width: `${size().width}px`,
-										height: `${size().height}px`,
-										"image-rendering": "auto",
-										"background-color": "#000000",
-										...(hasRenderedFrame() ? gridStyle : {}),
-									}}
-									ref={initCanvas}
-									id="canvas"
-									width={frameWidth()}
-									height={frameHeight()}
-								/>
-								<MaskOverlay size={size()} />
-								<TextOverlay size={size()} />
-							</div>
-						</div>
-					);
-				}}
-			</Show>
+			<div
+				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
+				style={{ visibility: hasFrame() ? "visible" : "hidden" }}
+			>
+				<div
+					class="relative"
+					style={{
+						width: `${size().width}px`,
+						height: `${size().height}px`,
+						contain: "strict",
+					}}
+				>
+					<canvas
+						style={{
+							width: `${size().width}px`,
+							height: `${size().height}px`,
+							"image-rendering": "auto",
+							"background-color": "#000000",
+							...(hasRenderedFrame() ? gridStyle : {}),
+						}}
+						ref={setCanvasRef}
+						id="canvas"
+					/>
+					<Show when={hasFrame()}>
+						<MaskOverlay size={size()} />
+						<TextOverlay size={size()} />
+					</Show>
+				</div>
+			</div>
 		</div>
 	);
 }

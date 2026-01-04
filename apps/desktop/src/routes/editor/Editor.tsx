@@ -208,9 +208,21 @@ function Inner() {
 
 	const doConfigUpdate = async (time: number) => {
 		const config = serializeProjectConfiguration(project);
-		await commands.updateProjectConfigInMemory(config);
-		canvasControls()?.resetFrameState();
-		renderFrame(time);
+		const frameNumber = Math.max(Math.floor(time * FPS), 0);
+		const resBase = previewResolutionBase();
+		try {
+			await commands.updateProjectConfigInMemory(
+				config,
+				frameNumber,
+				FPS,
+				resBase,
+			);
+		} catch (e) {
+			console.error(
+				"[Editor] doConfigUpdate - ERROR sending config to Rust:",
+				e,
+			);
+		}
 	};
 	const throttledConfigUpdate = throttle(doConfigUpdate, 1000 / FPS);
 	const trailingConfigUpdate = debounce(doConfigUpdate, 1000 / FPS + 16);
@@ -220,10 +232,13 @@ function Inner() {
 	};
 	createEffect(
 		on(
-			() => trackDeep(project),
 			() => {
-				updateConfigAndRender(editorState.playbackTime);
+				trackDeep(project);
 			},
+			() => {
+				updateConfigAndRender(frameNumberToRender());
+			},
+			{ defer: true },
 		),
 	);
 

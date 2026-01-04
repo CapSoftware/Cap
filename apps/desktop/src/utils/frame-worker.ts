@@ -621,6 +621,85 @@ function renderLoop() {
 		const frame = frameToRender;
 
 		if (frame.mode === "webgpu" && !webgpuRenderer) {
+			if (renderMode === "pending") {
+				_rafId = requestAnimationFrame(renderLoop);
+				return;
+			}
+			if (renderMode === "canvas2d" && offscreenCanvas && offscreenCtx) {
+				frameQueue.splice(frameIndex, 1);
+				lastRenderedFrameNumber = frame.timing.frameNumber;
+
+				if (
+					offscreenCanvas.width !== frame.width ||
+					offscreenCanvas.height !== frame.height
+				) {
+					offscreenCanvas.width = frame.width;
+					offscreenCanvas.height = frame.height;
+				}
+
+				let rgbaData: Uint8ClampedArray;
+				if (frame.pixelFormat === "nv12") {
+					rgbaData = convertNv12ToRgba(
+						frame.data,
+						frame.width,
+						frame.height,
+						frame.yStride,
+					);
+				} else {
+					const expectedRowBytes = frame.width * 4;
+					if (frame.strideBytes === expectedRowBytes) {
+						rgbaData = frame.data;
+					} else {
+						const expectedLength = expectedRowBytes * frame.height;
+						if (!strideBuffer || strideBufferSize < expectedLength) {
+							strideBuffer = new Uint8ClampedArray(expectedLength);
+							strideBufferSize = expectedLength;
+						}
+						for (let row = 0; row < frame.height; row += 1) {
+							const srcStart = row * frame.strideBytes;
+							const destStart = row * expectedRowBytes;
+							strideBuffer.set(
+								frame.data.subarray(srcStart, srcStart + expectedRowBytes),
+								destStart,
+							);
+						}
+						rgbaData = strideBuffer.subarray(0, expectedLength);
+					}
+				}
+
+				if (
+					!cachedImageData ||
+					cachedWidth !== frame.width ||
+					cachedHeight !== frame.height
+				) {
+					cachedImageData = new ImageData(frame.width, frame.height);
+					cachedWidth = frame.width;
+					cachedHeight = frame.height;
+				}
+				cachedImageData.data.set(rgbaData);
+				offscreenCtx.putImageData(cachedImageData, 0, 0);
+
+				if (frame.releaseCallback) {
+					frame.releaseCallback();
+				}
+
+				self.postMessage({
+					type: "frame-rendered",
+					width: frame.width,
+					height: frame.height,
+				} satisfies FrameRenderedMessage);
+
+				const shouldContinue =
+					frameQueue.length > 0 ||
+					(useSharedBuffer && consumer && !consumer.isShutdown());
+
+				if (shouldContinue) {
+					_rafId = requestAnimationFrame(renderLoop);
+				} else {
+					rafRunning = false;
+				}
+				return;
+			}
 			_rafId = requestAnimationFrame(renderLoop);
 			return;
 		}

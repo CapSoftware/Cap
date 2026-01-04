@@ -5,7 +5,7 @@ use tokio::runtime::Handle as TokioHandle;
 use cap_video_decode::avassetreader::KeyframeIndex;
 
 pub const MAX_DECODER_POOL_SIZE: usize = 3;
-pub const REPOSITION_THRESHOLD_SECS: f32 = 5.0;
+pub const REPOSITION_THRESHOLD_SECS: f32 = 2.5;
 
 pub struct DecoderPosition {
     pub id: usize,
