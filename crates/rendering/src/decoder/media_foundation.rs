@@ -99,6 +99,20 @@ struct CachedFrame {
 
 impl CachedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
+        let null_ptr = std::ptr::null_mut();
+        let y_handle = self._y_handle.filter(|h| h.0 != null_ptr);
+        let uv_handle = self._uv_handle.filter(|h| h.0 != null_ptr);
+        if let (Some(y_handle), Some(uv_handle)) = (y_handle, uv_handle) {
+            return DecodedFrame::new_nv12_with_d3d11_texture_and_yuv_handles(
+                self.width,
+                self.height,
+                self._texture.clone(),
+                self._shared_handle,
+                Some(y_handle),
+                Some(uv_handle),
+            );
+        }
+
         if let Some(nv12_data) = &self.nv12_data {
             DecodedFrame::new_nv12(
                 nv12_data.data.clone(),
@@ -237,7 +251,7 @@ impl MFDecoder {
                                     let frame_number = pts_100ns_to_frame(mf_frame.pts, fps);
 
                                     let nv12_data = match decoder.read_texture_to_cpu(
-                                        &mf_frame.texture,
+                                        &mf_frame.textures.nv12.texture,
                                         mf_frame.width,
                                         mf_frame.height,
                                     ) {
@@ -256,10 +270,10 @@ impl MFDecoder {
 
                                     let cached = CachedFrame {
                                         number: frame_number,
-                                        _texture: mf_frame.texture,
-                                        _shared_handle: mf_frame.shared_handle,
-                                        _y_handle: mf_frame.y_handle,
-                                        _uv_handle: mf_frame.uv_handle,
+                                        _texture: mf_frame.textures.nv12.texture.clone(),
+                                        _shared_handle: Some(mf_frame.textures.nv12.handle),
+                                        _y_handle: Some(mf_frame.textures.y.handle),
+                                        _uv_handle: Some(mf_frame.textures.uv.handle),
                                         nv12_data,
                                         width: mf_frame.width,
                                         height: mf_frame.height,
@@ -297,10 +311,11 @@ impl MFDecoder {
                                         {
                                             let _ = s.send(frame.to_decoded_frame());
                                         }
-                                        break;
                                     }
 
-                                    if frame_number > cache_max {
+                                    let readahead_target = requested_frame + 30;
+                                    if frame_number >= readahead_target || frame_number > cache_max
+                                    {
                                         break;
                                     }
                                 }

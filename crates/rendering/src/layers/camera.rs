@@ -1,9 +1,11 @@
 use cap_project::XY;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::{
     CompositeVideoFrameUniforms, DecodedFrame, PixelFormat,
-    composite_frame::CompositeVideoFramePipeline, yuv_converter::YuvToRgbaConverter,
+    composite_frame::CompositeVideoFramePipeline,
+    yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
 
 pub struct CameraLayer {
@@ -12,7 +14,7 @@ pub struct CameraLayer {
     current_texture: usize,
     uniforms_buffer: wgpu::Buffer,
     bind_groups: [Option<wgpu::BindGroup>; 2],
-    pipeline: CompositeVideoFramePipeline,
+    pipeline: Arc<CompositeVideoFramePipeline>,
     hidden: bool,
     last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
@@ -20,12 +22,30 @@ pub struct CameraLayer {
 
 impl CameraLayer {
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_with_all_shared_pipelines(
+            device,
+            Arc::new(YuvConverterPipelines::new(device)),
+            Arc::new(CompositeVideoFramePipeline::new(device)),
+        )
+    }
+
+    pub fn new_with_shared_pipelines(
+        device: &wgpu::Device,
+        yuv_pipelines: Arc<YuvConverterPipelines>,
+        composite_pipeline: Arc<CompositeVideoFramePipeline>,
+    ) -> Self {
+        Self::new_with_all_shared_pipelines(device, yuv_pipelines, composite_pipeline)
+    }
+
+    pub fn new_with_all_shared_pipelines(
+        device: &wgpu::Device,
+        yuv_pipelines: Arc<YuvConverterPipelines>,
+        composite_pipeline: Arc<CompositeVideoFramePipeline>,
+    ) -> Self {
         let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_view_0 = frame_texture_0.create_view(&Default::default());
         let frame_texture_view_1 = frame_texture_1.create_view(&Default::default());
-
-        let pipeline = CompositeVideoFramePipeline::new(device);
 
         let uniforms_buffer = device.create_buffer_init(
             &(wgpu::util::BufferInitDescriptor {
@@ -36,11 +56,11 @@ impl CameraLayer {
         );
 
         let bind_group_0 =
-            Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_0));
+            Some(composite_pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_0));
         let bind_group_1 =
-            Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
+            Some(composite_pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
 
-        let yuv_converter = YuvToRgbaConverter::new(device);
+        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines(device, yuv_pipelines);
 
         Self {
             frame_textures: [frame_texture_0, frame_texture_1],
@@ -48,7 +68,7 @@ impl CameraLayer {
             current_texture: 0,
             uniforms_buffer,
             bind_groups: [bind_group_0, bind_group_1],
-            pipeline,
+            pipeline: composite_pipeline,
             hidden: false,
             last_recording_time: None,
             yuv_converter,
@@ -130,6 +150,59 @@ impl CameraLayer {
                     );
                 }
                 PixelFormat::Nv12 => {
+                    if let Err(e) = self.yuv_converter.prepare_for_dimensions(
+                        device,
+                        frame_size.x,
+                        frame_size.y,
+                    ) {
+                        tracing::warn!(error = %e, "YUV converter prepare failed");
+                        return;
+                    }
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Some(nv12_texture) = camera_frame.d3d11_texture_backing() {
+                            if let Ok(d3d11_device) = unsafe { nv12_texture.GetDevice() } {
+                                if let Ok(d3d11_context) =
+                                    unsafe { d3d11_device.GetImmediateContext() }
+                                {
+                                    if self
+                                        .yuv_converter
+                                        .convert_nv12_with_fallback(
+                                            device,
+                                            queue,
+                                            &d3d11_device,
+                                            &d3d11_context,
+                                            nv12_texture,
+                                            camera_frame.d3d11_y_handle(),
+                                            camera_frame.d3d11_uv_handle(),
+                                            frame_size.x,
+                                            frame_size.y,
+                                        )
+                                        .is_ok()
+                                        && self.yuv_converter.output_texture().is_some()
+                                    {
+                                        self.copy_from_yuv_output(
+                                            device,
+                                            queue,
+                                            next_texture,
+                                            frame_size,
+                                        );
+                                        self.last_recording_time = Some(recording_time);
+                                        self.current_texture = next_texture;
+                                        return;
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        "Failed to get D3D11 immediate context for camera frame"
+                                    );
+                                }
+                            } else {
+                                tracing::warn!("Failed to get D3D11 device for camera frame");
+                            }
+                        }
+                    }
+
                     if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
                         && self
@@ -150,6 +223,15 @@ impl CameraLayer {
                     }
                 }
                 PixelFormat::Yuv420p => {
+                    if let Err(e) = self.yuv_converter.prepare_for_dimensions(
+                        device,
+                        frame_size.x,
+                        frame_size.y,
+                    ) {
+                        tracing::warn!(error = %e, "YUV converter prepare failed");
+                        return;
+                    }
+
                     if let (Some(y_data), Some(u_data), Some(v_data)) = (
                         camera_frame.y_plane(),
                         camera_frame.u_plane(),

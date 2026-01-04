@@ -143,7 +143,6 @@ impl Renderer {
                     break;
                 }
             }
-
             let frame = frame_renderer
                 .render(
                     current.segment_frames,
@@ -153,7 +152,6 @@ impl Renderer {
                 )
                 .await
                 .unwrap();
-
             (self.frame_cb)(frame);
 
             let _ = current.finished.send(());

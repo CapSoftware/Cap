@@ -1,21 +1,37 @@
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+use windows::core::PCSTR;
 use windows::{
     Win32::{
         Foundation::{HANDLE, HMODULE},
         Graphics::{
-            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL},
+            Direct3D::{
+                D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
+            },
             Direct3D11::{
-                D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
+                D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
+                D3D11_BIND_UNORDERED_ACCESS, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 D3D11_DECODER_PROFILE_H264_VLD_NOFGT, D3D11_DECODER_PROFILE_HEVC_VLD_MAIN,
-                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+                D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC1,
+                D3D11_SHADER_RESOURCE_VIEW_DESC1_0, D3D11_TEX2D_SRV1, D3D11_TEX2D_UAV,
+                D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_TEXTURE2D,
+                D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0,
                 D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_DECODER_DESC,
-                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11CreateDevice, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11Device3,
+                ID3D11DeviceContext, ID3D11DeviceContext1, ID3D11ShaderResourceView,
+                ID3D11ShaderResourceView1, ID3D11Texture2D, ID3D11UnorderedAccessView,
                 ID3D11VideoDevice,
             },
-            Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
+            Dxgi::Common::{
+                DXGI_FORMAT_NV12, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_SAMPLE_DESC,
+            },
+            Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource1},
         },
         Media::MediaFoundation::{
             IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFSample, IMFSourceReader,
@@ -115,21 +131,8 @@ fn query_mf_decoder_capabilities(device: &ID3D11Device) -> MFDecoderCapabilities
     })();
 
     match result {
-        Ok(caps) => {
-            info!(
-                max_width = caps.max_width,
-                max_height = caps.max_height,
-                supports_h264 = caps.supports_h264,
-                supports_hevc = caps.supports_hevc,
-                feature_level = ?caps.feature_level,
-                "MediaFoundation decoder capabilities detected"
-            );
-            caps
-        }
-        Err(e) => {
-            warn!("Failed to query MediaFoundation decoder capabilities: {e}, using defaults");
-            MFDecoderCapabilities::default()
-        }
+        Ok(caps) => caps,
+        Err(_) => MFDecoderCapabilities::default(),
     }
 }
 
@@ -138,15 +141,11 @@ pub fn get_mf_decoder_capabilities() -> Option<&'static MFDecoderCapabilities> {
 }
 
 pub struct MFDecodedFrame {
-    pub texture: ID3D11Texture2D,
-    pub shared_handle: Option<HANDLE>,
-    pub y_texture: Option<ID3D11Texture2D>,
-    pub y_handle: Option<HANDLE>,
-    pub uv_texture: Option<ID3D11Texture2D>,
-    pub uv_handle: Option<HANDLE>,
+    pub textures: Arc<FrameTextures>,
     pub width: u32,
     pub height: u32,
     pub pts: i64,
+    pub plane_time: Duration,
 }
 
 pub struct NV12Data {
@@ -154,140 +153,480 @@ pub struct NV12Data {
     pub y_stride: u32,
     pub uv_stride: u32,
 }
+#[derive(Clone)]
+pub struct FrameTexture {
+    pub texture: ID3D11Texture2D,
+    pub handle: HANDLE,
+    pub width: u32,
+    pub height: u32,
+}
 
-struct TexturePool {
-    output_texture: Option<ID3D11Texture2D>,
-    y_texture: Option<ID3D11Texture2D>,
-    uv_texture: Option<ID3D11Texture2D>,
+#[derive(Clone)]
+pub struct FrameTextures {
+    pub nv12: FrameTexture,
+    pub y: FrameTexture,
+    pub uv: FrameTexture,
+    pub y_uav: ID3D11UnorderedAccessView,
+    pub uv_uav: ID3D11UnorderedAccessView,
+}
+
+impl FrameTextures {
+    fn create(device: &ID3D11Device, width: u32, height: u32) -> Result<Self, String> {
+        let nv12 = create_internal_texture(
+            device,
+            width,
+            height,
+            DXGI_FORMAT_NV12,
+            D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        )
+        .map_err(|ie| format!("[NV12] {ie}"))?;
+
+        let y = create_internal_texture(
+            device,
+            width,
+            height,
+            DXGI_FORMAT_R8_UNORM,
+            (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS).0 as u32,
+        )
+        .map_err(|ie| format!("[Y-plane] {ie}"))?;
+
+        let uv = create_internal_texture(
+            device,
+            width / 2,
+            height / 2,
+            DXGI_FORMAT_R8G8_UNORM,
+            (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS).0 as u32,
+        )
+        .map_err(|ie| format!("[UV-plane] {ie}"))?;
+
+        let y_uav = create_uav(device, &y.texture, DXGI_FORMAT_R8_UNORM)?;
+        let uv_uav = create_uav(device, &uv.texture, DXGI_FORMAT_R8G8_UNORM)?;
+
+        Ok(Self {
+            nv12,
+            y,
+            uv,
+            y_uav,
+            uv_uav,
+        })
+    }
+}
+
+pub struct FramePool {
+    free: Vec<FrameTextures>,
     width: u32,
     height: u32,
 }
 
-impl TexturePool {
-    fn new() -> Self {
+impl FramePool {
+    pub fn new() -> Self {
         Self {
-            output_texture: None,
-            y_texture: None,
-            uv_texture: None,
+            free: Vec::new(),
             width: 0,
             height: 0,
         }
     }
 
-    fn get_or_create_output_texture(
+    pub fn acquire(
         &mut self,
         device: &ID3D11Device,
         width: u32,
         height: u32,
-    ) -> Result<&ID3D11Texture2D, String> {
-        if self.width != width || self.height != height || self.output_texture.is_none() {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: width,
-                Height: height,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_NV12,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                CPUAccessFlags: 0,
-                MiscFlags: 0,
-            };
-
-            let texture = unsafe {
-                let mut tex: Option<ID3D11Texture2D> = None;
-                device
-                    .CreateTexture2D(&desc, None, Some(&mut tex))
-                    .map_err(|e| format!("CreateTexture2D failed: {e:?}"))?;
-                tex.ok_or("CreateTexture2D returned null")?
-            };
-
-            self.output_texture = Some(texture);
+    ) -> Result<FrameTextures, String> {
+        if self.width != width || self.height != height {
+            self.free.clear();
             self.width = width;
             self.height = height;
-            self.y_texture = None;
-            self.uv_texture = None;
         }
 
-        self.output_texture
-            .as_ref()
-            .ok_or_else(|| "Output texture not initialized".to_string())
+        if let Some(textures) = self.free.pop() {
+            return Ok(textures);
+        }
+
+        FrameTextures::create(device, width, height)
     }
 
-    fn get_or_create_yuv_textures(
-        &mut self,
-        device: &ID3D11Device,
+    pub fn recycle(&mut self, textures: FrameTextures) {
+        self.free.push(textures);
+    }
+}
+
+#[repr(C)]
+struct PlaneConstants {
+    width: u32,
+    height: u32,
+    uv_width: u32,
+    uv_height: u32,
+}
+
+pub struct Nv12PlaneConverter {
+    device3: ID3D11Device3,
+    context1: ID3D11DeviceContext1,
+    shader: ID3D11ComputeShader,
+    constants: ID3D11Buffer,
+}
+
+impl Nv12PlaneConverter {
+    pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext) -> Result<Self, String> {
+        let device3: ID3D11Device3 = device
+            .cast()
+            .map_err(|e| format!("Failed to cast to ID3D11Device3: {e:?}"))?;
+        let context1: ID3D11DeviceContext1 = context
+            .cast()
+            .map_err(|e| format!("Failed to cast to ID3D11DeviceContext1: {e:?}"))?;
+
+        let shader = compile_plane_shader(&device3)?;
+
+        let constants = create_constant_buffer(&device3)?;
+
+        Ok(Self {
+            device3,
+            context1,
+            shader,
+            constants,
+        })
+    }
+
+    pub fn convert(
+        &self,
+        input: &ID3D11Texture2D,
+        outputs: &FrameTextures,
         width: u32,
         height: u32,
-    ) -> Result<(&ID3D11Texture2D, &ID3D11Texture2D), String> {
-        use windows::Win32::Graphics::Dxgi::Common::{
-            DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM,
+    ) -> Result<(), String> {
+        let y_srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC1 {
+            Format: DXGI_FORMAT_R8_UNORM,
+            ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC1_0 {
+                Texture2D: D3D11_TEX2D_SRV1 {
+                    MostDetailedMip: 0,
+                    MipLevels: 1,
+                    PlaneSlice: 0,
+                },
+            },
         };
 
-        if self.width != width || self.height != height || self.y_texture.is_none() {
-            let y_desc = D3D11_TEXTURE2D_DESC {
-                Width: width,
-                Height: height,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
+        let uv_srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC1 {
+            Format: DXGI_FORMAT_R8G8_UNORM,
+            ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC1_0 {
+                Texture2D: D3D11_TEX2D_SRV1 {
+                    MostDetailedMip: 0,
+                    MipLevels: 1,
+                    PlaneSlice: 1,
                 },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                CPUAccessFlags: 0,
-                MiscFlags: 0,
-            };
+            },
+        };
 
-            let y_texture = unsafe {
-                let mut tex: Option<ID3D11Texture2D> = None;
-                device
-                    .CreateTexture2D(&y_desc, None, Some(&mut tex))
-                    .map_err(|e| format!("CreateTexture2D Y failed: {e:?}"))?;
-                tex.ok_or("CreateTexture2D Y returned null")?
-            };
+        let y_srv = unsafe {
+            let mut srv: Option<ID3D11ShaderResourceView1> = None;
+            self.device3
+                .CreateShaderResourceView1(input, Some(&y_srv_desc), Some(&mut srv))
+                .map_err(|e| format!("CreateShaderResourceView1 for Y failed: {e:?}"))?;
+            srv.ok_or("Y SRV creation returned null")?
+        };
 
-            let uv_desc = D3D11_TEXTURE2D_DESC {
-                Width: width / 2,
-                Height: height / 2,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R8G8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                CPUAccessFlags: 0,
-                MiscFlags: 0,
-            };
+        let uv_srv = unsafe {
+            let mut srv: Option<ID3D11ShaderResourceView1> = None;
+            self.device3
+                .CreateShaderResourceView1(input, Some(&uv_srv_desc), Some(&mut srv))
+                .map_err(|e| format!("CreateShaderResourceView1 for UV failed: {e:?}"))?;
+            srv.ok_or("UV SRV creation returned null")?
+        };
 
-            let uv_texture = unsafe {
-                let mut tex: Option<ID3D11Texture2D> = None;
-                device
-                    .CreateTexture2D(&uv_desc, None, Some(&mut tex))
-                    .map_err(|e| format!("CreateTexture2D UV failed: {e:?}"))?;
-                tex.ok_or("CreateTexture2D UV returned null")?
-            };
+        let y_srv_base: ID3D11ShaderResourceView = y_srv
+            .cast()
+            .map_err(|e| format!("Cast Y SRV1 to base failed: {e:?}"))?;
+        let uv_srv_base: ID3D11ShaderResourceView = uv_srv
+            .cast()
+            .map_err(|e| format!("Cast UV SRV1 to base failed: {e:?}"))?;
 
-            self.y_texture = Some(y_texture);
-            self.uv_texture = Some(uv_texture);
-            self.width = width;
-            self.height = height;
+        let constants = PlaneConstants {
+            width,
+            height,
+            uv_width: width / 2,
+            uv_height: height / 2,
+        };
+
+        unsafe {
+            self.context1.UpdateSubresource(
+                &self.constants,
+                0,
+                None,
+                &constants as *const _ as *const std::ffi::c_void,
+                0,
+                0,
+            );
+
+            self.context1.CSSetShader(Some(&self.shader), None);
+            self.context1
+                .CSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
+            self.context1.CSSetShaderResources(
+                0,
+                Some(&[Some(y_srv_base.clone()), Some(uv_srv_base.clone())]),
+            );
+            let uavs = [Some(outputs.y_uav.clone()), Some(outputs.uv_uav.clone())];
+            self.context1.CSSetUnorderedAccessViews(
+                0,
+                uavs.len() as u32,
+                Some(uavs.as_ptr()),
+                None,
+            );
+
+            let groups_x = width.div_ceil(16);
+            let groups_y = height.div_ceil(16);
+            self.context1.Dispatch(groups_x, groups_y, 1);
+
+            self.context1.CSSetShaderResources(0, Some(&[None, None]));
+            let null_uavs: [Option<ID3D11UnorderedAccessView>; 2] = [None, None];
+            self.context1.CSSetUnorderedAccessViews(
+                0,
+                null_uavs.len() as u32,
+                Some(null_uavs.as_ptr()),
+                None,
+            );
+            self.context1.CSSetConstantBuffers(0, Some(&[None]));
+            self.context1.CSSetShader(None, None);
         }
 
-        Ok((
-            self.y_texture.as_ref().ok_or("Y texture not initialized")?,
-            self.uv_texture
-                .as_ref()
-                .ok_or("UV texture not initialized")?,
-        ))
+        Ok(())
+    }
+}
+
+fn compile_plane_shader(device: &ID3D11Device3) -> Result<ID3D11ComputeShader, String> {
+    let source = br#"
+cbuffer FrameSize : register(b0) {
+    uint width;
+    uint height;
+    uint uv_width;
+    uint uv_height;
+};
+Texture2D<uint> YPlane : register(t0);
+Texture2D<uint2> UVPlane : register(t1);
+RWTexture2D<uint> OutY : register(u0);
+RWTexture2D<uint2> OutUV : register(u1);
+
+[numthreads(16,16,1)]
+void main(uint3 dtid : SV_DispatchThreadID) {
+    uint x = dtid.x;
+    uint y = dtid.y;
+    if (x < width && y < height) {
+        OutY[uint2(x, y)] = YPlane.Load(int3(x, y, 0));
+    }
+    if (x < uv_width && y < uv_height) {
+        OutUV[uint2(x, y)] = UVPlane.Load(int3(x, y, 0));
+    }
+}
+"#;
+
+    let mut shader_blob: Option<ID3DBlob> = None;
+    let mut error_blob: Option<ID3DBlob> = None;
+    let shader_blob_ptr: *mut Option<ID3DBlob> = &mut shader_blob;
+    let error_blob_ptr: *mut Option<ID3DBlob> = &mut error_blob;
+
+    unsafe {
+        D3DCompile(
+            source.as_ptr() as *const std::ffi::c_void,
+            source.len(),
+            None,
+            None,
+            None,
+            PCSTR(b"main\0".as_ptr()),
+            PCSTR(b"cs_5_0\0".as_ptr()),
+            0,
+            0,
+            shader_blob_ptr,
+            Some(error_blob_ptr),
+        )
+        .map_err(|e| format!("D3DCompile failed: {e:?}"))?;
+    }
+
+    let shader_blob =
+        shader_blob.ok_or_else(|| "Shader compilation produced no blob".to_string())?;
+
+    let shader_bytes = unsafe {
+        std::slice::from_raw_parts(
+            shader_blob.GetBufferPointer() as *const u8,
+            shader_blob.GetBufferSize(),
+        )
+    };
+
+    let mut shader = None;
+    unsafe {
+        device
+            .CreateComputeShader(shader_bytes, None, Some(&mut shader))
+            .map_err(|e| format!("CreateComputeShader failed: {e:?}"))?;
+    }
+
+    shader.ok_or_else(|| "CreateComputeShader returned null".to_string())
+}
+
+fn create_constant_buffer(device: &ID3D11Device3) -> Result<ID3D11Buffer, String> {
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: std::mem::size_of::<PlaneConstants>() as u32,
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+        StructureByteStride: 0,
+    };
+
+    unsafe {
+        let mut buffer = None;
+        device
+            .CreateBuffer(&desc, None, Some(&mut buffer))
+            .map_err(|e| format!("CreateBuffer failed: {e:?}"))?;
+        buffer.ok_or_else(|| "CreateBuffer returned null".to_string())
+    }
+}
+
+fn create_nv12_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+) -> Result<FrameTexture, String> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_NV12,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+
+    let texture = unsafe {
+        let mut tex: Option<ID3D11Texture2D> = None;
+        device
+            .CreateTexture2D(&desc, None, Some(&mut tex))
+            .map_err(|e| format!("CreateTexture2D NV12 failed: {e:?}"))?;
+        tex.ok_or("CreateTexture2D NV12 returned null")?
+    };
+
+    Ok(FrameTexture {
+        texture,
+        handle: HANDLE::default(),
+        width,
+        height,
+    })
+}
+
+fn create_internal_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+    bind: u32,
+) -> Result<FrameTexture, String> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: bind,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+
+    let texture = unsafe {
+        let mut tex: Option<ID3D11Texture2D> = None;
+        device
+            .CreateTexture2D(&desc, None, Some(&mut tex))
+            .map_err(|e| format!("CreateTexture2D failed: {e:?}"))?;
+        tex.ok_or("CreateTexture2D returned null")?
+    };
+
+    Ok(FrameTexture {
+        texture,
+        handle: HANDLE::default(),
+        width,
+        height,
+    })
+}
+
+fn create_shared_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+    bind: u32,
+) -> Result<FrameTexture, String> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: bind,
+        CPUAccessFlags: 0,
+        MiscFlags: D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 as u32,
+    };
+
+    let texture = unsafe {
+        let mut tex: Option<ID3D11Texture2D> = None;
+        if let Err(e) = device.CreateTexture2D(&desc, None, Some(&mut tex)) {
+            return Err(format!("CreateTexture2D failed: {e:?}"));
+        }
+        tex.ok_or("CreateTexture2D returned null")?
+    };
+
+    let handle = unsafe {
+        let resource: IDXGIResource1 = texture
+            .cast()
+            .map_err(|e| format!("Failed to cast texture to IDXGIResource1: {e:?}"))?;
+        resource
+            .CreateSharedHandle(
+                None,
+                DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
+                None,
+            )
+            .map_err(|e| format!("CreateSharedHandle failed: {e:?}"))?
+    };
+
+    Ok(FrameTexture {
+        texture,
+        handle,
+        width,
+        height,
+    })
+}
+
+fn create_uav(
+    device: &ID3D11Device,
+    texture: &ID3D11Texture2D,
+    format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+) -> Result<ID3D11UnorderedAccessView, String> {
+    let desc = D3D11_UNORDERED_ACCESS_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D11_UAV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D11_UNORDERED_ACCESS_VIEW_DESC_0 {
+            Texture2D: D3D11_TEX2D_UAV { MipSlice: 0 },
+        },
+    };
+
+    unsafe {
+        let mut uav = None;
+        device
+            .CreateUnorderedAccessView(texture, Some(&desc), Some(&mut uav))
+            .map_err(|e| format!("CreateUnorderedAccessView failed: {e:?}"))?;
+        uav.ok_or_else(|| "CreateUnorderedAccessView returned null".to_string())
     }
 }
 
@@ -303,7 +642,8 @@ pub struct MediaFoundationDecoder {
     staging_texture: Option<ID3D11Texture2D>,
     staging_width: u32,
     staging_height: u32,
-    texture_pool: TexturePool,
+    frame_pool: FramePool,
+    plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
 }
 
@@ -349,6 +689,8 @@ impl MediaFoundationDecoder {
             .get_or_init(|| query_mf_decoder_capabilities(&d3d11_device))
             .clone();
 
+        let plane_converter = Nv12PlaneConverter::new(&d3d11_device, &d3d11_context)?;
+
         if width > capabilities.max_width || height > capabilities.max_height {
             warn!(
                 video_width = width,
@@ -381,7 +723,8 @@ impl MediaFoundationDecoder {
             staging_texture: None,
             staging_width: 0,
             staging_height: 0,
-            texture_pool: TexturePool::new(),
+            frame_pool: FramePool::new(),
+            plane_converter,
             capabilities,
         })
     }
@@ -492,6 +835,14 @@ impl MediaFoundationDecoder {
         unsafe { self.read_sample_inner() }
     }
 
+    pub fn recycle_textures(&mut self, textures: Arc<FrameTextures>) {
+        if Arc::strong_count(&textures) == 1 {
+            if let Ok(textures) = Arc::try_unwrap(textures) {
+                self.frame_pool.recycle(textures);
+            }
+        }
+    }
+
     unsafe fn read_sample_inner(&mut self) -> Result<Option<MFDecodedFrame>, String> {
         let mut stream_index = 0u32;
         let mut flags = 0u32;
@@ -550,14 +901,15 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("GetSubresourceIndex failed: {e:?}"))?
         };
 
-        let output_texture = self
-            .texture_pool
-            .get_or_create_output_texture(&self.d3d11_device, self.width, self.height)?
-            .clone();
+        let frame_textures =
+            self.frame_pool
+                .acquire(&self.d3d11_device, self.width, self.height)?;
+
+        let plane_start = Instant::now();
 
         unsafe {
             self.d3d11_context.CopySubresourceRegion(
-                &output_texture,
+                &frame_textures.nv12.texture,
                 0,
                 0,
                 0,
@@ -566,71 +918,23 @@ impl MediaFoundationDecoder {
                 subresource_index,
                 None,
             );
-        }
 
-        let shared_handle = None;
-
-        let (y_texture, y_handle, uv_texture, uv_handle) = {
-            let (y_tex, uv_tex) = self.texture_pool.get_or_create_yuv_textures(
-                &self.d3d11_device,
+            self.plane_converter.convert(
+                &frame_textures.nv12.texture,
+                &frame_textures,
                 self.width,
                 self.height,
             )?;
+        }
 
-            let y_texture = y_tex.clone();
-            let uv_texture = uv_tex.clone();
-
-            unsafe {
-                self.d3d11_context.CopySubresourceRegion(
-                    &y_texture,
-                    0,
-                    0,
-                    0,
-                    0,
-                    &output_texture,
-                    0,
-                    Some(&windows::Win32::Graphics::Direct3D11::D3D11_BOX {
-                        left: 0,
-                        top: 0,
-                        front: 0,
-                        right: self.width,
-                        bottom: self.height,
-                        back: 1,
-                    }),
-                );
-
-                self.d3d11_context.CopySubresourceRegion(
-                    &uv_texture,
-                    0,
-                    0,
-                    0,
-                    0,
-                    &output_texture,
-                    1,
-                    Some(&windows::Win32::Graphics::Direct3D11::D3D11_BOX {
-                        left: 0,
-                        top: 0,
-                        front: 0,
-                        right: self.width / 2,
-                        bottom: self.height / 2,
-                        back: 1,
-                    }),
-                );
-            }
-
-            (Some(y_texture), None, Some(uv_texture), None)
-        };
+        let plane_time = plane_start.elapsed();
 
         Ok(Some(MFDecodedFrame {
-            texture: output_texture,
-            shared_handle,
-            y_texture,
-            y_handle,
-            uv_texture,
-            uv_handle,
+            textures: Arc::new(frame_textures),
             width: self.width,
             height: self.height,
             pts: timestamp,
+            plane_time,
         }))
     }
 

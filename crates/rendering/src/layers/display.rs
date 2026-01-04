@@ -241,44 +241,45 @@ impl DisplayLayer {
                             let y_stride = screen_frame.y_stride();
                             let uv_stride = screen_frame.uv_stride();
 
-                            let convert_result = if self.prefer_cpu_conversion {
-                                self.yuv_converter.convert_nv12_cpu(
-                                    device,
-                                    queue,
-                                    y_data,
-                                    uv_data,
-                                    actual_width,
-                                    actual_height,
-                                    y_stride,
-                                    uv_stride,
-                                )
+                            let convert_ok = if self.prefer_cpu_conversion {
+                                self.yuv_converter
+                                    .convert_nv12_cpu(
+                                        device,
+                                        queue,
+                                        y_data,
+                                        uv_data,
+                                        actual_width,
+                                        actual_height,
+                                        y_stride,
+                                        uv_stride,
+                                    )
+                                    .is_ok()
                             } else {
-                                self.yuv_converter.convert_nv12(
-                                    device,
-                                    queue,
-                                    y_data,
-                                    uv_data,
-                                    actual_width,
-                                    actual_height,
-                                    y_stride,
-                                    uv_stride,
-                                )
+                                self.yuv_converter
+                                    .convert_nv12(
+                                        device,
+                                        queue,
+                                        y_data,
+                                        uv_data,
+                                        actual_width,
+                                        actual_height,
+                                        y_stride,
+                                        uv_stride,
+                                    )
+                                    .is_ok()
                             };
 
-                            match convert_result {
-                                Ok(_) => {
-                                    if self.yuv_converter.output_texture().is_some() {
-                                        self.pending_copy = Some(PendingTextureCopy {
-                                            width: actual_width,
-                                            height: actual_height,
-                                            dst_texture_index: next_texture,
-                                        });
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                Err(_) => false,
+                            let has_output = self.yuv_converter.output_texture().is_some();
+
+                            if convert_ok && has_output {
+                                self.pending_copy = Some(PendingTextureCopy {
+                                    width: actual_width,
+                                    height: actual_height,
+                                    dst_texture_index: next_texture,
+                                });
+                                true
+                            } else {
+                                false
                             }
                         } else {
                             false
