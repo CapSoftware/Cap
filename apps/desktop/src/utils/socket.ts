@@ -273,6 +273,52 @@ export function createImageDataWS(
 		}
 	}
 
+	function renderPendingFrameCanvas2D() {
+		if (!pendingNv12Frame || !directCanvas || !directCtx) return;
+
+		const buffer = pendingNv12Frame;
+		pendingNv12Frame = null;
+
+		const NV12_MAGIC = 0x4e563132;
+		if (buffer.byteLength < 28) return;
+
+		const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
+		if (formatCheck.getUint32(0, true) !== NV12_MAGIC) return;
+
+		const metadataOffset = buffer.byteLength - 28;
+		const meta = new DataView(buffer, metadataOffset, 28);
+		const yStride = meta.getUint32(0, true);
+		const height = meta.getUint32(4, true);
+		const width = meta.getUint32(8, true);
+
+		if (width > 0 && height > 0) {
+			const ySize = yStride * height;
+			const uvSize = width * (height / 2);
+			const totalSize = ySize + uvSize;
+
+			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
+
+			if (directCanvas.width !== width || directCanvas.height !== height) {
+				directCanvas.width = width;
+				directCanvas.height = height;
+			}
+
+			const rgba = convertNv12ToRgbaMainThread(
+				frameData,
+				width,
+				height,
+				yStride,
+			);
+			const imageData = new ImageData(rgba, width, height);
+			directCtx.putImageData(imageData, 0, 0);
+
+			if (!hasRenderedFrame()) {
+				setHasRenderedFrame(true);
+			}
+			onmessage({ width, height });
+		}
+	}
+
 	const canvasControls: CanvasControls = {
 		initCanvas: (canvas: OffscreenCanvas) => {
 			worker.postMessage({ type: "init-canvas", canvas }, [canvas]);
@@ -282,6 +328,17 @@ export function createImageDataWS(
 		},
 		hasRenderedFrame,
 		initDirectCanvas: (canvas: HTMLCanvasElement) => {
+			const isNewCanvas = directCanvas !== canvas;
+
+			if (isNewCanvas && directCanvas) {
+				if (mainThreadWebGPU) {
+					disposeWebGPU(mainThreadWebGPU);
+					mainThreadWebGPU = null;
+				}
+				directCtx = null;
+				mainThreadWebGPUInitializing = false;
+			}
+
 			directCanvas = canvas;
 
 			if (!mainThreadWebGPUInitializing && !mainThreadWebGPU) {
@@ -294,20 +351,27 @@ export function createImageDataWS(
 								mainThreadWebGPUInitializing = false;
 								if (pendingNv12Frame && directCanvas) {
 									renderPendingNv12Frame();
-								} else {
-									onRequestFrame?.();
 								}
+								onRequestFrame?.();
 							})
 							.catch((e) => {
 								mainThreadWebGPUInitializing = false;
-								console.error("[socket] Main thread WebGPU init failed:", e);
+								console.error("[Socket] Main thread WebGPU init failed:", e);
 								directCtx =
 									directCanvas?.getContext("2d", { alpha: false }) ?? null;
+								if (pendingNv12Frame && directCanvas && directCtx) {
+									renderPendingFrameCanvas2D();
+								}
+								onRequestFrame?.();
 							});
 					} else {
 						mainThreadWebGPUInitializing = false;
 						directCtx =
 							directCanvas?.getContext("2d", { alpha: false }) ?? null;
+						if (pendingNv12Frame && directCanvas && directCtx) {
+							renderPendingFrameCanvas2D();
+						}
+						onRequestFrame?.();
 					}
 				});
 			}
@@ -512,6 +576,7 @@ export function createImageDataWS(
 				const yStride = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
+				const frameNumber = meta.getUint32(12, true);
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;
@@ -556,11 +621,30 @@ export function createImageDataWS(
 			}
 
 			if (directCanvas && directCtx) {
+				if (!directCanvas.isConnected) {
+					const domCanvas = document.getElementById(
+						"canvas",
+					) as HTMLCanvasElement | null;
+					if (domCanvas && domCanvas !== directCanvas) {
+						directCanvas = domCanvas;
+						directCtx = domCanvas.getContext("2d", { alpha: false });
+						if (!directCtx) {
+							console.error(
+								"[Socket] Failed to get 2D context from DOM canvas",
+							);
+							return;
+						}
+					} else {
+						return;
+					}
+				}
+
 				const metadataOffset = buffer.byteLength - 28;
 				const meta = new DataView(buffer, metadataOffset, 28);
 				const yStride = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
+				const frameNumber = meta.getUint32(12, true);
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;

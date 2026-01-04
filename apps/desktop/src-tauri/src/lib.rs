@@ -1631,8 +1631,16 @@ async fn set_project_config(
 async fn update_project_config_in_memory(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
+    frame_number: Option<u32>,
+    fps: Option<u32>,
+    resolution_base: Option<XY<u32>>,
 ) -> Result<(), String> {
     editor_instance.project_config.0.send(config).ok();
+    if let (Some(frame), Some(f), Some(res)) = (frame_number, fps, resolution_base) {
+        editor_instance.preview_tx.send_modify(|v| {
+            *v = Some((frame, f, res));
+        });
+    }
     Ok(())
 }
 

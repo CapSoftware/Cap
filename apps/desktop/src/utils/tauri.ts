@@ -134,8 +134,8 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
 },
-async updateProjectConfigInMemory(config: ProjectConfiguration) : Promise<null> {
-    return await TAURI_INVOKE("update_project_config_in_memory", { config });
+async updateProjectConfigInMemory(config: ProjectConfiguration, frameNumber: number | null, fps: number | null, resolutionBase: XY<number> | null) : Promise<null> {
+    return await TAURI_INVOKE("update_project_config_in_memory", { config, frameNumber, fps, resolutionBase });
 },
 async generateZoomSegmentsFromClicks() : Promise<ZoomSegment[]> {
     return await TAURI_INVOKE("generate_zoom_segments_from_clicks");
