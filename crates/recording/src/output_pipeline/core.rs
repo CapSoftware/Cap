@@ -1095,12 +1095,11 @@ impl PreparedAudioSources {
                                 total_input_duration_secs,
                             );
 
-                            if let Some(timestamp) = timestamp {
-                                if let Err(e) =
+                            if let Some(timestamp) = timestamp
+                                && let Err(e) =
                                     muxer.lock().await.send_audio_frame(frame, timestamp)
-                                {
-                                    error!("Audio encoder: {e}");
-                                }
+                            {
+                                error!("Audio encoder: {e}");
                             }
                         }
                         Ok::<(), anyhow::Error>(())
