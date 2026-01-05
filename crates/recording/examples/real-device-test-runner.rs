@@ -1161,8 +1161,17 @@ async fn analyze_audio_timing(
                 ..Default::default()
             };
 
-            let video_duration = expected_durations.first().copied().unwrap_or_default();
-            let video_duration_secs = video_duration.as_secs_f64();
+            let display_path = meta.path(&segment.display.path);
+            let video_duration_secs = probe_media_duration(&display_path)
+                .await
+                .map(|d| d.as_secs_f64())
+                .unwrap_or_else(|_| {
+                    expected_durations
+                        .first()
+                        .copied()
+                        .unwrap_or_default()
+                        .as_secs_f64()
+                });
 
             if let Some(ref audio) = segment.audio {
                 let audio_path = meta.path(&audio.path);
@@ -1194,8 +1203,17 @@ async fn analyze_audio_timing(
                     ..Default::default()
                 };
 
-                let video_duration = expected_durations.get(idx).copied().unwrap_or_default();
-                let video_duration_secs = video_duration.as_secs_f64();
+                let display_path = meta.path(&segment.display.path);
+                let video_duration_secs = probe_media_duration(&display_path)
+                    .await
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or_else(|_| {
+                        expected_durations
+                            .get(idx)
+                            .copied()
+                            .unwrap_or_default()
+                            .as_secs_f64()
+                    });
 
                 if let Some(ref mic) = segment.mic {
                     let mic_path = meta.path(&mic.path);
