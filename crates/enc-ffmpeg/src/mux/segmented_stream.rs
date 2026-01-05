@@ -8,15 +8,12 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use sysinfo::Disks;
 
 use crate::video::h264::{
     DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
 };
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
-const DISK_SPACE_WARNING_THRESHOLD_MB: u64 = 500;
-const DISK_SPACE_CRITICAL_THRESHOLD_MB: u64 = 100;
 
 #[derive(Debug, Clone)]
 pub struct DiskSpaceWarning {
@@ -77,9 +74,6 @@ pub struct SegmentedVideoEncoder {
     codec_info: CodecInfo,
 
     disk_space_callback: Option<DiskSpaceCallback>,
-    disk_space_warned: bool,
-    disk_space_critical_warned: bool,
-    init_segment_validated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -268,9 +262,6 @@ impl SegmentedVideoEncoder {
             completed_segments: Vec::new(),
             codec_info,
             disk_space_callback: None,
-            disk_space_warned: false,
-            disk_space_critical_warned: false,
-            init_segment_validated: false,
         };
 
         instance.write_in_progress_manifest();
@@ -282,183 +273,63 @@ impl SegmentedVideoEncoder {
         self.disk_space_callback = Some(callback);
     }
 
-    fn check_disk_space(&mut self) {
-        let Some(callback) = &self.disk_space_callback else {
-            return;
-        };
-
-        let disks = Disks::new_with_refreshed_list();
-
-        let matching_disk = disks.iter().find(|disk| {
-            let mount_point = disk.mount_point();
-            self.base_path.starts_with(mount_point)
-        });
-
-        let Some(disk) = matching_disk else {
-            tracing::debug!("Could not find disk for path {}", self.base_path.display());
-            return;
-        };
-
-        let available_bytes = disk.available_space();
-        let available_mb = available_bytes / 1024 / 1024;
-
-        if available_mb < DISK_SPACE_CRITICAL_THRESHOLD_MB && !self.disk_space_critical_warned {
-            tracing::error!(
-                available_mb,
-                path = %self.base_path.display(),
-                "CRITICAL: Disk space critically low! Recording may fail."
-            );
-            self.disk_space_critical_warned = true;
-            callback(DiskSpaceWarning {
-                available_mb,
-                threshold_mb: DISK_SPACE_CRITICAL_THRESHOLD_MB,
-                path: self.base_path.display().to_string(),
-                is_critical: true,
-            });
-        } else if available_mb < DISK_SPACE_WARNING_THRESHOLD_MB && !self.disk_space_warned {
-            tracing::warn!(
-                available_mb,
-                path = %self.base_path.display(),
-                "Disk space running low. Consider freeing up space."
-            );
-            self.disk_space_warned = true;
-            callback(DiskSpaceWarning {
-                available_mb,
-                threshold_mb: DISK_SPACE_WARNING_THRESHOLD_MB,
-                path: self.base_path.display().to_string(),
-                is_critical: false,
-            });
-        }
-    }
-
     pub fn queue_frame(
         &mut self,
         frame: frame::Video,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
-        if self.segment_start_time.is_none() {
-            self.segment_start_time = Some(timestamp);
-        }
+        let segment_start = match self.segment_start_time {
+            Some(start) => start,
+            None => {
+                self.segment_start_time = Some(timestamp);
+                timestamp
+            }
+        };
 
         self.last_frame_timestamp = Some(timestamp);
-
-        let prev_segment_index = self.detect_current_segment_index();
 
         self.encoder
             .queue_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
 
-        let new_segment_index = self.detect_current_segment_index();
-
-        if new_segment_index > prev_segment_index {
-            self.on_segment_completed(prev_segment_index, timestamp)?;
+        let elapsed_in_segment = timestamp.saturating_sub(segment_start);
+        if elapsed_in_segment >= self.segment_duration {
+            self.on_segment_boundary(self.current_index, timestamp);
         }
 
         Ok(())
     }
 
-    fn detect_current_segment_index(&self) -> u32 {
-        let next_segment_path = self
-            .base_path
-            .join(format!("segment_{:03}.m4s", self.current_index + 1));
-        if next_segment_path.exists() {
-            self.current_index + 1
-        } else {
-            self.current_index
-        }
-    }
+    fn on_segment_boundary(&mut self, completed_index: u32, timestamp: Duration) {
+        let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
+        let segment_duration = timestamp.saturating_sub(segment_start);
 
-    fn on_segment_completed(
-        &mut self,
-        completed_index: u32,
-        timestamp: Duration,
-    ) -> Result<(), QueueFrameError> {
         let segment_path = self
             .base_path
             .join(format!("segment_{completed_index:03}.m4s"));
 
-        if segment_path.exists() {
-            sync_file(&segment_path);
+        tracing::debug!(
+            segment_index = completed_index,
+            duration_secs = segment_duration.as_secs_f64(),
+            frames = self.frames_in_segment,
+            "Segment boundary reached (time-based)"
+        );
 
-            let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
-            let segment_duration = timestamp.saturating_sub(segment_start);
+        self.completed_segments.push(VideoSegmentInfo {
+            path: segment_path,
+            index: completed_index,
+            duration: segment_duration,
+            file_size: None,
+        });
 
-            let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
-
-            tracing::debug!(
-                segment_index = completed_index,
-                duration_secs = segment_duration.as_secs_f64(),
-                file_size = ?file_size,
-                frames = self.frames_in_segment,
-                "Segment completed"
-            );
-
-            self.completed_segments.push(VideoSegmentInfo {
-                path: segment_path,
-                index: completed_index,
-                duration: segment_duration,
-                file_size,
-            });
-
-            self.current_index = completed_index + 1;
-            self.segment_start_time = Some(timestamp);
-            self.frames_in_segment = 0;
-
-            if !self.init_segment_validated && self.init_segment_path().exists() {
-                self.init_segment_validated = true;
-                tracing::debug!(
-                    segment = completed_index,
-                    "init.mp4 now exists after segment completion"
-                );
-            }
-
-            self.write_manifest();
-            self.write_in_progress_manifest();
-
-            self.check_disk_space();
-        }
-
-        Ok(())
+        self.current_index = completed_index + 1;
+        self.segment_start_time = Some(timestamp);
+        self.frames_in_segment = 0;
     }
 
     fn current_segment_path(&self) -> PathBuf {
         self.base_path
             .join(format!("segment_{:03}.m4s", self.current_index))
-    }
-
-    fn write_manifest(&self) {
-        let manifest = Manifest {
-            version: MANIFEST_VERSION,
-            manifest_type: "m4s_segments",
-            init_segment: Some(INIT_SEGMENT_NAME.to_string()),
-            codec_info: Some(self.codec_info.clone()),
-            segments: self
-                .completed_segments
-                .iter()
-                .map(|s| SegmentEntry {
-                    path: s
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    index: s.index,
-                    duration: s.duration.as_secs_f64(),
-                    is_complete: true,
-                    file_size: s.file_size,
-                })
-                .collect(),
-            total_duration: None,
-            is_complete: false,
-        };
-
-        let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
-            tracing::warn!(
-                "Failed to write manifest to {}: {e}",
-                manifest_path.display()
-            );
-        }
     }
 
     fn write_in_progress_manifest(&self) {

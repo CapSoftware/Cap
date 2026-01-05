@@ -99,6 +99,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 libproc = "0.14"
 
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { workspace = true, features = ["Win32_UI_HiDpi"] }
+
 [[test]]
 name = "synthetic_recording"
 required-features = ["test-utils"]
@@ -106,3 +109,9 @@ required-features = ["test-utils"]
 [[example]]
 name = "synthetic-test-runner"
 required-features = ["test-utils"]
+
+[[example]]
+name = "playback-test-runner"
+
+[[example]]
+name = "real-device-test-runner"

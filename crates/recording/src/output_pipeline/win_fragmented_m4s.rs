@@ -15,18 +15,20 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::AtomicBool,
-        mpsc::{SyncSender, sync_channel},
+        mpsc::{RecvTimeoutError, SyncSender, sync_channel},
     },
     thread::JoinHandle,
     time::Duration,
 };
 use tracing::*;
 
+const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(3)
+        .unwrap_or(DEFAULT_MUXER_BUFFER_SIZE)
 }
 
 struct FrameDropTracker {
@@ -54,6 +56,7 @@ impl FrameDropTracker {
         self.check_drop_rate();
     }
 
+    #[allow(dead_code)]
     fn record_drop(&mut self) {
         self.drops_in_window += 1;
         self.total_drops += 1;
@@ -153,7 +156,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             .shared_pause_state
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
-        Ok(Self {
+        let mut muxer = Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -164,7 +167,11 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
-        })
+        };
+
+        muxer.start_encoder()?;
+
+        Ok(muxer)
     }
 
     fn stop(&mut self) {
@@ -257,6 +264,7 @@ impl WindowsFragmentedM4SMuxer {
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
+        let video_config = self.video_config;
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
@@ -266,16 +274,155 @@ impl WindowsFragmentedM4SMuxer {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
 
+                let frame_interval = Duration::from_secs_f64(1.0 / video_config.fps() as f64);
+                let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
+                let mut last_timestamp: Option<Duration> = None;
+                let mut first_timestamp: Option<Duration> = None;
+
                 let mut slow_convert_count = 0u32;
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
+                let mut duplicated_frames = 0u64;
                 const SLOW_THRESHOLD_MS: u128 = 5;
 
-                while let Ok(Some((d3d_frame, timestamp))) = video_rx.recv() {
+                let normalize_timestamp =
+                    |ts: Duration, first: &mut Option<Duration>| -> Duration {
+                        if let Some(first_ts) = *first {
+                            ts.checked_sub(first_ts).unwrap_or(Duration::ZERO)
+                        } else {
+                            *first = Some(ts);
+                            Duration::ZERO
+                        }
+                    };
+
+                let encode_frame_fn = |ffmpeg_frame: ffmpeg::frame::Video,
+                                       timestamp: Duration,
+                                       slow_encode_count: &mut u32,
+                                       total_frames: &mut u64,
+                                       encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                 -> anyhow::Result<()> {
+                    let encode_start = std::time::Instant::now();
+
+                    match encoder.lock() {
+                        Ok(mut enc) => {
+                            if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
+                                warn!("Failed to encode frame: {e}");
+                            }
+                        }
+                        Err(_) => {
+                            return Err(anyhow!(
+                                "Encoder mutex poisoned - all subsequent frames would be lost"
+                            ));
+                        }
+                    }
+
+                    let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                    if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                        *slow_encode_count += 1;
+                        if *slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
+                            debug!(
+                                elapsed_ms = encode_elapsed_ms,
+                                count = *slow_encode_count,
+                                "encoder.queue_frame exceeded {}ms threshold",
+                                SLOW_THRESHOLD_MS
+                            );
+                        }
+                    }
+
+                    *total_frames += 1;
+                    Ok(())
+                };
+
+                loop {
                     let convert_start = std::time::Instant::now();
 
-                    let ffmpeg_frame_result = d3d_frame.as_ffmpeg();
+                    let (ffmpeg_frame, timestamp) = match video_rx.recv_timeout(frame_interval) {
+                        Ok(Some((frame, ts))) => match frame.as_ffmpeg() {
+                            Ok(f) => {
+                                last_ffmpeg_frame = Some(f.clone());
+                                last_timestamp = Some(ts);
+                                (Some(f), ts)
+                            }
+                            Err(e) => {
+                                warn!("Failed to convert D3D11 frame: {e:?}");
+                                match (&last_ffmpeg_frame, last_timestamp) {
+                                    (Some(f), Some(last_ts)) => {
+                                        let new_ts = last_ts.saturating_add(frame_interval);
+                                        last_timestamp = Some(new_ts);
+                                        duplicated_frames += 1;
+                                        (Some(f.clone()), new_ts)
+                                    }
+                                    _ => (None, Duration::ZERO),
+                                }
+                            }
+                        },
+                        Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                            let mut drained = 0u64;
+                            let drain_start = std::time::Instant::now();
+                            let drain_timeout = Duration::from_millis(500);
+
+                            loop {
+                                match video_rx.recv_timeout(Duration::from_millis(10)) {
+                                    Ok(Some((frame, ts))) => {
+                                        if let Ok(f) = frame.as_ffmpeg() {
+                                            let normalized_ts =
+                                                normalize_timestamp(ts, &mut first_timestamp);
+                                            if let Err(e) = encode_frame_fn(
+                                                f,
+                                                normalized_ts,
+                                                &mut slow_encode_count,
+                                                &mut total_frames,
+                                                &encoder_clone,
+                                            ) {
+                                                warn!("Failed to encode drained frame: {e}");
+                                                break;
+                                            }
+                                            drained += 1;
+                                        }
+                                    }
+                                    Ok(None) => break,
+                                    Err(RecvTimeoutError::Timeout) => {
+                                        if drain_start.elapsed() > drain_timeout {
+                                            break;
+                                        }
+                                    }
+                                    Err(RecvTimeoutError::Disconnected) => break,
+                                }
+                            }
+
+                            if drained > 0 {
+                                debug!(drained = drained, "Drained remaining frames before exit");
+                            }
+                            break;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            match (&last_ffmpeg_frame, last_timestamp) {
+                                (Some(f), Some(last_ts)) => {
+                                    let new_ts = last_ts.saturating_add(frame_interval);
+                                    last_timestamp = Some(new_ts);
+                                    duplicated_frames += 1;
+                                    (Some(f.clone()), new_ts)
+                                }
+                                _ => continue,
+                            }
+                        }
+                    };
+
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
+
+                    let Some(ffmpeg_frame) = ffmpeg_frame else {
+                        match video_rx.recv() {
+                            Ok(Some((frame, ts))) => {
+                                if let Ok(f) = frame.as_ffmpeg() {
+                                    last_ffmpeg_frame = Some(f);
+                                    last_timestamp = Some(ts);
+                                }
+                            }
+                            Ok(None) | Err(_) => break,
+                        }
+                        continue;
+                    };
 
                     if convert_elapsed_ms > SLOW_THRESHOLD_MS {
                         slow_convert_count += 1;
@@ -289,47 +436,23 @@ impl WindowsFragmentedM4SMuxer {
                         }
                     }
 
-                    match ffmpeg_frame_result {
-                        Ok(ffmpeg_frame) => {
-                            let encode_start = std::time::Instant::now();
-
-                            match encoder_clone.lock() {
-                                Ok(mut encoder) => {
-                                    if let Err(e) = encoder.queue_frame(ffmpeg_frame, timestamp) {
-                                        warn!("Failed to encode frame: {e}");
-                                    }
-                                }
-                                Err(_) => {
-                                    error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                    return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
-                                }
-                            }
-
-                            let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                                slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                                    debug!(
-                                        elapsed_ms = encode_elapsed_ms,
-                                        count = slow_encode_count,
-                                        "encoder.queue_frame exceeded {}ms threshold",
-                                        SLOW_THRESHOLD_MS
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to convert D3D11 frame to FFmpeg: {e:?}");
-                        }
+                    let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
+                    if let Err(e) = encode_frame_fn(
+                        ffmpeg_frame,
+                        normalized_ts,
+                        &mut slow_encode_count,
+                        &mut total_frames,
+                        &encoder_clone,
+                    ) {
+                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                        return Err(e);
                     }
-
-                    total_frames += 1;
                 }
 
                 if total_frames > 0 {
                     debug!(
                         total_frames = total_frames,
+                        duplicated_frames = duplicated_frames,
                         slow_converts = slow_convert_count,
                         slow_encodes = slow_encode_count,
                         slow_convert_pct = format!(
@@ -380,26 +503,14 @@ impl VideoMuxer for WindowsFragmentedM4SMuxer {
             return Ok(());
         };
 
-        if !self.started {
-            self.start_encoder()?;
-        }
-
         if let Some(state) = &self.state {
-            match state
-                .video_tx
-                .try_send(Some((frame.frame, adjusted_timestamp)))
-            {
+            match state.video_tx.send(Some((frame.frame, adjusted_timestamp))) {
                 Ok(()) => {
                     self.frame_drops.record_frame();
                 }
-                Err(e) => match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
-                        self.frame_drops.record_drop();
-                    }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        trace!("Windows M4S encoder channel disconnected");
-                    }
-                },
+                Err(_) => {
+                    trace!("Windows M4S encoder channel disconnected");
+                }
             }
         }
 
@@ -477,7 +588,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             .shared_pause_state
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
-        Ok(Self {
+        let mut muxer = Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -488,7 +599,11 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
-        })
+        };
+
+        muxer.start_encoder()?;
+
+        Ok(muxer)
     }
 
     fn stop(&mut self) {
@@ -583,6 +698,7 @@ impl WindowsFragmentedM4SCameraMuxer {
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
+        let video_config = self.video_config;
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-camera-segment-encoder".to_string())
             .spawn(move || {
@@ -594,69 +710,183 @@ impl WindowsFragmentedM4SCameraMuxer {
                     ));
                 }
 
+                let frame_interval = Duration::from_secs_f64(1.0 / video_config.fps() as f64);
+                let mut last_frame: Option<NativeCameraFrame> = None;
+                let mut last_timestamp: Option<Duration> = None;
+                let mut first_timestamp: Option<Duration> = None;
+
                 let mut slow_convert_count = 0u32;
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
+                let mut duplicated_frames = 0u64;
                 const SLOW_THRESHOLD_MS: u128 = 5;
 
-                while let Ok(Some((camera_frame, timestamp))) = video_rx.recv() {
-                    let convert_start = std::time::Instant::now();
-                    let ffmpeg_frame_result = camera_frame_to_ffmpeg(&camera_frame);
-                    let convert_elapsed_ms = convert_start.elapsed().as_millis();
-
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
-                        slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = convert_elapsed_ms,
-                                count = slow_convert_count,
-                                "Camera frame conversion exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
-                            );
+                let normalize_timestamp =
+                    |ts: Duration, first: &mut Option<Duration>| -> Duration {
+                        if let Some(first_ts) = *first {
+                            ts.checked_sub(first_ts).unwrap_or(Duration::ZERO)
+                        } else {
+                            *first = Some(ts);
+                            Duration::ZERO
                         }
-                    }
+                    };
 
-                    match ffmpeg_frame_result {
-                        Ok(ffmpeg_frame) => {
-                            let encode_start = std::time::Instant::now();
+                let encode_camera_frame_fn =
+                    |camera_frame: &NativeCameraFrame,
+                     timestamp: Duration,
+                     slow_convert_count: &mut u32,
+                     slow_encode_count: &mut u32,
+                     total_frames: &mut u64,
+                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                     -> anyhow::Result<()> {
+                        let convert_start = std::time::Instant::now();
+                        let ffmpeg_frame_result = camera_frame_to_ffmpeg(camera_frame);
+                        let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                            match encoder_clone.lock() {
-                                Ok(mut encoder) => {
-                                    if let Err(e) = encoder.queue_frame(ffmpeg_frame, timestamp) {
-                                        warn!("Failed to encode camera frame: {e}");
+                        if convert_elapsed_ms > SLOW_THRESHOLD_MS {
+                            *slow_convert_count += 1;
+                            if *slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = convert_elapsed_ms,
+                                    count = *slow_convert_count,
+                                    "Camera frame conversion exceeded {}ms threshold",
+                                    SLOW_THRESHOLD_MS
+                                );
+                            }
+                        }
+
+                        match ffmpeg_frame_result {
+                            Ok(ffmpeg_frame) => {
+                                let encode_start = std::time::Instant::now();
+
+                                match encoder.lock() {
+                                    Ok(mut enc) => {
+                                        if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
+                                            warn!("Failed to encode camera frame: {e}");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        return Err(anyhow!(
+                                            "Camera encoder mutex poisoned - all subsequent frames would be lost"
+                                        ));
                                     }
                                 }
-                                Err(_) => {
-                                    error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                    return Err(anyhow!("Camera encoder mutex poisoned - all subsequent frames would be lost"));
+
+                                let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                                if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                                    *slow_encode_count += 1;
+                                    if *slow_encode_count <= 5
+                                        || slow_encode_count.is_multiple_of(100)
+                                    {
+                                        debug!(
+                                            elapsed_ms = encode_elapsed_ms,
+                                            count = *slow_encode_count,
+                                            "Camera encoder.queue_frame exceeded {}ms threshold",
+                                            SLOW_THRESHOLD_MS
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to convert camera frame: {e:?}");
+                            }
+                        }
+
+                        *total_frames += 1;
+                        Ok(())
+                    };
+
+                loop {
+                    let (frame_to_encode, timestamp) = match video_rx.recv_timeout(frame_interval) {
+                        Ok(Some((frame, ts))) => {
+                            last_frame = Some(frame.clone());
+                            last_timestamp = Some(ts);
+                            (Some(frame), ts)
+                        }
+                        Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                            let mut drained = 0u64;
+                            let drain_start = std::time::Instant::now();
+                            let drain_timeout = Duration::from_millis(500);
+
+                            loop {
+                                match video_rx.recv_timeout(Duration::from_millis(10)) {
+                                    Ok(Some((frame, ts))) => {
+                                        let normalized_ts =
+                                            normalize_timestamp(ts, &mut first_timestamp);
+                                        if let Err(e) = encode_camera_frame_fn(
+                                            &frame,
+                                            normalized_ts,
+                                            &mut slow_convert_count,
+                                            &mut slow_encode_count,
+                                            &mut total_frames,
+                                            &encoder_clone,
+                                        ) {
+                                            warn!("Failed to encode drained camera frame: {e}");
+                                            break;
+                                        }
+                                        drained += 1;
+                                    }
+                                    Ok(None) => break,
+                                    Err(RecvTimeoutError::Timeout) => {
+                                        if drain_start.elapsed() > drain_timeout {
+                                            break;
+                                        }
+                                    }
+                                    Err(RecvTimeoutError::Disconnected) => break,
                                 }
                             }
 
-                            let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                                slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                                    debug!(
-                                        elapsed_ms = encode_elapsed_ms,
-                                        count = slow_encode_count,
-                                        "Camera encoder.queue_frame exceeded {}ms threshold",
-                                        SLOW_THRESHOLD_MS
-                                    );
+                            if drained > 0 {
+                                debug!(
+                                    drained = drained,
+                                    "Drained remaining camera frames before exit"
+                                );
+                            }
+                            break;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            match (&last_frame, last_timestamp) {
+                                (Some(f), Some(last_ts)) => {
+                                    let new_ts = last_ts.saturating_add(frame_interval);
+                                    last_timestamp = Some(new_ts);
+                                    duplicated_frames += 1;
+                                    (Some(f.clone()), new_ts)
                                 }
+                                _ => continue,
                             }
                         }
-                        Err(e) => {
-                            warn!("Failed to convert camera frame: {e:?}");
+                    };
+
+                    let Some(camera_frame) = frame_to_encode else {
+                        match video_rx.recv() {
+                            Ok(Some((frame, ts))) => {
+                                last_frame = Some(frame);
+                                last_timestamp = Some(ts);
+                            }
+                            Ok(None) | Err(_) => break,
                         }
+                        continue;
+                    };
+
+                    let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
+                    if let Err(e) = encode_camera_frame_fn(
+                        &camera_frame,
+                        normalized_ts,
+                        &mut slow_convert_count,
+                        &mut slow_encode_count,
+                        &mut total_frames,
+                        &encoder_clone,
+                    ) {
+                        error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
+                        return Err(e);
                     }
-
-                    total_frames += 1;
                 }
 
                 if total_frames > 0 {
                     debug!(
                         total_frames = total_frames,
+                        duplicated_frames = duplicated_frames,
                         slow_converts = slow_convert_count,
                         slow_encodes = slow_encode_count,
                         slow_convert_pct = format!(
@@ -707,23 +937,14 @@ impl VideoMuxer for WindowsFragmentedM4SCameraMuxer {
             return Ok(());
         };
 
-        if !self.started {
-            self.start_encoder()?;
-        }
-
         if let Some(state) = &self.state {
-            match state.video_tx.try_send(Some((frame, adjusted_timestamp))) {
+            match state.video_tx.send(Some((frame, adjusted_timestamp))) {
                 Ok(()) => {
                     self.frame_drops.record_frame();
                 }
-                Err(e) => match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
-                        self.frame_drops.record_drop();
-                    }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        trace!("Windows M4S camera encoder channel disconnected");
-                    }
-                },
+                Err(_) => {
+                    trace!("Windows M4S camera encoder channel disconnected");
+                }
             }
         }
 

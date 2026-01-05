@@ -183,23 +183,31 @@ impl output_pipeline::VideoSource for VideoSource {
             };
 
             let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+            let video_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
             let cancel_token = CancellationToken::new();
 
             let res = scap_direct3d::Capturer::new(
                 capture_item,
                 settings,
                 {
-	                let video_frame_counter = video_frame_counter.clone();
-	                move |frame| {
-	                	video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
-	                    let timestamp = frame.inner().SystemRelativeTime()?;
-	                    let timestamp = Timestamp::PerformanceCounter(
-	                        PerformanceCounterTimestamp::new(timestamp.Duration),
-	                    );
-	                    let _ = video_tx.try_send(VideoFrame { frame, timestamp });
+                    let video_frame_counter = video_frame_counter.clone();
+                    let video_drop_counter = video_drop_counter.clone();
+                    move |frame| {
+                        let timestamp = frame.inner().SystemRelativeTime()?;
+                        let timestamp = Timestamp::PerformanceCounter(
+                            PerformanceCounterTimestamp::new(timestamp.Duration),
+                        );
+                        match video_tx.try_send(VideoFrame { frame, timestamp }) {
+                            Ok(()) => {
+                                video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            }
+                            Err(_) => {
+                                video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            }
+                        }
 
-	                    Ok(())
-	                }
+                        Ok(())
+                    }
                 },
                 {
                     let mut error_tx = error_tx.clone();
@@ -230,16 +238,29 @@ impl output_pipeline::VideoSource for VideoSource {
 
             tokio_rt.spawn(
                 async move {
-	                loop {
-	                    tokio::time::sleep(Duration::from_secs(5)).await;
-	                    debug!(
-	                        "Captured {} frames",
-	                        video_frame_counter.load(atomic::Ordering::Relaxed)
-	                    );
-	                }
-	            }
-	            .with_cancellation_token_owned(cancel_token.clone())
-	            .in_current_span()
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
+                        let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
+                        let total = captured + dropped;
+                        if dropped > 0 {
+                            let drop_pct = if total > 0 { 100.0 * dropped as f64 / total as f64 } else { 0.0 };
+                            warn!(
+                                captured = captured,
+                                dropped = dropped,
+                                drop_pct = format!("{:.1}%", drop_pct),
+                                "Screen capture source dropping frames due to full channel"
+                            );
+                        } else {
+                            debug!(
+                                captured = captured,
+                                "Screen capture frames"
+                            );
+                        }
+                    }
+                }
+                .with_cancellation_token_owned(cancel_token.clone())
+                .in_current_span()
             );
 			let drop_guard = cancel_token.drop_guard();
 

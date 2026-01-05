@@ -1679,6 +1679,7 @@ dependencies = [
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "num_cpus",
+ "tempfile",
  "tokio",
  "tracing",
  "windows 0.60.0",

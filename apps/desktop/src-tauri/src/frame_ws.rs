@@ -233,19 +233,6 @@ pub async fn create_watch_frame_ws(
 
                         let packed_len = packed.len();
 
-                        let upper_32_bits = (frame.target_time_ns >> 32) as u32;
-                        if upper_32_bits == 1 || frame.frame_number % 60 == 0 {
-                            tracing::debug!(
-                                target_time_ns = frame.target_time_ns,
-                                upper_32_bits = upper_32_bits,
-                                frame_number = frame.frame_number,
-                                packed_len = packed_len,
-                                scaled_dims = format!("{}x{}", scaled_width, scaled_height),
-                                format = "NV12",
-                                "DEBUG: Frame metadata being sent"
-                            );
-                        }
-
                         match socket.send(Message::Binary(packed)).await {
                             Ok(()) => {
                                 TOTAL_BYTES_SENT.fetch_add(packed_len as u64, Ordering::Relaxed);
