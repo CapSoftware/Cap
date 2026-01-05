@@ -116,6 +116,9 @@ async getVideoMetadata(path: string) : Promise<VideoRecordingMetadata> {
 async createEditorInstance() : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance");
 },
+async getEditorProjectPath() : Promise<string> {
+    return await TAURI_INVOKE("get_editor_project_path");
+},
 async getMicWaveforms() : Promise<number[][]> {
     return await TAURI_INVOKE("get_mic_waveforms");
 },
