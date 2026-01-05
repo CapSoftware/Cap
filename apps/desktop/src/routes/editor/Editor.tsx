@@ -11,6 +11,7 @@ import { Menu } from "@tauri-apps/api/menu";
 import {
 	createEffect,
 	createMemo,
+	createResource,
 	createSignal,
 	Match,
 	on,
@@ -41,6 +42,7 @@ import {
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
+import { EditorErrorScreen } from "./EditorErrorScreen";
 import { ExportPage } from "./ExportPage";
 import { Header } from "./Header";
 import { PlayerContent } from "./Player";
@@ -54,38 +56,61 @@ const RESIZE_HANDLE_HEIGHT = 8;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
 
 export function Editor() {
+	const [projectPath] = createResource(() => commands.getEditorProjectPath());
+
 	return (
 		<EditorInstanceContextProvider>
-			<Show
-				when={(() => {
-					const ctx = useEditorInstanceContext();
-					const editorInstance = ctx.editorInstance();
+			<EditorContent projectPath={projectPath()} />
+		</EditorInstanceContextProvider>
+	);
+}
 
-					if (!editorInstance || !ctx.metaQuery.data) return;
+function EditorContent(props: { projectPath: string | undefined }) {
+	const ctx = useEditorInstanceContext();
 
-					return {
-						editorInstance,
-						meta() {
-							const d = ctx.metaQuery.data;
-							if (!d)
-								throw new Error(
-									"metaQuery.data is undefined - how did this happen?",
-								);
-							return d;
-						},
-						refetchMeta: async () => {
-							await ctx.metaQuery.refetch();
-						},
-					};
-				})()}
-			>
+	const errorInfo = () => {
+		const error = ctx.editorInstance.error;
+		if (!error || !props.projectPath) return null;
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		return { error: errorMessage, projectPath: props.projectPath };
+	};
+
+	const readyData = () => {
+		const editorInstance = ctx.editorInstance();
+		if (!editorInstance || !ctx.metaQuery.data) return null;
+
+		return {
+			editorInstance,
+			meta() {
+				const d = ctx.metaQuery.data;
+				if (!d)
+					throw new Error("metaQuery.data is undefined - how did this happen?");
+				return d;
+			},
+			refetchMeta: async () => {
+				await ctx.metaQuery.refetch();
+			},
+		};
+	};
+
+	return (
+		<Switch>
+			<Match when={errorInfo()}>
+				{(info) => (
+					<EditorErrorScreen
+						error={info().error}
+						projectPath={info().projectPath}
+					/>
+				)}
+			</Match>
+			<Match when={readyData()}>
 				{(values) => (
 					<EditorContextProvider {...values()}>
 						<Inner />
 					</EditorContextProvider>
 				)}
-			</Show>
-		</EditorInstanceContextProvider>
+			</Match>
+		</Switch>
 	);
 }
 

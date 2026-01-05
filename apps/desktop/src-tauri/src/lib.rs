@@ -1444,6 +1444,24 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(window))]
+async fn get_editor_project_path(window: Window) -> Result<PathBuf, String> {
+    let CapWindowId::Editor { id } = CapWindowId::from_str(window.label()).unwrap() else {
+        return Err("Invalid window".to_string());
+    };
+
+    let window_ids = EditorWindowIds::get(window.app_handle());
+    let window_ids = window_ids.ids.lock().unwrap();
+
+    let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
+        return Err("Editor instance not found".to_string());
+    };
+
+    Ok(path.clone())
+}
+
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(editor))]
 async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
     let path = editor.project_path.clone();
@@ -2472,6 +2490,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             open_file_path,
             get_video_metadata,
             create_editor_instance,
+            get_editor_project_path,
             get_mic_waveforms,
             get_system_audio_waveforms,
             start_playback,
