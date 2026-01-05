@@ -356,11 +356,23 @@ impl Muxer for WindowsMuxer {
                     }
                 };
 
+                fn normalize_timestamp(ts: Duration, first: &mut Option<Duration>) -> Duration {
+                    match *first {
+                        Some(first_ts) => ts.saturating_sub(first_ts),
+                        None => {
+                            *first = Some(ts);
+                            Duration::ZERO
+                        }
+                    }
+                }
+
                 match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder with frame pacing");
                         let frame_interval = Duration::from_secs_f64(1.0 / config.frame_rate as f64);
                         let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
+                        let mut first_timestamp: Option<Duration> = None;
+                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
 
@@ -368,15 +380,18 @@ impl Muxer for WindowsMuxer {
                             Arc::new(AtomicBool::default()),
                             || {
                                 match video_rx.recv_timeout(frame_interval) {
-                                    Ok(Some((frame, _timestamp))) => {
+                                    Ok(Some((frame, timestamp))) => {
                                         last_texture = Some(frame.texture().clone());
+                                        last_timestamp = Some(timestamp);
                                     }
                                     Ok(None) => {
                                         trace!("End of stream signal received");
                                         return Ok(None);
                                     }
                                     Err(RecvTimeoutError::Timeout) => {
-                                        if last_texture.is_some() {
+                                        if let Some(last_ts) = last_timestamp {
+                                            let new_ts = last_ts.saturating_add(frame_interval);
+                                            last_timestamp = Some(new_ts);
                                             frames_reused += 1;
                                             if frames_reused.is_multiple_of(30) {
                                                 debug!(
@@ -393,21 +408,20 @@ impl Muxer for WindowsMuxer {
                                     }
                                 }
 
-                                if let Some(ref texture) = last_texture {
-                                    let timestamp = Duration::from_nanos(
-                                        frame_count.saturating_mul(frame_interval.as_nanos() as u64)
-                                    );
+                                if let (Some(texture), Some(ts)) = (&last_texture, last_timestamp) {
+                                    let normalized_ts = normalize_timestamp(ts, &mut first_timestamp);
                                     frame_count += 1;
-                                    let frame_time = duration_to_timespan(timestamp);
+                                    let frame_time = duration_to_timespan(normalized_ts);
                                     Ok(Some((texture.clone(), frame_time)))
                                 } else {
                                     match video_rx.recv() {
-                                        Ok(Some((frame, _timestamp))) => {
+                                        Ok(Some((frame, timestamp))) => {
                                             let texture = frame.texture().clone();
                                             last_texture = Some(texture.clone());
-                                            let timestamp = Duration::ZERO;
+                                            last_timestamp = Some(timestamp);
+                                            let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
                                             frame_count = 1;
-                                            let frame_time = duration_to_timespan(timestamp);
+                                            let frame_time = duration_to_timespan(normalized_ts);
                                             Ok(Some((texture, frame_time)))
                                         }
                                         Ok(None) | Err(_) => Ok(None),
@@ -452,34 +466,44 @@ impl Muxer for WindowsMuxer {
                         trace!("Running software encoder with frame pacing");
                         let frame_interval = Duration::from_secs_f64(1.0 / config.frame_rate as f64);
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
+                        let mut first_timestamp: Option<Duration> = None;
+                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
 
                         use scap_ffmpeg::AsFFmpeg;
 
                         loop {
-                            let ffmpeg_frame = match video_rx.recv_timeout(frame_interval) {
-                                Ok(Some((frame, _timestamp))) => {
+                            let (ffmpeg_frame, ts) = match video_rx.recv_timeout(frame_interval) {
+                                Ok(Some((frame, timestamp))) => {
+                                    last_timestamp = Some(timestamp);
                                     match frame.as_ffmpeg() {
                                         Ok(f) => {
                                             last_ffmpeg_frame = Some(f.clone());
-                                            Some(f)
+                                            (Some(f), timestamp)
                                         }
                                         Err(e) => {
                                             warn!("Failed to convert frame: {e:?}");
-                                            last_ffmpeg_frame.clone()
+                                            (last_ffmpeg_frame.clone(), timestamp)
                                         }
                                     }
                                 }
                                 Ok(None) => break,
                                 Err(RecvTimeoutError::Timeout) => {
-                                    last_ffmpeg_frame.clone()
+                                    if let Some(last_ts) = last_timestamp {
+                                        let new_ts = last_ts.saturating_add(frame_interval);
+                                        last_timestamp = Some(new_ts);
+                                        (last_ffmpeg_frame.clone(), new_ts)
+                                    } else {
+                                        continue;
+                                    }
                                 }
                                 Err(RecvTimeoutError::Disconnected) => break,
                             };
 
                             let Some(ffmpeg_frame) = ffmpeg_frame else {
                                 match video_rx.recv() {
-                                    Ok(Some((frame, _timestamp))) => {
+                                    Ok(Some((frame, timestamp))) => {
+                                        last_timestamp = Some(timestamp);
                                         if let Ok(f) = frame.as_ffmpeg() {
                                             last_ffmpeg_frame = Some(f);
                                         }
@@ -489,9 +513,7 @@ impl Muxer for WindowsMuxer {
                                 continue;
                             };
 
-                            let timestamp = Duration::from_nanos(
-                                frame_count.saturating_mul(frame_interval.as_nanos() as u64)
-                            );
+                            let normalized_ts = normalize_timestamp(ts, &mut first_timestamp);
                             frame_count += 1;
 
                             let Ok(mut output) = output.lock() else {
@@ -499,7 +521,7 @@ impl Muxer for WindowsMuxer {
                             };
 
                             encoder
-                                .queue_frame(ffmpeg_frame, timestamp, &mut output)
+                                .queue_frame(ffmpeg_frame, normalized_ts, &mut output)
                                 .context("queue_frame")?;
                         }
 
@@ -845,6 +867,16 @@ impl Muxer for WindowsCameraMuxer {
                     }
                 };
 
+                fn normalize_camera_timestamp(ts: Duration, first: &mut Option<Duration>) -> Duration {
+                    match *first {
+                        Some(first_ts) => ts.saturating_sub(first_ts),
+                        None => {
+                            *first = Some(ts);
+                            Duration::ZERO
+                        }
+                    }
+                }
+
                 match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         info!(
@@ -859,20 +891,27 @@ impl Muxer for WindowsCameraMuxer {
 
                         let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
                         let mut last_frame: Option<NativeCameraFrame> = None;
+                        let mut first_timestamp: Option<Duration> = None;
+                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
                             || {
                                 match video_rx.recv_timeout(frame_interval) {
-                                    Ok(Some((frame, _timestamp))) => {
+                                    Ok(Some((frame, timestamp))) => {
                                         last_frame = Some(frame);
+                                        last_timestamp = Some(timestamp);
                                     }
                                     Ok(None) => {
                                         trace!("End of camera stream signal received");
                                         return Ok(None);
                                     }
                                     Err(RecvTimeoutError::Timeout) => {
+                                        if let Some(last_ts) = last_timestamp {
+                                            let new_ts = last_ts.saturating_add(frame_interval);
+                                            last_timestamp = Some(new_ts);
+                                        }
                                     }
                                     Err(RecvTimeoutError::Disconnected) => {
                                         trace!("Camera channel disconnected");
@@ -880,10 +919,8 @@ impl Muxer for WindowsCameraMuxer {
                                     }
                                 }
 
-                                if let Some(ref frame) = last_frame {
-                                    let timestamp = Duration::from_nanos(
-                                        frame_count.saturating_mul(frame_interval.as_nanos() as u64)
-                                    );
+                                if let (Some(frame), Some(ts)) = (&last_frame, last_timestamp) {
+                                    let normalized_ts = normalize_camera_timestamp(ts, &mut first_timestamp);
                                     frame_count += 1;
                                     if frame_count.is_multiple_of(30) {
                                         debug!(
@@ -892,15 +929,16 @@ impl Muxer for WindowsCameraMuxer {
                                         );
                                     }
                                     let texture = upload_mf_buffer_to_texture(&d3d_device, frame)?;
-                                    Ok(Some((texture, duration_to_timespan(timestamp))))
+                                    Ok(Some((texture, duration_to_timespan(normalized_ts))))
                                 } else {
                                     match video_rx.recv() {
-                                        Ok(Some((frame, _timestamp))) => {
+                                        Ok(Some((frame, timestamp))) => {
                                             last_frame = Some(frame.clone());
-                                            let timestamp = Duration::ZERO;
+                                            last_timestamp = Some(timestamp);
+                                            let normalized_ts = normalize_camera_timestamp(timestamp, &mut first_timestamp);
                                             frame_count = 1;
                                             let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
-                                            Ok(Some((texture, duration_to_timespan(timestamp))))
+                                            Ok(Some((texture, duration_to_timespan(normalized_ts))))
                                         }
                                         Ok(None) | Err(_) => Ok(None),
                                     }
@@ -949,34 +987,42 @@ impl Muxer for WindowsCameraMuxer {
 
                         let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
                         let mut last_frame: Option<NativeCameraFrame> = None;
+                        let mut first_timestamp: Option<Duration> = None;
+                        let mut last_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
 
                         loop {
-                            let frame_to_encode = match video_rx.recv_timeout(frame_interval) {
-                                Ok(Some((frame, _timestamp))) => {
+                            let (frame_to_encode, ts) = match video_rx.recv_timeout(frame_interval) {
+                                Ok(Some((frame, timestamp))) => {
                                     last_frame = Some(frame.clone());
-                                    Some(frame)
+                                    last_timestamp = Some(timestamp);
+                                    (Some(frame), timestamp)
                                 }
                                 Ok(None) => break,
                                 Err(RecvTimeoutError::Timeout) => {
-                                    last_frame.clone()
+                                    if let Some(last_ts) = last_timestamp {
+                                        let new_ts = last_ts.saturating_add(frame_interval);
+                                        last_timestamp = Some(new_ts);
+                                        (last_frame.clone(), new_ts)
+                                    } else {
+                                        continue;
+                                    }
                                 }
                                 Err(RecvTimeoutError::Disconnected) => break,
                             };
 
                             let Some(frame) = frame_to_encode else {
                                 match video_rx.recv() {
-                                    Ok(Some((frame, _timestamp))) => {
+                                    Ok(Some((frame, timestamp))) => {
                                         last_frame = Some(frame.clone());
+                                        last_timestamp = Some(timestamp);
                                     }
                                     Ok(None) | Err(_) => break,
                                 }
                                 continue;
                             };
 
-                            let timestamp = Duration::from_nanos(
-                                frame_count.saturating_mul(frame_interval.as_nanos() as u64)
-                            );
+                            let normalized_ts = normalize_camera_timestamp(ts, &mut first_timestamp);
 
                             let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame) {
                                 Ok(f) => f,
@@ -991,7 +1037,7 @@ impl Muxer for WindowsCameraMuxer {
                             };
 
                             if let Err(e) = encoder
-                                .queue_frame(ffmpeg_frame, timestamp, &mut output_guard)
+                                .queue_frame(ffmpeg_frame, normalized_ts, &mut output_guard)
                                 .context("queue camera frame")
                             {
                                 error!("Failed to queue camera frame: {e}");
