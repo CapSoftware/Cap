@@ -17,14 +17,24 @@ use std::{
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+#[cfg(windows)]
+fn default_output_dir() -> PathBuf {
+    std::env::temp_dir().join("cap-real-device-tests")
+}
+
+#[cfg(not(windows))]
+fn default_output_dir() -> PathBuf {
+    PathBuf::from("/tmp/cap-real-device-tests")
+}
+
 #[derive(Parser)]
 #[command(name = "real-device-test-runner")]
-#[command(about = "Run end-to-end recording tests with real hardware devices on macOS")]
+#[command(about = "Run end-to-end recording tests with real hardware devices")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    #[arg(long, global = true, default_value = "/tmp/cap-real-device-tests")]
+    #[arg(long, global = true, default_value_os_t = default_output_dir())]
     output_dir: PathBuf,
 
     #[arg(long, global = true)]
@@ -251,6 +261,65 @@ struct DurationValidation {
 }
 
 #[derive(Debug, Clone, Default)]
+struct FrameRateAnalysis {
+    valid: bool,
+    expected_fps: f64,
+    segments: Vec<SegmentFrameRateResult>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SegmentFrameRateResult {
+    index: usize,
+    actual_fps: f64,
+    frame_count: usize,
+    expected_frame_count: usize,
+    dropped_frames: usize,
+    avg_frame_interval_ms: f64,
+    max_frame_interval_ms: f64,
+    min_frame_interval_ms: f64,
+    jitter_ms: f64,
+    fps_ok: bool,
+    jitter_ok: bool,
+    dropped_ok: bool,
+}
+
+const FPS_TOLERANCE: f64 = 2.0;
+const JITTER_TOLERANCE_MS: f64 = 15.0;
+const MAX_DROPPED_FRAME_PERCENT: f64 = 2.0;
+
+#[derive(Debug, Clone, Default)]
+struct AudioTimingAnalysis {
+    valid: bool,
+    segments: Vec<SegmentAudioTimingResult>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SegmentAudioTimingResult {
+    index: usize,
+    mic: Option<AudioStreamMetrics>,
+    system_audio: Option<AudioStreamMetrics>,
+    mic_video_duration_diff_ms: Option<f64>,
+    system_audio_video_duration_diff_ms: Option<f64>,
+    mic_duration_ok: bool,
+    system_audio_duration_ok: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AudioStreamMetrics {
+    duration_secs: f64,
+    sample_rate: u32,
+    channels: u16,
+    total_samples: u64,
+    expected_samples: u64,
+    sample_deficit_percent: f64,
+    has_gaps: bool,
+    gap_count: usize,
+    total_gap_duration_ms: f64,
+}
+
+const AUDIO_VIDEO_DURATION_TOLERANCE_MS: f64 = 100.0;
+
+#[derive(Debug, Clone, Default)]
 struct SegmentDurationResult {
     index: usize,
     expected: Duration,
@@ -271,6 +340,8 @@ struct TestReport {
     av_sync: AVSyncValidation,
     camera_output: CameraOutputValidation,
     duration_validation: DurationValidation,
+    frame_rate: FrameRateAnalysis,
+    audio_timing: AudioTimingAnalysis,
     elapsed: Duration,
     errors: Vec<String>,
 }
@@ -392,6 +463,106 @@ impl TestReport {
                 seg.expected.as_secs_f64(),
                 if seg.ok { "OK" } else { "FAIL" }
             );
+        }
+
+        println!(
+            "  Frame Rate: {} (expected {:.0}fps, tolerance: ±{:.0}fps)",
+            if self.frame_rate.valid { "OK" } else { "FAIL" },
+            self.frame_rate.expected_fps,
+            FPS_TOLERANCE
+        );
+        for seg in &self.frame_rate.segments {
+            let drop_percent = if seg.expected_frame_count > 0 {
+                (seg.dropped_frames as f64 / seg.expected_frame_count as f64) * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "    Segment {}: {:.1}fps frames={} dropped={} ({:.1}%) jitter={:.1}ms interval=[{:.1}-{:.1}ms]",
+                seg.index,
+                seg.actual_fps,
+                seg.frame_count,
+                seg.dropped_frames,
+                drop_percent,
+                seg.jitter_ms,
+                seg.min_frame_interval_ms,
+                seg.max_frame_interval_ms
+            );
+            if !seg.fps_ok {
+                println!("      WARN: FPS outside tolerance!");
+            }
+            if !seg.jitter_ok {
+                println!(
+                    "      WARN: Frame jitter exceeds {}ms!",
+                    JITTER_TOLERANCE_MS
+                );
+            }
+            if !seg.dropped_ok {
+                println!(
+                    "      WARN: Dropped frames exceed {}%!",
+                    MAX_DROPPED_FRAME_PERCENT
+                );
+            }
+        }
+
+        println!(
+            "  Audio Timing: {} (tolerance: ±{:.0}ms vs video)",
+            if self.audio_timing.valid {
+                "OK"
+            } else {
+                "FAIL"
+            },
+            AUDIO_VIDEO_DURATION_TOLERANCE_MS
+        );
+        for seg in &self.audio_timing.segments {
+            if let Some(ref mic) = seg.mic {
+                let diff_str = seg
+                    .mic_video_duration_diff_ms
+                    .map(|d| format!("{:.1}ms", d))
+                    .unwrap_or_else(|| "N/A".to_string());
+                let gap_str = if mic.has_gaps {
+                    format!(
+                        " gaps={} ({:.1}ms total)",
+                        mic.gap_count, mic.total_gap_duration_ms
+                    )
+                } else {
+                    String::new()
+                };
+                println!(
+                    "    Segment {} mic: {:.2}s diff={} {}Hz {}ch{}",
+                    seg.index, mic.duration_secs, diff_str, mic.sample_rate, mic.channels, gap_str
+                );
+                if !seg.mic_duration_ok {
+                    println!("      WARN: Mic duration differs from video!");
+                }
+                if mic.has_gaps {
+                    println!("      WARN: Audio gaps detected!");
+                }
+            }
+            if let Some(ref sys) = seg.system_audio {
+                let diff_str = seg
+                    .system_audio_video_duration_diff_ms
+                    .map(|d| format!("{:.1}ms", d))
+                    .unwrap_or_else(|| "N/A".to_string());
+                let gap_str = if sys.has_gaps {
+                    format!(
+                        " gaps={} ({:.1}ms total)",
+                        sys.gap_count, sys.total_gap_duration_ms
+                    )
+                } else {
+                    String::new()
+                };
+                println!(
+                    "    Segment {} system: {:.2}s diff={} {}Hz {}ch{}",
+                    seg.index, sys.duration_secs, diff_str, sys.sample_rate, sys.channels, gap_str
+                );
+                if !seg.system_audio_duration_ok {
+                    println!("      WARN: System audio duration differs from video!");
+                }
+                if sys.has_gaps {
+                    println!("      WARN: Audio gaps detected!");
+                }
+            }
         }
 
         if !self.errors.is_empty() {
@@ -678,6 +849,412 @@ async fn probe_single_file_duration(path: &Path) -> anyhow::Result<Duration> {
     Ok(Duration::ZERO)
 }
 
+fn analyze_frame_rate_for_file(
+    path: &Path,
+    expected_fps: f64,
+    expected_duration: Duration,
+) -> anyhow::Result<SegmentFrameRateResult> {
+    let mut result = SegmentFrameRateResult {
+        expected_frame_count: (expected_duration.as_secs_f64() * expected_fps) as usize,
+        ..Default::default()
+    };
+
+    let input = ffmpeg::format::input(path).context("Failed to open video file")?;
+
+    let video_stream = input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .context("No video stream found")?;
+
+    let stream_index = video_stream.index();
+    let time_base = video_stream.time_base();
+    let time_base_secs = time_base.0 as f64 / time_base.1 as f64;
+
+    let mut frame_timestamps: Vec<f64> = Vec::new();
+
+    let mut ictx = ffmpeg::format::input(path)?;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == stream_index {
+            if let Some(pts) = packet.pts() {
+                let timestamp_secs = pts as f64 * time_base_secs;
+                frame_timestamps.push(timestamp_secs);
+            }
+        }
+    }
+
+    frame_timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    result.frame_count = frame_timestamps.len();
+
+    if frame_timestamps.len() < 2 {
+        return Ok(result);
+    }
+
+    let mut intervals: Vec<f64> = Vec::with_capacity(frame_timestamps.len() - 1);
+    for i in 1..frame_timestamps.len() {
+        let interval = frame_timestamps[i] - frame_timestamps[i - 1];
+        if interval > 0.0 {
+            intervals.push(interval * 1000.0);
+        }
+    }
+
+    if intervals.is_empty() {
+        return Ok(result);
+    }
+
+    let total_interval: f64 = intervals.iter().sum();
+    result.avg_frame_interval_ms = total_interval / intervals.len() as f64;
+    result.max_frame_interval_ms = intervals.iter().cloned().fold(0.0, f64::max);
+    result.min_frame_interval_ms = intervals.iter().cloned().fold(f64::INFINITY, f64::min);
+
+    let duration_secs = frame_timestamps.last().unwrap() - frame_timestamps.first().unwrap();
+    if duration_secs > 0.0 {
+        result.actual_fps = (frame_timestamps.len() - 1) as f64 / duration_secs;
+    }
+
+    let mean_interval = result.avg_frame_interval_ms;
+    let variance: f64 = intervals
+        .iter()
+        .map(|i| (i - mean_interval).powi(2))
+        .sum::<f64>()
+        / intervals.len() as f64;
+    result.jitter_ms = variance.sqrt();
+
+    let expected_interval_ms = 1000.0 / expected_fps;
+    let drop_threshold_ms = expected_interval_ms * 1.8;
+
+    result.dropped_frames = intervals
+        .iter()
+        .filter(|&&interval| interval > drop_threshold_ms)
+        .map(|&interval| ((interval / expected_interval_ms).round() as usize).saturating_sub(1))
+        .sum();
+
+    result.fps_ok = (result.actual_fps - expected_fps).abs() <= FPS_TOLERANCE;
+    result.jitter_ok = result.jitter_ms <= JITTER_TOLERANCE_MS;
+
+    let drop_percent = if result.expected_frame_count > 0 {
+        (result.dropped_frames as f64 / result.expected_frame_count as f64) * 100.0
+    } else {
+        0.0
+    };
+    result.dropped_ok = drop_percent <= MAX_DROPPED_FRAME_PERCENT;
+
+    Ok(result)
+}
+
+async fn analyze_frame_rate(
+    meta: &RecordingMeta,
+    scenario: &TestScenario,
+    expected_fps: f64,
+) -> FrameRateAnalysis {
+    let mut result = FrameRateAnalysis {
+        valid: true,
+        expected_fps,
+        segments: vec![],
+    };
+
+    let expected_durations = scenario.segment_durations();
+
+    let RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
+        return result;
+    };
+
+    match studio_meta.as_ref() {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            let display_path = meta.path(&segment.display.path);
+            let expected_dur = expected_durations.first().copied().unwrap_or_default();
+
+            let file_path = if display_path.is_dir() {
+                let combined = display_path.join("_combined_for_fps.mp4");
+                if let Ok(()) = combine_fragmented_to_file(&display_path, &combined) {
+                    combined
+                } else {
+                    return result;
+                }
+            } else {
+                display_path
+            };
+
+            match analyze_frame_rate_for_file(&file_path, expected_fps, expected_dur) {
+                Ok(mut seg_result) => {
+                    seg_result.index = 0;
+                    if !seg_result.fps_ok || !seg_result.jitter_ok || !seg_result.dropped_ok {
+                        result.valid = false;
+                    }
+                    result.segments.push(seg_result);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to analyze frame rate for segment 0: {}", e);
+                    result.valid = false;
+                }
+            }
+
+            if file_path
+                .file_name()
+                .is_some_and(|n| n == "_combined_for_fps.mp4")
+            {
+                let _ = std::fs::remove_file(&file_path);
+            }
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            for (idx, segment) in inner.segments.iter().enumerate() {
+                let display_path = meta.path(&segment.display.path);
+                let expected_dur = expected_durations.get(idx).copied().unwrap_or_default();
+
+                let file_path = if display_path.is_dir() {
+                    let combined = display_path.join("_combined_for_fps.mp4");
+                    if let Ok(()) = combine_fragmented_to_file(&display_path, &combined) {
+                        combined
+                    } else {
+                        result.valid = false;
+                        continue;
+                    }
+                } else {
+                    display_path
+                };
+
+                match analyze_frame_rate_for_file(&file_path, expected_fps, expected_dur) {
+                    Ok(mut seg_result) => {
+                        seg_result.index = idx;
+                        if !seg_result.fps_ok || !seg_result.jitter_ok || !seg_result.dropped_ok {
+                            result.valid = false;
+                        }
+                        result.segments.push(seg_result);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to analyze frame rate for segment {}: {}", idx, e);
+                        result.valid = false;
+                    }
+                }
+
+                if file_path
+                    .file_name()
+                    .is_some_and(|n| n == "_combined_for_fps.mp4")
+                {
+                    let _ = std::fs::remove_file(&file_path);
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn combine_fragmented_to_file(dir: &Path, output: &Path) -> anyhow::Result<()> {
+    let init_segment = dir.join("init.mp4");
+    if !init_segment.exists() {
+        bail!("Missing init.mp4");
+    }
+
+    let mut fragments: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+        .collect();
+    fragments.sort();
+
+    let mut combined_data = std::fs::read(&init_segment)?;
+    for fragment in &fragments {
+        combined_data.extend(std::fs::read(fragment)?);
+    }
+    std::fs::write(output, combined_data)?;
+
+    Ok(())
+}
+
+fn analyze_audio_stream(
+    path: &Path,
+    video_duration_secs: f64,
+) -> anyhow::Result<AudioStreamMetrics> {
+    let mut metrics = AudioStreamMetrics::default();
+
+    let input = ffmpeg::format::input(path).context("Failed to open audio file")?;
+
+    let audio_stream = input
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .context("No audio stream found")?;
+
+    let codec_params = audio_stream.parameters();
+    metrics.sample_rate = unsafe { (*codec_params.as_ptr()).sample_rate as u32 };
+    metrics.channels = unsafe { (*codec_params.as_ptr()).ch_layout.nb_channels as u16 };
+
+    let time_base = audio_stream.time_base();
+    let time_base_secs = time_base.0 as f64 / time_base.1 as f64;
+    let stream_index = audio_stream.index();
+
+    let raw_duration = input.duration();
+    if raw_duration > 0 {
+        metrics.duration_secs = raw_duration as f64 / ffmpeg::ffi::AV_TIME_BASE as f64;
+    } else if let Some(stream_duration) = audio_stream.duration().checked_mul(time_base.0 as i64) {
+        metrics.duration_secs = stream_duration as f64 / time_base.1 as f64;
+    }
+
+    if metrics.sample_rate > 0 {
+        metrics.expected_samples = (video_duration_secs * metrics.sample_rate as f64) as u64;
+    }
+
+    let mut packet_timestamps: Vec<(f64, f64)> = Vec::new();
+    let mut ictx = ffmpeg::format::input(path)?;
+
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == stream_index {
+            if let (Some(pts), Some(duration)) = (packet.pts(), Some(packet.duration())) {
+                let start_secs = pts as f64 * time_base_secs;
+                let dur_secs = duration as f64 * time_base_secs;
+                packet_timestamps.push((start_secs, dur_secs));
+            }
+        }
+    }
+
+    packet_timestamps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let gap_threshold_secs = 0.05;
+    for i in 1..packet_timestamps.len() {
+        let prev_end = packet_timestamps[i - 1].0 + packet_timestamps[i - 1].1;
+        let curr_start = packet_timestamps[i].0;
+        let gap = curr_start - prev_end;
+
+        if gap > gap_threshold_secs {
+            metrics.has_gaps = true;
+            metrics.gap_count += 1;
+            metrics.total_gap_duration_ms += gap * 1000.0;
+        }
+    }
+
+    if metrics.sample_rate > 0 && metrics.duration_secs > 0.0 {
+        metrics.total_samples = (metrics.duration_secs * metrics.sample_rate as f64) as u64;
+
+        if metrics.expected_samples > 0 {
+            let deficit = metrics
+                .expected_samples
+                .saturating_sub(metrics.total_samples);
+            metrics.sample_deficit_percent =
+                (deficit as f64 / metrics.expected_samples as f64) * 100.0;
+        }
+    }
+
+    Ok(metrics)
+}
+
+async fn analyze_audio_timing(
+    meta: &RecordingMeta,
+    scenario: &TestScenario,
+) -> AudioTimingAnalysis {
+    let mut result = AudioTimingAnalysis {
+        valid: true,
+        segments: vec![],
+    };
+
+    let expected_durations = scenario.segment_durations();
+
+    let RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
+        return result;
+    };
+
+    match studio_meta.as_ref() {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            let mut seg_result = SegmentAudioTimingResult {
+                index: 0,
+                mic_duration_ok: true,
+                system_audio_duration_ok: true,
+                ..Default::default()
+            };
+
+            let video_duration = expected_durations.first().copied().unwrap_or_default();
+            let video_duration_secs = video_duration.as_secs_f64();
+
+            if let Some(ref audio) = segment.audio {
+                let audio_path = meta.path(&audio.path);
+                match analyze_audio_stream(&audio_path, video_duration_secs) {
+                    Ok(metrics) => {
+                        let diff_ms = (metrics.duration_secs - video_duration_secs).abs() * 1000.0;
+                        seg_result.mic_video_duration_diff_ms = Some(diff_ms);
+                        seg_result.mic_duration_ok = diff_ms <= AUDIO_VIDEO_DURATION_TOLERANCE_MS;
+
+                        if !seg_result.mic_duration_ok || metrics.has_gaps {
+                            result.valid = false;
+                        }
+                        seg_result.mic = Some(metrics);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to analyze audio: {}", e);
+                    }
+                }
+            }
+
+            result.segments.push(seg_result);
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            for (idx, segment) in inner.segments.iter().enumerate() {
+                let mut seg_result = SegmentAudioTimingResult {
+                    index: idx,
+                    mic_duration_ok: true,
+                    system_audio_duration_ok: true,
+                    ..Default::default()
+                };
+
+                let video_duration = expected_durations.get(idx).copied().unwrap_or_default();
+                let video_duration_secs = video_duration.as_secs_f64();
+
+                if let Some(ref mic) = segment.mic {
+                    let mic_path = meta.path(&mic.path);
+                    match analyze_audio_stream(&mic_path, video_duration_secs) {
+                        Ok(metrics) => {
+                            let diff_ms =
+                                (metrics.duration_secs - video_duration_secs).abs() * 1000.0;
+                            seg_result.mic_video_duration_diff_ms = Some(diff_ms);
+                            seg_result.mic_duration_ok =
+                                diff_ms <= AUDIO_VIDEO_DURATION_TOLERANCE_MS;
+
+                            if !seg_result.mic_duration_ok || metrics.has_gaps {
+                                result.valid = false;
+                            }
+                            seg_result.mic = Some(metrics);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to analyze mic audio for segment {}: {}",
+                                idx,
+                                e
+                            );
+                        }
+                    }
+                }
+
+                if let Some(ref sys_audio) = segment.system_audio {
+                    let sys_path = meta.path(&sys_audio.path);
+                    match analyze_audio_stream(&sys_path, video_duration_secs) {
+                        Ok(metrics) => {
+                            let diff_ms =
+                                (metrics.duration_secs - video_duration_secs).abs() * 1000.0;
+                            seg_result.system_audio_video_duration_diff_ms = Some(diff_ms);
+                            seg_result.system_audio_duration_ok =
+                                diff_ms <= AUDIO_VIDEO_DURATION_TOLERANCE_MS;
+
+                            if !seg_result.system_audio_duration_ok || metrics.has_gaps {
+                                result.valid = false;
+                            }
+                            seg_result.system_audio = Some(metrics);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to analyze system audio for segment {}: {}",
+                                idx,
+                                e
+                            );
+                        }
+                    }
+                }
+
+                result.segments.push(seg_result);
+            }
+        }
+    }
+
+    result
+}
+
 async fn validate_duration(
     meta: &RecordingMeta,
     scenario: &TestScenario,
@@ -785,6 +1362,7 @@ async fn execute_recording(
         None
     };
 
+    #[cfg(target_os = "macos")]
     let shareable_content = cidre::sc::ShareableContent::current().await?;
 
     let mut builder = studio_recording::Actor::builder(
@@ -805,7 +1383,12 @@ async fn execute_recording(
         builder = builder.with_camera_feed(camera);
     }
 
-    let handle = builder.build(shareable_content).await?;
+    let handle = builder
+        .build(
+            #[cfg(target_os = "macos")]
+            shareable_content,
+        )
+        .await?;
 
     for action in &scenario.actions {
         match action {
@@ -903,12 +1486,19 @@ async fn run_test(
         }
     }
 
+    let expected_fps = 30.0;
+    report.frame_rate = analyze_frame_rate(&meta, scenario, expected_fps).await;
+
+    report.audio_timing = analyze_audio_timing(&meta, scenario).await;
+
     let av_sync_ok = !include_camera || report.av_sync.all_synced;
     let camera_output_ok = !include_camera || !fragmented || report.camera_output.valid;
 
     report.passed = report.segment_count_ok
         && report.segment_timing.all_valid
         && report.duration_validation.total_ok
+        && report.frame_rate.valid
+        && report.audio_timing.valid
         && av_sync_ok
         && camera_output_ok
         && report.errors.is_empty();
@@ -917,6 +1507,7 @@ async fn run_test(
     report
 }
 
+#[cfg(target_os = "macos")]
 async fn check_permissions() -> anyhow::Result<()> {
     println!("\nChecking macOS permissions...\n");
 
@@ -935,8 +1526,30 @@ async fn check_permissions() -> anyhow::Result<()> {
         println!("  Microphone: NO DEVICE FOUND");
     }
 
-    if !cap_camera::list_cameras().next().is_none() {
+    if cap_camera::list_cameras().next().is_some() {
         println!("  Camera: AVAILABLE (permission will be requested on first use)");
+    } else {
+        println!("  Camera: NO DEVICE FOUND");
+    }
+
+    println!();
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn check_permissions() -> anyhow::Result<()> {
+    println!("\nChecking Windows device availability...\n");
+
+    println!("  Screen Recording: Windows does not require explicit permission");
+
+    if MicrophoneFeed::default_device().is_some() {
+        println!("  Microphone: AVAILABLE");
+    } else {
+        println!("  Microphone: NO DEVICE FOUND");
+    }
+
+    if cap_camera::list_cameras().next().is_some() {
+        println!("  Camera: AVAILABLE");
     } else {
         println!("  Camera: NO DEVICE FOUND");
     }
@@ -980,6 +1593,12 @@ fn print_summary(reports: &[TestReport]) {
             if !report.duration_validation.total_ok {
                 print!(" [DURATION]");
             }
+            if !report.frame_rate.valid {
+                print!(" [FRAME RATE]");
+            }
+            if !report.audio_timing.valid {
+                print!(" [AUDIO TIMING]");
+            }
             if report.include_camera && !report.av_sync.all_synced {
                 print!(" [A/V SYNC]");
             }
@@ -996,6 +1615,12 @@ fn print_summary(reports: &[TestReport]) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).ok() };
+    }
+
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
@@ -1017,6 +1642,7 @@ async fn main() -> anyhow::Result<()> {
 
     let devices = AvailableDevices::discover()?;
 
+    #[cfg(target_os = "macos")]
     if cidre::sc::ShareableContent::current().await.is_err() {
         bail!(
             "Screen Recording permission not granted. Run with 'check-permissions' to see details."

@@ -72,7 +72,20 @@
       "Bash(sysctl:*)",
       "Bash(CAP_VIDEO_SOURCE_BUFFER_SIZE=4800 CAP_MUXER_BUFFER_SIZE=4800 RUST_LOG=warn cargo run:*)",
       "Bash(RUST_LOG=cap_enc_ffmpeg::video::h264=debug cargo run:*)",
-      "Bash(CAP_VIDEO_SOURCE_BUFFER_SIZE=5400 CAP_MUXER_BUFFER_SIZE=5400 RUST_LOG=info cargo run:*)"
+      "Bash(CAP_VIDEO_SOURCE_BUFFER_SIZE=5400 CAP_MUXER_BUFFER_SIZE=5400 RUST_LOG=info cargo run:*)",
+      "Bash(target\\release\\examples\\real-device-test-runner.exe:*)",
+      "Bash(./target/release/examples/real-device-test-runner.exe:*)",
+      "Bash(.\\target\\release\\examples\\real-device-test-runner.exe:*)",
+      "Bash(for dir in /c/Users/Richie/AppData/Local/Temp/cap-real-device-tests/*/)",
+      "Bash(for segment in \"$dir\"content/segments/*/)",
+      "Bash(do if [ -d \"$segment\" ])",
+      "Bash(if [ -f \"$segment/output.mp4\" ])",
+      "Bash(then ffprobe -v error -show_entries format=duration -of default=nw=1 \"$segment/output.mp4\")",
+      "Bash(fi)",
+      "Bash(if [ -f \"$segment/audio.ogg\" ])",
+      "Bash(then ffprobe -v error -show_entries format=duration -of default=nw=1 \"$segment/audio.ogg\")",
+      "Bash(done)",
+      "Bash(./target/release/examples/real-device-test-runner:*)"
     ],
     "deny": [],
     "ask": []

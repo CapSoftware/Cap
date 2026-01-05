@@ -8,6 +8,7 @@ use ffmpeg::{
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use tempfile::NamedTempFile;
 use tracing::*;
 
 #[derive(Debug, Clone)]
@@ -176,6 +177,56 @@ pub struct FFmpegDecoder {
     stream_index: usize,
     hw_device: Option<HwDevice>,
     start_time: i64,
+    _temp_file: Option<NamedTempFile>,
+}
+
+fn combine_fragmented_segments(dir_path: &std::path::Path) -> Result<NamedTempFile, String> {
+    let init_segment = dir_path.join("init.mp4");
+    if !init_segment.exists() {
+        return Err(format!(
+            "init.mp4 not found in fragmented directory: {}",
+            dir_path.display()
+        ));
+    }
+
+    let mut fragments: Vec<PathBuf> = std::fs::read_dir(dir_path)
+        .map_err(|e| format!("read fragmented directory / {e}"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+        .collect();
+
+    fragments.sort();
+
+    if fragments.is_empty() {
+        return Err(format!(
+            "no .m4s segments found in fragmented directory: {}",
+            dir_path.display()
+        ));
+    }
+
+    let mut combined_data =
+        std::fs::read(&init_segment).map_err(|e| format!("read init.mp4 / {e}"))?;
+
+    for fragment in &fragments {
+        let data = std::fs::read(fragment)
+            .map_err(|e| format!("read fragment {} / {e}", fragment.display()))?;
+        combined_data.extend(data);
+    }
+
+    let temp_file = NamedTempFile::new().map_err(|e| format!("create temp file / {e}"))?;
+
+    std::fs::write(temp_file.path(), &combined_data)
+        .map_err(|e| format!("write combined file / {e}"))?;
+
+    info!(
+        "Combined {} fragmented segments ({} bytes) into temp file: {}",
+        fragments.len(),
+        combined_data.len(),
+        temp_file.path().display()
+    );
+
+    Ok(temp_file)
 }
 
 impl FFmpegDecoder {
@@ -183,77 +234,80 @@ impl FFmpegDecoder {
         path: impl Into<PathBuf>,
         hw_device_type: Option<AVHWDeviceType>,
     ) -> Result<Self, String> {
-        fn inner(
-            path: PathBuf,
-            hw_device_type: Option<AVHWDeviceType>,
-        ) -> Result<FFmpegDecoder, String> {
-            let input = ffmpeg::format::input(&path).map_err(|e| format!("open file / {e}"))?;
+        let path = path.into();
 
-            let input_stream = input
-                .streams()
-                .best(avutil::media::Type::Video)
-                .ok_or_else(|| "no video stream".to_string())?;
+        let (effective_path, temp_file): (PathBuf, Option<NamedTempFile>) = if path.is_dir() {
+            let temp = combine_fragmented_segments(&path)?;
+            (temp.path().to_path_buf(), Some(temp))
+        } else {
+            (path, None)
+        };
 
-            let start_time = input_stream.start_time();
+        let input =
+            ffmpeg::format::input(&effective_path).map_err(|e| format!("open file / {e}"))?;
 
-            let stream_index = input_stream.index();
+        let input_stream = input
+            .streams()
+            .best(avutil::media::Type::Video)
+            .ok_or_else(|| "no video stream".to_string())?;
 
-            let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
-                .map_err(|e| format!("decoder context / {e}"))?
-                .decoder()
-                .video()
-                .map_err(|e| format!("video decoder / {e}"))?;
+        let start_time = input_stream.start_time();
 
-            decoder.set_time_base(input_stream.time_base());
+        let stream_index = input_stream.index();
 
-            let width = decoder.width();
-            let height = decoder.height();
+        let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
+            .map_err(|e| format!("decoder context / {e}"))?
+            .decoder()
+            .video()
+            .map_err(|e| format!("video decoder / {e}"))?;
 
-            let hw_caps = get_hw_decoder_capabilities();
-            let exceeds_hw_limits = width > hw_caps.max_width
-                || height > hw_caps.max_height
-                || !hw_caps.supports_hw_decode;
+        decoder.set_time_base(input_stream.time_base());
 
-            let hw_device = hw_device_type.and_then(|hw_device_type| {
-                if exceeds_hw_limits {
-                    warn!(
-                        "Video dimensions {width}x{height} exceed hardware decoder limits ({}x{}), using software decode",
-                        hw_caps.max_width, hw_caps.max_height
-                    );
-                    configure_software_threading(&mut decoder, width, height);
-                    None
-                } else {
-                    match decoder.try_use_hw_device(hw_device_type) {
-                        Ok(device) => {
-                            info!(
-                                "Using hardware acceleration for {width}x{height} video (device: {:?})",
-                                hw_device_type
-                            );
-                            Some(device)
-                        }
-                        Err(error) => {
-                            warn!("Failed to enable hardware decoder: {error:?}, falling back to optimized software decode");
-                            configure_software_threading(&mut decoder, width, height);
-                            None
-                        }
+        let width = decoder.width();
+        let height = decoder.height();
+
+        let hw_caps = get_hw_decoder_capabilities();
+        let exceeds_hw_limits =
+            width > hw_caps.max_width || height > hw_caps.max_height || !hw_caps.supports_hw_decode;
+
+        let hw_device = hw_device_type.and_then(|hw_device_type| {
+            if exceeds_hw_limits {
+                warn!(
+                    "Video dimensions {width}x{height} exceed hardware decoder limits ({}x{}), using software decode",
+                    hw_caps.max_width, hw_caps.max_height
+                );
+                configure_software_threading(&mut decoder, width, height);
+                None
+            } else {
+                match decoder.try_use_hw_device(hw_device_type) {
+                    Ok(device) => {
+                        info!(
+                            "Using hardware acceleration for {width}x{height} video (device: {:?})",
+                            hw_device_type
+                        );
+                        Some(device)
+                    }
+                    Err(error) => {
+                        warn!("Failed to enable hardware decoder: {error:?}, falling back to optimized software decode");
+                        configure_software_threading(&mut decoder, width, height);
+                        None
                     }
                 }
-            });
-
-            if hw_device.is_none() && hw_device_type.is_none() {
-                configure_software_threading(&mut decoder, width, height);
             }
+        });
 
-            Ok(FFmpegDecoder {
-                input,
-                decoder,
-                stream_index,
-                hw_device,
-                start_time,
-            })
+        if hw_device.is_none() && hw_device_type.is_none() {
+            configure_software_threading(&mut decoder, width, height);
         }
 
-        inner(path.into(), hw_device_type)
+        Ok(FFmpegDecoder {
+            input,
+            decoder,
+            stream_index,
+            hw_device,
+            start_time,
+            _temp_file: temp_file,
+        })
     }
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), ffmpeg::Error> {
