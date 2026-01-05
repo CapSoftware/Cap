@@ -212,11 +212,12 @@ impl Message<Resume> for Actor {
                     .create_next(cursors, next_cursor_id)
                     .await?;
 
+                let new_segment_start_time = current_time_f64();
+
                 Some(ActorState::Recording {
                     pipeline,
-                    // pipeline_done_rx,
                     index: next_index,
-                    segment_start_time: current_time_f64(),
+                    segment_start_time: new_segment_start_time,
                     segment_start_instant: Instant::now(),
                 })
             }
@@ -575,8 +576,6 @@ async fn spawn_studio_recording_actor(
     let segments_dir = ensure_dir(&content_dir.join("segments"))?;
     let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
-    let start_time = Timestamps::now();
-
     let (completion_tx, completion_rx) =
         watch::channel::<Option<Result<(), PipelineDoneError>>>(None);
 
@@ -596,7 +595,6 @@ async fn spawn_studio_recording_actor(
         custom_cursor_capture,
         fragmented,
         max_fps,
-        start_time,
         completion_tx.clone(),
     );
 
@@ -689,6 +687,26 @@ async fn stop_recording(
             let to_start_time =
                 |timestamp: Timestamp| timestamp.signed_duration_since_secs(s.pipeline.start_time);
 
+            let mic_start_time = s
+                .pipeline
+                .microphone
+                .as_ref()
+                .map(|mic| to_start_time(mic.first_timestamp));
+
+            let camera_start_time = s.pipeline.camera.as_ref().map(|camera| {
+                let raw_camera_start = to_start_time(camera.first_timestamp);
+                if let Some(mic_start) = mic_start_time {
+                    let sync_offset = raw_camera_start - mic_start;
+                    if sync_offset.abs() > 0.030 {
+                        mic_start
+                    } else {
+                        raw_camera_start
+                    }
+                } else {
+                    raw_camera_start
+                }
+            });
+
             MultipleSegment {
                 display: VideoMeta {
                     path: make_relative(&s.pipeline.screen.path),
@@ -716,12 +734,12 @@ async fn stop_recording(
                         );
                         DEFAULT_FPS
                     }),
-                    start_time: Some(to_start_time(camera.first_timestamp)),
+                    start_time: camera_start_time,
                     device_id: s.camera_device_id.clone(),
                 }),
                 mic: s.pipeline.microphone.map(|mic| AudioMeta {
                     path: make_relative(&mic.path),
-                    start_time: Some(to_start_time(mic.first_timestamp)),
+                    start_time: mic_start_time,
                     device_id: s.mic_device_id.clone(),
                 }),
                 system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
@@ -798,7 +816,6 @@ struct SegmentPipelineFactory {
     custom_cursor_capture: bool,
     fragmented: bool,
     max_fps: u32,
-    start_time: Timestamps,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
@@ -814,7 +831,6 @@ impl SegmentPipelineFactory {
         custom_cursor_capture: bool,
         fragmented: bool,
         max_fps: u32,
-        start_time: Timestamps,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
         Self {
@@ -824,7 +840,6 @@ impl SegmentPipelineFactory {
             custom_cursor_capture,
             fragmented,
             max_fps,
-            start_time,
             index: 0,
             completion_tx,
             #[cfg(windows)]
@@ -837,7 +852,7 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
-        let segment_start_time = self.start_time;
+        let segment_start_time = Timestamps::now();
         let pipeline = create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
