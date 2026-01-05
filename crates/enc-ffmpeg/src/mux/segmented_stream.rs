@@ -8,15 +8,12 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use sysinfo::Disks;
 
 use crate::video::h264::{
     DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
 };
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
-const DISK_SPACE_WARNING_THRESHOLD_MB: u64 = 500;
-const DISK_SPACE_CRITICAL_THRESHOLD_MB: u64 = 100;
 
 #[derive(Debug, Clone)]
 pub struct DiskSpaceWarning {
@@ -77,9 +74,6 @@ pub struct SegmentedVideoEncoder {
     codec_info: CodecInfo,
 
     disk_space_callback: Option<DiskSpaceCallback>,
-    disk_space_warned: bool,
-    disk_space_critical_warned: bool,
-    init_segment_validated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -268,9 +262,6 @@ impl SegmentedVideoEncoder {
             completed_segments: Vec::new(),
             codec_info,
             disk_space_callback: None,
-            disk_space_warned: false,
-            disk_space_critical_warned: false,
-            init_segment_validated: false,
         };
 
         instance.write_in_progress_manifest();
@@ -280,55 +271,6 @@ impl SegmentedVideoEncoder {
 
     pub fn set_disk_space_callback(&mut self, callback: DiskSpaceCallback) {
         self.disk_space_callback = Some(callback);
-    }
-
-    fn check_disk_space(&mut self) {
-        let Some(callback) = &self.disk_space_callback else {
-            return;
-        };
-
-        let disks = Disks::new_with_refreshed_list();
-
-        let matching_disk = disks.iter().find(|disk| {
-            let mount_point = disk.mount_point();
-            self.base_path.starts_with(mount_point)
-        });
-
-        let Some(disk) = matching_disk else {
-            tracing::debug!("Could not find disk for path {}", self.base_path.display());
-            return;
-        };
-
-        let available_bytes = disk.available_space();
-        let available_mb = available_bytes / 1024 / 1024;
-
-        if available_mb < DISK_SPACE_CRITICAL_THRESHOLD_MB && !self.disk_space_critical_warned {
-            tracing::error!(
-                available_mb,
-                path = %self.base_path.display(),
-                "CRITICAL: Disk space critically low! Recording may fail."
-            );
-            self.disk_space_critical_warned = true;
-            callback(DiskSpaceWarning {
-                available_mb,
-                threshold_mb: DISK_SPACE_CRITICAL_THRESHOLD_MB,
-                path: self.base_path.display().to_string(),
-                is_critical: true,
-            });
-        } else if available_mb < DISK_SPACE_WARNING_THRESHOLD_MB && !self.disk_space_warned {
-            tracing::warn!(
-                available_mb,
-                path = %self.base_path.display(),
-                "Disk space running low. Consider freeing up space."
-            );
-            self.disk_space_warned = true;
-            callback(DiskSpaceWarning {
-                available_mb,
-                threshold_mb: DISK_SPACE_WARNING_THRESHOLD_MB,
-                path: self.base_path.display().to_string(),
-                is_critical: false,
-            });
-        }
     }
 
     pub fn queue_frame(
@@ -388,41 +330,6 @@ impl SegmentedVideoEncoder {
     fn current_segment_path(&self) -> PathBuf {
         self.base_path
             .join(format!("segment_{:03}.m4s", self.current_index))
-    }
-
-    fn write_manifest(&self) {
-        let manifest = Manifest {
-            version: MANIFEST_VERSION,
-            manifest_type: "m4s_segments",
-            init_segment: Some(INIT_SEGMENT_NAME.to_string()),
-            codec_info: Some(self.codec_info.clone()),
-            segments: self
-                .completed_segments
-                .iter()
-                .map(|s| SegmentEntry {
-                    path: s
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    index: s.index,
-                    duration: s.duration.as_secs_f64(),
-                    is_complete: true,
-                    file_size: s.file_size,
-                })
-                .collect(),
-            total_duration: None,
-            is_complete: false,
-        };
-
-        let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
-            tracing::warn!(
-                "Failed to write manifest to {}: {e}",
-                manifest_path.display()
-            );
-        }
     }
 
     fn write_in_progress_manifest(&self) {

@@ -1573,7 +1573,7 @@ mod tests {
                     if i > 0 {
                         let gap = result.as_secs_f64() - last_timestamp.as_secs_f64();
                         assert!(
-                            gap >= 0.0 && gap < 0.05,
+                            (0.0..0.05).contains(&gap),
                             "Gap between frames should be small: {gap:.3}s at frame {i}"
                         );
                     }
