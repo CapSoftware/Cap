@@ -259,7 +259,7 @@ impl DecoderInstance {
         path: PathBuf,
         tokio_handle: TokioHandle,
         start_time: f32,
-        keyframe_index: Option<cap_video_decode::avassetreader::KeyframeIndex>,
+        keyframe_index: Option<Arc<cap_video_decode::avassetreader::KeyframeIndex>>,
     ) -> Result<Self, String> {
         Ok(Self {
             inner: cap_video_decode::AVAssetReaderDecoder::new_with_keyframe_index(
@@ -326,13 +326,12 @@ impl AVAssetReaderDecoder {
 
         let pool_manager = DecoderPoolManager::new(config);
 
-        let primary_kf = keyframe_index_arc.as_ref().map(|arc| (**arc).clone());
         let primary_instance = DecoderInstance {
             inner: cap_video_decode::AVAssetReaderDecoder::new_with_keyframe_index(
                 path.clone(),
                 tokio_handle.clone(),
                 0.0,
-                primary_kf,
+                keyframe_index_arc.clone(),
             )?,
             is_done: false,
             frames_iter_valid: true,
@@ -343,8 +342,12 @@ impl AVAssetReaderDecoder {
         let initial_positions = pool_manager.positions();
         for pos in initial_positions.iter().skip(1) {
             let start_time = pos.position_secs;
-            let kf_clone = keyframe_index_arc.as_ref().map(|arc| (**arc).clone());
-            match DecoderInstance::new(path.clone(), tokio_handle.clone(), start_time, kf_clone) {
+            match DecoderInstance::new(
+                path.clone(),
+                tokio_handle.clone(),
+                start_time,
+                keyframe_index_arc.clone(),
+            ) {
                 Ok(instance) => {
                     decoders.push(instance);
                     tracing::info!(
