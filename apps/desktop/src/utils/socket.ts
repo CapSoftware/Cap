@@ -92,6 +92,7 @@ export type CanvasControls = {
 	hasRenderedFrame: () => boolean;
 	initDirectCanvas: (canvas: HTMLCanvasElement) => void;
 	resetFrameState: () => void;
+	captureFrame: () => Promise<Blob | null>;
 };
 
 interface ReadyMessage {
@@ -190,6 +191,8 @@ export function createImageDataWS(
 	let mainThreadWebGPUInitializing = false;
 	let pendingNv12Frame: ArrayBuffer | null = null;
 
+	let lastRenderedImageData: ImageData | null = null;
+
 	function cleanup() {
 		if (isCleanedUp) return;
 		isCleanedUp = true;
@@ -224,6 +227,8 @@ export function createImageDataWS(
 		cachedStrideImageData = null;
 		cachedStrideWidth = 0;
 		cachedStrideHeight = 0;
+
+		lastRenderedImageData = null;
 
 		setIsConnected(false);
 	}
@@ -264,6 +269,18 @@ export function createImageDataWS(
 				width,
 				height,
 				yStride,
+			);
+
+			const rgba = convertNv12ToRgbaMainThread(
+				frameData,
+				width,
+				height,
+				yStride,
+			);
+			lastRenderedImageData = new ImageData(
+				new Uint8ClampedArray(rgba),
+				width,
+				height,
 			);
 
 			if (!hasRenderedFrame()) {
@@ -309,8 +326,13 @@ export function createImageDataWS(
 				height,
 				yStride,
 			);
-			const imageData = new ImageData(rgba, width, height);
+			const imageData = new ImageData(
+				new Uint8ClampedArray(rgba),
+				width,
+				height,
+			);
 			directCtx.putImageData(imageData, 0, 0);
+			lastRenderedImageData = imageData;
 
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
@@ -398,6 +420,11 @@ export function createImageDataWS(
 				}
 				cachedStrideImageData.data.set(frameData);
 				directCtx.putImageData(cachedStrideImageData, 0, 0);
+				lastRenderedImageData = new ImageData(
+					new Uint8ClampedArray(cachedStrideImageData.data),
+					width,
+					height,
+				);
 
 				if (!hasRenderedFrame()) {
 					setHasRenderedFrame(true);
@@ -407,6 +434,22 @@ export function createImageDataWS(
 		},
 		resetFrameState: () => {
 			worker.postMessage({ type: "reset-frame-state" });
+		},
+		captureFrame: async () => {
+			if (!lastRenderedImageData) {
+				return null;
+			}
+			const canvas = document.createElement("canvas");
+			canvas.width = lastRenderedImageData.width;
+			canvas.height = lastRenderedImageData.height;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) {
+				return null;
+			}
+			ctx.putImageData(lastRenderedImageData, 0, 0);
+			return new Promise<Blob | null>((resolve) => {
+				canvas.toBlob((blob) => resolve(blob), "image/png");
+			});
 		},
 	};
 
@@ -600,6 +643,18 @@ export function createImageDataWS(
 					actualRendersCount++;
 					renderFrameCount++;
 
+					const rgba = convertNv12ToRgbaMainThread(
+						frameData,
+						width,
+						height,
+						yStride,
+					);
+					lastRenderedImageData = new ImageData(
+						new Uint8ClampedArray(rgba),
+						width,
+						height,
+					);
+
 					if (!hasRenderedFrame()) {
 						setHasRenderedFrame(true);
 					}
@@ -675,6 +730,11 @@ export function createImageDataWS(
 					}
 					cachedDirectImageData.data.set(rgbaData);
 					directCtx.putImageData(cachedDirectImageData, 0, 0);
+					lastRenderedImageData = new ImageData(
+						new Uint8ClampedArray(cachedDirectImageData.data),
+						width,
+						height,
+					);
 					actualRendersCount++;
 					renderFrameCount++;
 
@@ -761,6 +821,11 @@ export function createImageDataWS(
 						}
 						cachedDirectImageData.data.set(frameData);
 						directCtx.putImageData(cachedDirectImageData, 0, 0);
+						lastRenderedImageData = new ImageData(
+							new Uint8ClampedArray(cachedDirectImageData.data),
+							width,
+							height,
+						);
 						renderFrameCount++;
 
 						if (!hasRenderedFrame()) {

@@ -129,6 +129,11 @@ function Inner() {
 		return "type" in d && d.type === "export" && d.open;
 	};
 
+	const isCropMode = () => {
+		const d = dialog();
+		return "type" in d && d.type === "crop" && d.open;
+	};
+
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const layoutBounds = createElementBounds(layoutRef);
 	const [storedTimelineHeight, setStoredTimelineHeight] = makePersisted(
@@ -226,6 +231,14 @@ function Inner() {
 	createEffect(
 		on(isExportMode, (exportMode, prevExportMode) => {
 			if (prevExportMode === true && exportMode === false) {
+				emitRenderFrame(frameNumberToRender());
+			}
+		}),
+	);
+
+	createEffect(
+		on(isCropMode, (cropMode, prevCropMode) => {
+			if (prevCropMode === true && cropMode === false) {
 				emitRenderFrame(frameNumberToRender());
 			}
 		}),
@@ -481,8 +494,11 @@ function Dialogs() {
 							})()}
 						>
 							{(dialog) => {
-								const { setProject: setState, editorInstance } =
-									useEditorContext();
+								const {
+									setProject: setState,
+									editorInstance,
+									canvasControls,
+								} = useEditorContext();
 								const display = editorInstance.recordings.segments[0].display;
 
 								let cropperRef: CropperRef | undefined;
@@ -493,16 +509,14 @@ function Dialogs() {
 									string | null
 								>(null);
 
-								const playerCanvas = document.getElementById(
-									"canvas",
-								) as HTMLCanvasElement | null;
-								if (playerCanvas) {
-									playerCanvas.toBlob((blob) => {
+								const controls = canvasControls();
+								if (controls) {
+									controls.captureFrame().then((blob) => {
 										if (blob) {
 											const url = URL.createObjectURL(blob);
 											setFrameBlobUrl(url);
 										}
-									}, "image/png");
+									});
 								}
 
 								onCleanup(() => {
