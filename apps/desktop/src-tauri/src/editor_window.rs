@@ -182,7 +182,7 @@ impl EditorInstances {
                 let (frame_tx, frame_rx) = watch::channel(None);
 
                 let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
-                let instance = create_editor_instance_impl(
+                let inner = create_editor_instance_impl(
                     window.app_handle(),
                     path,
                     Box::new(move |frame| {
@@ -200,7 +200,7 @@ impl EditorInstances {
                 .await?;
 
                 let instance = Arc::new(EditorInstance {
-                    inner: instance.clone(),
+                    inner,
                     ws_port,
                     ws_shutdown_token,
                 });

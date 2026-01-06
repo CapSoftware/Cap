@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cidre::{
     arc::{self, R},
@@ -10,6 +11,7 @@ use cidre::{
 use ffmpeg::{codec as avcodec, format as avformat};
 use tokio::runtime::Handle as TokioHandle;
 
+#[derive(Clone)]
 pub struct KeyframeIndex {
     keyframes: Vec<(u32, f64)>,
     fps: f64,
@@ -165,12 +167,15 @@ impl KeyframeIndex {
     }
 }
 
-fn compute_seek_time(keyframe_index: Option<&KeyframeIndex>, requested_time: f32) -> f32 {
+fn compute_seek_time(keyframe_index: Option<&Arc<KeyframeIndex>>, requested_time: f32) -> f32 {
     if let Some(kf_index) = keyframe_index {
         let fps = kf_index.fps();
         let target_frame = (requested_time as f64 * fps).round() as u32;
         if let Some((_, keyframe_time)) = kf_index.nearest_keyframe_before(target_frame) {
             return keyframe_time as f32;
+        }
+        if let Some((_, first_keyframe_time)) = kf_index.keyframes().first() {
+            return *first_keyframe_time as f32;
         }
     }
     requested_time
@@ -184,7 +189,7 @@ pub struct AVAssetReaderDecoder {
     reader: R<av::AssetReader>,
     width: u32,
     height: u32,
-    keyframe_index: Option<KeyframeIndex>,
+    keyframe_index: Option<Arc<KeyframeIndex>>,
     current_position_secs: f32,
 }
 
@@ -199,7 +204,7 @@ impl AVAssetReaderDecoder {
         start_time: f32,
     ) -> Result<Self, String> {
         let keyframe_index = match KeyframeIndex::build(&path) {
-            Ok(index) => Some(index),
+            Ok(index) => Some(Arc::new(index)),
             Err(e) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -217,7 +222,7 @@ impl AVAssetReaderDecoder {
         path: PathBuf,
         tokio_handle: TokioHandle,
         start_time: f32,
-        keyframe_index: Option<KeyframeIndex>,
+        keyframe_index: Option<Arc<KeyframeIndex>>,
     ) -> Result<Self, String> {
         let (pixel_format, width, height) = {
             let input = ffmpeg::format::input(&path).unwrap();
@@ -300,12 +305,16 @@ impl AVAssetReaderDecoder {
         self.pixel_format
     }
 
-    pub fn take_keyframe_index(&mut self) -> Option<KeyframeIndex> {
+    pub fn take_keyframe_index(&mut self) -> Option<Arc<KeyframeIndex>> {
         self.keyframe_index.take()
     }
 
-    pub fn keyframe_index(&self) -> Option<&KeyframeIndex> {
+    pub fn keyframe_index(&self) -> Option<&Arc<KeyframeIndex>> {
         self.keyframe_index.as_ref()
+    }
+
+    pub fn keyframe_index_arc(&self) -> Option<Arc<KeyframeIndex>> {
+        self.keyframe_index.clone()
     }
 
     fn get_reader_track_output(

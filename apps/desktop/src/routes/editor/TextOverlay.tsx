@@ -1,4 +1,5 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { throttle } from "@solid-primitives/scheduled";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -12,7 +13,7 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import type { TextSegment as TauriTextSegment } from "~/utils/tauri";
-import { useEditorContext } from "./context";
+import { FPS, useEditorContext } from "./context";
 import type { TextSegment } from "./text";
 
 type TextOverlayProps = {
@@ -82,18 +83,21 @@ export function TextOverlay(props: TextOverlayProps) {
 				update(event, initial, initialMouse);
 			}
 
-			function finish() {
+			const throttledUpdate = throttle(handleUpdate, 1000 / FPS);
+
+			function finish(finalEvent: MouseEvent) {
+				throttledUpdate.clear();
+				handleUpdate(finalEvent);
 				resumeHistory();
 				dispose();
 			}
 
+			handleUpdate(downEvent);
+
 			const dispose = createRoot((dispose) => {
 				createEventListenerMap(window, {
-					mousemove: handleUpdate,
-					mouseup: (event) => {
-						handleUpdate(event);
-						finish();
-					},
+					mousemove: throttledUpdate,
+					mouseup: finish,
 				});
 				return dispose;
 			});

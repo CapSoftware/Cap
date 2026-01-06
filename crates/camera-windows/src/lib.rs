@@ -58,6 +58,7 @@ const VIRTUAL_CAMERA_PATTERNS: &[&str] = &[
     "camo",
     "avatarify",
     "facerig",
+    "nvidia broadcast",
 ];
 
 const CAPTURE_CARD_PATTERNS: &[&str] = &[
@@ -339,10 +340,10 @@ impl VideoDeviceInfo {
                                 inner: FrameInner::MediaFoundation(buffer),
                                 width: format.width() as usize,
                                 height: format.height() as usize,
+                                is_bottom_up: format.is_bottom_up,
                                 pixel_format: format.pixel_format,
                                 timestamp: data.timestamp,
                                 perf_counter: data.perf_counter,
-                                // capture_begin_time: Some(data.capture_begin_time),
                             })
                         }
                     }),
@@ -365,14 +366,18 @@ impl VideoDeviceInfo {
                             return;
                         };
 
+                        let bi_height = video_info.bmiHeader.biHeight;
+                        let is_bottom_up = bi_height > 0;
+                        let height = bi_height.unsigned_abs() as usize;
+
                         callback(Frame {
                             inner: FrameInner::DirectShow(sample.clone()),
                             pixel_format: format,
                             width: video_info.bmiHeader.biWidth as usize,
-                            height: video_info.bmiHeader.biHeight as usize,
+                            height,
+                            is_bottom_up,
                             timestamp: data.timestamp,
                             perf_counter: data.perf_counter,
-                            // capture_begin_time: None,
                         });
                     }),
                 )?;
@@ -421,6 +426,7 @@ pub struct Frame {
     pub pixel_format: PixelFormat,
     pub width: usize,
     pub height: usize,
+    pub is_bottom_up: bool,
     // pub reference_time: Instant,
     pub timestamp: Duration,
     pub perf_counter: i64,
@@ -482,6 +488,19 @@ pub enum PixelFormat {
     RGB565,
     P010,
     H264,
+}
+
+impl PixelFormat {
+    pub fn is_traditionally_bottom_up(&self) -> bool {
+        matches!(
+            self,
+            PixelFormat::RGB24
+                | PixelFormat::RGB32
+                | PixelFormat::BGR24
+                | PixelFormat::ARGB
+                | PixelFormat::RGB565
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -592,6 +611,7 @@ pub struct VideoFormat {
     height: u32,
     frame_rate: f32,
     pixel_format: PixelFormat,
+    is_bottom_up: bool,
     pub inner: VideoFormatInner,
 }
 
@@ -610,6 +630,10 @@ impl VideoFormat {
 
     pub fn pixel_format(&self) -> PixelFormat {
         self.pixel_format
+    }
+
+    pub fn is_bottom_up(&self) -> bool {
+        self.is_bottom_up
     }
 }
 
@@ -658,13 +682,20 @@ impl VideoFormat {
 
         let subtype = unsafe { inner.GetGUID(&MF_MT_SUBTYPE)? };
 
+        let pixel_format = MFPixelFormat::new(subtype)
+            .ok_or(VideoFormatError::InvalidPixelFormat(subtype))?
+            .format;
+
+        let is_bottom_up = unsafe { inner.GetUINT32(&MF_MT_DEFAULT_STRIDE) }
+            .map(|stride| (stride as i32) < 0)
+            .unwrap_or_else(|_| pixel_format.is_traditionally_bottom_up());
+
         Ok(Self {
             width,
             height,
             frame_rate,
-            pixel_format: MFPixelFormat::new(subtype)
-                .ok_or(VideoFormatError::InvalidPixelFormat(subtype))?
-                .format,
+            pixel_format,
+            is_bottom_up,
             inner: VideoFormatInner::MediaFoundation(inner),
         })
     }
@@ -675,15 +706,19 @@ impl VideoFormat {
         }
 
         let video_info = unsafe { inner.video_info() };
+        let bi_height = video_info.bmiHeader.biHeight;
+        let is_bottom_up = bi_height > 0;
+        let height = bi_height.unsigned_abs();
 
         Ok(VideoFormat {
             width: video_info.bmiHeader.biWidth as u32,
-            height: video_info.bmiHeader.biHeight as u32,
+            height,
             frame_rate: ((10_000_000.0 / video_info.AvgTimePerFrame as f32) * 100.0).round()
                 / 100.0,
             pixel_format: DSPixelFormat::new(&inner)
                 .ok_or(VideoFormatError::InvalidPixelFormat(inner.subtype))?
                 .format,
+            is_bottom_up,
             inner: VideoFormatInner::DirectShow(inner),
         })
     }

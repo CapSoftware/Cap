@@ -11,6 +11,7 @@ import {
 	type Accessor,
 	batch,
 	createEffect,
+	createMemo,
 	createResource,
 	createRoot,
 	createSignal,
@@ -18,6 +19,8 @@ import {
 	onCleanup,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
+
+import { generalSettingsStore } from "~/store";
 
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
@@ -29,6 +32,7 @@ import {
 } from "~/utils/socket";
 import {
 	commands,
+	type EditorPreviewQuality,
 	events,
 	type FramesRendered,
 	type MultipleSegments,
@@ -64,17 +68,17 @@ export const OUTPUT_SIZE = {
 	y: 1080,
 };
 
-export type PreviewQuality = "quarter" | "half" | "full";
+export const DEFAULT_PREVIEW_QUALITY: EditorPreviewQuality = "half";
 
-export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "full";
-
-const previewQualityScale: Record<PreviewQuality, number> = {
+const previewQualityScale: Record<EditorPreviewQuality, number> = {
 	full: 1,
-	half: 0.5,
+	half: 0.65,
 	quarter: 0.25,
 };
 
-export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
+export const getPreviewResolution = (
+	quality: EditorPreviewQuality,
+): XY<number> => {
 	const scale = previewQualityScale[quality];
 	const width = (Math.max(2, Math.round(OUTPUT_SIZE.x * scale)) + 1) & ~1;
 	const height = (Math.max(2, Math.round(OUTPUT_SIZE.y * scale)) + 1) & ~1;
@@ -523,9 +527,31 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			),
 		);
 
-		const [previewQuality, setPreviewQuality] = createSignal<PreviewQuality>(
-			DEFAULT_PREVIEW_QUALITY,
-		);
+		const [storedSettings] = createResource(() => generalSettingsStore.get());
+		const initialPreviewQuality = createMemo((): EditorPreviewQuality => {
+			const stored = storedSettings()?.editorPreviewQuality;
+			if (stored === "quarter" || stored === "half" || stored === "full") {
+				return stored;
+			}
+			return DEFAULT_PREVIEW_QUALITY;
+		});
+
+		const [previewQuality, _setPreviewQuality] =
+			createSignal<EditorPreviewQuality>(DEFAULT_PREVIEW_QUALITY);
+
+		createEffect(() => {
+			const quality = initialPreviewQuality();
+			_setPreviewQuality(quality);
+		});
+
+		const setPreviewQuality = (quality: EditorPreviewQuality) => {
+			_setPreviewQuality(quality);
+			generalSettingsStore
+				.set({ editorPreviewQuality: quality })
+				.catch((error) => {
+					console.error("Failed to persist preview quality setting", error);
+				});
+		};
 
 		const previewResolutionBase = () => getPreviewResolution(previewQuality());
 
@@ -712,6 +738,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 );
 
 export type { CanvasControls, FrameData } from "~/utils/socket";
+export type { EditorPreviewQuality } from "~/utils/tauri";
 
 function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 	if ("fps" in rawMeta) {

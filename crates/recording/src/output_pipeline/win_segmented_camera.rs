@@ -1,4 +1,4 @@
-use crate::output_pipeline::win::{NativeCameraFrame, upload_mf_buffer_to_texture};
+use crate::output_pipeline::win::{CameraBuffers, NativeCameraFrame, upload_mf_buffer_to_texture};
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, fragmentation};
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -512,6 +512,7 @@ impl WindowsSegmentedCameraMuxer {
                         );
 
                         let mut first_timestamp: Option<Duration> = None;
+                        let mut camera_buffers = CameraBuffers::new();
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
@@ -528,7 +529,7 @@ impl WindowsSegmentedCameraMuxer {
                                     Duration::ZERO
                                 };
 
-                                let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
+                                let texture = upload_mf_buffer_to_texture(&d3d_device, &frame, &mut camera_buffers)?;
                                 Ok(Some((texture, duration_to_timespan(relative))))
                             },
                             |output_sample| {

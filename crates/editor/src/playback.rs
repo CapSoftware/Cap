@@ -133,13 +133,21 @@ impl Playback {
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
-        let prefetch_duration = if let Some(timeline) = &self.project.borrow().timeline {
-            timeline.duration()
-        } else {
-            f64::MAX
-        };
+        let (prefetch_duration, has_timeline) =
+            if let Some(timeline) = &self.project.borrow().timeline {
+                (timeline.duration(), true)
+            } else {
+                (f64::MAX, false)
+            };
+        let segment_media_count = self.segment_medias.len();
 
         tokio::spawn(async move {
+            if !has_timeline {
+                warn!("Prefetch: No timeline configuration found");
+            }
+            if segment_media_count == 0 {
+                warn!("Prefetch: No segment media available");
+            }
             type PrefetchFuture = std::pin::Pin<
                 Box<
                     dyn std::future::Future<Output = (u32, u32, Option<DecodedSegmentFrames>)>
@@ -320,6 +328,12 @@ impl Playback {
                                 segment_frames,
                                 segment_index,
                             }).await;
+                        } else if frames_decoded <= 5 {
+                            warn!(
+                                frame = frame_num,
+                                segment = segment_index,
+                                "Prefetch: decoder returned no frames"
+                            );
                         }
                     }
 
@@ -361,6 +375,8 @@ impl Playback {
 
             let warmup_target_frames = 20usize;
             let warmup_after_first_timeout = Duration::from_millis(1000);
+            let warmup_no_frames_timeout = Duration::from_secs(5);
+            let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
 
             while !*stop_rx.borrow() {
@@ -373,6 +389,15 @@ impl Playback {
 
                 if should_start {
                     break;
+                }
+
+                if first_frame_time.is_none() && warmup_start.elapsed() > warmup_no_frames_timeout {
+                    warn!(
+                        "Playback warmup timed out waiting for first frame after {:?}",
+                        warmup_start.elapsed()
+                    );
+                    let _ = event_tx.send(PlaybackEvent::Stop);
+                    return;
                 }
 
                 tokio::select! {
@@ -388,6 +413,8 @@ impl Playback {
                         if *stop_rx.borrow() {
                             break;
                         }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
                     }
                 }
             }
