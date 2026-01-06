@@ -2246,6 +2246,94 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor_instance))]
+async fn get_display_frame_for_cropping(
+    editor_instance: WindowEditorInstance,
+    fps: u32,
+) -> Result<Vec<u8>, String> {
+    use cap_project::ClipOffsets;
+    use cap_rendering::{PixelFormat, cpu_yuv};
+    use image::{ImageEncoder, codecs::png::PngEncoder};
+    use std::io::Cursor;
+
+    let frame_number = editor_instance.state.lock().await.playhead_position;
+    let time_secs = frame_number as f64 / fps as f64;
+
+    let project = editor_instance.project_config.1.borrow().clone();
+
+    let (segment_time, segment) = project
+        .get_segment_time(time_secs)
+        .ok_or_else(|| "No segment found for current time".to_string())?;
+
+    let segment_medias = editor_instance
+        .segment_medias
+        .get(segment.recording_clip as usize)
+        .ok_or_else(|| "Segment media not found".to_string())?;
+
+    let clip_offsets = project
+        .clips
+        .iter()
+        .find(|v| v.index == segment.recording_clip)
+        .map(|v| v.offsets)
+        .unwrap_or(ClipOffsets::default());
+
+    let segment_frames = segment_medias
+        .decoders
+        .get_frames(segment_time as f32, false, clip_offsets)
+        .await
+        .ok_or_else(|| "Failed to get frame".to_string())?;
+
+    let screen_frame = segment_frames.screen_frame;
+    let width = screen_frame.width();
+    let height = screen_frame.height();
+
+    let rgba_data = match screen_frame.format() {
+        PixelFormat::Rgba => screen_frame.data().to_vec(),
+        PixelFormat::Nv12 => {
+            let y_plane = screen_frame.y_plane().ok_or("Missing Y plane")?;
+            let uv_plane = screen_frame.uv_plane().ok_or("Missing UV plane")?;
+            let mut rgba = vec![0u8; (width * height * 4) as usize];
+            cpu_yuv::nv12_to_rgba(
+                y_plane,
+                uv_plane,
+                width,
+                height,
+                screen_frame.y_stride(),
+                screen_frame.uv_stride(),
+                &mut rgba,
+            );
+            rgba
+        }
+        PixelFormat::Yuv420p => {
+            let y_plane = screen_frame.y_plane().ok_or("Missing Y plane")?;
+            let u_plane = screen_frame.u_plane().ok_or("Missing U plane")?;
+            let v_plane = screen_frame.v_plane().ok_or("Missing V plane")?;
+            let mut rgba = vec![0u8; (width * height * 4) as usize];
+            cpu_yuv::yuv420p_to_rgba(
+                y_plane,
+                u_plane,
+                v_plane,
+                width,
+                height,
+                screen_frame.y_stride(),
+                screen_frame.uv_stride(),
+                &mut rgba,
+            );
+            rgba
+        }
+    };
+
+    let mut png_data = Cursor::new(Vec::new());
+    let encoder = PngEncoder::new(&mut png_data);
+    encoder
+        .write_image(&rgba_data, width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|e| format!("Failed to encode PNG: {e}"))?;
+
+    Ok(png_data.into_inner())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<Vec<f32>>, String> {
     let mut out = Vec::new();
 
@@ -2518,6 +2606,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             reset_microphone_permissions,
             is_camera_window_open,
             seek_to,
+            get_display_frame_for_cropping,
             windows::position_traffic_lights,
             windows::set_theme,
             global_message_dialog,

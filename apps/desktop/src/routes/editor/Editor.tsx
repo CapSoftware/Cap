@@ -121,7 +121,6 @@ function Inner() {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
-		canvasControls,
 	} = useEditorContext();
 
 	const isExportMode = () => {
@@ -494,11 +493,8 @@ function Dialogs() {
 							})()}
 						>
 							{(dialog) => {
-								const {
-									setProject: setState,
-									editorInstance,
-									canvasControls,
-								} = useEditorContext();
+								const { setProject: setState, editorInstance } =
+									useEditorContext();
 								const display = editorInstance.recordings.segments[0].display;
 
 								let cropperRef: CropperRef | undefined;
@@ -509,20 +505,18 @@ function Dialogs() {
 									string | null
 								>(null);
 
-								const controls = canvasControls();
-								if (controls) {
-									controls
-										.captureFrame()
-										.then((blob) => {
-											if (blob) {
-												const url = URL.createObjectURL(blob);
-												setFrameBlobUrl(url);
-											}
-										})
-										.catch((error) => {
-											console.warn("Frame capture failed:", error);
+								commands
+									.getDisplayFrameForCropping(FPS)
+									.then((pngBytes) => {
+										const blob = new Blob([new Uint8Array(pngBytes)], {
+											type: "image/png",
 										});
-								}
+										const url = URL.createObjectURL(blob);
+										setFrameBlobUrl(url);
+									})
+									.catch((error: unknown) => {
+										console.warn("Display frame fetch failed:", error);
+									});
 
 								onCleanup(() => {
 									const url = frameBlobUrl();
