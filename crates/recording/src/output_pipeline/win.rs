@@ -468,7 +468,6 @@ impl Muxer for WindowsMuxer {
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut last_timestamp: Option<Duration> = None;
-                        let mut frame_count: u64 = 0;
 
                         use scap_ffmpeg::AsFFmpeg;
 
@@ -514,7 +513,6 @@ impl Muxer for WindowsMuxer {
                             };
 
                             let normalized_ts = normalize_timestamp(ts, &mut first_timestamp);
-                            frame_count += 1;
 
                             let Ok(mut output) = output.lock() else {
                                 continue;
@@ -1527,7 +1525,7 @@ fn flip_buffer_size(
         PixelFormat::ARGB | PixelFormat::RGB32 => width * 4 * height,
         PixelFormat::RGB24 | PixelFormat::BGR24 => width * 3 * height,
         PixelFormat::GRAY8 => width * height,
-        PixelFormat::MJPEG => 0,
+        PixelFormat::MJPEG | PixelFormat::H264 => 0,
     }
 }
 
@@ -1626,7 +1624,7 @@ fn flip_camera_buffer_into(
         PixelFormat::GRAY8 => {
             flip_rows_into(data, dst, width, height);
         }
-        PixelFormat::MJPEG => {
+        PixelFormat::MJPEG | PixelFormat::H264 => {
             let copy_len = data.len().min(dst.len());
             dst[..copy_len].copy_from_slice(&data[..copy_len]);
         }
@@ -1690,18 +1688,29 @@ pub fn upload_mf_buffer_to_texture(
         }
         (true, true) => {
             let uyvy_size = (frame.width * frame.height * 2) as usize;
-            let uyvy_dst = buffers.ensure_uyvy_capacity(uyvy_size);
-            convert_uyvy_to_yuyv_into(original_data, uyvy_dst, frame.width, frame.height);
-
             let flip_size = flip_buffer_size(
                 frame.width as usize,
                 frame.height as usize,
                 frame.pixel_format,
             );
-            let flip_dst = buffers.ensure_flip_capacity(flip_size);
+
+            if buffers.uyvy_buffer.len() < uyvy_size {
+                buffers.uyvy_buffer.resize(uyvy_size, 0);
+            }
+            if buffers.flip_buffer.len() < flip_size {
+                buffers.flip_buffer.resize(flip_size, 0);
+            }
+
+            convert_uyvy_to_yuyv_into(
+                original_data,
+                &mut buffers.uyvy_buffer[..uyvy_size],
+                frame.width,
+                frame.height,
+            );
+
             flip_camera_buffer_into(
                 &buffers.uyvy_buffer[..uyvy_size],
-                flip_dst,
+                &mut buffers.flip_buffer[..flip_size],
                 frame.width as usize,
                 frame.height as usize,
                 frame.pixel_format,
