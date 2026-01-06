@@ -2677,6 +2677,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 })
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
+                    CapWindowId::Main.label().as_str(),
                     "window-capture-occluder",
                     "target-select-overlay",
                     CapWindowId::CaptureArea.label().as_str(),
