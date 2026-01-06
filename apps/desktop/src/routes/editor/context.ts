@@ -11,6 +11,7 @@ import {
 	type Accessor,
 	batch,
 	createEffect,
+	createMemo,
 	createResource,
 	createRoot,
 	createSignal,
@@ -18,6 +19,8 @@ import {
 	onCleanup,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
+
+import { generalSettingsStore } from "~/store";
 
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
@@ -66,7 +69,7 @@ export const OUTPUT_SIZE = {
 
 export type PreviewQuality = "quarter" | "half" | "full";
 
-export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "full";
+export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "half";
 
 const previewQualityScale: Record<PreviewQuality, number> = {
 	full: 1,
@@ -523,9 +526,38 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			),
 		);
 
-		const [previewQuality, setPreviewQuality] = createSignal<PreviewQuality>(
+		const [storedSettings] = createResource(() => generalSettingsStore.get());
+		const initialPreviewQuality = createMemo((): PreviewQuality => {
+			const stored = storedSettings()?.editorPreviewQuality;
+			if (stored === "quarter" || stored === "half" || stored === "full") {
+				return stored;
+			}
+			return DEFAULT_PREVIEW_QUALITY;
+		});
+
+		const [previewQuality, _setPreviewQuality] = createSignal<PreviewQuality>(
 			DEFAULT_PREVIEW_QUALITY,
 		);
+
+		createEffect(() => {
+			const quality = initialPreviewQuality();
+			_setPreviewQuality(quality);
+			commands.setEditorPreviewQuality(quality).catch((error) => {
+				console.error("Failed to set initial editor preview quality", error);
+			});
+		});
+
+		const setPreviewQuality = (quality: PreviewQuality) => {
+			_setPreviewQuality(quality);
+			generalSettingsStore
+				.set({ editorPreviewQuality: quality })
+				.catch((error) => {
+					console.error("Failed to persist preview quality setting", error);
+				});
+			commands.setEditorPreviewQuality(quality).catch((error) => {
+				console.error("Failed to update editor preview quality", error);
+			});
+		};
 
 		const previewResolutionBase = () => getPreviewResolution(previewQuality());
 

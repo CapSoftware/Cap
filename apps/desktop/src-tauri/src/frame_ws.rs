@@ -7,7 +7,6 @@ static TOTAL_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 static TOTAL_FRAMES_SENT: AtomicU32 = AtomicU32::new(0);
 static LAST_LOG_TIME: AtomicU64 = AtomicU64::new(0);
 
-const DOWNSCALE_PERCENT: u32 = 75;
 const NV12_FORMAT_MAGIC: u32 = 0x4e563132;
 
 fn downscale_and_convert_to_nv12(
@@ -15,9 +14,10 @@ fn downscale_and_convert_to_nv12(
     width: u32,
     height: u32,
     stride: u32,
+    scale_percent: u32,
 ) -> (Vec<u8>, u32, u32) {
-    let new_width = ((width * DOWNSCALE_PERCENT) / 100) & !1;
-    let new_height = ((height * DOWNSCALE_PERCENT) / 100) & !1;
+    let new_width = ((width * scale_percent) / 100) & !1;
+    let new_height = ((height * scale_percent) / 100) & !1;
 
     if new_width == 0 || new_height == 0 {
         return (Vec::new(), 0, 0);
@@ -148,6 +148,7 @@ pub struct WSFrame {
 
 pub async fn create_watch_frame_ws(
     frame_rx: watch::Receiver<Option<WSFrame>>,
+    scale_rx: watch::Receiver<u32>,
 ) -> (u16, CancellationToken) {
     use axum::{
         extract::{
@@ -158,41 +159,49 @@ pub async fn create_watch_frame_ws(
         routing::get,
     };
 
-    type RouterState = watch::Receiver<Option<WSFrame>>;
+    type RouterState = (watch::Receiver<Option<WSFrame>>, watch::Receiver<u32>);
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
         State(state): State<RouterState>,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_socket(socket, state))
+        ws.on_upgrade(move |socket| handle_socket(socket, state.0, state.1))
     }
 
-    async fn handle_socket(mut socket: WebSocket, mut camera_rx: RouterState) {
+    async fn handle_socket(
+        mut socket: WebSocket,
+        mut camera_rx: watch::Receiver<Option<WSFrame>>,
+        scale_rx: watch::Receiver<u32>,
+    ) {
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
 
         {
             let frame_opt = camera_rx.borrow().clone();
+            let scale_percent = *scale_rx.borrow();
             if let Some(frame) = frame_opt {
                 let (nv12_data, scaled_width, scaled_height) = downscale_and_convert_to_nv12(
                     &frame.data,
                     frame.width,
                     frame.height,
                     frame.stride,
+                    scale_percent,
                 );
 
-                let packed = pack_nv12_frame(
-                    nv12_data,
-                    scaled_width,
-                    scaled_height,
-                    frame.frame_number,
-                    frame.target_time_ns,
-                );
+                if scaled_width > 0 && scaled_height > 0 {
+                    let packed = pack_nv12_frame(
+                        nv12_data,
+                        scaled_width,
+                        scaled_height,
+                        frame.frame_number,
+                        frame.target_time_ns,
+                    );
 
-                if let Err(e) = socket.send(Message::Binary(packed)).await {
-                    tracing::error!("Failed to send initial frame to socket: {:?}", e);
-                    return;
+                    if let Err(e) = socket.send(Message::Binary(packed)).await {
+                        tracing::error!("Failed to send initial frame to socket: {:?}", e);
+                        return;
+                    }
                 }
             }
         }
@@ -214,14 +223,19 @@ pub async fn create_watch_frame_ws(
                 },
                 _ = camera_rx.changed() => {
                     let frame_opt = camera_rx.borrow_and_update().clone();
+                    let scale_percent = *scale_rx.borrow();
                     if let Some(frame) = frame_opt {
-
                         let (nv12_data, scaled_width, scaled_height) = downscale_and_convert_to_nv12(
                             &frame.data,
                             frame.width,
                             frame.height,
                             frame.stride,
+                            scale_percent,
                         );
+
+                        if scaled_width == 0 || scaled_height == 0 {
+                            continue;
+                        }
 
                         let packed = pack_nv12_frame(
                             nv12_data,
@@ -270,7 +284,7 @@ pub async fn create_watch_frame_ws(
 
     let router = axum::Router::new()
         .route("/", get(ws_handler))
-        .with_state(frame_rx);
+        .with_state((frame_rx, scale_rx));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

@@ -511,12 +511,17 @@ function Dialogs() {
 
 								const controls = canvasControls();
 								if (controls) {
-									controls.captureFrame().then((blob) => {
-										if (blob) {
-											const url = URL.createObjectURL(blob);
-											setFrameBlobUrl(url);
-										}
-									});
+									controls
+										.captureFrame()
+										.then((blob) => {
+											if (blob) {
+												const url = URL.createObjectURL(blob);
+												setFrameBlobUrl(url);
+											}
+										})
+										.catch((error) => {
+											console.warn("Frame capture failed:", error);
+										});
 								}
 
 								onCleanup(() => {

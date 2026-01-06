@@ -98,7 +98,8 @@ impl ScreenshotEditorInstances {
         match instances.entry(window.label().to_string()) {
             Entry::Vacant(entry) => {
                 let (frame_tx, frame_rx) = watch::channel(None);
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                let (_scale_tx, scale_rx) = watch::channel(100u32);
+                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, scale_rx).await;
 
                 let (data, width, height) = {
                     let key = path

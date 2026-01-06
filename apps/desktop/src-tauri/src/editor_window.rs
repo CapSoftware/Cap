@@ -12,6 +12,7 @@ pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
     pub ws_port: u16,
     pub ws_shutdown_token: CancellationToken,
+    scale_tx: watch::Sender<u32>,
 }
 
 type PendingResult = Result<Arc<EditorInstance>, String>;
@@ -22,8 +23,9 @@ pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>)
 
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
+    let (scale_tx, scale_rx) = watch::channel(50u32);
 
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, scale_rx).await;
     let inner = create_editor_instance_impl(
         &app,
         path,
@@ -45,6 +47,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         inner,
         ws_port,
         ws_shutdown_token,
+        scale_tx,
     }))
 }
 
@@ -95,6 +98,10 @@ impl EditorInstance {
         self.inner.dispose().await;
 
         self.ws_shutdown_token.cancel();
+    }
+
+    pub fn set_preview_scale(&self, scale_percent: u32) {
+        self.scale_tx.send_replace(scale_percent);
     }
 }
 
@@ -180,9 +187,10 @@ impl EditorInstances {
                 }
 
                 let (frame_tx, frame_rx) = watch::channel(None);
+                let (scale_tx, scale_rx) = watch::channel(50u32);
 
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
-                let instance = create_editor_instance_impl(
+                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, scale_rx).await;
+                let inner = create_editor_instance_impl(
                     window.app_handle(),
                     path,
                     Box::new(move |frame| {
@@ -200,9 +208,10 @@ impl EditorInstances {
                 .await?;
 
                 let instance = Arc::new(EditorInstance {
-                    inner: instance.clone(),
+                    inner,
                     ws_port,
                     ws_shutdown_token,
+                    scale_tx,
                 });
 
                 entry.insert(instance.clone());

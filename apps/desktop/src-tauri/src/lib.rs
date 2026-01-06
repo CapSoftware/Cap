@@ -58,7 +58,7 @@ use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
 use editor_window::{EditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
-use general_settings::GeneralSettingsStore;
+use general_settings::{EditorPreviewQuality, GeneralSettingsStore};
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
@@ -1646,6 +1646,16 @@ async fn set_project_config(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor_instance))]
+fn set_editor_preview_quality(
+    editor_instance: WindowEditorInstance,
+    quality: EditorPreviewQuality,
+) {
+    editor_instance.set_preview_scale(quality.scale_percent());
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn update_project_config_in_memory(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
@@ -2497,6 +2507,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            set_editor_preview_quality,
             update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
