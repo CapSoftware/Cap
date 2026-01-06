@@ -199,6 +199,25 @@ export function createImageDataWS(
 		isNv12: boolean;
 	} | null = null;
 
+	function storeRenderedFrame(
+		frameData: Uint8ClampedArray,
+		width: number,
+		height: number,
+		yStride: number,
+		isNv12: boolean,
+	) {
+		lastRenderedFrameData = {
+			data: new Uint8ClampedArray(frameData),
+			width,
+			height,
+			yStride,
+			isNv12,
+		};
+		if (!hasRenderedFrame()) {
+			setHasRenderedFrame(true);
+		}
+	}
+
 	function cleanup() {
 		if (isCleanedUp) return;
 		isCleanedUp = true;
@@ -277,17 +296,7 @@ export function createImageDataWS(
 				yStride,
 			);
 
-			lastRenderedFrameData = {
-				data: new Uint8ClampedArray(frameData),
-				width,
-				height,
-				yStride,
-				isNv12: true,
-			};
-
-			if (!hasRenderedFrame()) {
-				setHasRenderedFrame(true);
-			}
+			storeRenderedFrame(frameData, width, height, yStride, true);
 			onmessage({ width, height });
 		}
 	}
@@ -335,17 +344,7 @@ export function createImageDataWS(
 			);
 			directCtx.putImageData(imageData, 0, 0);
 
-			lastRenderedFrameData = {
-				data: new Uint8ClampedArray(frameData),
-				width,
-				height,
-				yStride,
-				isNv12: true,
-			};
-
-			if (!hasRenderedFrame()) {
-				setHasRenderedFrame(true);
-			}
+			storeRenderedFrame(frameData, width, height, yStride, true);
 			onmessage({ width, height });
 		}
 	}
@@ -430,17 +429,13 @@ export function createImageDataWS(
 				cachedStrideImageData.data.set(frameData);
 				directCtx.putImageData(cachedStrideImageData, 0, 0);
 
-				lastRenderedFrameData = {
-					data: new Uint8ClampedArray(cachedStrideImageData.data),
+				storeRenderedFrame(
+					cachedStrideImageData.data,
 					width,
 					height,
-					yStride: width * 4,
-					isNv12: false,
-				};
-
-				if (!hasRenderedFrame()) {
-					setHasRenderedFrame(true);
-				}
+					width * 4,
+					false,
+				);
 				onmessage({ width, height });
 			};
 		},
@@ -663,17 +658,7 @@ export function createImageDataWS(
 					actualRendersCount++;
 					renderFrameCount++;
 
-					lastRenderedFrameData = {
-						data: new Uint8ClampedArray(frameData),
-						width,
-						height,
-						yStride,
-						isNv12: true,
-					};
-
-					if (!hasRenderedFrame()) {
-						setHasRenderedFrame(true);
-					}
+					storeRenderedFrame(frameData, width, height, yStride, true);
 					onmessage({ width, height });
 				}
 				return;
@@ -747,19 +732,10 @@ export function createImageDataWS(
 					cachedDirectImageData.data.set(rgbaData);
 					directCtx.putImageData(cachedDirectImageData, 0, 0);
 
-					lastRenderedFrameData = {
-						data: new Uint8ClampedArray(nv12Data),
-						width,
-						height,
-						yStride,
-						isNv12: true,
-					};
+					storeRenderedFrame(nv12Data, width, height, yStride, true);
 					actualRendersCount++;
 					renderFrameCount++;
 
-					if (!hasRenderedFrame()) {
-						setHasRenderedFrame(true);
-					}
 					onmessage({ width, height });
 				}
 				return;
@@ -841,18 +817,15 @@ export function createImageDataWS(
 						cachedDirectImageData.data.set(frameData);
 						directCtx.putImageData(cachedDirectImageData, 0, 0);
 
-						lastRenderedFrameData = {
-							data: new Uint8ClampedArray(cachedDirectImageData.data),
+						storeRenderedFrame(
+							cachedDirectImageData.data,
 							width,
 							height,
-							yStride: width * 4,
-							isNv12: false,
-						};
+							width * 4,
+							false,
+						);
 						renderFrameCount++;
 
-						if (!hasRenderedFrame()) {
-							setHasRenderedFrame(true);
-						}
 						onmessage({ width, height });
 					} else {
 						strideWorker.postMessage(

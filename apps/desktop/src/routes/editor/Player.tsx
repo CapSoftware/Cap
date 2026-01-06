@@ -10,8 +10,8 @@ import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
+	type EditorPreviewQuality,
 	FPS,
-	type PreviewQuality,
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
@@ -45,9 +45,9 @@ export function PlayerContent() {
 	} = useEditorContext();
 
 	const previewOptions = [
-		{ label: "Full", value: "full" as PreviewQuality },
-		{ label: "Half", value: "half" as PreviewQuality },
-		{ label: "Quarter", value: "quarter" as PreviewQuality },
+		{ label: "Full", value: "full" as EditorPreviewQuality },
+		{ label: "Half", value: "half" as EditorPreviewQuality },
+		{ label: "Quarter", value: "quarter" as EditorPreviewQuality },
 	];
 
 	// Load captions on mount
@@ -141,7 +141,7 @@ export function PlayerContent() {
 		setEditorState("playing", false);
 	};
 
-	const handlePreviewQualityChange = async (quality: PreviewQuality) => {
+	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
 		if (quality === previewQuality()) return;
 
 		const wasPlaying = editorState.playing;
@@ -266,7 +266,7 @@ export function PlayerContent() {
 				</div>
 				<div class="flex items-center gap-2">
 					<span class="text-xs font-medium text-gray-11">Preview quality</span>
-					<KSelect<{ label: string; value: PreviewQuality }>
+					<KSelect<{ label: string; value: EditorPreviewQuality }>
 						options={previewOptions}
 						optionValue="value"
 						optionTextValue="label"
@@ -294,7 +294,7 @@ export function PlayerContent() {
 						<KSelect.Trigger class="flex items-center gap-2 h-9 px-3 rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm text-gray-12">
 							<KSelect.Value<{
 								label: string;
-								value: PreviewQuality;
+								value: EditorPreviewQuality;
 							}> class="flex-1 text-left truncate">
 								{(state) =>
 									state.selectedOption()?.label ?? "Select preview quality"
