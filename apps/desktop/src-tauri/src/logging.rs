@@ -1,4 +1,5 @@
-use crate::{ArcLock, web_api::ManagerExt};
+use crate::{ArcLock, feeds::microphone::MicrophoneFeed, permissions, web_api::ManagerExt};
+use serde::Serialize;
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
@@ -27,6 +28,60 @@ async fn get_latest_log_file(app: &AppHandle) -> Option<PathBuf> {
 
     log_files.sort_by(|a, b| b.1.cmp(&a.1));
     log_files.first().map(|(path, _)| path.clone())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogUploadDiagnostics {
+    system: cap_recording::diagnostics::SystemDiagnostics,
+    cameras: Vec<String>,
+    microphones: Vec<String>,
+    permissions: PermissionsInfo,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionsInfo {
+    screen_recording: String,
+    camera: String,
+    microphone: String,
+}
+
+fn collect_diagnostics_for_upload() -> LogUploadDiagnostics {
+    let system = cap_recording::diagnostics::collect_diagnostics();
+    let permissions = permissions::do_permissions_check(false);
+
+    let cameras: Vec<String> = if permissions.camera.permitted() {
+        cap_camera::list_cameras()
+            .map(|c| c.display_name().to_string())
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let microphones: Vec<String> = if permissions.microphone.permitted() {
+        MicrophoneFeed::list().keys().cloned().collect()
+    } else {
+        vec![]
+    };
+
+    let perm_status = |p: &permissions::OSPermissionStatus| match p {
+        permissions::OSPermissionStatus::NotNeeded => "not_needed",
+        permissions::OSPermissionStatus::Empty => "not_requested",
+        permissions::OSPermissionStatus::Granted => "granted",
+        permissions::OSPermissionStatus::Denied => "denied",
+    };
+
+    LogUploadDiagnostics {
+        system,
+        cameras,
+        microphones,
+        permissions: PermissionsInfo {
+            screen_recording: perm_status(&permissions.screen_recording).to_string(),
+            camera: perm_status(&permissions.camera).to_string(),
+            microphone: perm_status(&permissions.microphone).to_string(),
+        },
+    }
 }
 
 pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
@@ -62,10 +117,14 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
         fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {e}"))?
     };
 
+    let diagnostics = collect_diagnostics_for_upload();
+    let diagnostics_json = serde_json::to_string(&diagnostics).unwrap_or_else(|_| "{}".to_string());
+
     let form = reqwest::multipart::Form::new()
         .text("log", log_content)
         .text("os", std::env::consts::OS)
-        .text("version", env!("CARGO_PKG_VERSION"));
+        .text("version", env!("CARGO_PKG_VERSION"))
+        .text("diagnostics", diagnostics_json);
 
     let response = app
         .api_request("/api/desktop/logs", |client, url| {
