@@ -305,12 +305,7 @@ pub struct AVAssetReaderDecoder {
 
 impl AVAssetReaderDecoder {
     fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
-        let mut primary_decoder =
-            cap_video_decode::AVAssetReaderDecoder::new(path.clone(), tokio_handle.clone())?;
-
-        let keyframe_index = primary_decoder.take_keyframe_index();
-        let keyframe_index_arc: Option<Arc<cap_video_decode::avassetreader::KeyframeIndex>> = None;
-
+        let keyframe_index = cap_video_decode::avassetreader::KeyframeIndex::build(&path).ok();
         let fps = keyframe_index
             .as_ref()
             .map(|kf| kf.fps() as u32)
@@ -319,19 +314,26 @@ impl AVAssetReaderDecoder {
             .as_ref()
             .map(|kf| kf.duration_secs())
             .unwrap_or(0.0);
+        let keyframe_index_arc = keyframe_index.map(Arc::new);
 
         let config = MultiPositionDecoderConfig {
             path: path.clone(),
             tokio_handle: tokio_handle.clone(),
-            keyframe_index: keyframe_index_arc,
+            keyframe_index: keyframe_index_arc.clone(),
             fps,
             duration_secs,
         };
 
         let pool_manager = DecoderPoolManager::new(config);
 
+        let primary_kf = keyframe_index_arc.as_ref().map(|arc| (**arc).clone());
         let primary_instance = DecoderInstance {
-            inner: primary_decoder,
+            inner: cap_video_decode::AVAssetReaderDecoder::new_with_keyframe_index(
+                path.clone(),
+                tokio_handle.clone(),
+                0.0,
+                primary_kf,
+            )?,
             is_done: false,
             frames_iter_valid: true,
         };
@@ -341,7 +343,8 @@ impl AVAssetReaderDecoder {
         let initial_positions = pool_manager.positions();
         for pos in initial_positions.iter().skip(1) {
             let start_time = pos.position_secs;
-            match DecoderInstance::new(path.clone(), tokio_handle.clone(), start_time, None) {
+            let kf_clone = keyframe_index_arc.as_ref().map(|arc| (**arc).clone());
+            match DecoderInstance::new(path.clone(), tokio_handle.clone(), start_time, kf_clone) {
                 Ok(instance) => {
                     decoders.push(instance);
                     tracing::info!(
@@ -545,6 +548,10 @@ impl AVAssetReaderDecoder {
                     last_decoded_position = Some(position_secs);
 
                     let Some(frame) = frame.image_buf() else {
+                        tracing::debug!(
+                            current_frame = current_frame,
+                            "Frame has no image buffer, skipping"
+                        );
                         continue;
                     };
 
@@ -629,10 +636,22 @@ impl AVAssetReaderDecoder {
                 decoder.is_done = true;
             }
 
+            if frames_iterated == 0 && !pending_requests.is_empty() {
+                tracing::warn!(
+                    decoder_idx = decoder_idx,
+                    requested_frame = requested_frame,
+                    requested_time = requested_time,
+                    was_reset = was_reset,
+                    cache_size = cache.len(),
+                    "No frames decoded from video - decoder iterator returned no frames"
+                );
+            }
+
             if let Some(pos) = last_decoded_position {
                 this.pool_manager.update_decoder_position(decoder_idx, pos);
             }
 
+            let mut unfulfilled_count = 0u32;
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
@@ -649,9 +668,22 @@ impl AVAssetReaderDecoder {
                         let distance = req.frame.abs_diff(frame_num);
                         if distance <= MAX_FALLBACK_DISTANCE {
                             let _ = req.sender.send(cached.data().to_decoded_frame());
+                        } else {
+                            unfulfilled_count += 1;
                         }
+                    } else {
+                        unfulfilled_count += 1;
                     }
                 }
+            }
+
+            if unfulfilled_count > 0 {
+                tracing::warn!(
+                    unfulfilled_count = unfulfilled_count,
+                    cache_size = cache.len(),
+                    frames_iterated = frames_iterated,
+                    "Frame requests could not be fulfilled - frames not in cache or nearby"
+                );
             }
         }
     }
