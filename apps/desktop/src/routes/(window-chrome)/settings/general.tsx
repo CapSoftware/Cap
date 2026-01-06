@@ -404,18 +404,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					}}
 				/>
 
-				<SettingGroup
-					title="Cap Pro"
-					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
-				>
-					<ToggleSettingItem
-						label="Automatically open shareable links"
-						description="Whether Cap should automatically open instant recordings in your browser"
-						value={!settings.disableAutoOpenLinks}
-						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
-					/>
-				</SettingGroup>
-
 				{ostype === "macos" && (
 					<SettingGroup title="App">
 						<ToggleSettingItem
@@ -554,6 +542,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							</p>
 						)}
 					</div>
+				</SettingGroup>
+
+				<SettingGroup
+					title="Cap Pro Settings"
+					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
+				>
+					<ToggleSettingItem
+						label="Automatically open shareable links"
+						description="Whether Cap should automatically open instant recordings in your browser"
+						value={!settings.disableAutoOpenLinks}
+						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
+					/>
 				</SettingGroup>
 
 				<DefaultProjectNameCard
