@@ -468,9 +468,15 @@ impl AsyncVideoDecoderHandle {
             return None;
         }
 
-        match tokio::time::timeout(std::time::Duration::from_millis(250), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_millis(1000), rx).await {
             Ok(result) => result.ok(),
-            Err(_) => None,
+            Err(_) => {
+                tracing::warn!(
+                    time = adjusted_time,
+                    "Frame decode request timed out after 1000ms"
+                );
+                None
+            }
         }
     }
 
