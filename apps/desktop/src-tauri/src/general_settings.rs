@@ -40,16 +40,6 @@ pub enum EditorPreviewQuality {
     Full,
 }
 
-impl EditorPreviewQuality {
-    pub fn scale_percent(self) -> u32 {
-        match self {
-            Self::Quarter => 25,
-            Self::Half => 50,
-            Self::Full => 100,
-        }
-    }
-}
-
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
