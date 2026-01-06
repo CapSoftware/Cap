@@ -22,17 +22,14 @@ export const LicenseDeactivationPage = () => {
 		setIsSubmitting(true);
 
 		try {
-			const response = await fetch(
-				"https://l.cap.so/api/commercial/deactivate",
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						licensekey: licenseKey.trim(),
-					},
-					body: JSON.stringify({ email: email.trim() }),
+			const response = await fetch("/api/commercial/deactivate", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					licensekey: licenseKey.trim(),
 				},
-			);
+				body: JSON.stringify({ email: email.trim() }),
+			});
 
 			const data = await response.json();
 
