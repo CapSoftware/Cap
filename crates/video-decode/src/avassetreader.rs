@@ -10,6 +10,7 @@ use cidre::{
 use ffmpeg::{codec as avcodec, format as avformat};
 use tokio::runtime::Handle as TokioHandle;
 
+#[derive(Clone)]
 pub struct KeyframeIndex {
     keyframes: Vec<(u32, f64)>,
     fps: f64,
@@ -171,6 +172,9 @@ fn compute_seek_time(keyframe_index: Option<&KeyframeIndex>, requested_time: f32
         let target_frame = (requested_time as f64 * fps).round() as u32;
         if let Some((_, keyframe_time)) = kf_index.nearest_keyframe_before(target_frame) {
             return keyframe_time as f32;
+        }
+        if let Some((_, first_keyframe_time)) = kf_index.keyframes().first() {
+            return *first_keyframe_time as f32;
         }
     }
     requested_time
