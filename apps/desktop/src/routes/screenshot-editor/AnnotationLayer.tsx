@@ -86,9 +86,11 @@ export function AnnotationLayer(props: {
 	createEffect(() => {
 		const rect = props.imageRect;
 		if (rect.width <= 0 || rect.height <= 0) return;
+		const currentlyDrawingId = isDrawing() ? tempAnnotation()?.id : null;
 		const masksToRemove: string[] = [];
 		for (const ann of annotations) {
 			if (ann.type !== "mask") continue;
+			if (ann.id === currentlyDrawingId) continue;
 			const left = clampValue(
 				Math.min(ann.x, ann.x + ann.width),
 				rect.x,
@@ -217,11 +219,11 @@ export function AnnotationLayer(props: {
 			newAnn.width = 150; // Default width
 		}
 
+		setTempAnnotation(newAnn);
+
 		if (tool === "mask") {
 			setAnnotations((prev) => [...prev, newAnn]);
 		}
-
-		setTempAnnotation(newAnn);
 	};
 
 	const handleMouseMove = (e: MouseEvent) => {
