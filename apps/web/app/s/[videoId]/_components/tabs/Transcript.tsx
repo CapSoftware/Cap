@@ -4,7 +4,7 @@ import { Button } from "@cap/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
 import { Check, Copy, Download, Edit3, MessageSquare, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../../types";
@@ -122,11 +122,8 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const user = useCurrentUser();
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-	const [isLoading, setIsLoading] = useState(true);
 	const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
-	const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
-		useState(false);
-	const [hasTimedOut, setHasTimedOut] = useState(false);
+	const [retryTriggered, setRetryTriggered] = useState(false);
 	const [editingEntry, setEditingEntry] = useState<number | null>(null);
 	const [editText, setEditText] = useState<string>("");
 	const [isSaving, setIsSaving] = useState(false);
@@ -160,8 +157,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			return response.json();
 		},
 		onSuccess: () => {
-			// Reset status - Share.tsx polling will automatically detect the change and trigger transcription
-			setIsTranscriptionProcessing(true);
+			setRetryTriggered(true);
 			invalidateTranscript(data.id);
 		},
 		onError: (error) => {
@@ -173,71 +169,32 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		if (transcriptContent) {
 			const parsed = parseVTT(transcriptContent);
 			setTranscriptData(parsed);
-			setIsTranscriptionProcessing(false);
-			setIsLoading(false);
-		} else if (transcriptError) {
-			console.error(
-				"[Transcript] Transcript error from React Query:",
-				transcriptError.message,
-			);
-			if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
-				setIsTranscriptionProcessing(true);
-			} else {
-				setIsTranscriptionProcessing(false);
-			}
-			setIsLoading(false);
 		}
-	}, [transcriptContent, transcriptError]);
+	}, [transcriptContent]);
 
-	useEffect(() => {
-		if (isTranscriptLoading) {
-			setIsLoading(true);
+	const isTranscriptionProcessing = useMemo(() => {
+		if (retryTriggered && data.transcriptionStatus !== "COMPLETE") {
+			return true;
 		}
-	}, [isTranscriptLoading]);
+		return (
+			data.transcriptionStatus === "PROCESSING" || !data.transcriptionStatus
+		);
+	}, [data.transcriptionStatus, retryTriggered]);
 
-	useEffect(() => {
+	const isQueryLoading =
+		isTranscriptLoading && data.transcriptionStatus === "COMPLETE";
+
+	const hasTimedOut = useMemo(() => {
 		const videoCreationTime = new Date(data.createdAt).getTime();
 		const fiveMinutesInMs = 5 * 60 * 1000;
 		const isVideoOlderThanFiveMinutes =
 			Date.now() - videoCreationTime > fiveMinutesInMs;
-
-		if (data.transcriptionStatus === "PROCESSING") {
-			setIsTranscriptionProcessing(true);
-			setIsLoading(true);
-		} else if (data.transcriptionStatus === "ERROR") {
-			setIsTranscriptionProcessing(false);
-			setIsLoading(false);
-		} else if (isVideoOlderThanFiveMinutes && !data.transcriptionStatus) {
-			setIsLoading(false);
-			setHasTimedOut(true);
-		} else if (!data.transcriptionStatus) {
-			const startTime = Date.now();
-			const maxDuration = 2 * 60 * 1000;
-
-			const intervalId = setInterval(() => {
-				if (Date.now() - startTime > maxDuration) {
-					clearInterval(intervalId);
-					setIsLoading(false);
-					return;
-				}
-
-				fetch(`/api/video/transcribe/status?videoId=${data.id}`)
-					.then((response) => response.json())
-					.then(({ transcriptionStatus }) => {
-						if (transcriptionStatus === "PROCESSING") {
-							setIsTranscriptionProcessing(true);
-						} else if (transcriptionStatus === "COMPLETE") {
-							clearInterval(intervalId);
-						} else if (transcriptionStatus === "ERROR") {
-							clearInterval(intervalId);
-							setIsLoading(false);
-						}
-					});
-			}, 1000);
-
-			return () => clearInterval(intervalId);
-		}
-	}, [data.id, data.transcriptionStatus, data.createdAt]);
+		return (
+			isVideoOlderThanFiveMinutes &&
+			!data.transcriptionStatus &&
+			!retryTriggered
+		);
+	}, [data.createdAt, data.transcriptionStatus, retryTriggered]);
 
 	const handleTranscriptClick = (entry: TranscriptEntry) => {
 		if (editingEntry === entry.id) {
@@ -380,36 +337,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	const canEdit = user?.id === data.owner.id;
 
-	if (isLoading) {
-		return (
-			<div className="flex justify-center items-center h-full">
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					className="w-8 h-8"
-					viewBox="0 0 24 24"
-				>
-					<style>
-						{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
-					</style>
-					<path
-						fill="#4B5563"
-						d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
-						opacity={0.25}
-					/>
-					<path
-						fill="#4B5563"
-						d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
-						style={{
-							transformOrigin: "center",
-							animation: "spinner_AtaB .75s infinite linear",
-						}}
-					/>
-				</svg>
-			</div>
-		);
-	}
-
-	if (isTranscriptionProcessing) {
+	if (isTranscriptionProcessing && !hasTimedOut) {
 		return (
 			<div className="flex justify-center items-center h-full text-gray-1">
 				<div className="text-center">
@@ -443,10 +371,42 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		);
 	}
 
+	if (isQueryLoading) {
+		return (
+			<div className="flex justify-center items-center h-full">
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					className="w-8 h-8"
+					viewBox="0 0 24 24"
+				>
+					<style>
+						{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
+					</style>
+					<path
+						fill="#4B5563"
+						d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+						opacity={0.25}
+					/>
+					<path
+						fill="#4B5563"
+						d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+						style={{
+							transformOrigin: "center",
+							animation: "spinner_AtaB .75s infinite linear",
+						}}
+					/>
+				</svg>
+			</div>
+		);
+	}
+
 	const showRetryButton =
 		data.transcriptionStatus === "ERROR" ||
-		data.transcriptionStatus === null ||
-		(!transcriptData.length && !isTranscriptionProcessing);
+		hasTimedOut ||
+		(data.transcriptionStatus === "COMPLETE" &&
+			!transcriptData.length &&
+			!isQueryLoading &&
+			transcriptError);
 
 	if (showRetryButton) {
 		return (
@@ -458,24 +418,21 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 							? "Transcript not available"
 							: "No transcript available"}
 					</p>
-					{canEdit &&
-						(data.transcriptionStatus === "ERROR" ||
-							data.transcriptionStatus === null ||
-							hasTimedOut) && (
-							<Button
-								onClick={() => {
-									retryTranscriptionMutation.mutate();
-								}}
-								disabled={retryTranscriptionMutation.isPending}
-								variant="primary"
-								size="sm"
-								spinner={retryTranscriptionMutation.isPending}
-							>
-								{retryTranscriptionMutation.isPending
-									? "Retrying..."
-									: "Retry Transcription"}
-							</Button>
-						)}
+					{canEdit && (
+						<Button
+							onClick={() => {
+								retryTranscriptionMutation.mutate();
+							}}
+							disabled={retryTranscriptionMutation.isPending}
+							variant="primary"
+							size="sm"
+							spinner={retryTranscriptionMutation.isPending}
+						>
+							{retryTranscriptionMutation.isPending
+								? "Retrying..."
+								: "Retry Transcription"}
+						</Button>
+					)}
 				</div>
 			</div>
 		);

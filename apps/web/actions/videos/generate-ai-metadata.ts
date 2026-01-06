@@ -6,7 +6,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { runPromise } from "@/lib/server";
@@ -52,8 +52,6 @@ export async function generateAiMetadata(
 					},
 				})
 				.where(eq(videos.id, videoId));
-
-			metadata.aiProcessing = false;
 		} else {
 			return;
 		}
@@ -89,16 +87,33 @@ export async function generateAiMetadata(
 		return;
 	}
 
+	const lockResult = await db()
+		.update(videos)
+		.set({
+			metadata: {
+				...metadata,
+				aiProcessing: true,
+			},
+		})
+		.where(
+			and(
+				eq(videos.id, videoId),
+				sql`JSON_EXTRACT(metadata, '$.aiProcessing') IS NULL OR JSON_EXTRACT(metadata, '$.aiProcessing') = false`,
+			),
+		);
+
+	const affectedRows = (lockResult[0] as { affectedRows?: number })
+		?.affectedRows;
+	if (typeof affectedRows !== "number") {
+		console.warn(
+			"[generateAiMetadata] Unable to determine lock result, proceeding cautiously",
+		);
+	}
+	if (affectedRows === 0) {
+		return;
+	}
+
 	try {
-		await db()
-			.update(videos)
-			.set({
-				metadata: {
-					...metadata,
-					aiProcessing: true,
-				},
-			})
-			.where(eq(videos.id, videoId));
 		const query = await db()
 			.select({ video: videos, bucket: s3Buckets })
 			.from(videos)

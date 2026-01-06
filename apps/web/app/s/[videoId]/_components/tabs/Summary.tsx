@@ -4,7 +4,6 @@ import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import { faRectangleList } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useEffect, useState } from "react";
 
 interface Chapter {
 	title: string;
@@ -68,25 +67,12 @@ export const Summary: React.FC<SummaryProps> = ({
 	aiGenerationEnabled = false,
 	ownerIsPro,
 }) => {
-	const [aiData, setAiData] = useState<{
-		title?: string | null;
-		summary?: string | null;
-		chapters?: Chapter[] | null;
-		processing?: boolean;
-	} | null>(initialAiData || null);
-	const [isLoading, setIsLoading] = useState(
+	const aiData = initialAiData || null;
+	const isLoading =
 		aiGenerationEnabled &&
-			(!initialAiData || initialAiData.processing === true),
-	);
-
-	useEffect(() => {
-		if (initialAiData) {
-			setAiData(initialAiData);
-			setIsLoading(aiGenerationEnabled && initialAiData.processing === true);
-		} else {
-			setIsLoading(aiGenerationEnabled);
-		}
-	}, [initialAiData, aiGenerationEnabled]);
+		aiData?.processing === true &&
+		!aiData?.summary &&
+		!aiData?.chapters?.length;
 
 	const handleSeek = (time: number) => {
 		if (onSeek) {
@@ -139,7 +125,7 @@ export const Summary: React.FC<SummaryProps> = ({
 
 	if (isSummaryDisabled) return null;
 
-	if (isLoading || aiData?.processing) {
+	if (isLoading) {
 		return (
 			<div className="flex flex-col h-full">
 				<div className="overflow-y-auto flex-1">
@@ -149,7 +135,7 @@ export const Summary: React.FC<SummaryProps> = ({
 		);
 	}
 
-	if (!aiData?.summary && (!aiData?.chapters || aiData.chapters.length === 0)) {
+	if (!aiData?.summary && !aiData?.chapters?.length) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<FontAwesomeIcon

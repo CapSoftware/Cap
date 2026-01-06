@@ -85,7 +85,11 @@
       "Bash(if [ -f \"$segment/audio.ogg\" ])",
       "Bash(then ffprobe -v error -show_entries format=duration -of default=nw=1 \"$segment/audio.ogg\")",
       "Bash(done)",
-      "Bash(./target/release/examples/real-device-test-runner:*)"
+      "Bash(./target/release/examples/real-device-test-runner:*)",
+      "Bash(pnpm --dir apps/web exec tsc:*)",
+      "mcp__plugin_greptile_greptile__list_pull_requests",
+      "mcp__plugin_greptile_greptile__search_custom_context",
+      "mcp__plugin_greptile_greptile__list_code_reviews"
     ],
     "deny": [],
     "ask": []

@@ -34,7 +34,6 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
@@ -526,29 +525,6 @@ async function AuthorizedContent({
 			processing: false,
 			generationSkipped: true,
 		};
-	}
-
-	if (
-		video.transcriptionStatus === "COMPLETE" &&
-		!currentMetadata.aiProcessing &&
-		!currentMetadata.aiGenerationSkipped &&
-		!currentMetadata.summary &&
-		!currentMetadata.chapters &&
-		aiGenerationEnabled
-	) {
-		try {
-			generateAiMetadata(videoId, video.owner.id).catch((error) => {
-				console.error(
-					`[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
-					error,
-				);
-			});
-		} catch (error) {
-			console.error(
-				`[ShareVideoPage] Error starting AI metadata generation for video ${videoId}:`,
-				error,
-			);
-		}
 	}
 
 	const customDomainPromise = (async () => {
