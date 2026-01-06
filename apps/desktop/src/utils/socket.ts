@@ -206,13 +206,24 @@ export function createImageDataWS(
 		yStride: number,
 		isNv12: boolean,
 	) {
-		lastRenderedFrameData = {
-			data: new Uint8ClampedArray(frameData),
-			width,
-			height,
-			yStride,
-			isNv12,
-		};
+		if (
+			lastRenderedFrameData &&
+			lastRenderedFrameData.data.length === frameData.length
+		) {
+			lastRenderedFrameData.data.set(frameData);
+			lastRenderedFrameData.width = width;
+			lastRenderedFrameData.height = height;
+			lastRenderedFrameData.yStride = yStride;
+			lastRenderedFrameData.isNv12 = isNv12;
+		} else {
+			lastRenderedFrameData = {
+				data: new Uint8ClampedArray(frameData),
+				width,
+				height,
+				yStride,
+				isNv12,
+			};
+		}
 		if (!hasRenderedFrame()) {
 			setHasRenderedFrame(true);
 		}
