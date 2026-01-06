@@ -27,6 +27,7 @@ export const LicenseDeactivationPage = () => {
 				headers: {
 					"Content-Type": "application/json",
 					licensekey: licenseKey.trim(),
+					instanceid: "12345",
 				},
 				body: JSON.stringify({ email: email.trim() }),
 			});
