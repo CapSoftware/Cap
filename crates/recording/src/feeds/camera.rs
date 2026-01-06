@@ -575,6 +575,7 @@ async fn setup_camera(
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,
+                                is_bottom_up: frame.native().is_bottom_up,
                                 timestamp,
                             }))
                             .try_send();

@@ -58,6 +58,7 @@ const VIRTUAL_CAMERA_PATTERNS: &[&str] = &[
     "camo",
     "avatarify",
     "facerig",
+    "nvidia broadcast",
 ];
 
 const CAPTURE_CARD_PATTERNS: &[&str] = &[
@@ -339,10 +340,10 @@ impl VideoDeviceInfo {
                                 inner: FrameInner::MediaFoundation(buffer),
                                 width: format.width() as usize,
                                 height: format.height() as usize,
+                                is_bottom_up: false,
                                 pixel_format: format.pixel_format,
                                 timestamp: data.timestamp,
                                 perf_counter: data.perf_counter,
-                                // capture_begin_time: Some(data.capture_begin_time),
                             })
                         }
                     }),
@@ -365,14 +366,18 @@ impl VideoDeviceInfo {
                             return;
                         };
 
+                        let bi_height = video_info.bmiHeader.biHeight;
+                        let is_bottom_up = bi_height > 0;
+                        let height = bi_height.unsigned_abs() as usize;
+
                         callback(Frame {
                             inner: FrameInner::DirectShow(sample.clone()),
                             pixel_format: format,
                             width: video_info.bmiHeader.biWidth as usize,
-                            height: video_info.bmiHeader.biHeight as usize,
+                            height,
+                            is_bottom_up,
                             timestamp: data.timestamp,
                             perf_counter: data.perf_counter,
-                            // capture_begin_time: None,
                         });
                     }),
                 )?;
@@ -421,6 +426,7 @@ pub struct Frame {
     pub pixel_format: PixelFormat,
     pub width: usize,
     pub height: usize,
+    pub is_bottom_up: bool,
     // pub reference_time: Instant,
     pub timestamp: Duration,
     pub perf_counter: i64,
