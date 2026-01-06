@@ -1,6 +1,17 @@
 "use client";
 
-const faqContent = [
+import Link from "next/link";
+
+interface FaqItem {
+	title: string;
+	answer: string;
+	link?: {
+		text: string;
+		href: string;
+	};
+}
+
+const faqContent: FaqItem[] = [
 	{
 		title: "Who is Cap for?",
 		answer:
@@ -30,6 +41,10 @@ const faqContent = [
 		title: "Is there a commercial license available?",
 		answer:
 			"Yes, we offer commercial licenses for businesses that want to use the Cap desktop app. The commercial license includes the Cap Recorder + Editor with local-only features. Our Pro plan also includes a commercial license for the desktop app.",
+		link: {
+			text: "Deactivate your license",
+			href: "/deactivate-license",
+		},
 	},
 	{
 		title: "What happens after the beta period ends?",
@@ -45,11 +60,19 @@ export const FaqPage = () => {
 				<h1>FAQ</h1>
 			</div>
 			<div className="mb-10">
-				{faqContent.map((section, index) => {
+				{faqContent.map((section) => {
 					return (
-						<div key={index} className="mx-auto my-8 max-w-2xl">
+						<div key={section.title} className="mx-auto my-8 max-w-2xl">
 							<h2 className="mb-2 text-xl">{section.title}</h2>
 							<p className="text-lg">{section.answer}</p>
+							{section.link && (
+								<Link
+									href={section.link.href}
+									className="inline-block mt-2 text-blue-500 hover:text-blue-600 hover:underline"
+								>
+									{section.link.text} &rarr;
+								</Link>
+							)}
 						</div>
 					);
 				})}

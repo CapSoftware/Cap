@@ -17,6 +17,153 @@ import { withAuth, withOptionalAuth } from "../../utils";
 
 export const app = new Hono();
 
+const diagnosticsSchema = z.object({
+	system: z
+		.object({
+			windowsVersion: z
+				.object({
+					displayName: z.string(),
+					meetsRequirements: z.boolean().optional(),
+					isWindows11: z.boolean().optional(),
+				})
+				.optional(),
+			macosVersion: z.object({ displayName: z.string() }).optional(),
+			gpuInfo: z
+				.object({
+					vendor: z.string(),
+					description: z.string(),
+					dedicatedVideoMemoryMb: z.number().optional(),
+					isSoftwareAdapter: z.boolean().optional(),
+					isBasicRenderDriver: z.boolean().optional(),
+					supportsHardwareEncoding: z.boolean().optional(),
+				})
+				.optional(),
+			allGpus: z
+				.object({
+					gpus: z.array(
+						z.object({
+							vendor: z.string(),
+							description: z.string(),
+							dedicatedVideoMemoryMb: z.number().optional(),
+						}),
+					),
+					isMultiGpuSystem: z.boolean().optional(),
+					hasDiscreteGpu: z.boolean().optional(),
+				})
+				.optional(),
+			renderingStatus: z
+				.object({
+					isUsingSoftwareRendering: z.boolean().optional(),
+					isUsingBasicRenderDriver: z.boolean().optional(),
+					hardwareEncodingAvailable: z.boolean().optional(),
+					warningMessage: z.string().optional(),
+				})
+				.optional(),
+			availableEncoders: z.array(z.string()).optional(),
+			graphicsCaptureSupported: z.boolean().optional(),
+			screenCaptureSupported: z.boolean().optional(),
+			d3D11VideoProcessorAvailable: z.boolean().optional(),
+		})
+		.optional(),
+	cameras: z.array(z.string()).optional(),
+	microphones: z.array(z.string()).optional(),
+	permissions: z
+		.object({
+			screenRecording: z.string().optional(),
+			camera: z.string().optional(),
+			microphone: z.string().optional(),
+		})
+		.optional(),
+});
+
+function formatDiagnosticsForDiscord(
+	diagnostics: z.infer<typeof diagnosticsSchema>,
+): string {
+	const lines: string[] = [];
+	const sys = diagnostics.system;
+
+	if (sys?.windowsVersion?.displayName) {
+		lines.push(`**OS:** ${sys.windowsVersion.displayName}`);
+	} else if (sys?.macosVersion?.displayName) {
+		lines.push(`**OS:** ${sys.macosVersion.displayName}`);
+	}
+
+	if (sys?.gpuInfo) {
+		const gpu = sys.gpuInfo;
+		let gpuLine = `**GPU:** ${gpu.description}`;
+		if (gpu.vendor) gpuLine += ` (${gpu.vendor})`;
+		if (gpu.dedicatedVideoMemoryMb)
+			gpuLine += ` - ${gpu.dedicatedVideoMemoryMb}MB VRAM`;
+		lines.push(gpuLine);
+
+		const flags: string[] = [];
+		if (gpu.isSoftwareAdapter) flags.push("⚠️ Software Adapter");
+		if (gpu.isBasicRenderDriver) flags.push("⚠️ Basic Render Driver");
+		if (gpu.supportsHardwareEncoding === false) flags.push("❌ No HW Encoding");
+		if (gpu.supportsHardwareEncoding === true) flags.push("✅ HW Encoding");
+		if (flags.length > 0) lines.push(`**GPU Status:** ${flags.join(", ")}`);
+	}
+
+	if (sys?.allGpus?.gpus && sys.allGpus.gpus.length > 1) {
+		const gpuList = sys.allGpus.gpus
+			.map((g) => `${g.description} (${g.vendor})`)
+			.join(", ");
+		lines.push(`**All GPUs:** ${gpuList}`);
+	}
+
+	if (sys?.renderingStatus?.warningMessage) {
+		lines.push(`**⚠️ Warning:** ${sys.renderingStatus.warningMessage}`);
+	}
+
+	const captureSupported =
+		sys?.graphicsCaptureSupported ?? sys?.screenCaptureSupported;
+	if (captureSupported !== undefined) {
+		lines.push(
+			`**Screen Capture:** ${captureSupported ? "✅ Supported" : "❌ Not Supported"}`,
+		);
+	}
+
+	if (sys?.d3D11VideoProcessorAvailable !== undefined) {
+		lines.push(
+			`**D3D11 Video Processor:** ${sys.d3D11VideoProcessorAvailable ? "✅" : "❌"}`,
+		);
+	}
+
+	if (sys?.availableEncoders && sys.availableEncoders.length > 0) {
+		lines.push(`**Encoders:** ${sys.availableEncoders.join(", ")}`);
+	}
+
+	if (diagnostics.permissions) {
+		const perms = diagnostics.permissions;
+		const permList = [
+			perms.screenRecording && `Screen: ${perms.screenRecording}`,
+			perms.camera && `Camera: ${perms.camera}`,
+			perms.microphone && `Mic: ${perms.microphone}`,
+		]
+			.filter(Boolean)
+			.join(", ");
+		if (permList) lines.push(`**Permissions:** ${permList}`);
+	}
+
+	if (diagnostics.cameras && diagnostics.cameras.length > 0) {
+		lines.push(
+			`**Cameras (${diagnostics.cameras.length}):** ${diagnostics.cameras.join(", ")}`,
+		);
+	} else {
+		lines.push("**Cameras:** None detected");
+	}
+
+	if (diagnostics.microphones && diagnostics.microphones.length > 0) {
+		lines.push(
+			`**Mics (${diagnostics.microphones.length}):** ${diagnostics.microphones.join(", ")}`,
+		);
+	} else {
+		lines.push("**Mics:** None detected");
+	}
+
+	return lines.join("\n");
+}
+
 app.post(
 	"/logs",
 	zValidator(
@@ -25,11 +172,17 @@ app.post(
 			log: z.string(),
 			os: z.string().optional(),
 			version: z.string().optional(),
+			diagnostics: z.string().optional(),
 		}),
 	),
 	withOptionalAuth,
 	async (c) => {
-		const { log, os, version } = c.req.valid("form");
+		const {
+			log,
+			os,
+			version,
+			diagnostics: diagnosticsJson,
+		} = c.req.valid("form");
 		const user = c.get("user");
 
 		try {
@@ -42,13 +195,29 @@ app.post(
 			const fileName = `cap-desktop-${os || "unknown"}-${version || "unknown"}-${Date.now()}.log`;
 			formData.append("file", logBlob, fileName);
 
+			let diagnosticsContent = "";
+			if (diagnosticsJson) {
+				try {
+					const parsed = JSON.parse(diagnosticsJson);
+					const validated = diagnosticsSchema.safeParse(parsed);
+					if (validated.success) {
+						diagnosticsContent = formatDiagnosticsForDiscord(validated.data);
+					}
+				} catch {
+					diagnosticsContent = "";
+				}
+			}
+
 			const content = [
-				"New log file uploaded",
-				user && `User: ${user.email} (${user.id})`,
-				os && `OS: ${os}`,
-				version && `Version: ${version}`,
+				"📋 **New Log File Uploaded**",
+				"",
+				user ? `**User:** ${user.email} (${user.id})` : null,
+				os ? `**Platform:** ${os}` : null,
+				version ? `**App Version:** ${version}` : null,
+				diagnosticsContent ? "" : null,
+				diagnosticsContent || null,
 			]
-				.filter(Boolean)
+				.filter((line): line is string => line !== null)
 				.join("\n");
 
 			formData.append("content", content);
