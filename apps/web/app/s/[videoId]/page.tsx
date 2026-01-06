@@ -454,47 +454,14 @@ async function AuthorizedContent({
 		video.transcriptionStatus !== "PROCESSING"
 	) {
 		console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-		await transcribeVideo(videoId, video.owner.id, aiGenerationEnabled);
-
-		const updatedVideoQuery = await db()
-			.select({
-				id: videos.id,
-				name: videos.name,
-				createdAt: videos.createdAt,
-				updatedAt: videos.updatedAt,
-				effectiveCreatedAt: videos.effectiveCreatedAt,
-				bucket: videos.bucket,
-				metadata: videos.metadata,
-				public: videos.public,
-				videoStartTime: videos.videoStartTime,
-				audioStartTime: videos.audioStartTime,
-				xStreamInfo: videos.xStreamInfo,
-				jobId: videos.jobId,
-				jobStatus: videos.jobStatus,
-				isScreenshot: videos.isScreenshot,
-				skipProcessing: videos.skipProcessing,
-				transcriptionStatus: videos.transcriptionStatus,
-				source: videos.source,
-				sharedOrganization: {
-					organizationId: sharedVideos.organizationId,
-				},
-				orgSettings: organizations.settings,
-				videoSettings: videos.settings,
-			})
-			.from(videos)
-			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-			.innerJoin(users, eq(videos.ownerId, users.id))
-			.leftJoin(organizations, eq(videos.orgId, organizations.id))
-			.where(eq(videos.id, videoId))
-			.execute();
-
-		if (updatedVideoQuery[0]) {
-			Object.assign(video, updatedVideoQuery[0]);
-			console.log(
-				"[ShareVideoPage] Updated transcription status:",
-				video.transcriptionStatus,
-			);
-		}
+		transcribeVideo(videoId, video.owner.id, aiGenerationEnabled).catch(
+			(error) => {
+				console.error(
+					`[ShareVideoPage] Error transcribing video ${videoId}:`,
+					error,
+				);
+			},
+		);
 	}
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
