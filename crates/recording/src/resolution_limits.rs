@@ -1,3 +1,5 @@
+pub use cap_media_info::ensure_even;
+
 pub const H264_MAX_DIMENSION: u32 = 4096;
 
 pub fn calculate_gpu_compatible_size(
@@ -55,11 +57,6 @@ pub fn calculate_gpu_compatible_size(
     );
 
     Some((final_width, final_height))
-}
-
-fn ensure_even(value: u32) -> u32 {
-    let adjusted = value - (value % 2);
-    if adjusted == 0 { 2 } else { adjusted }
 }
 
 #[cfg(test)]

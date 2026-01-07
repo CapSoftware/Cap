@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use cap_media_info::{Pixel, VideoInfo};
+use cap_media_info::{Pixel, VideoInfo, ensure_even};
 use ffmpeg::{
     Dictionary,
     codec::{codec::Codec, context, encoder},
@@ -18,11 +18,6 @@ fn is_420(format: ffmpeg::format::Pixel) -> bool {
         .descriptor()
         .map(|desc| desc.log2_chroma_w() == 1 && desc.log2_chroma_h() == 1)
         .unwrap_or(false)
-}
-
-fn ensure_even(value: u32) -> u32 {
-    let adjusted = value - (value % 2);
-    if adjusted == 0 { 2 } else { adjusted }
 }
 
 pub struct H264EncoderBuilder {
@@ -110,13 +105,6 @@ impl H264EncoderBuilder {
                 output_height,
                 "Auto-adjusted odd dimensions to even for H264 encoding"
             );
-        }
-
-        if output_width == 0 || output_height == 0 {
-            return Err(H264EncoderError::InvalidOutputDimensions {
-                width: output_width,
-                height: output_height,
-            });
         }
 
         let candidates = get_codec_and_options(&input_config, self.preset);

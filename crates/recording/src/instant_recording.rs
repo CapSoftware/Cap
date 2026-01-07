@@ -5,6 +5,7 @@ use crate::{
     },
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
+    resolution_limits::ensure_even,
     sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use anyhow::Context as _;
@@ -416,11 +417,6 @@ fn current_time_f64() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
-}
-
-fn ensure_even(value: u32) -> u32 {
-    let adjusted = value - (value % 2);
-    if adjusted == 0 { 2 } else { adjusted }
 }
 
 fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
