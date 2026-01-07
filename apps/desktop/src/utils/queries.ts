@@ -181,6 +181,12 @@ export function createOptionsQuery() {
 		});
 	});
 
+	recordingSettingsStore.get().then((data) => {
+		if (data?.mode && data.mode !== _state.mode) {
+			_setState("mode", data.mode);
+		}
+	});
+
 	const storeListenerCleanup = recordingSettingsStore.listen((data) => {
 		if (data?.mode && data.mode !== _state.mode) {
 			_setState("mode", data.mode);
