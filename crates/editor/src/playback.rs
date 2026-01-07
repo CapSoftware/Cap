@@ -352,7 +352,7 @@ impl Playback {
             let (audio_playhead_tx, audio_playhead_rx) =
                 watch::channel(self.start_frame_number as f64 / fps as f64);
 
-            AudioPlayback {
+            let has_audio = AudioPlayback {
                 segments: get_audio_segments(&self.segment_medias),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
@@ -661,9 +661,10 @@ impl Playback {
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
-                if audio_playhead_tx
-                    .send(frame_number as f64 / fps_f64)
-                    .is_err()
+                if has_audio
+                    && audio_playhead_tx
+                        .send(frame_number as f64 / fps_f64)
+                        .is_err()
                 {
                     break 'playback;
                 }
@@ -686,9 +687,10 @@ impl Playback {
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
-                        if audio_playhead_tx
-                            .send(frame_number as f64 / fps_f64)
-                            .is_err()
+                        if has_audio
+                            && audio_playhead_tx
+                                .send(frame_number as f64 / fps_f64)
+                                .is_err()
                         {
                             break 'playback;
                         }
@@ -727,12 +729,12 @@ struct AudioPlayback {
 }
 
 impl AudioPlayback {
-    fn spawn(self) {
+    fn spawn(self) -> bool {
         let handle = tokio::runtime::Handle::current();
 
         if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
             info!("No audio segments found, skipping audio playback thread.");
-            return;
+            return false;
         }
 
         std::thread::spawn(move || {
@@ -807,6 +809,8 @@ impl AudioPlayback {
             let _ = handle.block_on(stop_rx.changed());
             info!("Audio playback thread finished.");
         });
+
+        true
     }
 
     #[cfg(not(target_os = "windows"))]
