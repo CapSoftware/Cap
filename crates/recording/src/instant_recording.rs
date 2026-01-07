@@ -227,7 +227,12 @@ async fn create_pipeline(
                 ),
             )
         })
-        .unwrap_or((screen_info.width, screen_info.height));
+        .unwrap_or_else(|| {
+            (
+                ensure_even(screen_info.width),
+                ensure_even(screen_info.height),
+            )
+        });
 
     let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
