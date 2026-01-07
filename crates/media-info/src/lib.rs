@@ -325,6 +325,11 @@ impl VideoInfo {
     }
 }
 
+pub fn ensure_even(value: u32) -> u32 {
+    let adjusted = value - (value % 2);
+    if adjusted == 0 { 2 } else { adjusted }
+}
+
 pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
     match sample_format {
         SampleFormat::U8 => Some(Sample::U8(Type::Planar)),

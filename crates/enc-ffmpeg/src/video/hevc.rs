@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use cap_media_info::{Pixel, VideoInfo};
+use cap_media_info::{Pixel, VideoInfo, ensure_even};
 use ffmpeg::{
     Dictionary,
     codec::{codec::Codec, context, encoder},
@@ -9,7 +9,7 @@ use ffmpeg::{
     frame,
     threading::Config,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::base::EncoderBase;
 
@@ -89,15 +89,21 @@ impl HevcEncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<HevcEncoder, HevcEncoderError> {
         let input_config = self.input_config;
-        let (output_width, output_height) = self
+        let (raw_width, raw_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
 
-        if output_width == 0 || output_height == 0 {
-            return Err(HevcEncoderError::InvalidOutputDimensions {
-                width: output_width,
-                height: output_height,
-            });
+        let output_width = ensure_even(raw_width);
+        let output_height = ensure_even(raw_height);
+
+        if raw_width != output_width || raw_height != output_height {
+            warn!(
+                raw_width,
+                raw_height,
+                output_width,
+                output_height,
+                "Auto-adjusted odd dimensions to even for HEVC encoding"
+            );
         }
 
         let candidates = get_codec_and_options(&input_config, self.preset);

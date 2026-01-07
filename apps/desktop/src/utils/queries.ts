@@ -7,7 +7,7 @@ import {
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { batch, createEffect, createMemo, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import {
@@ -170,20 +170,29 @@ export function createOptionsQuery() {
 		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
 	});
 
+	let initialized = false;
+
+	recordingSettingsStore.get().then((data) => {
+		batch(() => {
+			if (data?.mode && data.mode !== _state.mode) {
+				_setState("mode", data.mode);
+			}
+			initialized = true;
+		});
+	});
+
 	createEffect(() => {
-		recordingSettingsStore.set({
+		const settings = {
 			target: _state.captureTarget,
 			micName: _state.micName,
 			cameraId: _state.cameraID,
 			mode: _state.mode,
 			systemAudio: _state.captureSystemAudio,
 			organizationId: _state.organizationId,
-		});
-	});
+		};
 
-	recordingSettingsStore.get().then((data) => {
-		if (data?.mode && data.mode !== _state.mode) {
-			_setState("mode", data.mode);
+		if (initialized) {
+			recordingSettingsStore.set(settings);
 		}
 	});
 

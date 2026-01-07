@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use cap_media_info::{Pixel, VideoInfo};
+use cap_media_info::{Pixel, VideoInfo, ensure_even};
 use ffmpeg::{
     Dictionary,
     codec::{codec::Codec, context, encoder},
@@ -90,15 +90,21 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = self.input_config;
-        let (output_width, output_height) = self
+        let (raw_width, raw_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
 
-        if output_width == 0 || output_height == 0 {
-            return Err(H264EncoderError::InvalidOutputDimensions {
-                width: output_width,
-                height: output_height,
-            });
+        let output_width = ensure_even(raw_width);
+        let output_height = ensure_even(raw_height);
+
+        if raw_width != output_width || raw_height != output_height {
+            warn!(
+                raw_width,
+                raw_height,
+                output_width,
+                output_height,
+                "Auto-adjusted odd dimensions to even for H264 encoding"
+            );
         }
 
         let candidates = get_codec_and_options(&input_config, self.preset);
