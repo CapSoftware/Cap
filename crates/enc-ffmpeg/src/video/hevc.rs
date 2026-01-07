@@ -9,7 +9,7 @@ use ffmpeg::{
     frame,
     threading::Config,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::base::EncoderBase;
 
@@ -18,6 +18,11 @@ fn is_420(format: ffmpeg::format::Pixel) -> bool {
         .descriptor()
         .map(|desc| desc.log2_chroma_w() == 1 && desc.log2_chroma_h() == 1)
         .unwrap_or(false)
+}
+
+fn ensure_even(value: u32) -> u32 {
+    let adjusted = value - (value % 2);
+    if adjusted == 0 { 2 } else { adjusted }
 }
 
 pub struct HevcEncoderBuilder {
@@ -89,9 +94,22 @@ impl HevcEncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<HevcEncoder, HevcEncoderError> {
         let input_config = self.input_config;
-        let (output_width, output_height) = self
+        let (raw_width, raw_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
+
+        let output_width = ensure_even(raw_width);
+        let output_height = ensure_even(raw_height);
+
+        if raw_width != output_width || raw_height != output_height {
+            warn!(
+                raw_width,
+                raw_height,
+                output_width,
+                output_height,
+                "Auto-adjusted odd dimensions to even for HEVC encoding"
+            );
+        }
 
         if output_width == 0 || output_height == 0 {
             return Err(HevcEncoderError::InvalidOutputDimensions {
