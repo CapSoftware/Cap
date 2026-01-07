@@ -8,7 +8,7 @@ pub fn calculate_gpu_compatible_size(
     max_dimension: u32,
 ) -> Option<(u32, u32)> {
     let needs_downscale = width > max_dimension || height > max_dimension;
-    let needs_even_adjustment = width % 2 != 0 || height % 2 != 0;
+    let needs_even_adjustment = !width.is_multiple_of(2) || !height.is_multiple_of(2);
 
     if !needs_downscale && !needs_even_adjustment {
         return None;
