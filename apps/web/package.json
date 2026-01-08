@@ -120,6 +120,7 @@
 		"nextjs-cors": "^2.2.0",
 		"posthog-js": "^1.215.3",
 		"posthog-node": "^4.11.2",
+		"prettier": "^3.7.4",
 		"react": "19.1.1",
 		"react-dom": "19.1.1",
 		"react-email": "^4.2.11",

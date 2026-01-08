@@ -15,7 +15,12 @@ const { version } = packageJson;
 
 const nextConfig = {
 	reactStrictMode: true,
-	serverExternalPackages: ["@ffmpeg-installer/ffmpeg", "fluent-ffmpeg"],
+	serverExternalPackages: [
+		"@ffmpeg-installer/ffmpeg",
+		"@ffprobe-installer/ffprobe",
+		"fluent-ffmpeg",
+		"prettier",
+	],
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
