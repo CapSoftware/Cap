@@ -214,6 +214,7 @@ struct SegmentTimingValidation {
     issues: Vec<SegmentTimingIssue>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct StreamSyncMetrics {
     display_start: Option<f64>,
@@ -233,6 +234,7 @@ struct AVSyncValidation {
     segments: Vec<SegmentSyncResult>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct SegmentSyncResult {
     index: usize,
@@ -585,24 +587,24 @@ fn validate_av_sync(meta: &RecordingMeta) -> AVSyncValidation {
 
     if let StudioRecordingMeta::MultipleSegments { inner } = studio_meta.as_ref() {
         for (idx, segment) in inner.segments.iter().enumerate() {
-            let mut metrics = StreamSyncMetrics::default();
+            let display_start = segment.display.start_time;
+            let camera_start = segment.camera.as_ref().and_then(|c| c.start_time);
+            let mic_start = segment.mic.as_ref().and_then(|m| m.start_time);
+            let system_audio_start = segment.system_audio.as_ref().and_then(|s| s.start_time);
 
-            metrics.display_start = segment.display.start_time;
-            metrics.camera_start = segment.camera.as_ref().and_then(|c| c.start_time);
-            metrics.mic_start = segment.mic.as_ref().and_then(|m| m.start_time);
-            metrics.system_audio_start = segment.system_audio.as_ref().and_then(|s| s.start_time);
+            let display_camera_drift = display_start.zip(camera_start).map(|(d, c)| (d - c).abs());
+            let display_mic_drift = display_start.zip(mic_start).map(|(d, m)| (d - m).abs());
+            let camera_mic_drift = camera_start.zip(mic_start).map(|(c, m)| (c - m).abs());
 
-            if let (Some(disp), Some(cam)) = (metrics.display_start, metrics.camera_start) {
-                metrics.display_camera_drift = Some((disp - cam).abs());
-            }
-
-            if let (Some(disp), Some(mic)) = (metrics.display_start, metrics.mic_start) {
-                metrics.display_mic_drift = Some((disp - mic).abs());
-            }
-
-            if let (Some(cam), Some(mic)) = (metrics.camera_start, metrics.mic_start) {
-                metrics.camera_mic_drift = Some((cam - mic).abs());
-            }
+            let metrics = StreamSyncMetrics {
+                display_start,
+                camera_start,
+                mic_start,
+                system_audio_start,
+                display_camera_drift,
+                display_mic_drift,
+                camera_mic_drift,
+            };
 
             let tolerance_secs = SYNC_TOLERANCE_MS / 1000.0;
 
@@ -621,7 +623,7 @@ fn validate_av_sync(meta: &RecordingMeta) -> AVSyncValidation {
                 .map(|d| d <= tolerance_secs)
                 .unwrap_or(true);
 
-            if !camera_mic_sync_ok {
+            if !camera_mic_sync_ok || !display_camera_sync_ok || !display_mic_sync_ok {
                 result.all_synced = false;
             }
 
