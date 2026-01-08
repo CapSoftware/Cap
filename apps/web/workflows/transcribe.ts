@@ -43,6 +43,14 @@ export async function transcribeVideoWorkflow(
 
 	const audioUrl = await extractAudio(videoId, userId, videoData.bucketId);
 
+	if (!audioUrl) {
+		await markNoAudio(videoId);
+		return {
+			success: true,
+			message: "Video has no audio track - skipped transcription",
+		};
+	}
+
 	const transcription = await transcribeWithDeepgram(audioUrl);
 
 	await saveTranscription(videoId, userId, videoData.bucketId, transcription);
@@ -111,6 +119,16 @@ async function markSkipped(videoId: string): Promise<void> {
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
+async function markNoAudio(videoId: string): Promise<void> {
+	"use step";
+
+	console.log(`[transcribe-workflow] Video ${videoId} has no audio track`);
+	await db()
+		.update(videos)
+		.set({ transcriptionStatus: "NO_AUDIO" })
+		.where(eq(videos.id, videoId as Video.VideoId));
+}
+
 async function extractAudio(
 	videoId: string,
 	userId: string,
@@ -163,14 +181,8 @@ async function extractAudio(
 	}
 }
 
-async function transcribeWithDeepgram(
-	audioUrl: string | null,
-): Promise<string> {
+async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 	"use step";
-
-	if (!audioUrl) {
-		return "WEBVTT\n\n";
-	}
 
 	console.log("[transcribe-workflow] Calling Deepgram API");
 	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
