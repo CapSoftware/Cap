@@ -129,8 +129,11 @@ impl Mp4ExportSettings {
                 let fps_u64 = u64::from(fps);
                 let mut audio_sample_cursor = 0u64;
 
+                let mut consecutive_timeouts = 0u32;
+                const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
+
                 loop {
-                    let timeout_secs = if frame_count == 0 { 120 } else { 60 };
+                    let timeout_secs = if frame_count == 0 { 120 } else { 90 };
                     let (frame, frame_number) = match tokio::time::timeout(
                         Duration::from_secs(timeout_secs),
                         video_rx.recv(),
@@ -138,14 +141,39 @@ impl Mp4ExportSettings {
                     .await
                     {
                         Err(_) => {
-                            warn!(
-                                "render_task frame receive timed out after {}s (frame {})",
-                                timeout_secs, frame_count
+                            consecutive_timeouts += 1;
+
+                            if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
+                                tracing::error!(
+                                    frame_count = frame_count,
+                                    timeout_secs = timeout_secs,
+                                    consecutive_timeouts = consecutive_timeouts,
+                                    "Export render_task timed out {} consecutive times - aborting",
+                                    MAX_CONSECUTIVE_TIMEOUTS
+                                );
+                                return Err(format!(
+                                    "Export timed out {} times consecutively after {}s each waiting for frame {} - GPU/decoder may be unresponsive",
+                                    MAX_CONSECUTIVE_TIMEOUTS, timeout_secs, frame_count
+                                ));
+                            }
+
+                            tracing::warn!(
+                                frame_count = frame_count,
+                                timeout_secs = timeout_secs,
+                                consecutive_timeouts = consecutive_timeouts,
+                                "Frame receive timed out, waiting for next frame..."
                             );
-                            break;
+                            continue;
                         }
-                        Ok(Some(v)) => v,
-                        _ => {
+                        Ok(Some(v)) => {
+                            consecutive_timeouts = 0;
+                            v
+                        }
+                        Ok(None) => {
+                            tracing::debug!(
+                                frame_count = frame_count,
+                                "Render channel closed - rendering complete"
+                            );
                             break;
                         }
                     };

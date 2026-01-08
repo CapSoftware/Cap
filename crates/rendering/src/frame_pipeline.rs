@@ -1,8 +1,11 @@
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::oneshot;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderingError};
+
+const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 30;
 
 pub struct PendingReadback {
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
@@ -17,8 +20,21 @@ pub struct PendingReadback {
 impl PendingReadback {
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
         let mut poll_count = 0u32;
+        let start_time = Instant::now();
+        let timeout_duration = std::time::Duration::from_secs(GPU_BUFFER_WAIT_TIMEOUT_SECS);
 
         loop {
+            if start_time.elapsed() > timeout_duration {
+                tracing::error!(
+                    frame_number = self.frame_number,
+                    elapsed_secs = start_time.elapsed().as_secs(),
+                    poll_count = poll_count,
+                    "GPU buffer mapping timed out after {}s",
+                    GPU_BUFFER_WAIT_TIMEOUT_SECS
+                );
+                return Err(RenderingError::BufferMapWaitingFailed);
+            }
+
             match self.rx.try_recv() {
                 Ok(result) => {
                     result?;
@@ -36,6 +52,14 @@ impl PendingReadback {
                     poll_count += 1;
                     if poll_count.is_multiple_of(3) {
                         tokio::task::yield_now().await;
+                    }
+                    if poll_count.is_multiple_of(10000) {
+                        tracing::warn!(
+                            frame_number = self.frame_number,
+                            poll_count = poll_count,
+                            elapsed_ms = start_time.elapsed().as_millis() as u64,
+                            "GPU buffer mapping taking longer than expected"
+                        );
                     }
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {

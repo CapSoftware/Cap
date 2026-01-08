@@ -270,6 +270,10 @@ pub async fn render_video_to_channel(
         constants.is_software_adapter,
     );
 
+    let mut last_successful_frame: Option<RenderedFrame> = None;
+    let mut consecutive_failures = 0u32;
+    const MAX_CONSECUTIVE_FAILURES: u32 = 30;
+
     loop {
         if frame_number >= total_frames {
             break;
@@ -286,47 +290,139 @@ pub async fn render_video_to_channel(
             .iter()
             .find(|v| v.index == segment.recording_clip);
 
-        let frame_number = {
+        let current_frame_number = {
             let prev = frame_number;
             std::mem::replace(&mut frame_number, prev + 1)
         };
 
         let render_segment = &render_segments[segment.recording_clip as usize];
 
-        if let Some(segment_frames) = render_segment
-            .decoders
-            .get_frames(
-                segment_time as f32,
-                !project.camera.hide,
-                clip_config.map(|v| v.offsets).unwrap_or_default(),
-            )
-            .await
-        {
+        let mut segment_frames = None;
+        let mut retry_count = 0;
+        const MAX_RETRIES: u32 = 3;
+
+        while segment_frames.is_none() && retry_count < MAX_RETRIES {
+            if retry_count > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(50 * retry_count as u64)).await;
+            }
+
+            segment_frames = render_segment
+                .decoders
+                .get_frames(
+                    segment_time as f32,
+                    !project.camera.hide,
+                    clip_config.map(|v| v.offsets).unwrap_or_default(),
+                )
+                .await;
+
+            if segment_frames.is_none() {
+                retry_count += 1;
+                if retry_count < MAX_RETRIES {
+                    tracing::warn!(
+                        frame_number = current_frame_number,
+                        segment_time = segment_time,
+                        retry_count = retry_count,
+                        "Frame decode failed, retrying..."
+                    );
+                }
+            }
+        }
+
+        let frame = if let Some(segment_frames) = segment_frames {
+            consecutive_failures = 0;
+
             let uniforms = ProjectUniforms::new(
                 constants,
                 project,
-                frame_number,
+                current_frame_number,
                 fps,
                 resolution_base,
                 &render_segment.cursor,
                 &segment_frames,
             );
 
-            let frame = frame_renderer
+            match frame_renderer
                 .render(
                     segment_frames,
                     uniforms,
                     &render_segment.cursor,
                     &mut layers,
                 )
-                .await?;
+                .await
+            {
+                Ok(frame) if frame.width > 0 && frame.height > 0 => {
+                    last_successful_frame = Some(frame.clone());
+                    frame
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        frame_number = current_frame_number,
+                        "Rendered frame has zero dimensions"
+                    );
+                    if let Some(ref last_frame) = last_successful_frame {
+                        let mut fallback = last_frame.clone();
+                        fallback.frame_number = current_frame_number;
+                        fallback.target_time_ns =
+                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        fallback
+                    } else {
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        frame_number = current_frame_number,
+                        error = %e,
+                        "Frame rendering failed"
+                    );
+                    if let Some(ref last_frame) = last_successful_frame {
+                        let mut fallback = last_frame.clone();
+                        fallback.frame_number = current_frame_number;
+                        fallback.target_time_ns =
+                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        fallback
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        } else {
+            consecutive_failures += 1;
 
-            if frame.width == 0 || frame.height == 0 {
-                continue;
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                tracing::error!(
+                    frame_number = current_frame_number,
+                    consecutive_failures = consecutive_failures,
+                    "Too many consecutive frame failures - aborting export"
+                );
+                return Err(RenderingError::BufferMapWaitingFailed);
             }
 
-            sender.send((frame, frame_number)).await?;
-        }
+            if let Some(ref last_frame) = last_successful_frame {
+                tracing::warn!(
+                    frame_number = current_frame_number,
+                    segment_time = segment_time,
+                    consecutive_failures = consecutive_failures,
+                    "Frame decode failed after {} retries - using previous frame",
+                    MAX_RETRIES
+                );
+                let mut fallback = last_frame.clone();
+                fallback.frame_number = current_frame_number;
+                fallback.target_time_ns =
+                    (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                fallback
+            } else {
+                tracing::error!(
+                    frame_number = current_frame_number,
+                    segment_time = segment_time,
+                    "First frame decode failed after {} retries - cannot continue",
+                    MAX_RETRIES
+                );
+                continue;
+            }
+        };
+
+        sender.send((frame, current_frame_number)).await?;
     }
 
     let total_time = start_time.elapsed();
