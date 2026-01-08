@@ -65,12 +65,12 @@ mod tests {
 
     fn assert_valid_output(result: Option<(u32, u32)>, max_dim: u32) {
         if let Some((w, h)) = result {
-            assert!(w <= max_dim, "Width {} exceeds max {}", w, max_dim);
-            assert!(h <= max_dim, "Height {} exceeds max {}", h, max_dim);
-            assert_eq!(w % 2, 0, "Width {} is odd", w);
-            assert_eq!(h % 2, 0, "Height {} is odd", h);
-            assert!(w >= 2, "Width {} is too small", w);
-            assert!(h >= 2, "Height {} is too small", h);
+            assert!(w <= max_dim, "Width {w} exceeds max {max_dim}");
+            assert!(h <= max_dim, "Height {h} exceeds max {max_dim}");
+            assert_eq!(w % 2, 0, "Width {w} is odd");
+            assert_eq!(h % 2, 0, "Height {h} is odd");
+            assert!(w >= 2, "Width {w} is too small");
+            assert!(h >= 2, "Height {h} is too small");
         }
     }
 
@@ -85,9 +85,7 @@ mod tests {
         let result_aspect = result_w as f64 / result_h as f64;
         assert!(
             (original_aspect - result_aspect).abs() < tolerance,
-            "Aspect ratio changed too much: {} -> {}",
-            original_aspect,
-            result_aspect
+            "Aspect ratio changed too much: {original_aspect} -> {result_aspect}"
         );
     }
 
@@ -226,7 +224,7 @@ mod tests {
         for (w, h) in browser_sizes {
             let result = calculate_gpu_compatible_size(w, h, 4096);
             if w % 2 != 0 || h % 2 != 0 {
-                assert!(result.is_some(), "Should adjust odd dimensions {}x{}", w, h);
+                assert!(result.is_some(), "Should adjust odd dimensions {w}x{h}");
             }
             assert_valid_output(result, 4096);
         }
@@ -396,11 +394,7 @@ mod tests {
             let result = calculate_gpu_compatible_size(w, h, 4096);
             assert_valid_output(result, 4096);
             if w % 2 == 0 && h % 2 == 0 && w <= 4096 && h <= 4096 {
-                assert_eq!(
-                    result, None,
-                    "Even dimensions {}x{} should return None",
-                    w, h
-                );
+                assert_eq!(result, None, "Even dimensions {w}x{h} should return None");
             }
         }
     }
@@ -418,16 +412,8 @@ mod tests {
             let result = calculate_gpu_compatible_size(in_w, in_h, 4096);
             assert!(result.is_some());
             let (w, h) = result.unwrap();
-            assert_eq!(
-                w, exp_w,
-                "Expected width {} for input {}x{}",
-                exp_w, in_w, in_h
-            );
-            assert_eq!(
-                h, exp_h,
-                "Expected height {} for input {}x{}",
-                exp_h, in_w, in_h
-            );
+            assert_eq!(w, exp_w, "Expected width {exp_w} for input {in_w}x{in_h}");
+            assert_eq!(h, exp_h, "Expected height {exp_h} for input {in_w}x{in_h}");
         }
     }
 
@@ -493,15 +479,12 @@ mod tests {
             if w <= 4096 && h <= 4096 && w % 2 == 0 && h % 2 == 0 {
                 assert_eq!(
                     result, None,
-                    "Standard resolution {}x{} should return None",
-                    w, h
+                    "Standard resolution {w}x{h} should return None"
                 );
             } else if w > 4096 || h > 4096 {
                 assert!(
                     result.is_some(),
-                    "Over-limit resolution {}x{} should downscale",
-                    w,
-                    h
+                    "Over-limit resolution {w}x{h} should downscale"
                 );
             }
         }

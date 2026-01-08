@@ -152,8 +152,7 @@ impl Mp4ExportSettings {
                                     MAX_CONSECUTIVE_TIMEOUTS
                                 );
                                 return Err(format!(
-                                    "Export timed out {} times consecutively after {}s each waiting for frame {} - GPU/decoder may be unresponsive",
-                                    MAX_CONSECUTIVE_TIMEOUTS, timeout_secs, frame_count
+                                    "Export timed out {MAX_CONSECUTIVE_TIMEOUTS} times consecutively after {timeout_secs}s each waiting for frame {frame_count} - GPU/decoder may be unresponsive"
                                 ));
                             }
 

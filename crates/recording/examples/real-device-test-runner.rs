@@ -96,7 +96,7 @@ impl AvailableDevices {
         );
 
         if let Some(mic) = &self.default_microphone {
-            println!("  Default Microphone: {}", mic);
+            println!("  Default Microphone: {mic}");
         } else {
             println!("  Default Microphone: None");
         }
@@ -439,7 +439,7 @@ impl TestReport {
                     println!("    No camera output found");
                 }
                 for issue in &self.camera_output.issues {
-                    println!("    ISSUE: {}", issue);
+                    println!("    ISSUE: {issue}");
                 }
             }
         }
@@ -492,16 +492,10 @@ impl TestReport {
                 println!("      WARN: FPS outside tolerance!");
             }
             if !seg.jitter_ok {
-                println!(
-                    "      WARN: Frame jitter exceeds {}ms!",
-                    JITTER_TOLERANCE_MS
-                );
+                println!("      WARN: Frame jitter exceeds {JITTER_TOLERANCE_MS}ms!");
             }
             if !seg.dropped_ok {
-                println!(
-                    "      WARN: Dropped frames exceed {}%!",
-                    MAX_DROPPED_FRAME_PERCENT
-                );
+                println!("      WARN: Dropped frames exceed {MAX_DROPPED_FRAME_PERCENT}%!");
             }
         }
 
@@ -518,7 +512,7 @@ impl TestReport {
             if let Some(ref mic) = seg.mic {
                 let diff_str = seg
                     .mic_video_duration_diff_ms
-                    .map(|d| format!("{:.1}ms", d))
+                    .map(|d| format!("{d:.1}ms"))
                     .unwrap_or_else(|| "N/A".to_string());
                 let gap_str = if mic.has_gaps {
                     format!(
@@ -542,7 +536,7 @@ impl TestReport {
             if let Some(ref sys) = seg.system_audio {
                 let diff_str = seg
                     .system_audio_video_duration_diff_ms
-                    .map(|d| format!("{:.1}ms", d))
+                    .map(|d| format!("{d:.1}ms"))
                     .unwrap_or_else(|| "N/A".to_string());
                 let gap_str = if sys.has_gaps {
                     format!(
@@ -568,7 +562,7 @@ impl TestReport {
         if !self.errors.is_empty() {
             println!("  Errors:");
             for error in &self.errors {
-                println!("    - {}", error);
+                println!("    - {error}");
             }
         }
 
@@ -673,8 +667,7 @@ fn validate_camera_output(meta: &RecordingMeta, fragmented: bool) -> CameraOutpu
                     if !result.has_init_mp4 {
                         result.valid = false;
                         result.issues.push(format!(
-                            "Segment {}: Missing init.mp4 in camera fragmented output",
-                            idx
+                            "Segment {idx}: Missing init.mp4 in camera fragmented output"
                         ));
                     }
 
@@ -687,22 +680,19 @@ fn validate_camera_output(meta: &RecordingMeta, fragmented: bool) -> CameraOutpu
 
                     if result.fragment_count == 0 {
                         result.valid = false;
-                        result.issues.push(format!(
-                            "Segment {}: No .m4s fragments in camera output",
-                            idx
-                        ));
+                        result
+                            .issues
+                            .push(format!("Segment {idx}: No .m4s fragments in camera output"));
                     }
                 } else if camera_path.is_file() {
                     result.valid = false;
                     result.issues.push(format!(
-                        "Segment {}: Camera output is a single file, expected fragmented directory",
-                        idx
+                        "Segment {idx}: Camera output is a single file, expected fragmented directory"
                     ));
                 } else {
                     result.valid = false;
                     result.issues.push(format!(
-                        "Segment {}: Camera output path does not exist: {:?}",
-                        idx, camera_path
+                        "Segment {idx}: Camera output path does not exist: {camera_path:?}"
                     ));
                 }
             }
@@ -1463,7 +1453,7 @@ async fn run_test(
     let recording_dir = match recording_result {
         Ok(dir) => dir,
         Err(e) => {
-            report.errors.push(format!("Recording failed: {}", e));
+            report.errors.push(format!("Recording failed: {e}"));
             report.elapsed = start.elapsed();
             return report;
         }
@@ -1474,7 +1464,7 @@ async fn run_test(
         Err(e) => {
             report
                 .errors
-                .push(format!("Failed to load recording metadata: {}", e));
+                .push(format!("Failed to load recording metadata: {e}"));
             report.elapsed = start.elapsed();
             return report;
         }
@@ -1500,7 +1490,7 @@ async fn run_test(
         Err(e) => {
             report
                 .errors
-                .push(format!("Duration validation failed: {}", e));
+                .push(format!("Duration validation failed: {e}"));
         }
     }
 
@@ -1589,7 +1579,7 @@ fn print_summary(reports: &[TestReport]) {
     let total = reports.len();
 
     println!("\n{}", "=".repeat(70));
-    println!("SUMMARY: {}/{} tests passed", passed, total);
+    println!("SUMMARY: {passed}/{total} tests passed");
 
     if passed < total {
         println!("\nFailed tests:");
@@ -1706,7 +1696,7 @@ async fn main() -> anyhow::Result<()> {
         println!("Camera: ENABLED (use --no-camera to disable)");
         if devices.default_microphone.is_some() {
             println!("  Testing A/V sync between camera and microphone");
-            println!("  Sync tolerance: {}ms", SYNC_TOLERANCE_MS);
+            println!("  Sync tolerance: {SYNC_TOLERANCE_MS}ms");
         } else {
             println!("  WARNING: No microphone available - A/V sync validation limited");
         }
