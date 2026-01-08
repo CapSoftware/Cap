@@ -3,9 +3,11 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { path as ffmpegPath } from "@ffmpeg-installer/ffmpeg";
+import { path as ffprobePath } from "@ffprobe-installer/ffprobe";
 import ffmpeg, { type FfprobeData } from "fluent-ffmpeg";
 
 ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfprobePath(ffprobePath);
 
 export interface AudioExtractionResult {
 	filePath: string;

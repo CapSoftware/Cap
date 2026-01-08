@@ -5,6 +5,10 @@ vi.mock("@ffmpeg-installer/ffmpeg", () => ({
 	path: "/usr/local/bin/ffmpeg",
 }));
 
+vi.mock("@ffprobe-installer/ffprobe", () => ({
+	path: "/usr/local/bin/ffprobe",
+}));
+
 const mockUnlink = vi.fn().mockResolvedValue(undefined);
 vi.mock("node:fs", () => ({
 	promises: {
@@ -60,6 +64,7 @@ vi.mock("fluent-ffmpeg", () => {
 	const ffmpeg = vi.fn(() => createChain());
 
 	(ffmpeg as Record<string, unknown>).setFfmpegPath = vi.fn();
+	(ffmpeg as Record<string, unknown>).setFfprobePath = vi.fn();
 	(ffmpeg as Record<string, unknown>).ffprobe = (
 		_url: string,
 		cb: (err: Error | null, data: unknown) => void,
