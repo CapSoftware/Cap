@@ -89,7 +89,9 @@
       "Bash(pnpm --dir apps/web exec tsc:*)",
       "mcp__plugin_greptile_greptile__list_pull_requests",
       "mcp__plugin_greptile_greptile__search_custom_context",
-      "mcp__plugin_greptile_greptile__list_code_reviews"
+      "mcp__plugin_greptile_greptile__list_code_reviews",
+      "WebFetch(domain:useworkflow.dev)",
+      "Bash(pnpm test:*)"
     ],
     "deny": [],
     "ask": []

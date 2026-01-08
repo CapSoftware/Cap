@@ -26,6 +26,8 @@
 		"lint": "pnpm exec biome lint",
 		"tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
 		"typecheck": "pnpm tsc -b",
+		"test": "turbo run test",
+		"test:web": "pnpm --filter=@cap/web test",
 		"web": "pnpm --filter=@cap/web",
 		"env-setup": "node scripts/env-cli.js",
 		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",

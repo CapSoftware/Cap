@@ -42,6 +42,10 @@
 			"dependsOn": ["db:push"],
 			"cache": false,
 			"persistent": true
+		},
+		"test": {
+			"inputs": ["**/*.ts", "**/*.tsx", "!node_modules/**"],
+			"cache": false
 		}
 	}
 }

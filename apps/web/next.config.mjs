@@ -4,6 +4,7 @@ import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
 import fs from "node:fs";
 import path from "node:path";
+import { withWorkflow } from "workflow/next";
 
 const packageJson = JSON.parse(
 	fs.readFileSync(path.resolve("./package.json"), "utf8"),
@@ -133,4 +134,4 @@ const nextConfig = {
 	// },
 };
 
-export default nextConfig;
+export default withWorkflow(nextConfig);
