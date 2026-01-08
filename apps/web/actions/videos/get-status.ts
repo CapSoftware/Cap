@@ -15,7 +15,12 @@ import { generateAiMetadata } from "./generate-ai-metadata";
 
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
-type TranscriptionStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+type TranscriptionStatus =
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED"
+	| "NO_AUDIO";
 
 export interface VideoStatusResult {
 	transcriptionStatus: TranscriptionStatus | null;

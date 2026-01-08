@@ -85,7 +85,9 @@ export async function transcribeVideo(
 
 	if (
 		video.transcriptionStatus === "COMPLETE" ||
-		video.transcriptionStatus === "PROCESSING"
+		video.transcriptionStatus === "PROCESSING" ||
+		video.transcriptionStatus === "SKIPPED" ||
+		video.transcriptionStatus === "NO_AUDIO"
 	) {
 		return {
 			success: true,

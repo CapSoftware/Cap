@@ -178,6 +178,8 @@ const useVideoStatus = (
 						| "PROCESSING"
 						| "COMPLETE"
 						| "ERROR"
+						| "SKIPPED"
+						| "NO_AUDIO"
 						| null,
 					aiProcessing: initialData.aiData?.processing || false,
 					aiGenerationSkipped: initialData.aiData?.generationSkipped || false,
@@ -198,7 +200,11 @@ const useVideoStatus = (
 					return true;
 				}
 
-				if (data.transcriptionStatus === "ERROR") {
+				if (
+					data.transcriptionStatus === "ERROR" ||
+					data.transcriptionStatus === "SKIPPED" ||
+					data.transcriptionStatus === "NO_AUDIO"
+				) {
 					return false;
 				}
 
@@ -298,7 +304,11 @@ export const Share = ({
 			return true;
 		}
 
-		if (transcriptionStatus === "ERROR") {
+		if (
+			transcriptionStatus === "ERROR" ||
+			transcriptionStatus === "SKIPPED" ||
+			transcriptionStatus === "NO_AUDIO"
+		) {
 			return false;
 		}
 

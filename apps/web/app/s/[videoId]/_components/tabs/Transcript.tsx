@@ -173,6 +173,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	}, [transcriptContent]);
 
 	const isTranscriptionProcessing = useMemo(() => {
+		if (
+			data.transcriptionStatus === "SKIPPED" ||
+			data.transcriptionStatus === "NO_AUDIO"
+		) {
+			return false;
+		}
 		if (retryTriggered && data.transcriptionStatus !== "COMPLETE") {
 			return true;
 		}
@@ -396,6 +402,38 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 						}}
 					/>
 				</svg>
+			</div>
+		);
+	}
+
+	if (data.transcriptionStatus === "NO_AUDIO") {
+		return (
+			<div className="flex justify-center items-center h-full text-gray-1">
+				<div className="text-center">
+					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
+					<p className="text-sm font-medium text-gray-12">
+						No audio track detected
+					</p>
+					<p className="mt-1 text-xs text-gray-9">
+						This video doesn't contain audio for transcription
+					</p>
+				</div>
+			</div>
+		);
+	}
+
+	if (data.transcriptionStatus === "SKIPPED") {
+		return (
+			<div className="flex justify-center items-center h-full text-gray-1">
+				<div className="text-center">
+					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
+					<p className="text-sm font-medium text-gray-12">
+						Transcription disabled
+					</p>
+					<p className="mt-1 text-xs text-gray-9">
+						Transcription has been disabled for this video
+					</p>
+				</div>
 			</div>
 		);
 	}

@@ -250,7 +250,9 @@ async function EmbedContent({
 
 	if (
 		video.transcriptionStatus !== "COMPLETE" &&
-		video.transcriptionStatus !== "PROCESSING"
+		video.transcriptionStatus !== "PROCESSING" &&
+		video.transcriptionStatus !== "SKIPPED" &&
+		video.transcriptionStatus !== "NO_AUDIO"
 	) {
 		transcribeVideo(video.id, video.ownerId, aiGenerationEnabled);
 	}

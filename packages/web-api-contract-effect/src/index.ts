@@ -13,6 +13,7 @@ const TranscriptionStatus = Schema.Literal(
 	"COMPLETE",
 	"ERROR",
 	"SKIPPED",
+	"NO_AUDIO",
 );
 const OSType = Schema.Literal("macos", "windows");
 const LicenseType = Schema.Literal("yearly", "lifetime");
