@@ -33,10 +33,13 @@ struct AudioDriftTracker {
     baseline_offset_secs: Option<f64>,
     drift_warning_logged: bool,
     first_frame_timestamp_secs: Option<f64>,
+    last_valid_wall_clock_secs: f64,
+    resync_count: u32,
 }
 
 const AUDIO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
+const AUDIO_LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
 
 impl AudioDriftTracker {
     fn new() -> Self {
@@ -44,6 +47,8 @@ impl AudioDriftTracker {
             baseline_offset_secs: None,
             drift_warning_logged: false,
             first_frame_timestamp_secs: None,
+            last_valid_wall_clock_secs: 0.0,
+            resync_count: 0,
         }
     }
 
@@ -63,6 +68,24 @@ impl AudioDriftTracker {
 
         if frame_elapsed_secs < 0.0 {
             return None;
+        }
+
+        if frame_elapsed_secs > wall_clock_secs + AUDIO_LARGE_FORWARD_JUMP_SECS {
+            self.resync_count += 1;
+            warn!(
+                frame_elapsed_secs,
+                wall_clock_secs,
+                forward_jump_secs = frame_elapsed_secs - wall_clock_secs,
+                resync_count = self.resync_count,
+                "Audio timestamp jumped forward (system sleep/wake?), resyncing to wall clock"
+            );
+
+            self.first_frame_timestamp_secs = Some(frame_timestamp_secs - wall_clock_secs);
+            self.baseline_offset_secs = None;
+            self.drift_warning_logged = false;
+
+            self.last_valid_wall_clock_secs = wall_clock_secs;
+            return Some(Duration::from_secs_f64(wall_clock_secs));
         }
 
         if frame_elapsed_secs > wall_clock_secs + AUDIO_WALL_CLOCK_TOLERANCE_SECS {
@@ -100,10 +123,12 @@ impl AudioDriftTracker {
                 self.drift_warning_logged = true;
             }
 
+            self.last_valid_wall_clock_secs = wall_clock_secs;
             let corrected_secs = adjusted_frame_elapsed * drift_ratio;
             return Some(Duration::from_secs_f64(corrected_secs.max(0.0)));
         }
 
+        self.last_valid_wall_clock_secs = wall_clock_secs;
         Some(Duration::from_secs_f64(frame_elapsed_secs.max(0.0)))
     }
 }
@@ -202,7 +227,7 @@ pub struct TimestampAnomalyTracker {
     total_forward_skew_secs: f64,
     max_forward_skew_secs: f64,
     last_valid_duration: Option<Duration>,
-    accumulated_compensation: Duration,
+    accumulated_compensation_secs: f64,
     resync_count: u64,
 }
 
@@ -217,7 +242,7 @@ impl TimestampAnomalyTracker {
             total_forward_skew_secs: 0.0,
             max_forward_skew_secs: 0.0,
             last_valid_duration: None,
-            accumulated_compensation: Duration::ZERO,
+            accumulated_compensation_secs: 0.0,
             resync_count: 0,
         }
     }
@@ -233,8 +258,8 @@ impl TimestampAnomalyTracker {
             return self.handle_backward_timestamp(signed_secs);
         }
 
-        let raw_duration = Duration::from_secs_f64(signed_secs);
-        let adjusted = raw_duration.saturating_add(self.accumulated_compensation);
+        let adjusted_secs = (signed_secs + self.accumulated_compensation_secs).max(0.0);
+        let adjusted = Duration::from_secs_f64(adjusted_secs);
 
         if let Some(last) = self.last_valid_duration
             && let Some(forward_jump) = adjusted.checked_sub(last)
@@ -281,12 +306,11 @@ impl TimestampAnomalyTracker {
                 backward_secs = skew_secs,
                 consecutive = self.consecutive_anomalies,
                 total_anomalies = self.anomaly_count,
+                resync_count = self.resync_count,
                 "Large backward timestamp jump detected (clock skew?), compensating"
             );
 
-            let compensation = Duration::from_secs_f64(skew_secs);
-            self.accumulated_compensation =
-                self.accumulated_compensation.saturating_add(compensation);
+            self.accumulated_compensation_secs += skew_secs;
             self.resync_count += 1;
 
             let adjusted = self.last_valid_duration.unwrap_or(Duration::ZERO);
@@ -317,21 +341,29 @@ impl TimestampAnomalyTracker {
             self.max_forward_skew_secs = jump_secs;
         }
 
+        let expected_increment = Duration::from_millis(33);
+        let adjusted = last.saturating_add(expected_increment);
+
+        let compensation_secs = current.as_secs_f64() - adjusted.as_secs_f64();
+        self.accumulated_compensation_secs -= compensation_secs;
+        self.resync_count += 1;
+
         warn!(
             stream = self.stream_name,
             forward_secs = jump_secs,
             last_valid_ms = last.as_millis(),
             current_ms = current.as_millis(),
             total_anomalies = self.anomaly_count,
-            "Large forward timestamp jump detected (system sleep/wake?), clamping"
+            resync_count = self.resync_count,
+            compensation_applied_secs = format!("{:.3}", compensation_secs),
+            accumulated_compensation_secs = format!("{:.3}", self.accumulated_compensation_secs),
+            "Large forward timestamp jump detected (system sleep/wake?), resyncing timeline"
         );
 
-        let expected_increment = Duration::from_millis(33);
-        let clamped = last.saturating_add(expected_increment);
-        self.last_valid_duration = Some(clamped);
+        self.last_valid_duration = Some(adjusted);
         self.consecutive_anomalies = 0;
 
-        Ok(clamped)
+        Ok(adjusted)
     }
 
     pub fn log_stats_if_notable(&self) {
@@ -347,7 +379,7 @@ impl TimestampAnomalyTracker {
             total_forward_skew_secs = format!("{:.3}", self.total_forward_skew_secs),
             max_forward_skew_secs = format!("{:.3}", self.max_forward_skew_secs),
             resync_count = self.resync_count,
-            accumulated_compensation_ms = self.accumulated_compensation.as_millis(),
+            accumulated_compensation_secs = format!("{:.3}", self.accumulated_compensation_secs),
             "Timestamp anomaly statistics"
         );
     }
