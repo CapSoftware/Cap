@@ -37,6 +37,7 @@ struct MixerSource {
 
 pub struct AudioMixerBuilder {
     sources: Vec<MixerSource>,
+    timestamps: Option<Timestamps>,
 }
 
 impl Default for AudioMixerBuilder {
@@ -49,7 +50,13 @@ impl AudioMixerBuilder {
     pub fn new() -> Self {
         Self {
             sources: Vec::new(),
+            timestamps: None,
         }
+    }
+
+    pub fn with_timestamps(mut self, timestamps: Timestamps) -> Self {
+        self.timestamps = Some(timestamps);
+        self
     }
 
     pub fn has_sources(&self) -> bool {
@@ -162,7 +169,7 @@ impl AudioMixerBuilder {
             _amix: amix,
             _aformat: aformat,
             start_timestamp: None,
-            timestamps: Timestamps::now(),
+            timestamps: self.timestamps.unwrap_or_else(Timestamps::now),
             max_buffer_timeout,
             wall_clock_start: None,
             baseline_offset_secs: None,

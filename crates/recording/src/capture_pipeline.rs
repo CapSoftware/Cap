@@ -68,6 +68,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         output_resolution: (u32, u32),
+        start_time: Timestamps,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -118,9 +119,11 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         output_resolution: (u32, u32),
+        start_time: Timestamps,
     ) -> anyhow::Result<OutputPipeline> {
         let mut output = OutputPipeline::builder(output_path.clone())
-            .with_video::<screen_capture::VideoSource>(screen_capture);
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time);
 
         if let Some(system_audio) = system_audio {
             output = output.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
@@ -194,11 +197,13 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         output_resolution: (u32, u32),
+        start_time: Timestamps,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();
         let mut output_builder = OutputPipeline::builder(output_path.clone())
-            .with_video::<screen_capture::VideoSource>(screen_capture);
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time);
 
         if let Some(mic_feed) = mic_feed {
             output_builder = output_builder.with_audio_source::<sources::Microphone>(mic_feed);

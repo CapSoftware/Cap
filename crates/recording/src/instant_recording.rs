@@ -11,6 +11,7 @@ use crate::{
 use anyhow::Context as _;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
+use cap_timestamp::Timestamps;
 use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
 use std::{
@@ -208,6 +209,7 @@ async fn create_pipeline(
     screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     max_output_size: Option<u32>,
+    start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
     if let Some(mic_feed) = &mic_feed {
         debug!(
@@ -243,6 +245,7 @@ async fn create_pipeline(
         mic_feed,
         output_path.clone(),
         output_resolution,
+        start_time,
         #[cfg(windows)]
         crate::capture_pipeline::EncoderPreferences::new(),
     )
@@ -339,7 +342,8 @@ pub async fn spawn_instant_recording_actor(
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
-    let start_time = SystemTime::now();
+    let timestamps = Timestamps::now();
+    let start_time = timestamps.system_time();
 
     trace!("creating recording actor");
 
@@ -378,6 +382,7 @@ pub async fn spawn_instant_recording_actor(
         screen_source.clone(),
         inputs.mic_feed.clone(),
         max_output_size,
+        timestamps,
     )
     .await?;
 

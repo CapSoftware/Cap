@@ -601,10 +601,14 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         let video_info = video_source.video_info();
         let (first_tx, first_rx) = oneshot::channel();
 
-        let audio =
-            setup_audio_sources(&mut setup_ctx, audio_sources, build_ctx.stop_token.clone())
-                .await
-                .context("setup_audio_sources")?;
+        let audio = setup_audio_sources(
+            &mut setup_ctx,
+            audio_sources,
+            build_ctx.stop_token.clone(),
+            timestamps,
+        )
+        .await
+        .context("setup_audio_sources")?;
 
         let muxer = setup_muxer::<TMuxer>(
             muxer_config,
@@ -672,10 +676,14 @@ impl OutputPipelineBuilder<NoVideo> {
 
         let (first_tx, first_rx) = oneshot::channel();
 
-        let audio =
-            setup_audio_sources(&mut setup_ctx, audio_sources, build_ctx.stop_token.clone())
-                .await
-                .context("setup_audio_sources")?;
+        let audio = setup_audio_sources(
+            &mut setup_ctx,
+            audio_sources,
+            build_ctx.stop_token.clone(),
+            timestamps,
+        )
+        .await
+        .context("setup_audio_sources")?;
 
         let muxer = setup_muxer::<TMuxer>(
             muxer_config,
@@ -1148,6 +1156,7 @@ async fn setup_audio_sources(
     setup_ctx: &mut SetupCtx,
     mut audio_sources: Vec<AudioSourceSetupFn>,
     stop_token: CancellationToken,
+    timestamps: Timestamps,
 ) -> anyhow::Result<Option<PreparedAudioSources>> {
     if audio_sources.is_empty() {
         return Ok(None);
@@ -1162,7 +1171,7 @@ async fn setup_audio_sources(
         erased_audio_sources.push(source);
         info
     } else {
-        let mut audio_mixer = AudioMixer::builder();
+        let mut audio_mixer = AudioMixer::builder().with_timestamps(timestamps);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
