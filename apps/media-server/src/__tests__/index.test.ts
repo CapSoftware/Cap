@@ -10,7 +10,7 @@ describe("GET /", () => {
 		expect(data).toEqual({
 			name: "@cap/media-server",
 			version: "1.0.0",
-			endpoints: ["/health", "/audio/check", "/audio/extract"],
+			endpoints: ["/health", "/audio/status", "/audio/check", "/audio/extract"],
 		});
 	});
 });

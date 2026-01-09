@@ -6,6 +6,57 @@ interface MediaServerError {
 	details?: string;
 }
 
+const MAX_RETRIES = 5;
+const INITIAL_RETRY_DELAY_MS = 2000;
+
+function isRetryableStatus(status: number): boolean {
+	return status === 503 || status === 504 || status === 502;
+}
+
+async function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+	url: string,
+	options: RequestInit,
+	maxRetries = MAX_RETRIES,
+): Promise<Response> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		try {
+			const response = await fetch(url, options);
+
+			if (!isRetryableStatus(response.status)) {
+				return response;
+			}
+
+			if (attempt < maxRetries) {
+				const delay = INITIAL_RETRY_DELAY_MS * 2 ** attempt;
+				console.log(
+					`[media-client] Got ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
+				);
+				await sleep(delay);
+				continue;
+			}
+
+			return response;
+		} catch (err) {
+			lastError = err instanceof Error ? err : new Error(String(err));
+			if (attempt < maxRetries) {
+				const delay = INITIAL_RETRY_DELAY_MS * 2 ** attempt;
+				console.log(
+					`[media-client] Request failed: ${lastError.message}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
+				);
+				await sleep(delay);
+			}
+		}
+	}
+
+	throw lastError || new Error("Request failed after retries");
+}
+
 export function isMediaServerConfigured(): boolean {
 	return !!serverEnv().MEDIA_SERVER_URL;
 }
@@ -38,7 +89,7 @@ export async function checkHasAudioTrackViaMediaServer(
 		throw new Error("MEDIA_SERVER_URL is not configured");
 	}
 
-	const response = await fetch(`${mediaServerUrl}/audio/check`, {
+	const response = await fetchWithRetry(`${mediaServerUrl}/audio/check`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ videoUrl }),
@@ -61,7 +112,7 @@ export async function extractAudioViaMediaServer(
 		throw new Error("MEDIA_SERVER_URL is not configured");
 	}
 
-	const response = await fetch(`${mediaServerUrl}/audio/extract`, {
+	const response = await fetchWithRetry(`${mediaServerUrl}/audio/extract`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ videoUrl }),

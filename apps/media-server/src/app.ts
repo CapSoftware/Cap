@@ -14,7 +14,7 @@ app.get("/", (c) => {
 	return c.json({
 		name: "@cap/media-server",
 		version: "1.0.0",
-		endpoints: ["/health", "/audio/check", "/audio/extract"],
+		endpoints: ["/health", "/audio/status", "/audio/check", "/audio/extract"],
 	});
 });
 
