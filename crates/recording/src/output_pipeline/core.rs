@@ -707,6 +707,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         )
         .await?;
 
+        let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+
         spawn_video_encoder(
             &mut setup_ctx,
             video_source,
@@ -715,7 +717,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.stop_token.clone(),
             muxer.clone(),
             timestamps,
-            build_ctx.pause_flag.clone(),
+            shared_pause.clone(),
         );
 
         finish_build(
@@ -727,7 +729,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.done_tx,
             None,
             &path,
-            build_ctx.pause_flag.clone(),
+            shared_pause,
         )
         .await?;
 
@@ -783,6 +785,8 @@ impl OutputPipelineBuilder<NoVideo> {
         )
         .await?;
 
+        let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+
         finish_build(
             setup_ctx,
             audio,
@@ -792,7 +796,7 @@ impl OutputPipelineBuilder<NoVideo> {
             build_ctx.done_tx,
             Some(first_tx),
             &path,
-            build_ctx.pause_flag.clone(),
+            shared_pause,
         )
         .await?;
 
@@ -847,7 +851,7 @@ async fn finish_build(
     done_tx: oneshot::Sender<anyhow::Result<()>>,
     first_tx: Option<oneshot::Sender<Timestamp>>,
     path: &Path,
-    pause_flag: Arc<AtomicBool>,
+    shared_pause: SharedWallClockPause,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -856,7 +860,7 @@ async fn finish_build(
             stop_token.clone(),
             timestamps,
             first_tx,
-            pause_flag,
+            shared_pause,
         );
     }
 
@@ -941,6 +945,7 @@ async fn setup_muxer<TMuxer: Muxer>(
     Ok(muxer)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
     mut video_source: TVideo,
@@ -949,7 +954,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     stop_token: CancellationToken,
     muxer: Arc<Mutex<TMutex>>,
     timestamps: Timestamps,
-    pause_flag: Arc<AtomicBool>,
+    shared_pause: SharedWallClockPause,
 ) {
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
@@ -973,32 +978,16 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut frame_count = 0u64;
         let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
         let mut drift_tracker = VideoDriftTracker::new();
-        let mut pause_start: Option<std::time::Instant> = None;
-        let mut total_pause_duration = Duration::ZERO;
         let mut dropped_during_pause: u64 = 0;
 
         let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
-                    let is_paused = pause_flag.load(Ordering::Acquire);
+                    let (is_paused, total_pause_duration) = shared_pause.check();
 
                     if is_paused {
-                        if pause_start.is_none() {
-                            pause_start = Some(std::time::Instant::now());
-                        }
                         dropped_during_pause += 1;
                         continue;
-                    }
-
-                    if let Some(start) = pause_start.take() {
-                        let pause_duration = start.elapsed();
-                        total_pause_duration =
-                            total_pause_duration.saturating_add(pause_duration);
-                        debug!(
-                            pause_duration_ms = pause_duration.as_millis(),
-                            total_pause_duration_ms = total_pause_duration.as_millis(),
-                            "Video resumed after pause"
-                        );
                     }
 
                     frame_count += 1;
@@ -1090,7 +1079,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                 };
 
                 let raw_wall_clock = timestamps.instant().elapsed();
-                let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
+                let total_pause = shared_pause.total_pause_duration();
+                let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
                 let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
 
                 match muxer.lock().await.send_video_frame(frame, duration) {
@@ -1113,10 +1103,12 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             }
         }
 
+        let final_pause_duration = shared_pause.total_pause_duration();
+
         if dropped_during_pause > 0 {
             debug!(
                 dropped_during_pause,
-                total_pause_ms = total_pause_duration.as_millis(),
+                total_pause_ms = final_pause_duration.as_millis(),
                 "Video frames dropped during pause"
             );
         }
@@ -1159,7 +1151,7 @@ impl PreparedAudioSources {
         stop_token: CancellationToken,
         timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
-        pause_flag: Arc<AtomicBool>,
+        shared_pause: SharedWallClockPause,
     ) {
         let sample_rate = self.audio_info.sample_rate;
 
@@ -1171,31 +1163,15 @@ impl PreparedAudioSources {
                 let mut drift_tracker = AudioDriftTracker::new();
                 let mut total_samples: u64 = 0;
                 let mut dropped_during_pause: u64 = 0;
-                let mut pause_start: Option<std::time::Instant> = None;
-                let mut total_pause_duration = Duration::ZERO;
 
                 let res = stop_token
                     .run_until_cancelled(async {
                         while let Some(frame) = self.audio_rx.next().await {
-                            let is_paused = pause_flag.load(Ordering::Acquire);
+                            let (is_paused, total_pause_duration) = shared_pause.check();
 
                             if is_paused {
-                                if pause_start.is_none() {
-                                    pause_start = Some(std::time::Instant::now());
-                                }
                                 dropped_during_pause += 1;
                                 continue;
-                            }
-
-                            if let Some(start) = pause_start.take() {
-                                let pause_duration = start.elapsed();
-                                total_pause_duration =
-                                    total_pause_duration.saturating_add(pause_duration);
-                                debug!(
-                                    pause_duration_ms = pause_duration.as_millis(),
-                                    total_pause_duration_ms = total_pause_duration.as_millis(),
-                                    "Audio resumed after pause"
-                                );
                             }
 
                             if let Some(first_tx) = first_tx.take() {
@@ -1250,10 +1226,12 @@ impl PreparedAudioSources {
                     })
                     .await;
 
+                let final_pause_duration = shared_pause.total_pause_duration();
+
                 if dropped_during_pause > 0 {
                     debug!(
                         dropped_during_pause,
-                        total_pause_ms = total_pause_duration.as_millis(),
+                        total_pause_ms = final_pause_duration.as_millis(),
                         "Audio frames dropped during pause (not counted in samples)"
                     );
                 }

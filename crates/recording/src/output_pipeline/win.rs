@@ -96,76 +96,10 @@ use windows::{
     },
 };
 
-struct PauseTracker {
-    flag: Arc<AtomicBool>,
-    paused_at: Option<Duration>,
-    offset: Duration,
-}
-
-impl PauseTracker {
-    fn new(flag: Arc<AtomicBool>) -> Self {
-        Self {
-            flag,
-            paused_at: None,
-            offset: Duration::ZERO,
-        }
-    }
-
-    fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
-        if self.flag.load(Ordering::Acquire) {
-            if self.paused_at.is_none() {
-                self.paused_at = Some(timestamp);
-            }
-            return Ok(None);
-        }
-
-        if let Some(start) = self.paused_at.take() {
-            let delta = match timestamp.checked_sub(start) {
-                Some(d) => d,
-                None => {
-                    warn!(
-                        resume_at = ?start,
-                        current = ?timestamp,
-                        "Timestamp anomaly: frame timestamp went backward during unpause (clock skew?), treating as zero delta"
-                    );
-                    Duration::ZERO
-                }
-            };
-
-            self.offset = match self.offset.checked_add(delta) {
-                Some(o) => o,
-                None => {
-                    warn!(
-                        offset = ?self.offset,
-                        delta = ?delta,
-                        "Timestamp anomaly: pause offset overflow, clamping to MAX"
-                    );
-                    Duration::MAX
-                }
-            };
-        }
-
-        let adjusted = match timestamp.checked_sub(self.offset) {
-            Some(t) => t,
-            None => {
-                warn!(
-                    timestamp = ?timestamp,
-                    offset = ?self.offset,
-                    "Timestamp anomaly: adjusted timestamp underflow (clock skew?), using zero"
-                );
-                Duration::ZERO
-            }
-        };
-
-        Ok(Some(adjusted))
-    }
-}
-
 pub struct WindowsMuxer {
     video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
-    pause: PauseTracker,
     frame_drops: FrameDropTracker,
 }
 
@@ -539,7 +473,6 @@ impl Muxer for WindowsMuxer {
             video_tx,
             output,
             audio_encoder,
-            pause: PauseTracker::new(pause_flag),
             frame_drops: FrameDropTracker::new(),
         })
     }
@@ -573,17 +506,15 @@ impl VideoMuxer for WindowsMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            match self.video_tx.try_send(Some((frame.frame, timestamp))) {
-                Ok(()) => {
-                    self.frame_drops.record_frame();
-                }
-                Err(TrySendError::Full(_)) => {
-                    self.frame_drops.record_drop();
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    trace!("Windows MP4 encoder channel disconnected");
-                }
+        match self.video_tx.try_send(Some((frame.frame, timestamp))) {
+            Ok(()) => {
+                self.frame_drops.record_frame();
+            }
+            Err(TrySendError::Full(_)) => {
+                self.frame_drops.record_drop();
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                trace!("Windows MP4 encoder channel disconnected");
             }
         }
 
@@ -593,8 +524,7 @@ impl VideoMuxer for WindowsMuxer {
 
 impl AudioMuxer for WindowsMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)?
-            && let Some(encoder) = self.audio_encoder.as_mut()
+        if let Some(encoder) = self.audio_encoder.as_mut()
             && let Ok(mut output) = self.output.lock()
         {
             encoder.send_frame(frame.inner, timestamp, &mut output)?;
@@ -658,7 +588,6 @@ pub struct WindowsCameraMuxer {
     video_tx: SyncSender<Option<(NativeCameraFrame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
-    pause: PauseTracker,
     frame_drops: FrameDropTracker,
 }
 
@@ -1073,7 +1002,6 @@ impl Muxer for WindowsCameraMuxer {
             video_tx,
             output,
             audio_encoder,
-            pause: PauseTracker::new(pause_flag),
             frame_drops: FrameDropTracker::new(),
         })
     }
@@ -1107,17 +1035,15 @@ impl VideoMuxer for WindowsCameraMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            match self.video_tx.try_send(Some((frame, timestamp))) {
-                Ok(()) => {
-                    self.frame_drops.record_frame();
-                }
-                Err(TrySendError::Full(_)) => {
-                    self.frame_drops.record_drop();
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    trace!("Windows MP4 camera encoder channel disconnected");
-                }
+        match self.video_tx.try_send(Some((frame, timestamp))) {
+            Ok(()) => {
+                self.frame_drops.record_frame();
+            }
+            Err(TrySendError::Full(_)) => {
+                self.frame_drops.record_drop();
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                trace!("Windows MP4 camera encoder channel disconnected");
             }
         }
 
@@ -1127,8 +1053,7 @@ impl VideoMuxer for WindowsCameraMuxer {
 
 impl AudioMuxer for WindowsCameraMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)?
-            && let Some(encoder) = self.audio_encoder.as_mut()
+        if let Some(encoder) = self.audio_encoder.as_mut()
             && let Ok(mut output) = self.output.lock()
         {
             encoder.send_frame(frame.inner, timestamp, &mut output)?;
