@@ -2226,6 +2226,13 @@ async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
+async fn clear_presets(app: AppHandle) -> Result<(), String> {
+    presets::PresetsStore::clear(&app)
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
 async fn is_camera_window_open(app: AppHandle) -> bool {
     CapWindowId::Camera.get(&app).is_some()
 }
@@ -2604,6 +2611,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::set_hotkey,
             reset_camera_permissions,
             reset_microphone_permissions,
+            clear_presets,
             is_camera_window_open,
             seek_to,
             get_display_frame_for_cropping,

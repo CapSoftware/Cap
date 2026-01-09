@@ -205,37 +205,34 @@ impl Crop {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
 pub struct ShadowConfiguration {
-    pub size: f32,    // Overall shadow size (0-100)
-    pub opacity: f32, // Shadow opacity (0-100)
-    pub blur: f32,    // Shadow blur amount (0-100)
+    pub size: f32,
+    pub opacity: f32,
+    pub blur: f32,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct BorderConfiguration {
     pub enabled: bool,
-    pub width: f32,   // Border width in pixels
-    pub color: Color, // Border color (RGB)
-    pub opacity: f32, // Border opacity (0-100)
+    pub width: f32,
+    pub color: Color,
+    pub opacity: f32,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
-    #[serde(default)]
     pub rounding_type: CornerStyle,
     pub inset: u32,
     pub crop: Option<Crop>,
-    #[serde(default)]
     pub shadow: f32,
-    #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
-    #[serde(default)]
     pub border: Option<BorderConfiguration>,
 }
 
@@ -285,14 +282,14 @@ pub enum CameraYPosition {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct CameraPosition {
     pub x: CameraXPosition,
     pub y: CameraYPosition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Camera {
     pub hide: bool,
     pub mirror: bool,
@@ -300,15 +297,12 @@ pub struct Camera {
     pub size: f32,
     #[serde(alias = "zoom_size")]
     pub zoom_size: Option<f32>,
-    #[serde(default = "Camera::default_rounding")]
     pub rounding: f32,
-    #[serde(default)]
     pub shadow: f32,
-    #[serde(alias = "advanced_shadow", default)]
+    #[serde(alias = "advanced_shadow")]
     pub advanced_shadow: Option<ShadowConfiguration>,
-    #[serde(default)]
     pub shape: CameraShape,
-    #[serde(alias = "rounding_type", default)]
+    #[serde(alias = "rounding_type")]
     pub rounding_type: CornerStyle,
 }
 
@@ -371,15 +365,12 @@ pub enum StereoMode {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct AudioConfiguration {
     pub mute: bool,
     pub improve: bool,
-    #[serde(default)]
     pub mic_volume_db: f32,
-    #[serde(default)]
     pub mic_stereo_mode: StereoMode,
-    #[serde(default)]
     pub system_volume_db: f32,
 }
 
@@ -440,13 +431,10 @@ impl CursorAnimationStyle {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct CursorConfiguration {
-    #[serde(default)]
     pub hide: bool,
-    #[serde(default)]
     pub hide_when_idle: bool,
-    #[serde(default = "CursorConfiguration::default_hide_when_idle_delay")]
     pub hide_when_idle_delay: f32,
     pub size: u32,
     r#type: CursorType,
@@ -454,16 +442,9 @@ pub struct CursorConfiguration {
     pub tension: f32,
     pub mass: f32,
     pub friction: f32,
-    #[serde(default = "CursorConfiguration::default_raw")]
     pub raw: bool,
-    #[serde(default)]
     pub motion_blur: f32,
-    #[serde(default = "yes")]
     pub use_svg: bool,
-}
-
-fn yes() -> bool {
-    true
 }
 
 impl Default for CursorConfiguration {
@@ -494,10 +475,6 @@ impl Default for CursorConfiguration {
     }
 }
 impl CursorConfiguration {
-    fn default_raw() -> bool {
-        true
-    }
-
     fn default_hide_when_idle_delay() -> f32 {
         2.0
     }
@@ -508,7 +485,7 @@ impl CursorConfiguration {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct HotkeysConfiguration {
     show: bool,
 }
@@ -777,7 +754,7 @@ pub enum CaptionPosition {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct CaptionSettings {
     pub enabled: bool,
     pub font: String,
@@ -787,40 +764,24 @@ pub struct CaptionSettings {
     pub background_color: String,
     #[serde(alias = "backgroundOpacity")]
     pub background_opacity: u32,
-    #[serde(default)]
     pub position: String,
     pub italic: bool,
-    #[serde(alias = "fontWeight", default = "CaptionSettings::default_font_weight")]
+    #[serde(alias = "fontWeight")]
     pub font_weight: u32,
     pub outline: bool,
     #[serde(alias = "outlineColor")]
     pub outline_color: String,
     #[serde(alias = "exportWithSubtitles")]
     pub export_with_subtitles: bool,
-    #[serde(
-        alias = "highlightColor",
-        default = "CaptionSettings::default_highlight_color"
-    )]
+    #[serde(alias = "highlightColor")]
     pub highlight_color: String,
-    #[serde(
-        alias = "fadeDuration",
-        default = "CaptionSettings::default_fade_duration"
-    )]
+    #[serde(alias = "fadeDuration")]
     pub fade_duration: f32,
-    #[serde(
-        alias = "lingerDuration",
-        default = "CaptionSettings::default_linger_duration"
-    )]
+    #[serde(alias = "lingerDuration")]
     pub linger_duration: f32,
-    #[serde(
-        alias = "wordTransitionDuration",
-        default = "CaptionSettings::default_word_transition_duration"
-    )]
+    #[serde(alias = "wordTransitionDuration")]
     pub word_transition_duration: f32,
-    #[serde(
-        alias = "activeWordHighlight",
-        default = "CaptionSettings::default_active_word_highlight"
-    )]
+    #[serde(alias = "activeWordHighlight")]
     pub active_word_highlight: bool,
 }
 
@@ -892,7 +853,7 @@ pub struct ClipOffsets {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ClipConfiguration {
     pub index: u32,
     pub offsets: ClipOffsets,
@@ -1020,7 +981,7 @@ impl Annotation {
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
     pub background: BackgroundConfiguration,
@@ -1028,15 +989,11 @@ pub struct ProjectConfiguration {
     pub audio: AudioConfiguration,
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
-    #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
-    #[serde(default)]
     pub captions: Option<CaptionsData>,
-    #[serde(default)]
     pub clips: Vec<ClipConfiguration>,
-    #[serde(default)]
     pub annotations: Vec<Annotation>,
-    #[serde(default, skip_serializing)]
+    #[serde(skip_serializing)]
     pub hidden_text_segments: Vec<usize>,
 }
 
