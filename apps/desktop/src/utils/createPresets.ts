@@ -25,10 +25,11 @@ export function createPresets() {
 	return {
 		query,
 		createPreset: async (preset: CreatePreset) => {
-			const config = { ...preset.config };
-			// @ts-expect-error we reeeally don't want the timeline in the preset
-			config.timeline = undefined;
-			config.clips = undefined;
+			const config = {
+				...preset.config,
+				timeline: null,
+				clips: [],
+			};
 
 			await updatePresets((store) => {
 				store.presets.push({ name: preset.name, config });
