@@ -601,7 +601,7 @@ impl AVAssetReaderDecoder {
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
                                     let _ = req.sender.send(data.to_decoded_frame());
                                 } else {
-                                    const MAX_FALLBACK_DISTANCE: u32 = 10;
+                                    const MAX_FALLBACK_DISTANCE: u32 = 30;
 
                                     let nearest = cache
                                         .range(..=req.frame)
@@ -655,12 +655,20 @@ impl AVAssetReaderDecoder {
             }
 
             let mut unfulfilled_count = 0u32;
+            let decoder_returned_no_frames = frames_iterated == 0;
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
                     let _ = req.sender.send(data.to_decoded_frame());
                 } else {
                     const MAX_FALLBACK_DISTANCE: u32 = 10;
+                    const MAX_FALLBACK_DISTANCE_EOF: u32 = 60;
+
+                    let fallback_distance = if decoder_returned_no_frames {
+                        MAX_FALLBACK_DISTANCE_EOF
+                    } else {
+                        MAX_FALLBACK_DISTANCE
+                    };
 
                     let nearest = cache
                         .range(..=req.frame)
@@ -669,7 +677,7 @@ impl AVAssetReaderDecoder {
 
                     if let Some((&frame_num, cached)) = nearest {
                         let distance = req.frame.abs_diff(frame_num);
-                        if distance <= MAX_FALLBACK_DISTANCE {
+                        if distance <= fallback_distance {
                             let _ = req.sender.send(cached.data().to_decoded_frame());
                         } else {
                             unfulfilled_count += 1;
