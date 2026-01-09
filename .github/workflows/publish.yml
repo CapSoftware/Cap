@@ -143,7 +143,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest-xlarge
           - target: x86_64-pc-windows-msvc
-            runner: windows-latest-l
+            runner: windows-latest-xl
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
