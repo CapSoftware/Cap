@@ -37,8 +37,6 @@ export async function transcribeVideoWorkflow(
 
 	const { videoId, userId, aiGenerationEnabled } = payload;
 
-	console.log(`[transcribe-workflow] Starting for video ${videoId}`);
-
 	const videoData = await validateVideo(videoId);
 
 	if (videoData.transcriptionDisabled) {
@@ -66,7 +64,6 @@ export async function transcribeVideoWorkflow(
 		await generateMetadata(videoId, userId);
 	}
 
-	console.log(`[transcribe-workflow] Completed for video ${videoId}`);
 	return { success: true, message: "Transcription completed successfully" };
 }
 
@@ -127,7 +124,6 @@ async function markSkipped(videoId: string): Promise<void> {
 async function markNoAudio(videoId: string): Promise<void> {
 	"use step";
 
-	console.log(`[transcribe-workflow] Video ${videoId} has no audio track`);
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "NO_AUDIO" })
@@ -157,9 +153,6 @@ async function extractAudio(
 	}
 
 	const useMediaServer = isMediaServerConfigured();
-	console.log(
-		`[transcribe-workflow] Using ${useMediaServer ? "media server" : "local FFmpeg"} for audio extraction`,
-	);
 
 	let hasAudio: boolean;
 	let audioBuffer: Buffer;
@@ -167,20 +160,16 @@ async function extractAudio(
 	if (useMediaServer) {
 		hasAudio = await checkHasAudioTrackViaMediaServer(videoUrl);
 		if (!hasAudio) {
-			console.log("[transcribe-workflow] Video has no audio track");
 			return null;
 		}
 
-		console.log("[transcribe-workflow] Extracting audio via media server");
 		audioBuffer = await extractAudioViaMediaServer(videoUrl);
 	} else {
 		hasAudio = await checkHasAudioTrack(videoUrl);
 		if (!hasAudio) {
-			console.log("[transcribe-workflow] Video has no audio track");
 			return null;
 		}
 
-		console.log("[transcribe-workflow] Extracting audio from video");
 		const result = await extractAudioFromUrl(videoUrl);
 
 		try {
@@ -190,11 +179,11 @@ async function extractAudio(
 		}
 	}
 
-	const audioKey = `${userId}/${videoId}/audio-temp.m4a`;
+	const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
 
 	await bucket
 		.putObject(audioKey, audioBuffer, {
-			contentType: "audio/mp4",
+			contentType: "audio/mpeg",
 		})
 		.pipe(runPromise);
 
@@ -202,14 +191,21 @@ async function extractAudio(
 		.getSignedObjectUrl(audioKey)
 		.pipe(runPromise);
 
-	console.log("[transcribe-workflow] Audio uploaded to S3");
 	return audioSignedUrl;
 }
 
 async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 	"use step";
 
-	console.log("[transcribe-workflow] Calling Deepgram API");
+	const audioCheckResponse = await fetch(audioUrl, {
+		method: "HEAD",
+	});
+	if (!audioCheckResponse.ok) {
+		throw new Error(
+			`Audio URL not accessible: ${audioCheckResponse.status} ${audioCheckResponse.statusText}`,
+		);
+	}
+
 	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
 	const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
@@ -219,16 +215,14 @@ async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 			smart_format: true,
 			detect_language: true,
 			utterances: true,
-			mime_type: "audio/mp4",
+			mime_type: "audio/mpeg",
 		},
 	);
 
 	if (error) {
-		console.error("[transcribe-workflow] Deepgram error:", error);
 		throw new Error(`Deepgram transcription failed: ${error.message}`);
 	}
 
-	console.log("[transcribe-workflow] Transcription received");
 	return formatToWebVTT(result as unknown as DeepgramResult);
 }
 
@@ -254,8 +248,6 @@ async function saveTranscription(
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE" })
 		.where(eq(videos.id, videoId as Video.VideoId));
-
-	console.log("[transcribe-workflow] Transcription saved to S3");
 }
 
 async function cleanupTempAudio(
@@ -270,9 +262,8 @@ async function cleanupTempAudio(
 			Option.fromNullable(bucketId),
 		).pipe(runPromise);
 
-		const audioKey = `${userId}/${videoId}/audio-temp.m4a`;
+		const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
 		await bucket.deleteObject(audioKey).pipe(runPromise);
-		console.log("[transcribe-workflow] Cleaned up temp audio file");
 	} catch {}
 }
 
@@ -282,6 +273,5 @@ async function generateMetadata(
 ): Promise<void> {
 	"use step";
 
-	console.log("[transcribe-workflow] Triggering AI metadata generation");
 	await generateAiMetadata(videoId as Video.VideoId, userId);
 }

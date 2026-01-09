@@ -1,14 +1,14 @@
 import { spawn } from "bun";
 
 export interface AudioExtractionOptions {
-	format?: "m4a";
-	codec?: "aac";
+	format?: "mp3";
+	codec?: "libmp3lame";
 	bitrate?: string;
 }
 
 const DEFAULT_OPTIONS: Required<AudioExtractionOptions> = {
-	format: "m4a",
-	codec: "aac",
+	format: "mp3",
+	codec: "libmp3lame",
 	bitrate: "128k",
 };
 
@@ -22,9 +22,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	const stderrText = await new Response(proc.stderr).text();
 	await proc.exited;
 
-	const hasAudio = /Stream #\d+:\d+.*Audio:/.test(stderrText);
-	console.log(`[ffmpeg] Video has audio track: ${hasAudio}`);
-	return hasAudio;
+	return /Stream #\d+:\d+.*Audio:/.test(stderrText);
 }
 
 export async function extractAudio(
@@ -43,13 +41,9 @@ export async function extractAudio(
 		"-b:a",
 		opts.bitrate,
 		"-f",
-		"ipod",
-		"-movflags",
-		"+frag_keyframe+empty_moov",
+		"mp3",
 		"pipe:1",
 	];
-
-	console.log(`[ffmpeg] Starting audio extraction: ${ffmpegArgs.join(" ")}`);
 
 	const proc = spawn({
 		cmd: ffmpegArgs,
@@ -64,13 +58,9 @@ export async function extractAudio(
 	]);
 
 	if (exitCode !== 0) {
-		console.error(`[ffmpeg] Audio extraction failed:\n${stderrText}`);
-		throw new Error(`FFmpeg exited with code ${exitCode}`);
+		throw new Error(`FFmpeg exited with code ${exitCode}: ${stderrText}`);
 	}
 
-	console.log(
-		`[ffmpeg] Audio extraction complete, size: ${stdout.byteLength} bytes`,
-	);
 	return new Uint8Array(stdout);
 }
 
@@ -90,26 +80,14 @@ export async function extractAudioStream(
 		"-b:a",
 		opts.bitrate,
 		"-f",
-		"ipod",
-		"-movflags",
-		"+frag_keyframe+empty_moov",
+		"mp3",
 		"pipe:1",
 	];
-
-	console.log(
-		`[ffmpeg] Starting audio extraction (stream): ${ffmpegArgs.join(" ")}`,
-	);
 
 	const proc = spawn({
 		cmd: ffmpegArgs,
 		stdout: "pipe",
 		stderr: "pipe",
-	});
-
-	proc.exited.then((code) => {
-		if (code !== 0) {
-			console.error(`[ffmpeg] Stream extraction failed with code ${code}`);
-		}
 	});
 
 	return proc.stdout as ReadableStream<Uint8Array>;

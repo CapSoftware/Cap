@@ -25,7 +25,6 @@ function getFfmpegPath(): string {
 
 	for (const path of candidatePaths) {
 		if (existsSync(path)) {
-			console.log(`[audio-extract] Found FFmpeg at: ${path}`);
 			cachedFfmpegPath = path;
 			return path;
 		}
@@ -46,31 +45,23 @@ export async function extractAudioFromUrl(
 	videoUrl: string,
 ): Promise<AudioExtractionResult> {
 	const ffmpeg = getFfmpegPath();
-	const outputPath = join(tmpdir(), `audio-${randomUUID()}.m4a`);
+	const outputPath = join(tmpdir(), `audio-${randomUUID()}.mp3`);
 
 	const ffmpegArgs = [
 		"-i",
 		videoUrl,
 		"-vn",
 		"-acodec",
-		"aac",
+		"libmp3lame",
 		"-b:a",
 		"128k",
 		"-f",
-		"ipod",
-		"-movflags",
-		"+faststart",
+		"mp3",
 		"-y",
 		outputPath,
 	];
 
 	return new Promise((resolve, reject) => {
-		console.log(
-			"[audio-extract] FFmpeg started:",
-			ffmpeg,
-			ffmpegArgs.join(" "),
-		);
-
 		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
 
 		let stderr = "";
@@ -80,28 +71,24 @@ export async function extractAudioFromUrl(
 		});
 
 		proc.on("error", (err: Error) => {
-			console.error("[audio-extract] FFmpeg error:", err);
 			fs.unlink(outputPath).catch(() => {});
 			reject(new Error(`Audio extraction failed: ${err.message}`));
 		});
 
 		proc.on("close", (code: number | null) => {
 			if (code === 0) {
-				console.log("[audio-extract] Audio extraction complete");
 				resolve({
 					filePath: outputPath,
-					mimeType: "audio/mp4",
+					mimeType: "audio/mpeg",
 					cleanup: async () => {
 						try {
 							await fs.unlink(outputPath);
-							console.log("[audio-extract] Cleaned up temp file:", outputPath);
 						} catch {}
 					},
 				});
 			} else {
-				console.error("[audio-extract] FFmpeg stderr:", stderr);
 				fs.unlink(outputPath).catch(() => {});
-				reject(new Error(`Audio extraction failed with code ${code}`));
+				reject(new Error(`Audio extraction failed with code ${code}: ${stderr}`));
 			}
 		});
 	});
@@ -114,13 +101,11 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 		videoUrl,
 		"-vn",
 		"-acodec",
-		"aac",
+		"libmp3lame",
 		"-b:a",
 		"128k",
 		"-f",
-		"ipod",
-		"-movflags",
-		"+frag_keyframe+empty_moov",
+		"mp3",
 		"-pipe:1",
 	];
 
@@ -139,17 +124,14 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 		});
 
 		proc.on("error", (err: Error) => {
-			console.error("[audio-extract] FFmpeg error:", err);
 			reject(new Error(`Audio extraction failed: ${err.message}`));
 		});
 
 		proc.on("close", (code: number | null) => {
 			if (code === 0) {
-				console.log("[audio-extract] Audio extraction to buffer complete");
 				resolve(Buffer.concat(chunks));
 			} else {
-				console.error("[audio-extract] FFmpeg stderr:", stderr);
-				reject(new Error(`Audio extraction failed with code ${code}`));
+				reject(new Error(`Audio extraction failed with code ${code}: ${stderr}`));
 			}
 		});
 	});
@@ -159,8 +141,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	let ffmpeg: string;
 	try {
 		ffmpeg = getFfmpegPath();
-	} catch (err) {
-		console.error("[audio-extract] FFmpeg binary not found:", err);
+	} catch {
 		return false;
 	}
 	const ffmpegArgs = ["-i", videoUrl, "-hide_banner"];
@@ -176,15 +157,12 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 			stderr += data.toString();
 		});
 
-		proc.on("error", (err: Error) => {
-			console.error("[audio-extract] FFmpeg error:", err);
+		proc.on("error", () => {
 			resolve(false);
 		});
 
 		proc.on("close", () => {
-			const hasAudio = /Stream #\d+:\d+.*Audio:/.test(stderr);
-			console.log(`[audio-extract] Video has audio track: ${hasAudio}`);
-			resolve(hasAudio);
+			resolve(/Stream #\d+:\d+.*Audio:/.test(stderr));
 		});
 	});
 }

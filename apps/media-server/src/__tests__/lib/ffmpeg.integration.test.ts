@@ -26,12 +26,13 @@ describe("ffmpeg integration tests", () => {
 			expect(audioData).toBeInstanceOf(Uint8Array);
 			expect(audioData.length).toBeGreaterThan(0);
 
-			const hasFtypBox =
-				audioData[4] === 0x66 &&
-				audioData[5] === 0x74 &&
-				audioData[6] === 0x79 &&
-				audioData[7] === 0x70;
-			expect(hasFtypBox).toBe(true);
+			const hasId3Tag =
+				audioData[0] === 0x49 &&
+				audioData[1] === 0x44 &&
+				audioData[2] === 0x33;
+			const hasMpegSync =
+				audioData[0] === 0xff && (audioData[1] & 0xe0) === 0xe0;
+			expect(hasId3Tag || hasMpegSync).toBe(true);
 		});
 
 		test("throws error for video without audio track", async () => {

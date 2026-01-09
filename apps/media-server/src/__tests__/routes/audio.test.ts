@@ -151,7 +151,7 @@ describe("POST /audio/extract", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(response.headers.get("Content-Type")).toBe("audio/mp4");
+		expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
 		expect(response.headers.get("Content-Length")).toBe(
 			mockAudioData.length.toString(),
 		);

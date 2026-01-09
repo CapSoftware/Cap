@@ -67,7 +67,7 @@ audio.post("/extract", async (c) => {
 
 		return new Response(Buffer.from(audioData), {
 			headers: {
-				"Content-Type": "audio/mp4",
+				"Content-Type": "audio/mpeg",
 				"Content-Length": audioData.length.toString(),
 			},
 		});

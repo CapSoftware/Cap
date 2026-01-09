@@ -183,7 +183,7 @@ describe("media-client", () => {
 
 			await expect(
 				extractAudioViaMediaServer("https://example.com/video.mp4"),
-			).rejects.toThrow("Failed to extract audio");
+			).rejects.toThrow("FFmpeg process exited with code 1");
 		});
 	});
 });

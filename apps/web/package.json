@@ -4,8 +4,8 @@
 	"private": true,
 	"scripts": {
 		"dev": "NODE_OPTIONS='--disable-warning=DEP0169' dotenv -e ../../.env -- next dev",
-		"build": "next build --turbopack",
-		"build:web": "next build --turbopack",
+		"build": "next build",
+		"build:web": "next build",
 		"build:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
 		"start": "NODE_OPTIONS='--disable-warning=DEP0169' next start",
 		"compress-images": "bash tools/compress-images.sh",

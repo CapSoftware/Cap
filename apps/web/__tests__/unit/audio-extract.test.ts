@@ -132,12 +132,12 @@ describe("audio-extract", () => {
 			expect(args).toContain("https://example.com/video.mp4");
 			expect(args).toContain("-vn");
 			expect(args).toContain("-acodec");
-			expect(args).toContain("aac");
+			expect(args).toContain("libmp3lame");
 			expect(args).toContain("-b:a");
 			expect(args).toContain("128k");
 		});
 
-		it("returns audio/mp4 mime type", async () => {
+		it("returns audio/mpeg mime type", async () => {
 			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
 
 			const resultPromise = extractAudioFromUrl(
@@ -149,10 +149,10 @@ describe("audio-extract", () => {
 			}, 10);
 
 			const result = await resultPromise;
-			expect(result.mimeType).toBe("audio/mp4");
+			expect(result.mimeType).toBe("audio/mpeg");
 		});
 
-		it("generates .m4a file in temp directory", async () => {
+		it("generates .mp3 file in temp directory", async () => {
 			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
 
 			const resultPromise = extractAudioFromUrl(
@@ -165,7 +165,7 @@ describe("audio-extract", () => {
 
 			const result = await resultPromise;
 			expect(result.filePath).toContain("audio-");
-			expect(result.filePath).toContain(".m4a");
+			expect(result.filePath).toContain(".mp3");
 		});
 
 		it("provides cleanup function", async () => {
