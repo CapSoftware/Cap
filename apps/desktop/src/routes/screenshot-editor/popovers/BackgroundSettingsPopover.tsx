@@ -170,17 +170,14 @@ export function BackgroundSettingsPopover() {
 		setProject("background", "source", source);
 	};
 
-	// Debounced set project for history
-	const debouncedSetProject = (wallpaperPath: string) => {
+	const setWallpaperSource = (wallpaperPath: string) => {
 		const resumeHistory = projectHistory.pause();
-		queueMicrotask(() => {
-			batch(() => {
-				setProject("background", "source", {
-					type: "wallpaper",
-					path: wallpaperPath,
-				} as const);
-				resumeHistory();
-			});
+		batch(() => {
+			setProject("background", "source", {
+				type: "wallpaper",
+				path: wallpaperPath,
+			} as const);
+			resumeHistory();
 		});
 	};
 
@@ -319,7 +316,7 @@ export function BackgroundSettingsPopover() {
 												(w) => w.url === photoUrl,
 											);
 											if (wallpaper) {
-												debouncedSetProject(wallpaper.rawPath);
+												setWallpaperSource(wallpaper.rawPath);
 												ensurePaddingForBackground();
 											}
 										}}
