@@ -45,22 +45,21 @@ services:
     volumes:
       - ps-mysql:/var/lib/mysql
 
-  # Local S3 Strorage
+  # Local S3 Storage
   minio:
     container_name: cap-minio-storage
-    image: "bitnami/minio:latest"
+    image: "minio/minio:latest"
     restart: unless-stopped
     ports:
       - "3902:3902"
       - "3903:3903"
     environment:
-      - MINIO_API_PORT_NUMBER=3902
-      - MINIO_CONSOLE_PORT_NUMBER=3903
       # CHANGE THESE TO YOUR OWN VALUES
       - MINIO_ROOT_USER=capS3root
       - MINIO_ROOT_PASSWORD=capS3root
+    command: server /data --address :3902 --console-address :3903
     volumes:
-      - minio-data:/bitnami/minio/data
+      - minio-data:/data
       - minio-certs:/certs
 volumes:
   ps-mysql:
