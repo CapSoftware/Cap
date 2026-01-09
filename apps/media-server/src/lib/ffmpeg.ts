@@ -46,7 +46,7 @@ export async function extractAudio(
 		"ipod",
 		"-movflags",
 		"+frag_keyframe+empty_moov",
-		"-pipe:1",
+		"pipe:1",
 	];
 
 	console.log(`[ffmpeg] Starting audio extraction: ${ffmpegArgs.join(" ")}`);
@@ -93,7 +93,7 @@ export async function extractAudioStream(
 		"ipod",
 		"-movflags",
 		"+frag_keyframe+empty_moov",
-		"-pipe:1",
+		"pipe:1",
 	];
 
 	console.log(
