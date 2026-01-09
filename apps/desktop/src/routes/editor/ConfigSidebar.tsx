@@ -1262,7 +1262,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									photoUrl.replace("file://", ""),
 								);
 
-								debouncedSetProject(rawPath);
+								setWallpaperSource(rawPath);
 							} catch (_err) {
 								toast.error("Failed to set wallpaper");
 							}
@@ -1324,17 +1324,14 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 	let fileInput!: HTMLInputElement;
 
-	// Optimize the debounced set project function
-	const debouncedSetProject = (wallpaperPath: string) => {
+	const setWallpaperSource = (wallpaperPath: string) => {
 		const resumeHistory = projectHistory.pause();
-		queueMicrotask(() => {
-			batch(() => {
-				setProject("background", "source", {
-					type: "wallpaper",
-					path: wallpaperPath,
-				} as const);
-				resumeHistory();
-			});
+		batch(() => {
+			setProject("background", "source", {
+				type: "wallpaper",
+				path: wallpaperPath,
+			} as const);
+			resumeHistory();
 		});
 	};
 
@@ -1600,7 +1597,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 									// Get the raw path without any URL prefixes
 
-									debouncedSetProject(wallpaper.rawPath);
+									setWallpaperSource(wallpaper.rawPath);
 
 									ensurePaddingForBackground();
 								} catch (_err) {

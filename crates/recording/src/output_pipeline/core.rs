@@ -29,113 +29,32 @@ const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
 
-struct AudioDriftTracker {
-    baseline_offset_secs: Option<f64>,
-    drift_warning_logged: bool,
-    first_frame_timestamp_secs: Option<f64>,
-    last_valid_wall_clock_secs: f64,
-    resync_count: u32,
+struct AudioTimestampGenerator {
+    sample_rate: u32,
+    total_samples: u64,
 }
 
-const AUDIO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
-const AUDIO_LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
 
-impl AudioDriftTracker {
-    fn new() -> Self {
+impl AudioTimestampGenerator {
+    fn new(sample_rate: u32) -> Self {
         Self {
-            baseline_offset_secs: None,
-            drift_warning_logged: false,
-            first_frame_timestamp_secs: None,
-            last_valid_wall_clock_secs: 0.0,
-            resync_count: 0,
+            sample_rate,
+            total_samples: 0,
         }
     }
 
-    fn calculate_timestamp(
-        &mut self,
-        frame_timestamp_secs: f64,
-        wall_clock_secs: f64,
-    ) -> Option<Duration> {
-        if frame_timestamp_secs < 0.0 {
-            return None;
-        }
-
-        let first_timestamp = *self
-            .first_frame_timestamp_secs
-            .get_or_insert(frame_timestamp_secs);
-        let frame_elapsed_secs = frame_timestamp_secs - first_timestamp;
-
-        if frame_elapsed_secs < 0.0 {
-            return None;
-        }
-
-        if frame_elapsed_secs > wall_clock_secs + AUDIO_LARGE_FORWARD_JUMP_SECS {
-            self.resync_count += 1;
-            warn!(
-                frame_elapsed_secs,
-                wall_clock_secs,
-                forward_jump_secs = frame_elapsed_secs - wall_clock_secs,
-                resync_count = self.resync_count,
-                "Audio timestamp jumped forward (system sleep/wake?), resyncing to wall clock"
-            );
-
-            self.first_frame_timestamp_secs = Some(frame_timestamp_secs - wall_clock_secs);
-            self.baseline_offset_secs = None;
-            self.drift_warning_logged = false;
-
-            self.last_valid_wall_clock_secs = wall_clock_secs;
-            return Some(Duration::from_secs_f64(wall_clock_secs));
-        }
-
-        if frame_elapsed_secs > wall_clock_secs + AUDIO_WALL_CLOCK_TOLERANCE_SECS {
-            return None;
-        }
-
-        if wall_clock_secs >= 2.0 && frame_elapsed_secs >= 2.0 {
-            if self.baseline_offset_secs.is_none() {
-                let offset = frame_elapsed_secs - wall_clock_secs;
-                debug!(
-                    wall_clock_secs,
-                    frame_elapsed_secs,
-                    baseline_offset_secs = offset,
-                    "Capturing audio baseline offset after warmup"
-                );
-                self.baseline_offset_secs = Some(offset);
-            }
-
-            let baseline = self.baseline_offset_secs.unwrap_or(0.0);
-            let adjusted_frame_elapsed = frame_elapsed_secs - baseline;
-            let drift_ratio = if adjusted_frame_elapsed > 0.0 {
-                wall_clock_secs / adjusted_frame_elapsed
-            } else {
-                1.0
-            };
-
-            if !(0.90..=1.10).contains(&drift_ratio) && !self.drift_warning_logged {
-                warn!(
-                    drift_ratio,
-                    wall_clock_secs,
-                    adjusted_frame_elapsed,
-                    baseline,
-                    "Significant audio clock drift detected"
-                );
-                self.drift_warning_logged = true;
-            }
-
-            self.last_valid_wall_clock_secs = wall_clock_secs;
-            let corrected_secs = adjusted_frame_elapsed * drift_ratio;
-            return Some(Duration::from_secs_f64(corrected_secs.max(0.0)));
-        }
-
-        self.last_valid_wall_clock_secs = wall_clock_secs;
-        Some(Duration::from_secs_f64(frame_elapsed_secs.max(0.0)))
+    fn next_timestamp(&mut self, frame_samples: u64) -> Duration {
+        let timestamp_secs = self.total_samples as f64 / self.sample_rate as f64;
+        self.total_samples += frame_samples;
+        Duration::from_secs_f64(timestamp_secs)
     }
 }
 
 struct VideoDriftTracker {
     baseline_offset_secs: Option<f64>,
     capped_frame_count: u64,
+    drift_warning_logged: bool,
 }
 
 impl VideoDriftTracker {
@@ -143,6 +62,7 @@ impl VideoDriftTracker {
         Self {
             baseline_offset_secs: None,
             capped_frame_count: 0,
+            drift_warning_logged: false,
         }
     }
 
@@ -184,13 +104,16 @@ impl VideoDriftTracker {
         };
 
         let corrected_secs = if !(0.95..=1.05).contains(&drift_ratio) {
-            warn!(
-                drift_ratio,
-                wall_clock_secs,
-                adjusted_camera_secs,
-                baseline,
-                "Extreme video clock drift detected after baseline correction, clamping"
-            );
+            if !self.drift_warning_logged {
+                warn!(
+                    drift_ratio,
+                    wall_clock_secs,
+                    adjusted_camera_secs,
+                    baseline,
+                    "Extreme video clock drift detected after baseline correction, clamping"
+                );
+                self.drift_warning_logged = true;
+            }
             let clamped_ratio = drift_ratio.clamp(0.95, 1.05);
             adjusted_camera_secs * clamped_ratio
         } else {
@@ -471,6 +394,60 @@ impl SharedPauseState {
     }
 }
 
+struct SharedWallClockPauseInner {
+    pause_started_at: Option<std::time::Instant>,
+    total_pause_duration: Duration,
+}
+
+#[derive(Clone)]
+pub struct SharedWallClockPause {
+    flag: Arc<AtomicBool>,
+    inner: Arc<std::sync::Mutex<SharedWallClockPauseInner>>,
+}
+
+impl SharedWallClockPause {
+    pub fn new(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            flag,
+            inner: Arc::new(std::sync::Mutex::new(SharedWallClockPauseInner {
+                pause_started_at: None,
+                total_pause_duration: Duration::ZERO,
+            })),
+        }
+    }
+
+    pub fn check(&self) -> (bool, Duration) {
+        let is_paused = self.flag.load(Ordering::Acquire);
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if is_paused {
+            if inner.pause_started_at.is_none() {
+                inner.pause_started_at = Some(std::time::Instant::now());
+            }
+        } else if let Some(started) = inner.pause_started_at.take() {
+            let delta = started.elapsed();
+            inner.total_pause_duration = inner.total_pause_duration.saturating_add(delta);
+            debug!(
+                pause_delta_ms = delta.as_millis(),
+                total_pause_ms = inner.total_pause_duration.as_millis(),
+                "Shared pause state: resumed"
+            );
+        }
+
+        (is_paused, inner.total_pause_duration)
+    }
+
+    pub fn total_pause_duration(&self) -> Duration {
+        match self.inner.lock() {
+            Ok(guard) => guard.total_pause_duration,
+            Err(poisoned) => poisoned.into_inner().total_pause_duration,
+        }
+    }
+}
+
 pub struct OnceSender<T>(Option<oneshot::Sender<T>>);
 
 impl<T> OnceSender<T> {
@@ -652,6 +629,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         )
         .await?;
 
+        let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+
         spawn_video_encoder(
             &mut setup_ctx,
             video_source,
@@ -660,6 +639,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.stop_token.clone(),
             muxer.clone(),
             timestamps,
+            shared_pause.clone(),
         );
 
         finish_build(
@@ -671,7 +651,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.done_tx,
             None,
             &path,
-            build_ctx.pause_flag.clone(),
+            shared_pause,
         )
         .await?;
 
@@ -727,6 +707,8 @@ impl OutputPipelineBuilder<NoVideo> {
         )
         .await?;
 
+        let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+
         finish_build(
             setup_ctx,
             audio,
@@ -736,7 +718,7 @@ impl OutputPipelineBuilder<NoVideo> {
             build_ctx.done_tx,
             Some(first_tx),
             &path,
-            build_ctx.pause_flag.clone(),
+            shared_pause,
         )
         .await?;
 
@@ -791,7 +773,7 @@ async fn finish_build(
     done_tx: oneshot::Sender<anyhow::Result<()>>,
     first_tx: Option<oneshot::Sender<Timestamp>>,
     path: &Path,
-    pause_flag: Arc<AtomicBool>,
+    shared_pause: SharedWallClockPause,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -800,7 +782,7 @@ async fn finish_build(
             stop_token.clone(),
             timestamps,
             first_tx,
-            pause_flag,
+            shared_pause,
         );
     }
 
@@ -885,6 +867,7 @@ async fn setup_muxer<TMuxer: Muxer>(
     Ok(muxer)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
     mut video_source: TVideo,
@@ -893,6 +876,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     stop_token: CancellationToken,
     muxer: Arc<Mutex<TMutex>>,
     timestamps: Timestamps,
+    shared_pause: SharedWallClockPause,
 ) {
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
@@ -916,10 +900,18 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut frame_count = 0u64;
         let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
         let mut drift_tracker = VideoDriftTracker::new();
+        let mut dropped_during_pause: u64 = 0;
 
         let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
+                    let (is_paused, total_pause_duration) = shared_pause.check();
+
+                    if is_paused {
+                        dropped_during_pause += 1;
+                        continue;
+                    }
+
                     frame_count += 1;
 
                     let timestamp = frame.timestamp();
@@ -938,7 +930,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
                     };
 
-                    let wall_clock_elapsed = timestamps.instant().elapsed();
+                    let raw_wall_clock = timestamps.instant().elapsed();
+                    let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                     let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
 
                     if frame_count.is_multiple_of(300) {
@@ -954,6 +947,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             corrected_secs = duration.as_secs_f64(),
                             drift_ratio,
                             baseline_offset = drift_tracker.baseline_offset_secs,
+                            total_pause_ms = total_pause_duration.as_millis(),
                             "Video drift correction status"
                         );
                     }
@@ -1006,7 +1000,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
                 };
 
-                let wall_clock_elapsed = timestamps.instant().elapsed();
+                let raw_wall_clock = timestamps.instant().elapsed();
+                let total_pause = shared_pause.total_pause_duration();
+                let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
                 let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
 
                 match muxer.lock().await.send_video_frame(frame, duration) {
@@ -1027,6 +1023,16 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     drain_start.elapsed()
                 );
             }
+        }
+
+        let final_pause_duration = shared_pause.total_pause_duration();
+
+        if dropped_during_pause > 0 {
+            debug!(
+                dropped_during_pause,
+                total_pause_ms = final_pause_duration.as_millis(),
+                "Video frames dropped during pause"
+            );
         }
 
         anomaly_tracker.log_stats_if_notable();
@@ -1067,7 +1073,7 @@ impl PreparedAudioSources {
         stop_token: CancellationToken,
         timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
-        pause_flag: Arc<AtomicBool>,
+        shared_pause: SharedWallClockPause,
     ) {
         let sample_rate = self.audio_info.sample_rate;
 
@@ -1075,35 +1081,18 @@ impl PreparedAudioSources {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
-                let mut anomaly_tracker = TimestampAnomalyTracker::new("audio");
-                let mut drift_tracker = AudioDriftTracker::new();
-                let mut total_samples: u64 = 0;
+                let mut timestamp_generator = AudioTimestampGenerator::new(sample_rate);
                 let mut dropped_during_pause: u64 = 0;
-                let mut pause_start: Option<std::time::Instant> = None;
-                let mut total_pause_duration = Duration::ZERO;
+                let mut frame_count: u64 = 0;
 
                 let res = stop_token
                     .run_until_cancelled(async {
                         while let Some(frame) = self.audio_rx.next().await {
-                            let is_paused = pause_flag.load(Ordering::Acquire);
+                            let (is_paused, total_pause_duration) = shared_pause.check();
 
                             if is_paused {
-                                if pause_start.is_none() {
-                                    pause_start = Some(std::time::Instant::now());
-                                }
                                 dropped_during_pause += 1;
                                 continue;
-                            }
-
-                            if let Some(start) = pause_start.take() {
-                                let pause_duration = start.elapsed();
-                                total_pause_duration =
-                                    total_pause_duration.saturating_add(pause_duration);
-                                debug!(
-                                    pause_duration_ms = pause_duration.as_millis(),
-                                    total_pause_duration_ms = total_pause_duration.as_millis(),
-                                    "Audio resumed after pause"
-                                );
                             }
 
                             if let Some(first_tx) = first_tx.take() {
@@ -1111,46 +1100,25 @@ impl PreparedAudioSources {
                             }
 
                             let frame_samples = frame.inner.samples() as u64;
-                            total_samples += frame_samples;
+                            frame_count += 1;
 
-                            let _ = anomaly_tracker.process_timestamp(frame.timestamp, timestamps);
+                            let timestamp = timestamp_generator.next_timestamp(frame_samples);
 
-                            let raw_wall_clock = timestamps.instant().elapsed();
-                            let effective_wall_clock =
-                                raw_wall_clock.saturating_sub(total_pause_duration);
-                            let wall_clock_secs = effective_wall_clock.as_secs_f64();
-
-                            let frame_timestamp_secs =
-                                frame.timestamp.signed_duration_since_secs(timestamps);
-
-                            if wall_clock_secs >= 5.0 && (wall_clock_secs as u64).is_multiple_of(10)
-                            {
-                                let total_input_duration_secs =
-                                    total_samples as f64 / sample_rate as f64;
-                                let drift_ratio = if frame_timestamp_secs > 0.0 {
-                                    wall_clock_secs / frame_timestamp_secs
-                                } else {
-                                    1.0
-                                };
+                            if frame_count.is_multiple_of(500) {
+                                let raw_wall_clock = timestamps.instant().elapsed();
+                                let effective_wall_clock =
+                                    raw_wall_clock.saturating_sub(total_pause_duration);
                                 debug!(
-                                    wall_clock_secs,
-                                    total_input_duration_secs,
-                                    frame_timestamp_secs,
-                                    drift_ratio,
-                                    total_samples,
-                                    baseline_offset = drift_tracker.baseline_offset_secs,
+                                    wall_clock_secs = effective_wall_clock.as_secs_f64(),
+                                    sample_based_secs = timestamp.as_secs_f64(),
+                                    total_samples = timestamp_generator.total_samples,
+                                    frame_count,
                                     total_pause_ms = total_pause_duration.as_millis(),
-                                    "Audio drift correction status"
+                                    "Audio timestamp status"
                                 );
                             }
 
-                            let timestamp = drift_tracker
-                                .calculate_timestamp(frame_timestamp_secs, wall_clock_secs);
-
-                            if let Some(timestamp) = timestamp
-                                && let Err(e) =
-                                    muxer.lock().await.send_audio_frame(frame, timestamp)
-                            {
+                            if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
                                 error!("Audio encoder: {e}");
                             }
                         }
@@ -1158,15 +1126,15 @@ impl PreparedAudioSources {
                     })
                     .await;
 
+                let final_pause_duration = shared_pause.total_pause_duration();
+
                 if dropped_during_pause > 0 {
                     debug!(
                         dropped_during_pause,
-                        total_pause_ms = total_pause_duration.as_millis(),
+                        total_pause_ms = final_pause_duration.as_millis(),
                         "Audio frames dropped during pause (not counted in samples)"
                     );
                 }
-
-                anomaly_tracker.log_stats_if_notable();
 
                 for source in &mut self.erased_audio_sources {
                     let _ = (source.stop_fn)(source.inner.as_mut()).await;
@@ -1533,182 +1501,120 @@ pub trait VideoMuxer: Muxer {
 mod tests {
     use super::*;
 
-    mod audio_drift_tracker {
+    mod audio_timestamp_generator {
         use super::*;
 
         #[test]
-        fn returns_frame_based_time_during_warmup() {
-            let mut tracker = AudioDriftTracker::new();
-            let frame_timestamp = 1.0;
-            let wall_clock = 1.5;
-            let result = tracker
-                .calculate_timestamp(frame_timestamp, wall_clock)
-                .expect("Should not be capped when frame time < wall clock");
-            let expected = Duration::ZERO;
-            assert!(
-                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.001,
-                "First frame should have ~0s timestamp, got {:.3}s",
-                result.as_secs_f64()
-            );
-            assert!(
-                tracker.baseline_offset_secs.is_none(),
-                "Baseline should not be set during warmup"
+        fn first_timestamp_is_zero() {
+            let mut generator = AudioTimestampGenerator::new(48000);
+            let result = generator.next_timestamp(960);
+            assert_eq!(
+                result,
+                Duration::ZERO,
+                "First frame should have 0s timestamp"
             );
         }
 
         #[test]
-        fn captures_baseline_after_warmup() {
-            let mut tracker = AudioDriftTracker::new();
-            let buffer_delay = 0.05;
-
-            tracker.calculate_timestamp(0.0, 0.0);
-
-            let frame_timestamp = 2.0 + buffer_delay;
-            let wall_clock = 2.0;
-            tracker.calculate_timestamp(frame_timestamp, wall_clock);
-
-            assert!(tracker.baseline_offset_secs.is_some());
-            let baseline = tracker.baseline_offset_secs.unwrap();
-            assert!(
-                (baseline - buffer_delay).abs() < 0.001,
-                "Baseline should be ~{buffer_delay:.3}s, got {baseline:.3}s"
+        fn tracks_samples_correctly() {
+            let mut generator = AudioTimestampGenerator::new(48000);
+            generator.next_timestamp(960);
+            assert_eq!(
+                generator.total_samples, 960,
+                "Should track samples after first call"
             );
+
+            generator.next_timestamp(960);
+            assert_eq!(generator.total_samples, 1920, "Should accumulate samples");
         }
 
         #[test]
-        fn applies_drift_correction_after_warmup() {
-            let mut tracker = AudioDriftTracker::new();
-            let buffer_delay = 0.05;
+        fn calculates_timestamp_from_samples() {
+            let sample_rate = 48000;
+            let mut generator = AudioTimestampGenerator::new(sample_rate);
+            let samples_per_frame = 960;
 
-            tracker.calculate_timestamp(0.0, 0.0);
+            generator.next_timestamp(samples_per_frame);
+            let second = generator.next_timestamp(samples_per_frame);
 
-            let frame_timestamp_1 = 2.0 + buffer_delay;
-            let wall_clock_1 = 2.0;
-            tracker.calculate_timestamp(frame_timestamp_1, wall_clock_1);
-
-            let frame_timestamp_2 = 10.0 + buffer_delay;
-            let wall_clock_2 = 10.0;
-            let result = tracker
-                .calculate_timestamp(frame_timestamp_2, wall_clock_2)
-                .expect("Should not be capped");
-
-            let expected = Duration::from_secs_f64(wall_clock_2);
+            let expected_secs = samples_per_frame as f64 / sample_rate as f64;
             assert!(
-                (result.as_secs_f64() - expected.as_secs_f64()).abs() < 0.1,
-                "Expected drift-corrected time ~{:.3}s, got {:.3}s",
-                expected.as_secs_f64(),
-                result.as_secs_f64()
+                (second.as_secs_f64() - expected_secs).abs() < 0.0001,
+                "Expected {expected_secs:.6}s, got {:.6}s",
+                second.as_secs_f64()
             );
         }
 
         #[test]
         fn continuous_timestamps_no_gaps() {
-            let mut tracker = AudioDriftTracker::new();
+            let sample_rate = 48000;
+            let mut generator = AudioTimestampGenerator::new(sample_rate);
+            let samples_per_frame = 960;
 
             let mut last_timestamp = Duration::ZERO;
             for i in 0..100 {
-                let frame_timestamp = i as f64 * 0.02;
-                let wall_clock = i as f64 * 0.02;
-                if let Some(result) = tracker.calculate_timestamp(frame_timestamp, wall_clock) {
-                    if i > 0 {
-                        let gap = result.as_secs_f64() - last_timestamp.as_secs_f64();
-                        assert!(
-                            (0.0..0.05).contains(&gap),
-                            "Gap between frames should be small: {gap:.3}s at frame {i}"
-                        );
-                    }
-
-                    last_timestamp = result;
+                let result = generator.next_timestamp(samples_per_frame);
+                if i > 0 {
+                    let gap = result.as_secs_f64() - last_timestamp.as_secs_f64();
+                    let expected_gap = samples_per_frame as f64 / sample_rate as f64;
+                    assert!(
+                        (gap - expected_gap).abs() < 0.0001,
+                        "Gap between frames should be {expected_gap:.6}s, got {gap:.6}s at frame {i}"
+                    );
                 }
+                last_timestamp = result;
             }
         }
 
         #[test]
-        fn continuous_across_warmup_boundary() {
-            let mut tracker = AudioDriftTracker::new();
+        fn handles_variable_frame_sizes() {
+            let sample_rate = 48000;
+            let mut generator = AudioTimestampGenerator::new(sample_rate);
 
-            tracker.calculate_timestamp(0.0, 0.0);
+            generator.next_timestamp(480);
+            let second = generator.next_timestamp(960);
+            let third = generator.next_timestamp(1920);
 
-            let frame_timestamp_1 = 2.0;
-            let wall_clock_1 = 2.1;
-            let result1 = tracker
-                .calculate_timestamp(frame_timestamp_1, wall_clock_1)
-                .expect("Should not be capped");
+            let expected_second = 480.0 / sample_rate as f64;
+            let expected_third = (480.0 + 960.0) / sample_rate as f64;
 
-            let frame_timestamp_2 = 2.02;
-            let wall_clock_2 = 2.12;
-            let result2 = tracker
-                .calculate_timestamp(frame_timestamp_2, wall_clock_2)
-                .expect("Should not be capped");
-
-            let gap = result2.as_secs_f64() - result1.as_secs_f64();
-            let expected_gap = 0.02;
             assert!(
-                (gap - expected_gap).abs() < 0.01,
-                "Gap across warmup boundary should be continuous: expected {expected_gap:.3}s, got {gap:.3}s"
+                (second.as_secs_f64() - expected_second).abs() < 0.0001,
+                "Second timestamp: expected {expected_second:.6}s, got {:.6}s",
+                second.as_secs_f64()
+            );
+            assert!(
+                (third.as_secs_f64() - expected_third).abs() < 0.0001,
+                "Third timestamp: expected {expected_third:.6}s, got {:.6}s",
+                third.as_secs_f64()
             );
         }
 
         #[test]
-        fn simulates_real_world_scenario_with_drift() {
-            let mut tracker = AudioDriftTracker::new();
-            let initial_offset = 0.05;
-            let drift_rate = 0.004;
+        fn simulates_long_recording() {
+            let sample_rate = 48000;
+            let mut generator = AudioTimestampGenerator::new(sample_rate);
+            let samples_per_frame = 960u64;
+            let frames_per_second = sample_rate as u64 / samples_per_frame;
+            let duration_secs = 3600u64;
+            let total_frames = frames_per_second * duration_secs;
 
-            let mut frame_time = initial_offset;
-            let mut wall_time = 0.0;
-            let step = 0.5;
-
-            while wall_time < 60.0 {
-                if let Some(result) = tracker.calculate_timestamp(frame_time, wall_time) {
-                    if wall_time >= 2.0 {
-                        let error = (result.as_secs_f64() - wall_time).abs();
-                        assert!(
-                            error < 0.5,
-                            "At wall_time={:.1}s: result {:.3}s should be close to wall clock",
-                            wall_time,
-                            result.as_secs_f64()
-                        );
-                    }
-                }
-
-                wall_time += step;
-                frame_time += step * (1.0 + drift_rate);
+            let mut last_timestamp = Duration::ZERO;
+            for _ in 0..total_frames {
+                last_timestamp = generator.next_timestamp(samples_per_frame);
             }
-        }
 
-        #[test]
-        fn preserves_baseline_across_multiple_calls() {
-            let mut tracker = AudioDriftTracker::new();
-
-            tracker.calculate_timestamp(0.0, 0.0);
-            tracker.calculate_timestamp(2.1, 2.0);
-
-            let first_baseline = tracker.baseline_offset_secs;
-
-            tracker.calculate_timestamp(10.1, 10.0);
-
+            let expected_secs =
+                ((total_frames - 1) * samples_per_frame) as f64 / sample_rate as f64;
+            assert!(
+                (last_timestamp.as_secs_f64() - expected_secs).abs() < 0.001,
+                "After 1 hour: expected {expected_secs:.3}s, got {:.3}s",
+                last_timestamp.as_secs_f64()
+            );
             assert_eq!(
-                first_baseline, tracker.baseline_offset_secs,
-                "Baseline should not change after initial capture"
-            );
-        }
-
-        #[test]
-        fn rejects_negative_timestamps() {
-            let mut tracker = AudioDriftTracker::new();
-            let result = tracker.calculate_timestamp(-1.0, 1.0);
-            assert!(result.is_none(), "Negative timestamps should be rejected");
-        }
-
-        #[test]
-        fn rejects_timestamps_too_far_ahead_of_wall_clock() {
-            let mut tracker = AudioDriftTracker::new();
-            tracker.calculate_timestamp(0.0, 0.0);
-            let result = tracker.calculate_timestamp(5.0, 1.0);
-            assert!(
-                result.is_none(),
-                "Timestamps too far ahead of wall clock should be rejected"
+                generator.total_samples,
+                total_frames * samples_per_frame,
+                "Total samples should equal total_frames * samples_per_frame"
             );
         }
     }

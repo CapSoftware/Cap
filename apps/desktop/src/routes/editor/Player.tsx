@@ -73,22 +73,7 @@ export function PlayerContent() {
 							end: segment.end,
 							text: segment.text,
 						})),
-						settings: {
-							enabled: captionsStore.state.settings.enabled,
-							font: captionsStore.state.settings.font,
-							size: captionsStore.state.settings.size,
-							color: captionsStore.state.settings.color,
-							backgroundColor: captionsStore.state.settings.backgroundColor,
-							backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
-							position: captionsStore.state.settings.position,
-							italic: captionsStore.state.settings.italic,
-							outline: captionsStore.state.settings.outline,
-							outlineColor: captionsStore.state.settings.outlineColor,
-							exportWithSubtitles:
-								captionsStore.state.settings.exportWithSubtitles,
-							highlightColor: captionsStore.state.settings.highlightColor,
-							fadeDuration: captionsStore.state.settings.fadeDuration,
-						},
+						settings: { ...captionsStore.state.settings },
 					};
 
 					// Update the project with captions data
