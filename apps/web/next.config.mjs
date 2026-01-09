@@ -17,7 +17,9 @@ const nextConfig = {
 	reactStrictMode: true,
 	serverExternalPackages: ["ffmpeg-static", "prettier"],
 	outputFileTracingIncludes: {
-		"/**": ["./node_modules/ffmpeg-static/ffmpeg"],
+		"/app/.well-known/workflow/v1/step": [
+			"./node_modules/ffmpeg-static/ffmpeg",
+		],
 	},
 	transpilePackages: [
 		"@cap/ui",
