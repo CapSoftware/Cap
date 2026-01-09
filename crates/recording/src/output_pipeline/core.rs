@@ -35,6 +35,7 @@ struct AudioDriftTracker {
     first_frame_timestamp_secs: Option<f64>,
     last_valid_wall_clock_secs: f64,
     resync_count: u32,
+    initial_alignment_done: bool,
 }
 
 const AUDIO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
@@ -49,6 +50,7 @@ impl AudioDriftTracker {
             first_frame_timestamp_secs: None,
             last_valid_wall_clock_secs: 0.0,
             resync_count: 0,
+            initial_alignment_done: false,
         }
     }
 
@@ -72,13 +74,23 @@ impl AudioDriftTracker {
 
         if frame_elapsed_secs > wall_clock_secs + AUDIO_LARGE_FORWARD_JUMP_SECS {
             self.resync_count += 1;
-            warn!(
-                frame_elapsed_secs,
-                wall_clock_secs,
-                forward_jump_secs = frame_elapsed_secs - wall_clock_secs,
-                resync_count = self.resync_count,
-                "Audio timestamp jumped forward (system sleep/wake?), resyncing to wall clock"
-            );
+
+            if !self.initial_alignment_done && wall_clock_secs < 5.0 {
+                debug!(
+                    frame_elapsed_secs,
+                    wall_clock_secs,
+                    forward_jump_secs = frame_elapsed_secs - wall_clock_secs,
+                    "Audio initial alignment: resyncing to wall clock"
+                );
+            } else {
+                warn!(
+                    frame_elapsed_secs,
+                    wall_clock_secs,
+                    forward_jump_secs = frame_elapsed_secs - wall_clock_secs,
+                    resync_count = self.resync_count,
+                    "Audio timestamp jumped forward (system sleep/wake?), resyncing to wall clock"
+                );
+            }
 
             self.first_frame_timestamp_secs = Some(frame_timestamp_secs - wall_clock_secs);
             self.baseline_offset_secs = None;
@@ -86,6 +98,15 @@ impl AudioDriftTracker {
 
             self.last_valid_wall_clock_secs = wall_clock_secs;
             return Some(Duration::from_secs_f64(wall_clock_secs));
+        }
+
+        if !self.initial_alignment_done && wall_clock_secs >= 2.0 {
+            self.initial_alignment_done = true;
+            debug!(
+                wall_clock_secs,
+                resync_count = self.resync_count,
+                "Audio initial alignment complete"
+            );
         }
 
         if frame_elapsed_secs > wall_clock_secs + AUDIO_WALL_CLOCK_TOLERANCE_SECS {
@@ -136,6 +157,7 @@ impl AudioDriftTracker {
 struct VideoDriftTracker {
     baseline_offset_secs: Option<f64>,
     capped_frame_count: u64,
+    drift_warning_logged: bool,
 }
 
 impl VideoDriftTracker {
@@ -143,6 +165,7 @@ impl VideoDriftTracker {
         Self {
             baseline_offset_secs: None,
             capped_frame_count: 0,
+            drift_warning_logged: false,
         }
     }
 
@@ -184,13 +207,16 @@ impl VideoDriftTracker {
         };
 
         let corrected_secs = if !(0.95..=1.05).contains(&drift_ratio) {
-            warn!(
-                drift_ratio,
-                wall_clock_secs,
-                adjusted_camera_secs,
-                baseline,
-                "Extreme video clock drift detected after baseline correction, clamping"
-            );
+            if !self.drift_warning_logged {
+                warn!(
+                    drift_ratio,
+                    wall_clock_secs,
+                    adjusted_camera_secs,
+                    baseline,
+                    "Extreme video clock drift detected after baseline correction, clamping"
+                );
+                self.drift_warning_logged = true;
+            }
             let clamped_ratio = drift_ratio.clamp(0.95, 1.05);
             adjusted_camera_secs * clamped_ratio
         } else {
@@ -1158,7 +1184,6 @@ impl PreparedAudioSources {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
-                let mut anomaly_tracker = TimestampAnomalyTracker::new("audio");
                 let mut drift_tracker = AudioDriftTracker::new();
                 let mut total_samples: u64 = 0;
                 let mut dropped_during_pause: u64 = 0;
@@ -1179,8 +1204,6 @@ impl PreparedAudioSources {
 
                             let frame_samples = frame.inner.samples() as u64;
                             total_samples += frame_samples;
-
-                            let _ = anomaly_tracker.process_timestamp(frame.timestamp, timestamps);
 
                             let raw_wall_clock = timestamps.instant().elapsed();
                             let effective_wall_clock =
@@ -1234,8 +1257,6 @@ impl PreparedAudioSources {
                         "Audio frames dropped during pause (not counted in samples)"
                     );
                 }
-
-                anomaly_tracker.log_stats_if_notable();
 
                 for source in &mut self.erased_audio_sources {
                     let _ = (source.stop_fn)(source.inner.as_mut()).await;
