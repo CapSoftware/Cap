@@ -88,7 +88,9 @@ export async function extractAudioFromUrl(
 				});
 			} else {
 				fs.unlink(outputPath).catch(() => {});
-				reject(new Error(`Audio extraction failed with code ${code}: ${stderr}`));
+				reject(
+					new Error(`Audio extraction failed with code ${code}: ${stderr}`),
+				);
 			}
 		});
 	});
@@ -131,7 +133,9 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 			if (code === 0) {
 				resolve(Buffer.concat(chunks));
 			} else {
-				reject(new Error(`Audio extraction failed with code ${code}: ${stderr}`));
+				reject(
+					new Error(`Audio extraction failed with code ${code}: ${stderr}`),
+				);
 			}
 		});
 	});
