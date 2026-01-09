@@ -460,7 +460,7 @@ impl Default for CursorConfiguration {
             tension: 65.0,
             mass: 1.8,
             friction: 16.0,
-            raw: false,
+            raw: true,
             motion_blur: 0.5,
             use_svg: true,
         };

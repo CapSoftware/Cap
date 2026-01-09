@@ -471,6 +471,61 @@ impl SharedPauseState {
     }
 }
 
+struct SharedWallClockPauseInner {
+    pause_started_at: Option<std::time::Instant>,
+    total_pause_duration: Duration,
+}
+
+#[derive(Clone)]
+pub struct SharedWallClockPause {
+    flag: Arc<AtomicBool>,
+    inner: Arc<std::sync::Mutex<SharedWallClockPauseInner>>,
+}
+
+impl SharedWallClockPause {
+    pub fn new(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            flag,
+            inner: Arc::new(std::sync::Mutex::new(SharedWallClockPauseInner {
+                pause_started_at: None,
+                total_pause_duration: Duration::ZERO,
+            })),
+        }
+    }
+
+    pub fn check(&self) -> (bool, Duration) {
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let is_paused = self.flag.load(Ordering::Acquire);
+
+        if is_paused {
+            if inner.pause_started_at.is_none() {
+                inner.pause_started_at = Some(std::time::Instant::now());
+            }
+        } else if let Some(started) = inner.pause_started_at.take() {
+            let delta = started.elapsed();
+            inner.total_pause_duration = inner.total_pause_duration.saturating_add(delta);
+            debug!(
+                pause_delta_ms = delta.as_millis(),
+                total_pause_ms = inner.total_pause_duration.as_millis(),
+                "Shared pause state: resumed"
+            );
+        }
+
+        (is_paused, inner.total_pause_duration)
+    }
+
+    pub fn total_pause_duration(&self) -> Duration {
+        match self.inner.lock() {
+            Ok(guard) => guard.total_pause_duration,
+            Err(poisoned) => poisoned.into_inner().total_pause_duration,
+        }
+    }
+}
+
 pub struct OnceSender<T>(Option<oneshot::Sender<T>>);
 
 impl<T> OnceSender<T> {
