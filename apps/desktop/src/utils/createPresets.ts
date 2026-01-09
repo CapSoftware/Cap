@@ -32,16 +32,20 @@ export function createPresets() {
 
 			await updatePresets((store) => {
 				store.presets.push({ name: preset.name, config });
-				store.default = preset.default ? store.presets.length : store.default;
+				store.default = preset.default
+					? store.presets.length - 1
+					: store.default;
 			});
 		},
 		deletePreset: (index: number) =>
 			updatePresets((store) => {
 				store.presets.splice(index, 1);
-				store.default =
-					index > store.presets.length - 1
-						? store.presets.length - 1
-						: store.default;
+				if (store.default === null) return;
+				if (index === store.default) {
+					store.default = store.presets.length > 0 ? 0 : null;
+				} else if (index < store.default) {
+					store.default = store.default - 1;
+				}
 			}),
 		setDefault: (index: number) =>
 			updatePresets((store) => {
