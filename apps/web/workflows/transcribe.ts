@@ -10,6 +10,11 @@ import { Option } from "effect";
 import { FatalError } from "workflow";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
+import {
+	checkHasAudioTrackViaMediaServer,
+	extractAudioViaMediaServer,
+	isMediaServerConfigured,
+} from "@/lib/media-client";
 import { runPromise } from "@/lib/server";
 import { type DeepgramResult, formatToWebVTT } from "@/lib/transcribe-utils";
 
@@ -151,34 +156,54 @@ async function extractAudio(
 		throw new Error("Video file not accessible");
 	}
 
-	const hasAudio = await checkHasAudioTrack(videoUrl);
-	if (!hasAudio) {
-		console.log("[transcribe-workflow] Video has no audio track");
-		return null;
+	const useMediaServer = isMediaServerConfigured();
+	console.log(
+		`[transcribe-workflow] Using ${useMediaServer ? "media server" : "local FFmpeg"} for audio extraction`,
+	);
+
+	let hasAudio: boolean;
+	let audioBuffer: Buffer;
+
+	if (useMediaServer) {
+		hasAudio = await checkHasAudioTrackViaMediaServer(videoUrl);
+		if (!hasAudio) {
+			console.log("[transcribe-workflow] Video has no audio track");
+			return null;
+		}
+
+		console.log("[transcribe-workflow] Extracting audio via media server");
+		audioBuffer = await extractAudioViaMediaServer(videoUrl);
+	} else {
+		hasAudio = await checkHasAudioTrack(videoUrl);
+		if (!hasAudio) {
+			console.log("[transcribe-workflow] Video has no audio track");
+			return null;
+		}
+
+		console.log("[transcribe-workflow] Extracting audio from video");
+		const result = await extractAudioFromUrl(videoUrl);
+
+		try {
+			audioBuffer = await fs.readFile(result.filePath);
+		} finally {
+			await result.cleanup();
+		}
 	}
 
-	console.log("[transcribe-workflow] Extracting audio from video");
-	const result = await extractAudioFromUrl(videoUrl);
+	const audioKey = `${userId}/${videoId}/audio-temp.m4a`;
 
-	try {
-		const audioBuffer = await fs.readFile(result.filePath);
-		const audioKey = `${userId}/${videoId}/audio-temp.m4a`;
+	await bucket
+		.putObject(audioKey, audioBuffer, {
+			contentType: "audio/mp4",
+		})
+		.pipe(runPromise);
 
-		await bucket
-			.putObject(audioKey, audioBuffer, {
-				contentType: result.mimeType,
-			})
-			.pipe(runPromise);
+	const audioSignedUrl = await bucket
+		.getSignedObjectUrl(audioKey)
+		.pipe(runPromise);
 
-		const audioSignedUrl = await bucket
-			.getSignedObjectUrl(audioKey)
-			.pipe(runPromise);
-
-		console.log("[transcribe-workflow] Audio uploaded to S3");
-		return audioSignedUrl;
-	} finally {
-		await result.cleanup();
-	}
+	console.log("[transcribe-workflow] Audio uploaded to S3");
+	return audioSignedUrl;
 }
 
 async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
