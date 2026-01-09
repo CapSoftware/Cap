@@ -1,9 +1,40 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import ffmpegPath from "ffmpeg-static";
+import { join, resolve } from "node:path";
+import ffmpegStaticPath from "ffmpeg-static";
+
+let cachedFfmpegPath: string | null = null;
+
+function getFfmpegPath(): string {
+	if (cachedFfmpegPath) {
+		return cachedFfmpegPath;
+	}
+
+	const candidatePaths = [
+		ffmpegStaticPath,
+		resolve(process.cwd(), "node_modules/ffmpeg-static/ffmpeg"),
+		resolve(
+			process.cwd(),
+			"node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
+		),
+		"/var/task/node_modules/ffmpeg-static/ffmpeg",
+		"/var/task/node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
+	].filter(Boolean) as string[];
+
+	for (const path of candidatePaths) {
+		if (existsSync(path)) {
+			console.log(`[audio-extract] Found FFmpeg at: ${path}`);
+			cachedFfmpegPath = path;
+			return path;
+		}
+	}
+
+	throw new Error(
+		`FFmpeg binary not found. Tried paths: ${candidatePaths.join(", ")}`,
+	);
+}
 
 export interface AudioExtractionResult {
 	filePath: string;
@@ -14,11 +45,7 @@ export interface AudioExtractionResult {
 export async function extractAudioFromUrl(
 	videoUrl: string,
 ): Promise<AudioExtractionResult> {
-	if (!ffmpegPath) {
-		throw new Error("FFmpeg binary not found");
-	}
-
-	const ffmpeg = ffmpegPath;
+	const ffmpeg = getFfmpegPath();
 	const outputPath = join(tmpdir(), `audio-${randomUUID()}.m4a`);
 
 	const ffmpegArgs = [
@@ -81,11 +108,7 @@ export async function extractAudioFromUrl(
 }
 
 export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
-	if (!ffmpegPath) {
-		throw new Error("FFmpeg binary not found");
-	}
-
-	const ffmpeg = ffmpegPath;
+	const ffmpeg = getFfmpegPath();
 	const ffmpegArgs = [
 		"-i",
 		videoUrl,
@@ -133,12 +156,13 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 }
 
 export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
-	if (!ffmpegPath) {
-		console.error("[audio-extract] FFmpeg binary not found");
+	let ffmpeg: string;
+	try {
+		ffmpeg = getFfmpegPath();
+	} catch (err) {
+		console.error("[audio-extract] FFmpeg binary not found:", err);
 		return false;
 	}
-
-	const ffmpeg = ffmpegPath;
 	const ffmpegArgs = ["-i", videoUrl, "-hide_banner"];
 
 	return new Promise((resolve) => {

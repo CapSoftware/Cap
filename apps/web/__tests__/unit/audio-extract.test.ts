@@ -6,11 +6,17 @@ vi.mock("ffmpeg-static", () => ({
 }));
 
 const mockUnlink = vi.fn(() => Promise.resolve(undefined));
-vi.mock("node:fs", () => ({
-	promises: {
-		unlink: () => mockUnlink(),
-	},
-}));
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		existsSync: (path: string) => path === "/usr/local/bin/ffmpeg",
+		promises: {
+			...actual.promises,
+			unlink: () => mockUnlink(),
+		},
+	};
+});
 
 class MockChildProcess extends EventEmitter {
 	stdout = new EventEmitter();
