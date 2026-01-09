@@ -660,6 +660,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.stop_token.clone(),
             muxer.clone(),
             timestamps,
+            build_ctx.pause_flag.clone(),
         );
 
         finish_build(
@@ -893,6 +894,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     stop_token: CancellationToken,
     muxer: Arc<Mutex<TMutex>>,
     timestamps: Timestamps,
+    pause_flag: Arc<AtomicBool>,
 ) {
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
@@ -916,10 +918,34 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut frame_count = 0u64;
         let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
         let mut drift_tracker = VideoDriftTracker::new();
+        let mut pause_start: Option<std::time::Instant> = None;
+        let mut total_pause_duration = Duration::ZERO;
+        let mut dropped_during_pause: u64 = 0;
 
         let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
+                    let is_paused = pause_flag.load(Ordering::Acquire);
+
+                    if is_paused {
+                        if pause_start.is_none() {
+                            pause_start = Some(std::time::Instant::now());
+                        }
+                        dropped_during_pause += 1;
+                        continue;
+                    }
+
+                    if let Some(start) = pause_start.take() {
+                        let pause_duration = start.elapsed();
+                        total_pause_duration =
+                            total_pause_duration.saturating_add(pause_duration);
+                        debug!(
+                            pause_duration_ms = pause_duration.as_millis(),
+                            total_pause_duration_ms = total_pause_duration.as_millis(),
+                            "Video resumed after pause"
+                        );
+                    }
+
                     frame_count += 1;
 
                     let timestamp = frame.timestamp();
@@ -938,7 +964,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
                     };
 
-                    let wall_clock_elapsed = timestamps.instant().elapsed();
+                    let raw_wall_clock = timestamps.instant().elapsed();
+                    let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                     let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
 
                     if frame_count.is_multiple_of(300) {
@@ -954,6 +981,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             corrected_secs = duration.as_secs_f64(),
                             drift_ratio,
                             baseline_offset = drift_tracker.baseline_offset_secs,
+                            total_pause_ms = total_pause_duration.as_millis(),
                             "Video drift correction status"
                         );
                     }
@@ -1006,7 +1034,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
                 };
 
-                let wall_clock_elapsed = timestamps.instant().elapsed();
+                let raw_wall_clock = timestamps.instant().elapsed();
+                let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                 let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
 
                 match muxer.lock().await.send_video_frame(frame, duration) {
@@ -1027,6 +1056,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     drain_start.elapsed()
                 );
             }
+        }
+
+        if dropped_during_pause > 0 {
+            debug!(
+                dropped_during_pause,
+                total_pause_ms = total_pause_duration.as_millis(),
+                "Video frames dropped during pause"
+            );
         }
 
         anomaly_tracker.log_stats_if_notable();
