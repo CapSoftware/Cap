@@ -1,5 +1,6 @@
 [build]
 dockerfilePath = "apps/media-server/Dockerfile"
+buildCommand = ""
 
 [deploy]
 healthcheckPath = "/health"

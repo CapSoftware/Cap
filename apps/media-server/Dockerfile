@@ -4,10 +4,10 @@ RUN apk add --no-cache ffmpeg
 
 WORKDIR /app
 
-COPY package.json ./
+COPY apps/media-server/package.json ./
 RUN bun install --production
 
-COPY src ./src
+COPY apps/media-server/src ./src
 
 ENV PORT=3456
 EXPOSE 3456

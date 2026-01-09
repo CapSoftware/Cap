@@ -23,8 +23,8 @@ services:
   cap-media-server:
     container_name: cap-media-server-dev
     build:
-      context: ../../apps/media-server
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: apps/media-server/Dockerfile
     restart: unless-stopped
     environment:
       PORT: 3456
