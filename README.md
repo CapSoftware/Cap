@@ -82,6 +82,22 @@ Cap 使用 Tauri 和 Rust 构建桌面应用程序。要编译 Cap Desktop，请
 4.  **开发模式**: 运行 `pnpm dev` 启动开发服务器。
 5.  **构建**: 运行 `pnpm build` 构建生产版本。
 
+## 使用 GitHub Actions 构建
+
+您可以使用 GitHub Actions 自动构建 Windows 和 macOS 应用。项目中已经包含了一个名为 `publish` 的工作流（`.github/workflows/publish.yml`），用于处理此过程。
+
+1.  **Fork 仓库**: 将本项目 Fork 到您的 GitHub 账户。
+2.  **配置 Secrets**: 在仓库的 Settings > Secrets and variables > Actions 中配置必要的 Secrets（如果您需要签名和发布）：
+    *   `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` (macOS 签名)
+    *   `CN_API_KEY` (CrabNebula 发布)
+    *   `GITHUB_TOKEN` (自动提供)
+    *   其他相关 Secrets 请参考 `publish.yml` 文件。
+3.  **运行工作流**:
+    *   进入 Actions 标签页。
+    *   选择 "publish" 工作流。
+    *   点击 "Run workflow"。
+4.  **下载构建产物**: 构建完成后，您可以在 GitHub Releases 或 Workflow 运行记录中找到构建好的安装包。
+
 ## 使用
 
 1.  启动应用程序后，您可以选择录制屏幕、窗口或区域。
