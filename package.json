@@ -49,5 +49,8 @@
 	"name": "cap",
 	"engines": {
 		"node": ">=20"
+	},
+	"dependencies": {
+		"@solid-primitives/i18n": "^2.2.1"
 	}
 }

@@ -17,6 +17,7 @@ import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
+import { I18nProvider } from "./i18n/context";
 
 const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
@@ -89,9 +90,11 @@ const queryClient = new QueryClient({
 export default function App() {
 	return (
 		<QueryClientProvider client={queryClient}>
-			<Suspense>
-				<Inner />
-			</Suspense>
+			<I18nProvider>
+				<Suspense>
+					<Inner />
+				</Suspense>
+			</I18nProvider>
 		</QueryClientProvider>
 	);
 }

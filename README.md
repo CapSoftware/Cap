@@ -69,3 +69,25 @@ Cap uses [Tinybird](https://www.tinybird.co) to ingest viewer telemetry for dash
 - Validate that the schema and materialized views match what the app expects via `pnpm analytics:check`.
 
 Both commands target the workspace pointed to by `TINYBIRD_HOST` (defaults to `https://api.tinybird.co`). Make sure you are comfortable with the destructive nature of the deploy step before running `analytics:setup`.
+
+# 编译和使用 (Chinese)
+
+## 编译
+
+Cap 使用 Tauri 和 Rust 构建桌面应用程序。要编译 Cap Desktop，请按照以下步骤操作：
+
+1.  **先决条件**: 确保您已安装 Node.js, pnpm 和 Rust。
+2.  **安装依赖**: 在项目根目录下运行 `pnpm install`。
+3.  **准备环境**: 根据您的需要配置 `.env` 文件（参考 `.env.example`）。
+4.  **开发模式**: 运行 `pnpm dev` 启动开发服务器。
+5.  **构建**: 运行 `pnpm build` 构建生产版本。
+
+## 使用
+
+1.  启动应用程序后，您可以选择录制屏幕、窗口或区域。
+2.  在“设置”中，您可以配置语言（支持简体中文）、录制分辨率、帧率等选项。
+3.  录制完成后，您可以编辑视频并将其上传到 Cap Web 或自托管服务器。
+
+如需更改语言：
+1.  进入“设置” (Settings)。
+2.  目前语言会根据您的系统语言自动检测（如果是中文系统则显示中文）。
