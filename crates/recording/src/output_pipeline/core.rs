@@ -494,12 +494,11 @@ impl SharedWallClockPause {
     }
 
     pub fn check(&self) -> (bool, Duration) {
+        let is_paused = self.flag.load(Ordering::Acquire);
         let mut inner = match self.inner.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-
-        let is_paused = self.flag.load(Ordering::Acquire);
 
         if is_paused {
             if inner.pause_started_at.is_none() {

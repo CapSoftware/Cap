@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::AtomicBool,
         mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel},
     },
     time::Duration,
@@ -122,7 +122,7 @@ impl Muxer for WindowsMuxer {
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
-        pause_flag: Arc<AtomicBool>,
+        _pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
@@ -629,7 +629,7 @@ impl Muxer for WindowsCameraMuxer {
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
-        pause_flag: Arc<AtomicBool>,
+        _pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
