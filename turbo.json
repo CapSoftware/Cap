@@ -6,17 +6,17 @@
 		"build": {
 			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
 			"dependsOn": ["^build"],
-			"outputs": [".next/**", "!.next/cache/**"]
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
 		"build:web:docker": {
 			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
 			"dependsOn": ["^build"],
-			"outputs": [".next/**", "!.next/cache/**"]
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
 		"build:web": {
 			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
 			"dependsOn": ["^build"],
-			"outputs": [".next/**", "!.next/cache/**"]
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
 		"lint": {
 			"cache": false
