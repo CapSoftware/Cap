@@ -1594,21 +1594,27 @@ mod tests {
         fn simulates_long_recording() {
             let sample_rate = 48000;
             let mut generator = AudioTimestampGenerator::new(sample_rate);
-            let samples_per_frame = 960;
-            let frames_per_second = sample_rate / samples_per_frame as u32;
-            let duration_secs = 3600;
-            let total_frames = frames_per_second as u64 * duration_secs;
+            let samples_per_frame = 960u64;
+            let frames_per_second = sample_rate as u64 / samples_per_frame;
+            let duration_secs = 3600u64;
+            let total_frames = frames_per_second * duration_secs;
 
             let mut last_timestamp = Duration::ZERO;
             for _ in 0..total_frames {
                 last_timestamp = generator.next_timestamp(samples_per_frame);
             }
 
-            let expected_secs = (total_frames * samples_per_frame) as f64 / sample_rate as f64;
+            let expected_secs =
+                ((total_frames - 1) * samples_per_frame) as f64 / sample_rate as f64;
             assert!(
                 (last_timestamp.as_secs_f64() - expected_secs).abs() < 0.001,
                 "After 1 hour: expected {expected_secs:.3}s, got {:.3}s",
                 last_timestamp.as_secs_f64()
+            );
+            assert_eq!(
+                generator.total_samples,
+                total_frames * samples_per_frame,
+                "Total samples should equal total_frames * samples_per_frame"
             );
         }
     }
