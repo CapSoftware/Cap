@@ -298,7 +298,7 @@ const UpgradeModalImpl = ({
 							</div>
 
 							<div className="flex flex-1 justify-center items-center self-stretch p-8 bg-transparent md:bg-gray-3">
-								<div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+								<div className="grid grid-cols-1 gap-8 md:gap-4 md:grid-cols-2">
 									{proFeatures.map((feature, index) => (
 										<div
 											key={index.toString()}
