@@ -1,0 +1,52 @@
+name: "Build Mac App"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create .env file in root
+        run: |
+          echo "appVersion=0.4.1" >> .env
+          echo "VITE_ENVIRONMENT=production" >> .env
+          echo "VITE_SERVER_URL=https://cap.so" >> .env
+          echo "RUST_TARGET_TRIPLE=${{ matrix.target }}" >> .env
+
+      - name: Build app
+        working-directory: apps/desktop
+        run: |
+          pnpm -w cap-setup
+          # Use tauri.conf.json or create a specific one that doesn't enforce signing if prod config does
+          # Actually tauri.prod.conf.json doesn't seem to enforce signing strictly unless keys are present in env
+          pnpm build:tauri --target ${{ matrix.target }} --config src-tauri/tauri.prod.conf.json
+        env:
+          CI: false
+
+      - name: Upload Mac installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-installer-${{ matrix.target }}
+          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error

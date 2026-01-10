@@ -82,23 +82,31 @@ Cap 使用 Tauri 和 Rust 构建桌面应用程序。要编译 Cap Desktop，请
 4.  **开发模式**: 运行 `pnpm dev` 启动开发服务器。
 5.  **构建**: 运行 `pnpm build` 构建生产版本。
 
-## 使用 GitHub Actions 构建 Windows 应用 (推荐)
+## 使用 GitHub Actions 构建 (推荐)
 
-我们提供了一个简化的工作流，只需简单的几步即可在 GitHub 上自动构建 Windows 安装包。
+我们提供了简化的工作流，只需简单的几步即可在 GitHub 上自动构建 Windows 和 Mac 安装包。
+
+### 步骤
 
 1.  **Fork 仓库**: 点击本页面右上角的 "Fork" 按钮，将项目复刻到您的 GitHub 账户。
 2.  **运行工作流**:
     *   在您 Fork 的仓库中，点击顶部的 **Actions** 标签页。
-    *   在左侧列表中，选择 **Build Windows App** 工作流。
+    *   在左侧列表中，选择 **Build Windows App** 或 **Build Mac App** 工作流。
     *   点击右侧的 **Run workflow** 按钮（如果是首次运行，可能需要点击 "I understand my workflows, go ahead and enable them"）。
     *   再次点击绿色的 **Run workflow** 按钮确认。
 3.  **下载安装包**:
-    *   等待工作流运行完成（通常需要 15-30 分钟）。
+    *   等待工作流运行完成（Windows 约 15-30 分钟，Mac 约 15-30 分钟）。
     *   点击运行记录进入详情页。
-    *   在底部的 **Artifacts** 区域，您会看到一个名为 `windows-installer` 的文件。
-    *   点击下载该文件，解压后即可获得 `.exe` 安装包。
+    *   在底部的 **Artifacts** 区域，您会看到构建好的文件：
+        *   `windows-installer`: 包含 Windows `.exe` 安装包。
+        *   `mac-installer-aarch64-apple-darwin` 或 `mac-installer-x86_64-apple-darwin`: 包含 Mac `.dmg` 安装包。
+    *   点击下载该文件，解压后即可获得安装包。
 
-*注意：此构建方式生成的是未签名的安装包，Windows 可能会提示安全警告，您可以选择“仍要运行”。*
+*注意：此构建方式生成的是未签名的安装包。*
+*   **Windows**: 可能会提示安全警告，您可以选择“仍要运行”。
+*   **Mac**: 首次运行时可能会提示应用已损坏或无法打开。您需要执行以下操作之一：
+    *   在“系统设置” -> “隐私与安全性”中，点击“仍要打开”。
+    *   或者在终端中运行 `xattr -cr /Applications/Cap.app` (将路径替换为您的应用路径) 来清除隔离属性。
 
 ## 使用
 
