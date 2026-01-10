@@ -511,6 +511,7 @@ export const usersRelations = relations(users, ({ many, one }) => ({
 	customBucket: one(s3Buckets),
 	spaces: many(spaces),
 	spaceMembers: many(spaceMembers),
+	autoModeSessions: many(autoModeSessions),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -538,6 +539,7 @@ export const organizationsRelations = relations(
 		sharedVideos: many(sharedVideos),
 		organizationInvites: many(organizationInvites),
 		spaces: many(spaces),
+		autoModeSessions: many(autoModeSessions),
 	}),
 );
 
@@ -766,4 +768,158 @@ export const importedVideos = mysqlTable(
 	(table) => [
 		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
 	],
+);
+
+export type AutoModeSessionStatus =
+	| "draft"
+	| "planning"
+	| "ready"
+	| "executing"
+	| "processing"
+	| "completed"
+	| "failed";
+
+export type AutoModeRecordingFocus =
+	| "feature_demo"
+	| "bug_report"
+	| "tutorial"
+	| "walkthrough"
+	| "other";
+
+export type AutoModeNarrationTone =
+	| "professional"
+	| "casual"
+	| "educational"
+	| "enthusiastic";
+
+export type AutoModeDurationPreference =
+	| "30s"
+	| "1min"
+	| "2min"
+	| "5min"
+	| "as_needed";
+
+export interface AutoModeQuestionnaire {
+	targetUrl?: string;
+	recordingFocus: AutoModeRecordingFocus;
+	keyActions: string;
+	narrationTone: AutoModeNarrationTone;
+	durationPreference: AutoModeDurationPreference;
+	additionalContext?: string;
+}
+
+export interface AutoModeScrapedContext {
+	url: string;
+	title: string;
+	metaDescription: string;
+	navigation: { label: string; href: string }[];
+	headings: { level: number; text: string }[];
+	mainContent: string;
+	interactiveElements: { type: string; label: string; selector: string }[];
+	scrapedAt: string;
+}
+
+export interface AutoModeNarrationSegment {
+	id: string;
+	text: string;
+	startTime: number;
+	duration: number;
+	emotion: "neutral" | "excited" | "calm" | "serious";
+}
+
+export interface AutoModeAction {
+	id: string;
+	type:
+		| "navigate"
+		| "click"
+		| "type"
+		| "scroll"
+		| "wait"
+		| "hover"
+		| "screenshot";
+	selector?: string;
+	value?: string;
+	duration?: number;
+	description: string;
+	narrationId?: string;
+}
+
+export interface AutoModeGeneratedPlan {
+	title: string;
+	summary: string;
+	estimatedDuration: number;
+	narration: AutoModeNarrationSegment[];
+	actions: AutoModeAction[];
+	warnings: string[];
+}
+
+export interface AutoModeExecutionLog {
+	startedAt: string;
+	completedAt?: string;
+	events: {
+		type: "action_start" | "action_complete" | "action_error";
+		actionId: string;
+		timestamp: string;
+		details?: string;
+	}[];
+}
+
+export const autoModeSessions = mysqlTable(
+	"auto_mode_sessions",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		orgId: nanoId("orgId").notNull().$type<Organisation.OrganisationId>(),
+		status: varchar("status", {
+			length: 50,
+			enum: [
+				"draft",
+				"planning",
+				"ready",
+				"executing",
+				"processing",
+				"completed",
+				"failed",
+			],
+		})
+			.notNull()
+			.$type<AutoModeSessionStatus>()
+			.default("draft"),
+		prompt: text("prompt").notNull(),
+		targetUrl: varchar("targetUrl", { length: 2048 }),
+		scrapedContext: json("scrapedContext").$type<AutoModeScrapedContext>(),
+		questionnaire: json("questionnaire").$type<AutoModeQuestionnaire>(),
+		generatedPlan: json("generatedPlan").$type<AutoModeGeneratedPlan>(),
+		ttsAudioUrl: varchar("ttsAudioUrl", { length: 2048 }),
+		executionLog: json("executionLog").$type<AutoModeExecutionLog>(),
+		resultVideoId: nanoIdNullable("resultVideoId").$type<Video.VideoId>(),
+		errorMessage: text("errorMessage"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("user_id_idx").on(table.userId),
+		index("org_id_idx").on(table.orgId),
+		index("status_idx").on(table.status),
+		index("user_org_status_idx").on(table.userId, table.orgId, table.status),
+		index("created_at_idx").on(table.createdAt),
+	],
+);
+
+export const autoModeSessionsRelations = relations(
+	autoModeSessions,
+	({ one }) => ({
+		user: one(users, {
+			fields: [autoModeSessions.userId],
+			references: [users.id],
+		}),
+		organization: one(organizations, {
+			fields: [autoModeSessions.orgId],
+			references: [organizations.id],
+		}),
+		resultVideo: one(videos, {
+			fields: [autoModeSessions.resultVideoId],
+			references: [videos.id],
+		}),
+	}),
 );
