@@ -13,6 +13,7 @@ import ReactionIcon from "./Reaction";
 import RecordIcon from "./Record";
 import ReferIcon from "./Refer";
 import SettingsGearIcon from "./Settings";
+import SparklesIcon from "./Sparkles";
 export {
 	ArrowUpIcon,
 	CapIcon,
@@ -29,4 +30,5 @@ export {
 	ChatIcon,
 	ReactionIcon,
 	RecordIcon,
+	SparklesIcon,
 };
