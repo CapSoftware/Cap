@@ -82,21 +82,23 @@ Cap 使用 Tauri 和 Rust 构建桌面应用程序。要编译 Cap Desktop，请
 4.  **开发模式**: 运行 `pnpm dev` 启动开发服务器。
 5.  **构建**: 运行 `pnpm build` 构建生产版本。
 
-## 使用 GitHub Actions 构建
+## 使用 GitHub Actions 构建 Windows 应用 (推荐)
 
-您可以使用 GitHub Actions 自动构建 Windows 和 macOS 应用。项目中已经包含了一个名为 `publish` 的工作流（`.github/workflows/publish.yml`），用于处理此过程。
+我们提供了一个简化的工作流，只需简单的几步即可在 GitHub 上自动构建 Windows 安装包。
 
-1.  **Fork 仓库**: 将本项目 Fork 到您的 GitHub 账户。
-2.  **配置 Secrets**: 在仓库的 Settings > Secrets and variables > Actions 中配置必要的 Secrets（如果您需要签名和发布）：
-    *   `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` (macOS 签名)
-    *   `CN_API_KEY` (CrabNebula 发布)
-    *   `GITHUB_TOKEN` (自动提供)
-    *   其他相关 Secrets 请参考 `publish.yml` 文件。
-3.  **运行工作流**:
-    *   进入 Actions 标签页。
-    *   选择 "publish" 工作流。
-    *   点击 "Run workflow"。
-4.  **下载构建产物**: 构建完成后，您可以在 GitHub Releases 或 Workflow 运行记录中找到构建好的安装包。
+1.  **Fork 仓库**: 点击本页面右上角的 "Fork" 按钮，将项目复刻到您的 GitHub 账户。
+2.  **运行工作流**:
+    *   在您 Fork 的仓库中，点击顶部的 **Actions** 标签页。
+    *   在左侧列表中，选择 **Build Windows App** 工作流。
+    *   点击右侧的 **Run workflow** 按钮（如果是首次运行，可能需要点击 "I understand my workflows, go ahead and enable them"）。
+    *   再次点击绿色的 **Run workflow** 按钮确认。
+3.  **下载安装包**:
+    *   等待工作流运行完成（通常需要 15-30 分钟）。
+    *   点击运行记录进入详情页。
+    *   在底部的 **Artifacts** 区域，您会看到一个名为 `windows-installer` 的文件。
+    *   点击下载该文件，解压后即可获得 `.exe` 安装包。
+
+*注意：此构建方式生成的是未签名的安装包，Windows 可能会提示安全警告，您可以选择“仍要运行”。*
 
 ## 使用
 

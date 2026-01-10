@@ -1,0 +1,47 @@
+name: "Build Windows App"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create .env file in root
+        run: |
+          echo "appVersion=0.4.1" >> .env
+          echo "VITE_ENVIRONMENT=production" >> .env
+          echo "VITE_SERVER_URL=https://cap.so" >> .env
+          echo "RUST_TARGET_TRIPLE=x86_64-pc-windows-msvc" >> .env
+
+      - name: Build app
+        working-directory: apps/desktop
+        run: |
+          pnpm -w cap-setup
+          pnpm build:tauri --target x86_64-pc-windows-msvc --config src-tauri/tauri.prod.conf.json
+        env:
+          CI: false
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error
