@@ -116,6 +116,7 @@
 		"next-contentlayer2": "^0.5.3",
 		"next-mdx-remote": "^5.0.0",
 		"nextjs-cors": "^2.2.0",
+		"playwright": "^1.57.0",
 		"posthog-js": "^1.215.3",
 		"posthog-node": "^4.11.2",
 		"prettier": "^3.7.4",
