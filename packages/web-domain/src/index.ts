@@ -1,4 +1,5 @@
 export * from "./Authentication.ts";
+export * as AutoMode from "./AutoMode.ts";
 export * as Comment from "./Comment.ts";
 export * from "./Database.ts";
 export * from "./Errors.ts";
