@@ -254,6 +254,23 @@ jobs:
           Write-Host "Files in bundle directory after signing:"
           Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
 
+      - name: Re-sign Windows installer for Tauri updater
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          BUNDLE_DIR="../../target/${{ matrix.settings.target }}/release/bundle/nsis"
+          for exe in "$BUNDLE_DIR"/*.exe; do
+            echo "Re-signing $(basename "$exe") for Tauri updater..."
+            rm -f "${exe}.sig"
+            pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
+          done
+          echo "Signature files after re-signing:"
+          ls -la "$BUNDLE_DIR"/*.sig
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
         with:
