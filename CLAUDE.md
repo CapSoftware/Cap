@@ -480,6 +480,28 @@ Transcription/AI Enhancement → Database Storage
 - **Effect System**: Used in web-backend packages
 - **Media Processing**: FFmpeg documentation for Rust bindings
 
+## Auto Mode Plan Execution
+
+When the user says "continue the plan", "resume the plan", or similar phrases by themselves, this refers to the `AUTO_MODE_IMPLEMENTATION_PLAN.md` file in the repository root.
+
+### Workflow
+1. Read `AUTO_MODE_IMPLEMENTATION_PLAN.md` to understand context and find the current task
+2. Find the next uncompleted task (marked with `[ ]`) or the in-progress task (marked with `[~]`)
+3. **Complete ONLY ONE task** - do not continue to subsequent tasks
+4. Mark the task as complete (`[x]`) and add any relevant notes or context
+5. Update the "Status" section at the top of the plan file
+6. Run `pnpm lint` and `pnpm typecheck` to verify changes
+7. Commit changes to the current branch with a concise commit title only (no commit body/description)
+8. Notify the user that the task is complete so they can review and reset context
+
+### Important Rules
+- **Single Task Limit**: Only complete ONE task per session, then stop and notify the user
+- **No Batching**: Do not continue to the next task even if it seems simple
+- **Context Reset**: After completing a task, the user will manually reset the context window before continuing
+- **No Auto-Push**: Do NOT automatically push changes - the user will push manually when ready
+- **Commit Format**: Use a concise, descriptive title like "Add Auto Mode dashboard route" - no description text
+- **No AI Attribution**: Never include "Generated with Claude Code", "Co-Authored-By: Claude", or similar AI attribution in commit messages
+
 ## Code Formatting
 
 Always format code before completing work:
