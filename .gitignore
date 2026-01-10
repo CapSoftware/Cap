@@ -58,6 +58,3 @@ tauri.windows.conf.json
 scripts/backfill-releases.sh
 scripts/update-github-releases.sh
 scripts/releases-backfill-data.txt
-
-# Auto Mode implementation plan (local tracking only)
-AUTO_MODE_IMPLEMENTATION_PLAN.md
