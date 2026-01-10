@@ -29,7 +29,17 @@ export function I18nProvider(props: ParentProps) {
 		? "zh-CN"
 		: "en-US";
 
+	const storedLocale = localStorage.getItem("cap-locale") as Locale | null;
+	const systemLocale = navigator.language;
+	const defaultLocale: Locale = storedLocale ?? (systemLocale.startsWith("zh")
+		? "zh-CN"
+		: "en-US");
+
 	const [locale, setLocale] = createSignal<Locale>(defaultLocale);
+
+	createEffect(() => {
+		localStorage.setItem("cap-locale", locale());
+	});
 
 	const [dictionaries] = createStore({
 		"en-US": enUS,
