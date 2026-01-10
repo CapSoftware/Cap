@@ -10,6 +10,11 @@ import { Option } from "effect";
 import { FatalError } from "workflow";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
+import {
+	checkHasAudioTrackViaMediaServer,
+	extractAudioViaMediaServer,
+	isMediaServerConfigured,
+} from "@/lib/media-client";
 import { runPromise } from "@/lib/server";
 import { type DeepgramResult, formatToWebVTT } from "@/lib/transcribe-utils";
 
@@ -31,8 +36,6 @@ export async function transcribeVideoWorkflow(
 	"use workflow";
 
 	const { videoId, userId, aiGenerationEnabled } = payload;
-
-	console.log(`[transcribe-workflow] Starting for video ${videoId}`);
 
 	const videoData = await validateVideo(videoId);
 
@@ -61,7 +64,6 @@ export async function transcribeVideoWorkflow(
 		await generateMetadata(videoId, userId);
 	}
 
-	console.log(`[transcribe-workflow] Completed for video ${videoId}`);
 	return { success: true, message: "Transcription completed successfully" };
 }
 
@@ -122,7 +124,6 @@ async function markSkipped(videoId: string): Promise<void> {
 async function markNoAudio(videoId: string): Promise<void> {
 	"use step";
 
-	console.log(`[transcribe-workflow] Video ${videoId} has no audio track`);
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "NO_AUDIO" })
@@ -151,40 +152,60 @@ async function extractAudio(
 		throw new Error("Video file not accessible");
 	}
 
-	const hasAudio = await checkHasAudioTrack(videoUrl);
-	if (!hasAudio) {
-		console.log("[transcribe-workflow] Video has no audio track");
-		return null;
+	const useMediaServer = isMediaServerConfigured();
+
+	let hasAudio: boolean;
+	let audioBuffer: Buffer;
+
+	if (useMediaServer) {
+		hasAudio = await checkHasAudioTrackViaMediaServer(videoUrl);
+		if (!hasAudio) {
+			return null;
+		}
+
+		audioBuffer = await extractAudioViaMediaServer(videoUrl);
+	} else {
+		hasAudio = await checkHasAudioTrack(videoUrl);
+		if (!hasAudio) {
+			return null;
+		}
+
+		const result = await extractAudioFromUrl(videoUrl);
+
+		try {
+			audioBuffer = await fs.readFile(result.filePath);
+		} finally {
+			await result.cleanup();
+		}
 	}
 
-	console.log("[transcribe-workflow] Extracting audio from video");
-	const result = await extractAudioFromUrl(videoUrl);
+	const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
 
-	try {
-		const audioBuffer = await fs.readFile(result.filePath);
-		const audioKey = `${userId}/${videoId}/audio-temp.m4a`;
+	await bucket
+		.putObject(audioKey, audioBuffer, {
+			contentType: "audio/mpeg",
+		})
+		.pipe(runPromise);
 
-		await bucket
-			.putObject(audioKey, audioBuffer, {
-				contentType: result.mimeType,
-			})
-			.pipe(runPromise);
+	const audioSignedUrl = await bucket
+		.getSignedObjectUrl(audioKey)
+		.pipe(runPromise);
 
-		const audioSignedUrl = await bucket
-			.getSignedObjectUrl(audioKey)
-			.pipe(runPromise);
-
-		console.log("[transcribe-workflow] Audio uploaded to S3");
-		return audioSignedUrl;
-	} finally {
-		await result.cleanup();
-	}
+	return audioSignedUrl;
 }
 
 async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 	"use step";
 
-	console.log("[transcribe-workflow] Calling Deepgram API");
+	const audioCheckResponse = await fetch(audioUrl, {
+		method: "HEAD",
+	});
+	if (!audioCheckResponse.ok) {
+		throw new Error(
+			`Audio URL not accessible: ${audioCheckResponse.status} ${audioCheckResponse.statusText}`,
+		);
+	}
+
 	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
 	const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
@@ -194,16 +215,14 @@ async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 			smart_format: true,
 			detect_language: true,
 			utterances: true,
-			mime_type: "audio/mp4",
+			mime_type: "audio/mpeg",
 		},
 	);
 
 	if (error) {
-		console.error("[transcribe-workflow] Deepgram error:", error);
 		throw new Error(`Deepgram transcription failed: ${error.message}`);
 	}
 
-	console.log("[transcribe-workflow] Transcription received");
 	return formatToWebVTT(result as unknown as DeepgramResult);
 }
 
@@ -229,8 +248,6 @@ async function saveTranscription(
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE" })
 		.where(eq(videos.id, videoId as Video.VideoId));
-
-	console.log("[transcribe-workflow] Transcription saved to S3");
 }
 
 async function cleanupTempAudio(
@@ -245,9 +262,8 @@ async function cleanupTempAudio(
 			Option.fromNullable(bucketId),
 		).pipe(runPromise);
 
-		const audioKey = `${userId}/${videoId}/audio-temp.m4a`;
+		const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
 		await bucket.deleteObject(audioKey).pipe(runPromise);
-		console.log("[transcribe-workflow] Cleaned up temp audio file");
 	} catch {}
 }
 
@@ -257,6 +273,5 @@ async function generateMetadata(
 ): Promise<void> {
 	"use step";
 
-	console.log("[transcribe-workflow] Triggering AI metadata generation");
 	await generateAiMetadata(videoId as Video.VideoId, userId);
 }

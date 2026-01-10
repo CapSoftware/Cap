@@ -23,18 +23,26 @@ pub struct Preset {
 impl PresetsStore {
     fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         match app.store("store").map(|s| s.get("presets")) {
-            Ok(Some(store)) => {
-                // Handle potential deserialization errors gracefully
-                match serde_json::from_value(store) {
-                    Ok(settings) => Ok(Some(settings)),
-                    Err(_) => {
-                        error!("Failed to deserialize presets store");
-                        Ok(None)
-                    }
+            Ok(Some(store)) => match serde_json::from_value(store.clone()) {
+                Ok(settings) => Ok(Some(settings)),
+                Err(e) => {
+                    error!(
+                        "Failed to deserialize presets store: {}. Raw value: {}",
+                        e,
+                        serde_json::to_string_pretty(&store).unwrap_or_default()
+                    );
+                    Ok(None)
                 }
-            }
+            },
             _ => Ok(None),
         }
+    }
+
+    pub fn clear(app: &AppHandle<Wry>) -> Result<(), String> {
+        let store = app.store("store").map_err(|e| e.to_string())?;
+        store.delete("presets");
+        store.save().map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn get_default_preset(app: &AppHandle<Wry>) -> Result<Option<Preset>, String> {

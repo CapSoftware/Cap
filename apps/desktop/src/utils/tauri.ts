@@ -194,6 +194,9 @@ async resetCameraPermissions() : Promise<null> {
 async resetMicrophonePermissions() : Promise<null> {
     return await TAURI_INVOKE("reset_microphone_permissions");
 },
+async clearPresets() : Promise<null> {
+    return await TAURI_INVOKE("clear_presets");
+},
 async isCameraWindowOpen() : Promise<boolean> {
     return await TAURI_INVOKE("is_camera_window_open");
 },
@@ -380,15 +383,15 @@ export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask"
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
-export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; micStereoMode?: StereoMode; systemVolumeDb?: number }
+export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
 export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; intercom_hash: string | null; organizations?: Organization[] }
-export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType?: CornerStyle; inset: number; crop: Crop | null; shadow?: number; advancedShadow?: ShadowConfiguration | null; border?: BorderConfiguration | null }
+export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
-export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoomSize: number | null; rounding?: number; shadow?: number; advancedShadow?: ShadowConfiguration | null; shape?: CameraShape; roundingType?: CornerStyle }
+export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraPreviewShape = "round" | "square" | "full"
@@ -398,7 +401,7 @@ export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
 export type CaptionSegment = { id: string; start: number; end: number; text: string; words?: CaptionWord[] }
-export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position?: string; italic: boolean; fontWeight?: number; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor?: string; fadeDuration?: number; lingerDuration?: number; wordTransitionDuration?: number; activeWordHighlight?: boolean }
+export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; italic: boolean; fontWeight: number; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor: string; fadeDuration: number; lingerDuration: number; wordTransitionDuration: number; activeWordHighlight: boolean }
 export type CaptionWord = { text: string; start: number; end: number }
 export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings }
 export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number }
@@ -414,7 +417,7 @@ export type CurrentRecording = { target: CurrentRecordingTarget; mode: Recording
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: WindowId; bounds: LogicalBounds | null } } | { screen: { id: DisplayId } } | { area: { screen: DisplayId; bounds: LogicalBounds } }
 export type CursorAnimationStyle = "slow" | "mellow" | "custom"
-export type CursorConfiguration = { hide?: boolean; hideWhenIdle?: boolean; hideWhenIdleDelay?: number; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw?: boolean; motionBlur?: number; useSvg?: boolean }
+export type CursorConfiguration = { hide: boolean; hideWhenIdle: boolean; hideWhenIdleDelay: number; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw: boolean; motionBlur: number; useSvg: boolean }
 export type CursorMeta = { imagePath: string; hotspot: XY<number>; shape?: string | null }
 export type CursorType = "auto" | "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
@@ -483,7 +486,7 @@ export type PostDeletionBehaviour = "doNothing" | "reopenRecordingWindow"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
-export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null; captions?: CaptionsData | null; clips?: ClipConfiguration[]; annotations?: Annotation[] }
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; clips: ClipConfiguration[]; annotations: Annotation[] }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }

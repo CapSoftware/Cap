@@ -1,203 +1,256 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@ffmpeg-installer/ffmpeg", () => ({
-	path: "/usr/local/bin/ffmpeg",
+vi.mock("ffmpeg-static", () => ({
+	default: "/usr/local/bin/ffmpeg",
 }));
 
-const mockUnlink = vi.fn().mockResolvedValue(undefined);
-vi.mock("node:fs", () => ({
-	promises: {
-		unlink: mockUnlink,
+const mockUnlink = vi.fn(() => Promise.resolve(undefined));
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		existsSync: (path: string) => path === "/usr/local/bin/ffmpeg",
+		promises: {
+			...actual.promises,
+			unlink: () => mockUnlink(),
+		},
+	};
+});
+
+class MockChildProcess extends EventEmitter {
+	stdout = new EventEmitter();
+	stderr = new EventEmitter();
+}
+
+let mockProcess: MockChildProcess;
+let spawnArgs: { command: string; args: string[] }[] = [];
+
+vi.mock("node:child_process", () => ({
+	spawn: (command: string, args: string[]) => {
+		spawnArgs.push({ command, args });
+		mockProcess = new MockChildProcess();
+		return mockProcess;
 	},
 }));
-
-let ffprobeData: { streams: Array<{ codec_type: string }> } = { streams: [] };
-let ffprobeError: Error | null = null;
-
-const mockChain = {
-	noVideo: vi.fn(),
-	audioCodec: vi.fn(),
-	audioBitrate: vi.fn(),
-	format: vi.fn(),
-	outputOptions: vi.fn(),
-	on: vi.fn(),
-	save: vi.fn(),
-	pipe: vi.fn(),
-};
-
-vi.mock("fluent-ffmpeg", () => {
-	const createChain = () => {
-		const eventHandlers: Record<string, (...args: unknown[]) => void> = {};
-
-		mockChain.noVideo.mockImplementation(() => mockChain);
-		mockChain.audioCodec.mockImplementation(() => mockChain);
-		mockChain.audioBitrate.mockImplementation(() => mockChain);
-		mockChain.format.mockImplementation(() => mockChain);
-		mockChain.outputOptions.mockImplementation(() => mockChain);
-		mockChain.on.mockImplementation(
-			(event: string, handler: (...args: unknown[]) => void) => {
-				eventHandlers[event] = handler;
-				return mockChain;
-			},
-		);
-		mockChain.save.mockImplementation(() => {
-			setTimeout(() => eventHandlers.end?.(), 10);
-			return mockChain;
-		});
-		mockChain.pipe.mockImplementation(() => {
-			const emitter = new EventEmitter();
-			setTimeout(() => {
-				emitter.emit("data", Buffer.from("test"));
-				emitter.emit("end");
-			}, 10);
-			return emitter;
-		});
-
-		return mockChain;
-	};
-
-	const ffmpeg = vi.fn(() => createChain());
-
-	(ffmpeg as Record<string, unknown>).setFfmpegPath = vi.fn();
-	(ffmpeg as Record<string, unknown>).ffprobe = (
-		_url: string,
-		cb: (err: Error | null, data: unknown) => void,
-	) => {
-		setTimeout(() => cb(ffprobeError, ffprobeData), 10);
-	};
-
-	return { default: ffmpeg };
-});
 
 describe("audio-extract", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		ffprobeData = { streams: [{ codec_type: "audio" }] };
-		ffprobeError = null;
+		spawnArgs = [];
+	});
+
+	afterEach(() => {
+		vi.resetModules();
 	});
 
 	describe("checkHasAudioTrack", () => {
 		it("returns true when video has audio stream", async () => {
-			ffprobeData = {
-				streams: [{ codec_type: "video" }, { codec_type: "audio" }],
-			};
-
 			const { checkHasAudioTrack } = await import("@/lib/audio-extract");
-			const result = await checkHasAudioTrack("https://example.com/video.mp4");
 
+			const resultPromise = checkHasAudioTrack("https://example.com/video.mp4");
+
+			setTimeout(() => {
+				mockProcess.stderr.emit(
+					"data",
+					Buffer.from(
+						"Stream #0:0: Video: h264\n  Stream #0:1: Audio: aac, 44100 Hz",
+					),
+				);
+				mockProcess.emit("close", 1);
+			}, 10);
+
+			const result = await resultPromise;
 			expect(result).toBe(true);
 		});
 
 		it("returns false when video has no audio stream", async () => {
-			ffprobeData = {
-				streams: [{ codec_type: "video" }],
-			};
-
 			const { checkHasAudioTrack } = await import("@/lib/audio-extract");
-			const result = await checkHasAudioTrack("https://example.com/video.mp4");
 
+			const resultPromise = checkHasAudioTrack("https://example.com/video.mp4");
+
+			setTimeout(() => {
+				mockProcess.stderr.emit(
+					"data",
+					Buffer.from("Stream #0:0: Video: h264, 1920x1080"),
+				);
+				mockProcess.emit("close", 1);
+			}, 10);
+
+			const result = await resultPromise;
 			expect(result).toBe(false);
 		});
 
-		it("returns false when ffprobe fails", async () => {
-			ffprobeError = new Error("Failed to probe file");
-
+		it("returns false when ffmpeg errors", async () => {
 			const { checkHasAudioTrack } = await import("@/lib/audio-extract");
-			const result = await checkHasAudioTrack("https://example.com/video.mp4");
 
+			const resultPromise = checkHasAudioTrack("https://example.com/video.mp4");
+
+			setTimeout(() => {
+				mockProcess.emit("error", new Error("spawn failed"));
+			}, 10);
+
+			const result = await resultPromise;
 			expect(result).toBe(false);
 		});
 
-		it("returns false for empty streams array", async () => {
-			ffprobeData = { streams: [] };
-
+		it("uses correct ffmpeg arguments", async () => {
 			const { checkHasAudioTrack } = await import("@/lib/audio-extract");
-			const result = await checkHasAudioTrack("https://example.com/video.mp4");
 
-			expect(result).toBe(false);
+			const resultPromise = checkHasAudioTrack("https://example.com/video.mp4");
+
+			setTimeout(() => {
+				mockProcess.stderr.emit("data", Buffer.from(""));
+				mockProcess.emit("close", 1);
+			}, 10);
+
+			await resultPromise;
+
+			const args = spawnArgs[0]?.args ?? [];
+			expect(args).toContain("-i");
+			expect(args).toContain("-hide_banner");
+			expect(args).toContain("https://example.com/video.mp4");
 		});
 	});
 
 	describe("extractAudioFromUrl", () => {
-		it("configures ffmpeg with correct audio settings", async () => {
+		it("uses correct ffmpeg arguments", async () => {
 			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
 
-			await extractAudioFromUrl("https://example.com/video.mp4");
+			const resultPromise = extractAudioFromUrl(
+				"https://example.com/video.mp4",
+			);
 
-			expect(mockChain.noVideo).toHaveBeenCalled();
-			expect(mockChain.audioCodec).toHaveBeenCalledWith("aac");
-			expect(mockChain.audioBitrate).toHaveBeenCalledWith("128k");
-			expect(mockChain.format).toHaveBeenCalledWith("ipod");
+			setTimeout(() => {
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			await resultPromise;
+
+			const args = spawnArgs[0]?.args ?? [];
+			expect(args).toContain("-i");
+			expect(args).toContain("https://example.com/video.mp4");
+			expect(args).toContain("-vn");
+			expect(args).toContain("-acodec");
+			expect(args).toContain("libmp3lame");
+			expect(args).toContain("-b:a");
+			expect(args).toContain("128k");
 		});
 
-		it("sets faststart flag for streaming optimization", async () => {
+		it("returns audio/mpeg mime type", async () => {
 			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
 
-			await extractAudioFromUrl("https://example.com/video.mp4");
+			const resultPromise = extractAudioFromUrl(
+				"https://example.com/video.mp4",
+			);
 
-			expect(mockChain.outputOptions).toHaveBeenCalledWith([
-				"-movflags",
-				"+faststart",
-			]);
+			setTimeout(() => {
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			const result = await resultPromise;
+			expect(result.mimeType).toBe("audio/mpeg");
 		});
 
-		it("returns audio/mp4 mime type", async () => {
+		it("generates .mp3 file in temp directory", async () => {
 			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
 
-			const result = await extractAudioFromUrl("https://example.com/video.mp4");
+			const resultPromise = extractAudioFromUrl(
+				"https://example.com/video.mp4",
+			);
 
-			expect(result.mimeType).toBe("audio/mp4");
-		});
+			setTimeout(() => {
+				mockProcess.emit("close", 0);
+			}, 10);
 
-		it("generates .m4a file in temp directory", async () => {
-			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
-
-			const result = await extractAudioFromUrl("https://example.com/video.mp4");
-
+			const result = await resultPromise;
 			expect(result.filePath).toContain("audio-");
-			expect(result.filePath).toContain(".m4a");
+			expect(result.filePath).toContain(".mp3");
 		});
 
 		it("provides cleanup function", async () => {
 			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
 
-			const result = await extractAudioFromUrl("https://example.com/video.mp4");
+			const resultPromise = extractAudioFromUrl(
+				"https://example.com/video.mp4",
+			);
 
+			setTimeout(() => {
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			const result = await resultPromise;
 			expect(typeof result.cleanup).toBe("function");
 			await result.cleanup();
-			expect(mockUnlink).toHaveBeenCalledWith(result.filePath);
+			expect(mockUnlink).toHaveBeenCalled();
+		});
+
+		it("rejects on ffmpeg error", async () => {
+			const { extractAudioFromUrl } = await import("@/lib/audio-extract");
+
+			const resultPromise = extractAudioFromUrl(
+				"https://example.com/video.mp4",
+			);
+
+			setTimeout(() => {
+				mockProcess.stderr.emit("data", Buffer.from("Conversion failed"));
+				mockProcess.emit("close", 1);
+			}, 10);
+
+			await expect(resultPromise).rejects.toThrow("Audio extraction failed");
 		});
 	});
 
 	describe("extractAudioToBuffer", () => {
-		it("uses fragmented MP4 output for streaming", async () => {
+		it("uses pipe output for streaming", async () => {
 			const { extractAudioToBuffer } = await import("@/lib/audio-extract");
 
-			await extractAudioToBuffer("https://example.com/video.mp4");
+			const resultPromise = extractAudioToBuffer(
+				"https://example.com/video.mp4",
+			);
 
-			expect(mockChain.outputOptions).toHaveBeenCalledWith([
-				"-movflags",
-				"+frag_keyframe+empty_moov",
-			]);
+			setTimeout(() => {
+				mockProcess.stdout.emit("data", Buffer.from("audio-data"));
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			await resultPromise;
+
+			const args = spawnArgs[0]?.args ?? [];
+			expect(args).toContain("-pipe:1");
 		});
 
 		it("returns Buffer instance", async () => {
 			const { extractAudioToBuffer } = await import("@/lib/audio-extract");
 
-			const result = await extractAudioToBuffer(
+			const resultPromise = extractAudioToBuffer(
 				"https://example.com/video.mp4",
 			);
 
+			setTimeout(() => {
+				mockProcess.stdout.emit("data", Buffer.from("test-audio"));
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			const result = await resultPromise;
 			expect(Buffer.isBuffer(result)).toBe(true);
 		});
 
-		it("uses pipe() for streaming output", async () => {
+		it("concatenates multiple chunks", async () => {
 			const { extractAudioToBuffer } = await import("@/lib/audio-extract");
 
-			await extractAudioToBuffer("https://example.com/video.mp4");
+			const resultPromise = extractAudioToBuffer(
+				"https://example.com/video.mp4",
+			);
 
-			expect(mockChain.pipe).toHaveBeenCalled();
+			setTimeout(() => {
+				mockProcess.stdout.emit("data", Buffer.from("chunk1"));
+				mockProcess.stdout.emit("data", Buffer.from("chunk2"));
+				mockProcess.emit("close", 0);
+			}, 10);
+
+			const result = await resultPromise;
+			expect(result.toString()).toBe("chunk1chunk2");
 		});
 	});
 });

@@ -15,7 +15,13 @@ const { version } = packageJson;
 
 const nextConfig = {
 	reactStrictMode: true,
-	serverExternalPackages: ["@ffmpeg-installer/ffmpeg", "fluent-ffmpeg"],
+	serverExternalPackages: ["ffmpeg-static", "prettier"],
+	outputFileTracingIncludes: {
+		"/app/.well-known/workflow/v1/step": [
+			"./node_modules/ffmpeg-static/ffmpeg",
+			"./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
+		],
+	},
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
@@ -35,10 +41,20 @@ const nextConfig = {
 		optimizePackageImports: [
 			"@cap/ui",
 			"@cap/utils",
-			// "@cap/web-api-contract",
-			// "@cap/web-domain",
-			// "@cap/web-backend",
-			"@cap/database",
+			"lucide-react",
+			"framer-motion",
+			"motion",
+			"@fortawesome/free-solid-svg-icons",
+			"@fortawesome/free-brands-svg-icons",
+			"@tanstack/react-query",
+			"recharts",
+			"@radix-ui/react-dialog",
+			"@radix-ui/react-dropdown-menu",
+			"@radix-ui/react-popover",
+			"@radix-ui/react-select",
+			"@radix-ui/react-slider",
+			"@radix-ui/react-tooltip",
+			"date-fns",
 		],
 	},
 	images: {

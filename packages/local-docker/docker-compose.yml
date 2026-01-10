@@ -20,6 +20,17 @@ services:
     volumes:
       - ps-mysql:/var/lib/mysql
 
+  cap-media-server:
+    container_name: cap-media-server-dev
+    build:
+      context: ../..
+      dockerfile: apps/media-server/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3456
+    ports:
+      - "3456:3456"
+
   # Local S3 Strorage
   minio:
     container_name: minio-storage

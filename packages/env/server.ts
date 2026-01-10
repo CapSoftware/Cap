@@ -114,6 +114,12 @@ function createServerEnv() {
 			DUB_API_KEY: z.string().optional(),
 			INTERCOM_SECRET: z.string().optional(),
 
+			/// Media Server
+			MEDIA_SERVER_URL: z
+				.string()
+				.optional()
+				.describe("URL of the media server for FFmpeg processing"),
+
 			/// Ignore
 			NODE_ENV: z.string(),
 			WORKFLOWS_RPC_URL: z.string().optional(),

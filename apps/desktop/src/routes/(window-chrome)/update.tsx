@@ -2,25 +2,46 @@ import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check } from "@tauri-apps/plugin-updater";
-import { createResource, Match, Show, Switch } from "solid-js";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { createResource, createSignal, Match, Show, Switch } from "solid-js";
 
 export default function () {
 	const navigate = useNavigate();
+	const [updateError, setUpdateError] = createSignal<string | null>(null);
 
 	const [update] = createResource(async () => {
-		const update = await check();
-		if (!update) return;
-
-		return update;
+		try {
+			const update = await check();
+			if (!update) return;
+			return update;
+		} catch (e) {
+			console.error("Failed to check for updates:", e);
+			setUpdateError("Unable to check for updates.");
+			return;
+		}
 	});
 
 	return (
 		<div class="flex flex-col justify-center flex-1 items-center gap-[3rem] p-[1rem] text-[0.875rem] font-[400] h-full">
+			<Show when={updateError()}>
+				<div class="flex flex-col gap-4 items-center text-center max-w-md">
+					<p class="text-[--text-primary]">{updateError()}</p>
+					<p class="text-[--text-tertiary]">
+						Please download the latest version manually from cap.so/download.
+						Your data will not be lost.
+					</p>
+					<p class="text-[--text-tertiary] text-xs">
+						If this issue persists, please contact support.
+					</p>
+					<Button onClick={() => navigate("/")}>Go Back</Button>
+				</div>
+			</Show>
 			<Show
-				when={update()}
+				when={!updateError() && update()}
 				fallback={
-					<span class="text-[--text-tertiary]">No update available</span>
+					!updateError() && (
+						<span class="text-[--text-tertiary]">No update available</span>
+					)
 				}
 				keyed
 			>
@@ -61,7 +82,12 @@ export default function () {
 												UserAttentionType.Informational,
 											);
 										})
-										.catch(() => navigate("/"));
+										.catch((e) => {
+											console.error("Failed to download/install update:", e);
+											setUpdateError(
+												"Failed to download or install the update.",
+											);
+										});
 								}),
 						);
 

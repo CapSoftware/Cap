@@ -41,14 +41,7 @@ impl PendingReadback {
                     break;
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {
-                    match device.poll(wgpu::PollType::Poll) {
-                        Ok(maintained) => {
-                            if maintained.is_queue_empty() {
-                                break;
-                            }
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
+                    device.poll(wgpu::PollType::Poll)?;
                     poll_count += 1;
                     if poll_count.is_multiple_of(3) {
                         tokio::task::yield_now().await;
