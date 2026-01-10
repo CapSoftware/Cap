@@ -501,6 +501,7 @@ When the user says "continue the plan", "resume the plan", or similar phrases by
 - **No Auto-Push**: Do NOT automatically push changes - the user will push manually when ready
 - **Commit Format**: Use a concise, descriptive title like "Add Auto Mode dashboard route" - no description text
 - **No AI Attribution**: Never include "Generated with Claude Code", "Co-Authored-By: Claude", or similar AI attribution in commit messages
+- **Exclude Plan File**: Do NOT commit `AUTO_MODE_IMPLEMENTATION_PLAN.md` - only commit the actual code changes
 
 ## Code Formatting
 
