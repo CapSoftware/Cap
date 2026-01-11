@@ -26,12 +26,12 @@ import {
 	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type PropsWithChildren, useState } from "react";
+import { type PropsWithChildren, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -41,6 +41,7 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { usePublicEnv } from "@/utils/public-env";
 
 import { PasswordDialog } from "../PasswordDialog";
@@ -207,11 +208,32 @@ export const CapCard = ({
 
 	const isOwner = userId === cap.ownerId;
 
+	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
 		cap.id,
 		cap.hasActiveUpload || false,
 	);
 	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
+	const prevUploadProgressRef = useRef(uploadProgress);
+
+	useEffect(() => {
+		const prev = prevUploadProgressRef.current;
+		const wasActive =
+			prev !== null &&
+			prev.status !== "fetching" &&
+			prev.status !== "failed" &&
+			prev.status !== "error";
+		const isNowComplete = uploadProgress === null;
+
+		if (wasActive && isNowComplete) {
+			queryClient.invalidateQueries({
+				queryKey: ThumbnailRequest.queryKey(cap.id),
+			});
+			setImageStatus("loading");
+		}
+
+		prevUploadProgressRef.current = uploadProgress;
+	}, [uploadProgress, queryClient, cap.id]);
 
 	// Helper function to create a drag preview element
 	const createDragPreview = (text: string): HTMLElement => {
@@ -601,38 +623,71 @@ export const CapCard = ({
 															? "generating_thumbnail"
 															: "uploading",
 												)}
+												{uploadProgress.status === "uploading" &&
+													uploadProgress.progress > 0 &&
+													` ${Math.round(uploadProgress.progress)}%`}
 											</span>
-											<svg
-												className="w-4 h-4 transform -rotate-90"
-												viewBox="0 0 20 20"
-											>
-												<circle
-													cx="10"
-													cy="10"
-													r="8"
-													stroke="currentColor"
-													strokeWidth="3"
-													fill="none"
-													className="text-white/30"
-												/>
-												<circle
-													cx="10"
-													cy="10"
-													r="8"
-													stroke="currentColor"
-													strokeWidth="3"
-													fill="none"
-													strokeLinecap="round"
-													className="text-white transition-all duration-200 ease-out"
-													style={{
-														strokeDasharray: `${circumference} ${circumference}`,
-														strokeDashoffset: `${calculateStrokeDashoffset(
-															uploadProgress.progress,
-															circumference,
-														)}`,
-													}}
-												/>
-											</svg>
+											{(uploadProgress.status === "processing" ||
+												uploadProgress.status === "generating_thumbnail") &&
+											uploadProgress.progress === 0 ? (
+												<svg
+													className="w-4 h-4 animate-spin"
+													viewBox="0 0 20 20"
+												>
+													<circle
+														cx="10"
+														cy="10"
+														r="8"
+														stroke="currentColor"
+														strokeWidth="3"
+														fill="none"
+														className="text-white/30"
+													/>
+													<circle
+														cx="10"
+														cy="10"
+														r="8"
+														stroke="currentColor"
+														strokeWidth="3"
+														fill="none"
+														strokeLinecap="round"
+														className="text-white"
+														strokeDasharray="12.5 37.5"
+													/>
+												</svg>
+											) : (
+												<svg
+													className="w-4 h-4 transform -rotate-90"
+													viewBox="0 0 20 20"
+												>
+													<circle
+														cx="10"
+														cy="10"
+														r="8"
+														stroke="currentColor"
+														strokeWidth="3"
+														fill="none"
+														className="text-white/30"
+													/>
+													<circle
+														cx="10"
+														cy="10"
+														r="8"
+														stroke="currentColor"
+														strokeWidth="3"
+														fill="none"
+														strokeLinecap="round"
+														className="text-white transition-all duration-200 ease-out"
+														style={{
+															strokeDasharray: `${circumference} ${circumference}`,
+															strokeDashoffset: `${calculateStrokeDashoffset(
+																uploadProgress.progress,
+																circumference,
+															)}`,
+														}}
+													/>
+												</svg>
+											)}
 										</>
 									)}
 								</div>
@@ -654,6 +709,12 @@ export const CapCard = ({
 							alt={`${cap.name} Thumbnail`}
 							imageStatus={imageStatus}
 							setImageStatus={setImageStatus}
+							hasActiveUpload={
+								uploadProgress !== null &&
+								uploadProgress.status !== "fetching" &&
+								uploadProgress.status !== "failed" &&
+								uploadProgress.status !== "error"
+							}
 						/>
 					</Link>
 				</div>
