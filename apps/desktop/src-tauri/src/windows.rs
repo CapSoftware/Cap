@@ -472,12 +472,17 @@ impl ShowCapWindow {
                     let _ = camera.close();
                 };
 
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                    .ok();
+
                 let window = self
                     .window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1275.0, 800.0)
                     .min_inner_size(1275.0, 800.0)
                     .center()
+                    .focused(true)
                     .build()?;
 
                 #[cfg(windows)]
@@ -501,12 +506,17 @@ impl ShowCapWindow {
                     let _ = camera.close();
                 };
 
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                    .ok();
+
                 let window = self
                     .window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .min_inner_size(800.0, 600.0)
                     .center()
+                    .focused(true)
                     .build()?;
 
                 #[cfg(windows)]
