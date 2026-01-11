@@ -115,7 +115,12 @@ audio.post("/extract", async (c) => {
 		}
 
 		if (useStreaming) {
-			const { stream } = extractAudioStream(videoUrl);
+			const { stream, cleanup } = extractAudioStream(videoUrl);
+
+			c.req.raw.signal.addEventListener("abort", () => {
+				cleanup();
+			});
+
 			return new Response(stream, {
 				headers: {
 					"Content-Type": "audio/mpeg",

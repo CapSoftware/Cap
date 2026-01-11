@@ -2,6 +2,7 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
+import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
@@ -17,6 +18,7 @@ import {
 } from "./context";
 import { preloadCropVideoFull } from "./cropVideoPreloader";
 import { MaskOverlay } from "./MaskOverlay";
+import { PerformanceOverlay } from "./PerformanceOverlay";
 import { TextOverlay } from "./TextOverlay";
 import {
 	EditorButton,
@@ -442,9 +444,24 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, canvasControls } = useEditorContext();
+	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
+		useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+
+	const handleContextMenu = async (e: MouseEvent) => {
+		e.preventDefault();
+		const menu = await Menu.new({
+			items: [
+				{
+					id: "performance-mode",
+					text: performanceMode() ? "✓ Performance Mode" : "Performance Mode",
+					action: () => setPerformanceMode(!performanceMode()),
+				},
+			],
+		});
+		menu.popup();
+	};
 
 	const canvasInitializedRef = { current: false };
 	const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
@@ -538,6 +555,7 @@ function PreviewCanvas() {
 			ref={setCanvasContainerRef}
 			class="relative flex-1 justify-center items-center"
 			style={{ contain: "layout style" }}
+			onContextMenu={handleContextMenu}
 		>
 			<div
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
@@ -565,6 +583,7 @@ function PreviewCanvas() {
 					<Show when={hasFrame()}>
 						<MaskOverlay size={size()} />
 						<TextOverlay size={size()} />
+						<PerformanceOverlay size={size()} />
 					</Show>
 				</div>
 			</div>

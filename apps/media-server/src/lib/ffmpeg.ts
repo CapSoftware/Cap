@@ -56,6 +56,47 @@ async function withTimeout<T>(
 	}
 }
 
+async function drainStream(
+	stream: ReadableStream<Uint8Array> | null,
+): Promise<void> {
+	if (!stream) return;
+	try {
+		const reader = stream.getReader();
+		while (true) {
+			const { done } = await reader.read();
+			if (done) break;
+		}
+		reader.releaseLock();
+	} catch {}
+}
+
+async function readStreamWithLimit(
+	stream: ReadableStream<Uint8Array>,
+	maxBytes: number,
+): Promise<string> {
+	const reader = stream.getReader();
+	const chunks: Uint8Array[] = [];
+	let totalBytes = 0;
+
+	try {
+		while (totalBytes < maxBytes) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(value);
+			totalBytes += value.length;
+		}
+	} finally {
+		reader.releaseLock();
+	}
+
+	const decoder = new TextDecoder();
+	return chunks
+		.map((chunk) => decoder.decode(chunk, { stream: true }))
+		.join("");
+}
+
+const MAX_STDERR_BYTES = 64 * 1024;
+
 export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	if (!canAcceptNewProcess()) {
 		throw new Error("Server is busy, please try again later");
@@ -72,7 +113,12 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	try {
 		const result = await withTimeout(
 			(async () => {
-				const stderrText = await new Response(proc.stderr).text();
+				drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+				const stderrText = await readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
 				await proc.exited;
 				return /Stream #\d+:\d+.*Audio:/.test(stderrText);
 			})(),
@@ -122,9 +168,35 @@ export async function extractAudio(
 	try {
 		const result = await withTimeout(
 			(async () => {
-				const [stdout, stderrText, exitCode] = await Promise.all([
-					new Response(proc.stdout).arrayBuffer(),
-					new Response(proc.stderr).text(),
+				const stderrPromise = readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
+
+				const chunks: Uint8Array[] = [];
+				let totalBytes = 0;
+				const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+
+				try {
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+
+						totalBytes += value.length;
+						if (totalBytes > MAX_AUDIO_SIZE_BYTES) {
+							reader.releaseLock();
+							throw new Error(
+								`Audio too large: exceeds ${MAX_AUDIO_SIZE_BYTES} byte limit`,
+							);
+						}
+						chunks.push(value);
+					}
+				} finally {
+					reader.releaseLock();
+				}
+
+				const [stderrText, exitCode] = await Promise.all([
+					stderrPromise,
 					proc.exited,
 				]);
 
@@ -132,13 +204,14 @@ export async function extractAudio(
 					throw new Error(`FFmpeg exited with code ${exitCode}: ${stderrText}`);
 				}
 
-				if (stdout.byteLength > MAX_AUDIO_SIZE_BYTES) {
-					throw new Error(
-						`Audio too large: ${stdout.byteLength} bytes exceeds ${MAX_AUDIO_SIZE_BYTES} byte limit`,
-					);
+				const output = new Uint8Array(totalBytes);
+				let offset = 0;
+				for (const chunk of chunks) {
+					output.set(chunk, offset);
+					offset += chunk.length;
 				}
 
-				return new Uint8Array(stdout);
+				return output;
 			})(),
 			EXTRACT_TIMEOUT_MS,
 			() => killProcess(proc),
@@ -190,11 +263,19 @@ export function extractAudioStream(
 
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	let cleaned = false;
+	let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
 	const cleanup = () => {
 		if (cleaned) return;
 		cleaned = true;
 		if (timeoutId) clearTimeout(timeoutId);
+		if (reader) {
+			try {
+				reader.cancel().catch(() => {});
+				reader.releaseLock();
+			} catch {}
+			reader = null;
+		}
 		activeProcesses--;
 		killProcess(proc);
 	};
@@ -204,8 +285,10 @@ export function extractAudioStream(
 		cleanup();
 	}, EXTRACT_TIMEOUT_MS);
 
+	drainStream(proc.stderr as ReadableStream<Uint8Array>);
+
 	proc.exited.then((code) => {
-		if (code !== 0) {
+		if (code !== 0 && !cleaned) {
 			console.error(`[ffmpeg] Stream extraction exited with code ${code}`);
 		}
 		cleanup();
@@ -213,27 +296,36 @@ export function extractAudioStream(
 
 	const originalStream = proc.stdout as ReadableStream<Uint8Array>;
 
-	const wrappedStream = new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const reader = originalStream.getReader();
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					controller.enqueue(value);
+	const wrappedStream = new ReadableStream<Uint8Array>(
+		{
+			start() {
+				reader = originalStream.getReader();
+			},
+			async pull(controller) {
+				if (!reader || cleaned) {
+					controller.close();
+					return;
 				}
-				controller.close();
-			} catch (err) {
-				controller.error(err);
-			} finally {
-				reader.releaseLock();
+
+				try {
+					const { done, value } = await reader.read();
+					if (done) {
+						controller.close();
+						cleanup();
+					} else {
+						controller.enqueue(value);
+					}
+				} catch (err) {
+					controller.error(err);
+					cleanup();
+				}
+			},
+			cancel() {
 				cleanup();
-			}
+			},
 		},
-		cancel() {
-			cleanup();
-		},
-	});
+		new CountQueuingStrategy({ highWaterMark: 4 }),
+	);
 
 	return { stream: wrappedStream, cleanup };
 }
