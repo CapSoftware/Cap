@@ -95,37 +95,40 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 		const cloudfrontBucketAccess = cloudfrontEnvs.pipe(
 			Option.map((cloudfrontEnvs) =>
-				Effect.flatMap(createS3BucketAccess, (s3) =>
-					Effect.succeed<typeof s3>({
-						...s3,
-						getSignedObjectUrl: (key) => {
-							const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
-							const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
+				Effect.flatMap(createS3BucketAccess, (s3) => {
+					const getCloudFrontSignedUrl = (key: string) => {
+						const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
+						const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
 
-							const policy = {
-								Statement: [
-									{
-										Resource: url,
-										Condition: {
-											DateLessThan: {
-												"AWS:EpochTime": Math.floor(expires),
-											},
+						const policy = {
+							Statement: [
+								{
+									Resource: url,
+									Condition: {
+										DateLessThan: {
+											"AWS:EpochTime": Math.floor(expires),
 										},
 									},
-								],
-							};
+								},
+							],
+						};
 
-							return Effect.succeed(
-								CloudFrontPresigner.getSignedUrl({
-									url,
-									keyPairId: cloudfrontEnvs.keypairId,
-									privateKey: cloudfrontEnvs.privateKey,
-									policy: JSON.stringify(policy),
-								}),
-							);
-						},
-					}),
-				),
+						return Effect.succeed(
+							CloudFrontPresigner.getSignedUrl({
+								url,
+								keyPairId: cloudfrontEnvs.keypairId,
+								privateKey: cloudfrontEnvs.privateKey,
+								policy: JSON.stringify(policy),
+							}),
+						);
+					};
+
+					return Effect.succeed<typeof s3>({
+						...s3,
+						getSignedObjectUrl: getCloudFrontSignedUrl,
+						getInternalSignedObjectUrl: getCloudFrontSignedUrl,
+					});
+				}),
 			),
 		);
 

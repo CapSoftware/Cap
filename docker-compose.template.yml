@@ -24,6 +24,9 @@ services:
       S3_PUBLIC_ENDPOINT: http://localhost:3902
       S3_INTERNAL_ENDPOINT: http://minio:3902
       MEDIA_SERVER_URL: http://cap-media-server:3456
+      # CHANGE THESE TO YOUR OWN VALUES
+      MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
+
     ports:
       - 3000:3000
 

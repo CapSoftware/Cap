@@ -4,19 +4,19 @@ import { Button } from "@cap/ui";
 import type { Folder, Organisation } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
+import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
+import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import {
 	type UploadStatus,
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { sendProgressUpdate } from "./sendProgressUpdate";
 
 export const UploadCapButton = ({
@@ -50,18 +50,16 @@ export const UploadCapButton = ({
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
-		// This should be unreachable.
 		if (activeOrganization === null) {
 			alert("No organization active!");
 			return;
 		}
 
-		const ok = await legacyUploadCap(
+		const ok = await uploadVideoForServerProcessing(
 			file,
 			folderId,
 			activeOrganization.organization.id,
 			setUploadStatus,
-			queryClient,
 		);
 		if (ok) router.refresh();
 		if (inputRef.current) inputRef.current.value = "";
@@ -95,249 +93,57 @@ export const UploadCapButton = ({
 	);
 };
 
-async function legacyUploadCap(
+async function uploadVideoForServerProcessing(
 	file: File,
 	folderId: Folder.FolderId | undefined,
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
-	queryClient: QueryClient,
 ) {
-	const parser = await import("@remotion/media-parser");
-	const webcodecs = await import("@remotion/webcodecs");
-
 	try {
 		setUploadStatus({ status: "parsing" });
-		const metadata = await parser.parseMedia({
-			src: file,
-			fields: {
-				durationInSeconds: true,
-				dimensions: true,
-				fps: true,
-				numberOfAudioChannels: true,
-				sampleRate: true,
-			},
-		});
 
-		const duration = metadata.durationInSeconds
-			? Math.round(metadata.durationInSeconds)
-			: undefined;
+		let duration: number | undefined;
+		let resolution: string | undefined;
+
+		try {
+			const parser = await import("@remotion/media-parser");
+			const metadata = await parser.parseMedia({
+				src: file,
+				fields: {
+					durationInSeconds: true,
+					dimensions: true,
+				},
+			});
+
+			duration = metadata.durationInSeconds
+				? Math.round(metadata.durationInSeconds)
+				: undefined;
+			resolution = metadata.dimensions
+				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
+				: undefined;
+		} catch (parseError) {
+			console.warn(
+				"Failed to parse video metadata, continuing without it:",
+				parseError,
+			);
+		}
 
 		setUploadStatus({ status: "creating" });
-		const videoData = await createVideoAndGetUploadUrl({
+		const videoData = await createVideoForServerProcessing({
 			duration,
-			resolution: metadata.dimensions
-				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
-				: undefined,
-			videoCodec: "h264",
-			audioCodec: "aac",
-			isScreenshot: false,
-			isUpload: true,
+			resolution,
 			folderId,
 			orgId,
 		});
 
 		const uploadId = videoData.id;
 
-		setUploadStatus({ status: "converting", capId: uploadId, progress: 0 });
-
-		let optimizedBlob: Blob;
-
-		try {
-			const calculateResizeOptions = () => {
-				if (!metadata.dimensions) return undefined;
-
-				const { width, height } = metadata.dimensions;
-				const maxWidth = 1920;
-				const maxHeight = 1080;
-
-				if (width <= maxWidth && height <= maxHeight) {
-					return undefined;
-				}
-
-				const widthScale = maxWidth / width;
-				const heightScale = maxHeight / height;
-				const scale = Math.min(widthScale, heightScale);
-
-				return { mode: "scale" as const, scale };
-			};
-
-			const resizeOptions = calculateResizeOptions();
-
-			const convertResult = await webcodecs.convertMedia({
-				src: file,
-				container: "mp4",
-				videoCodec: "h264",
-				audioCodec: "aac",
-				...(resizeOptions && { resize: resizeOptions }),
-				onProgress: ({ overallProgress }) => {
-					if (overallProgress !== null) {
-						const progressValue = overallProgress * 100;
-						setUploadStatus({
-							status: "converting",
-							capId: uploadId,
-							progress: progressValue,
-						});
-					}
-				},
-			});
-			optimizedBlob = await convertResult.save();
-
-			if (optimizedBlob.size === 0)
-				throw new Error("Conversion produced empty file");
-			const isValidVideo = await new Promise<boolean>((resolve) => {
-				const testVideo = document.createElement("video");
-				testVideo.muted = true;
-				testVideo.playsInline = true;
-				testVideo.preload = "metadata";
-
-				const timeout = setTimeout(() => {
-					console.warn("Video validation timed out");
-					URL.revokeObjectURL(testVideo.src);
-					resolve(false);
-				}, 15000);
-
-				let metadataLoaded = false;
-
-				const validateVideo = () => {
-					if (metadataLoaded) return;
-					metadataLoaded = true;
-
-					const hasValidDuration =
-						testVideo.duration > 0 &&
-						!Number.isNaN(testVideo.duration) &&
-						Number.isFinite(testVideo.duration);
-
-					const hasValidDimensions =
-						(testVideo.videoWidth > 0 && testVideo.videoHeight > 0) ||
-						(metadata.dimensions &&
-							metadata.dimensions.width > 0 &&
-							metadata.dimensions.height > 0);
-
-					if (hasValidDuration && hasValidDimensions) {
-						clearTimeout(timeout);
-						URL.revokeObjectURL(testVideo.src);
-						resolve(true);
-					} else {
-						console.warn(
-							`Invalid video properties - Duration: ${testVideo.duration}, Dimensions: ${testVideo.videoWidth}x${testVideo.videoHeight}, Original dimensions: ${metadata.dimensions?.width}x${metadata.dimensions?.height}`,
-						);
-						clearTimeout(timeout);
-						URL.revokeObjectURL(testVideo.src);
-						resolve(false);
-					}
-				};
-
-				testVideo.addEventListener("loadedmetadata", validateVideo);
-				testVideo.addEventListener("loadeddata", validateVideo);
-				testVideo.addEventListener("canplay", validateVideo);
-
-				testVideo.addEventListener("error", (e) => {
-					console.error("Video validation error:", e);
-					clearTimeout(timeout);
-					URL.revokeObjectURL(testVideo.src);
-					resolve(false);
-				});
-
-				testVideo.addEventListener("loadstart", () => {});
-
-				testVideo.src = URL.createObjectURL(optimizedBlob);
-			});
-
-			if (!isValidVideo) {
-				throw new Error("Converted video is not playable");
-			}
-		} catch (conversionError) {
-			console.error("Video conversion failed:", conversionError);
-			toast.error(
-				"Failed to process video file. This format may not be supported for upload.",
-			);
-			setUploadStatus(undefined);
-			return false;
-		}
-
-		const captureThumbnail = (): Promise<Blob | null> => {
-			return new Promise((resolve) => {
-				const video = document.createElement("video");
-				video.src = URL.createObjectURL(optimizedBlob);
-				video.muted = true;
-				video.playsInline = true;
-				video.crossOrigin = "anonymous";
-
-				const cleanup = () => {
-					URL.revokeObjectURL(video.src);
-				};
-
-				const timeout = setTimeout(() => {
-					cleanup();
-					console.warn(
-						"Thumbnail generation timed out, proceeding without thumbnail",
-					);
-					resolve(null);
-				}, 10000);
-
-				video.addEventListener("loadedmetadata", () => {
-					try {
-						const seekTime = Math.min(1, video.duration / 4);
-						video.currentTime = seekTime;
-					} catch (err) {
-						console.warn("Failed to seek video for thumbnail:", err);
-						clearTimeout(timeout);
-						cleanup();
-						resolve(null);
-					}
-				});
-
-				video.addEventListener("seeked", () => {
-					try {
-						const canvas = document.createElement("canvas");
-						canvas.width = video.videoWidth || 640;
-						canvas.height = video.videoHeight || 480;
-						const ctx = canvas.getContext("2d");
-						if (!ctx) {
-							console.warn("Failed to get canvas context");
-							clearTimeout(timeout);
-							cleanup();
-							resolve(null);
-							return;
-						}
-						ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-						canvas.toBlob(
-							(blob) => {
-								clearTimeout(timeout);
-								cleanup();
-								if (blob) {
-									resolve(blob);
-								} else {
-									console.warn("Failed to create thumbnail blob");
-									resolve(null);
-								}
-							},
-							"image/jpeg",
-							0.8,
-						);
-					} catch (err) {
-						console.warn("Error during thumbnail capture:", err);
-						clearTimeout(timeout);
-						cleanup();
-						resolve(null);
-					}
-				});
-
-				video.addEventListener("error", (err) => {
-					console.warn("Video loading error for thumbnail:", err);
-					clearTimeout(timeout);
-					cleanup();
-					resolve(null);
-				});
-
-				video.addEventListener("loadstart", () => {});
-			});
-		};
-
-		const thumbnailBlob = await captureThumbnail();
-		const thumbnailUrl = thumbnailBlob
-			? URL.createObjectURL(thumbnailBlob)
-			: undefined;
+		setUploadStatus({
+			status: "uploadingVideo",
+			capId: uploadId,
+			progress: 0,
+			thumbnailUrl: undefined,
+		});
 
 		const formData = new FormData();
 		Object.entries(videoData.presignedPostData.fields).forEach(
@@ -345,16 +151,8 @@ async function legacyUploadCap(
 				formData.append(key, value as string);
 			},
 		);
-		formData.append("file", optimizedBlob);
+		formData.append("file", file);
 
-		setUploadStatus({
-			status: "uploadingVideo",
-			capId: uploadId,
-			progress: 0,
-			thumbnailUrl,
-		});
-
-		// Create progress tracking state outside React
 		const createProgressTracker = () => {
 			const uploadState = {
 				videoId: uploadId,
@@ -369,7 +167,6 @@ async function legacyUploadCap(
 				uploadState.total = total;
 				uploadState.lastUpdateTime = Date.now();
 
-				// Clear any existing pending task
 				if (uploadState.pendingTask) {
 					clearTimeout(uploadState.pendingTask);
 					uploadState.pendingTask = undefined;
@@ -378,11 +175,8 @@ async function legacyUploadCap(
 				const shouldSendImmediately = uploaded >= total;
 
 				if (shouldSendImmediately) {
-					// Don't send completion update immediately - let xhr.onload handle it
-					// to avoid double progress updates
 					return;
 				} else {
-					// Schedule delayed update (after 2 seconds)
 					uploadState.pendingTask = setTimeout(() => {
 						if (uploadState.videoId) {
 							sendProgressUpdate(
@@ -422,7 +216,7 @@ async function legacyUploadCap(
 							status: "uploadingVideo",
 							capId: uploadId,
 							progress: percent,
-							thumbnailUrl,
+							thumbnailUrl: undefined,
 						});
 
 						progressTracker.scheduleProgressUpdate(event.loaded, event.total);
@@ -432,7 +226,6 @@ async function legacyUploadCap(
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
 						progressTracker.cleanup();
-						// Guarantee final 100% progress update
 						const total = progressTracker.getTotal() || 1;
 						sendProgressUpdate(uploadId, total, total);
 						resolve();
@@ -453,65 +246,39 @@ async function legacyUploadCap(
 			throw uploadError;
 		}
 
-		if (thumbnailBlob) {
-			const screenshotData = await createVideoAndGetUploadUrl({
+		setUploadStatus({
+			status: "serverProcessing",
+			capId: uploadId,
+		});
+
+		try {
+			await triggerVideoProcessing({
 				videoId: uploadId,
-				isScreenshot: true,
-				isUpload: true,
-				orgId,
+				rawFileKey: videoData.rawFileKey,
+				bucketId: videoData.bucketId,
 			});
-
-			const screenshotFormData = new FormData();
-			Object.entries(screenshotData.presignedPostData.fields).forEach(
-				([key, value]) => {
-					screenshotFormData.append(key, value as string);
-				},
-			);
-			screenshotFormData.append("file", thumbnailBlob);
-
-			setUploadStatus({
-				status: "uploadingThumbnail",
-				capId: uploadId,
-				progress: 0,
-			});
-			await new Promise<void>((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-				xhr.open("POST", screenshotData.presignedPostData.url);
-
-				xhr.upload.onprogress = (event) => {
-					if (event.lengthComputable) {
-						const percent = (event.loaded / event.total) * 100;
-						const thumbnailProgress = 90 + percent * 0.1;
-						setUploadStatus({
-							status: "uploadingThumbnail",
-							capId: uploadId,
-							progress: thumbnailProgress,
-						});
-					}
-				};
-
-				xhr.onload = () => {
-					if (xhr.status >= 200 && xhr.status < 300) {
-						resolve();
-						queryClient.refetchQueries({
-							queryKey: ThumbnailRequest.queryKey(uploadId),
-						});
-					} else {
-						reject(
-							new Error(`Screenshot upload failed with status ${xhr.status}`),
-						);
-					}
-				};
-				xhr.onerror = () => reject(new Error("Screenshot upload failed"));
-
-				xhr.send(screenshotFormData);
-			});
+		} catch (triggerError) {
+			console.error("Failed to trigger processing:", triggerError);
+			toast.error("Failed to start video processing. Please try again.");
+			setUploadStatus(undefined);
+			return false;
 		}
 
 		setUploadStatus(undefined);
+		toast.success(
+			"Video uploaded! Processing will continue in the background.",
+		);
 		return true;
 	} catch (err) {
 		console.error("Video upload failed", err);
+
+		if (err instanceof Error && err.message === "upgrade_required") {
+			toast.error(
+				"Video duration exceeds the limit for free accounts. Please upgrade to Pro.",
+			);
+		} else {
+			toast.error("Failed to upload video. Please try again.");
+		}
 	}
 
 	setUploadStatus(undefined);

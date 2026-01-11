@@ -51,6 +51,18 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					),
 				),
 			).pipe(Effect.withSpan("getSignedObjectUrl")),
+		getInternalSignedObjectUrl: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map((client) =>
+						S3Presigner.getSignedUrl(
+							client,
+							new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+							{ expiresIn: 3600 },
+						),
+					),
+				),
+			).pipe(Effect.withSpan("getInternalSignedObjectUrl")),
 		getObject: (key: string) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
@@ -190,6 +202,26 @@ export const createS3BucketAccess = Effect.gen(function* () {
 		) =>
 			wrapS3Promise(
 				provider.getPublic.pipe(
+					Effect.map((client) =>
+						S3Presigner.getSignedUrl(
+							client,
+							new S3.PutObjectCommand({
+								Bucket: provider.bucket,
+								Key: key,
+								...args,
+							}),
+							signingArgs,
+						),
+					),
+				),
+			),
+		getInternalPresignedPutUrl: (
+			key: string,
+			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
+			signingArgs?: RequestPresigningArguments,
+		) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
 					Effect.map((client) =>
 						S3Presigner.getSignedUrl(
 							client,

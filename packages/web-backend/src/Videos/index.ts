@@ -276,6 +276,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 								total: Db.videoUploads.total,
 								startedAt: Db.videoUploads.startedAt,
 								updatedAt: Db.videoUploads.updatedAt,
+								phase: Db.videoUploads.phase,
+								processingProgress: Db.videoUploads.processingProgress,
+								processingMessage: Db.videoUploads.processingMessage,
+								processingError: Db.videoUploads.processingError,
 							})
 							.from(Db.videoUploads)
 							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
@@ -283,7 +287,18 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
 
 				if (result == null) return Option.none();
-				return Option.some(new Video.UploadProgress(result));
+				return Option.some(
+					new Video.UploadProgress({
+						uploaded: result.uploaded,
+						total: result.total,
+						startedAt: result.startedAt,
+						updatedAt: result.updatedAt,
+						phase: result.phase,
+						processingProgress: result.processingProgress,
+						processingMessage: Option.fromNullable(result.processingMessage),
+						processingError: Option.fromNullable(result.processingError),
+					}),
+				);
 			}),
 
 			updateUploadProgress: Effect.fn("Videos.updateUploadProgress")(function* (

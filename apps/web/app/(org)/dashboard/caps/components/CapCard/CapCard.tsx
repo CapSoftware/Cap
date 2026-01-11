@@ -571,7 +571,8 @@ export const CapCard = ({
 							<div className="relative inset-0 z-20 w-full h-full">
 								<div className="overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video z-5">
 									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
-										{uploadProgress.status === "failed" ? (
+										{uploadProgress.status === "failed" ||
+										uploadProgress.status === "error" ? (
 											<div className="flex flex-col items-center">
 												<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
 													<FontAwesomeIcon
@@ -580,7 +581,9 @@ export const CapCard = ({
 													/>
 												</div>
 												<p className="text-[13px] text-center text-white">
-													Upload failed
+													{uploadProgress.status === "error"
+														? "Processing failed"
+														: "Upload failed"}
 												</p>
 											</div>
 										) : (
@@ -590,6 +593,18 @@ export const CapCard = ({
 													subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
 													className="md:scale-[1.5] scale-[1.2]"
 													progress={uploadProgress.progress}
+													status={
+														uploadProgress.status === "processing"
+															? "processing"
+															: uploadProgress.status === "generating_thumbnail"
+																? "generating_thumbnail"
+																: "uploading"
+													}
+													message={
+														uploadProgress.status === "processing"
+															? uploadProgress.message
+															: undefined
+													}
 												/>
 											</div>
 										)}

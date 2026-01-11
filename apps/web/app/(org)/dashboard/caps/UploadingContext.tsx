@@ -27,6 +27,10 @@ export type UploadStatus =
 			capId: string;
 			progress: number;
 			thumbnailUrl: string | undefined;
+	  }
+	| {
+			status: "serverProcessing";
+			capId: string;
 	  };
 
 interface UploadingContextType {

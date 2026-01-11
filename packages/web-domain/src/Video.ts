@@ -58,6 +58,15 @@ export class Video extends Schema.Class<Video>("Video")({
 	}
 }
 
+export const UploadPhase = Schema.Literal(
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+	"complete",
+	"error",
+);
+export type UploadPhase = typeof UploadPhase.Type;
+
 export class UploadProgress extends Schema.Class<UploadProgress>(
 	"UploadProgress",
 )({
@@ -65,6 +74,10 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	total: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
 	startedAt: Schema.Date,
 	updatedAt: Schema.Date,
+	phase: UploadPhase,
+	processingProgress: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+	processingMessage: Schema.OptionFromNullOr(Schema.String),
+	processingError: Schema.OptionFromNullOr(Schema.String),
 }) {}
 
 export const UploadProgressUpdateInput = Schema.Struct({
