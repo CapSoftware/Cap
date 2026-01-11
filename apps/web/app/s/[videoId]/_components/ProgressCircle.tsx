@@ -120,14 +120,12 @@ export function useUploadProgress(
 const ProgressCircle = ({
 	progress,
 	status = "uploading",
-	message,
 	className,
 	progressTextClassName,
 	subTextClassName,
 }: {
 	progress: number;
 	status?: "uploading" | "processing" | "generating_thumbnail";
-	message?: string | null;
 	className?: string;
 	progressTextClassName?: string;
 	subTextClassName?: string;
@@ -137,11 +135,11 @@ const ProgressCircle = ({
 	const getStatusText = () => {
 		switch (status) {
 			case "processing":
-				return message || "Processing...";
+				return "Processing";
 			case "generating_thumbnail":
-				return "Generating thumbnail...";
+				return "Finishing up";
 			default:
-				return "Uploading...";
+				return "Uploading";
 		}
 	};
 

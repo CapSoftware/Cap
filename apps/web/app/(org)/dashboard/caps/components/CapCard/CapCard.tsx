@@ -8,6 +8,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
+import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
@@ -34,21 +35,35 @@ import { type PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import ProgressCircle, {
-	useUploadProgress,
-} from "@/app/s/[videoId]/_components/ProgressCircle";
+import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { usePublicEnv } from "@/utils/public-env";
+
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
+
+const { circumference } = getProgressCircleConfig();
+
+function getProgressStatusText(
+	status: "uploading" | "processing" | "generating_thumbnail",
+) {
+	switch (status) {
+		case "processing":
+			return "Processing";
+		case "generating_thumbnail":
+			return "Finishing up";
+		default:
+			return "Uploading";
+	}
+}
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
@@ -565,53 +580,64 @@ export const CapCard = ({
 						}}
 						href={`/s/${cap.id}`}
 					>
-						{imageStatus !== "success" &&
-						uploadProgress &&
-						uploadProgress?.status !== "fetching" ? (
-							<div className="relative inset-0 z-20 w-full h-full">
-								<div className="overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video z-5">
-									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
-										{uploadProgress.status === "failed" ||
-										uploadProgress.status === "error" ? (
-											<div className="flex flex-col items-center">
-												<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
-													<FontAwesomeIcon
-														icon={faVideo}
-														className="text-white size-3"
-													/>
-												</div>
-												<p className="text-[13px] text-center text-white">
-													{uploadProgress.status === "error"
-														? "Processing failed"
-														: "Upload failed"}
-												</p>
-											</div>
-										) : (
-											<div className="relative size-20 md:size-16">
-												<ProgressCircle
-													progressTextClassName="md:!text-[11px]"
-													subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
-													className="md:scale-[1.5] scale-[1.2]"
-													progress={uploadProgress.progress}
-													status={
-														uploadProgress.status === "processing"
-															? "processing"
-															: uploadProgress.status === "generating_thumbnail"
-																? "generating_thumbnail"
-																: "uploading"
-													}
-													message={
-														uploadProgress.status === "processing"
-															? uploadProgress.message
-															: undefined
-													}
+						{uploadProgress && uploadProgress?.status !== "fetching" && (
+							<>
+								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60 rounded-t-xl" />
+								<div className="flex absolute bottom-3 left-3 gap-2 items-center z-30">
+									{uploadProgress.status === "failed" ||
+									uploadProgress.status === "error" ? (
+										<span className="text-sm font-semibold text-red-400">
+											{uploadProgress.status === "error"
+												? "Processing failed"
+												: "Upload failed"}
+										</span>
+									) : (
+										<>
+											<span className="text-sm font-semibold text-white">
+												{getProgressStatusText(
+													uploadProgress.status === "processing"
+														? "processing"
+														: uploadProgress.status === "generating_thumbnail"
+															? "generating_thumbnail"
+															: "uploading",
+												)}
+											</span>
+											<svg
+												className="w-4 h-4 transform -rotate-90"
+												viewBox="0 0 20 20"
+											>
+												<circle
+													cx="10"
+													cy="10"
+													r="8"
+													stroke="currentColor"
+													strokeWidth="3"
+													fill="none"
+													className="text-white/30"
 												/>
-											</div>
-										)}
-									</div>
+												<circle
+													cx="10"
+													cy="10"
+													r="8"
+													stroke="currentColor"
+													strokeWidth="3"
+													fill="none"
+													strokeLinecap="round"
+													className="text-white transition-all duration-200 ease-out"
+													style={{
+														strokeDasharray: `${circumference} ${circumference}`,
+														strokeDashoffset: `${calculateStrokeDashoffset(
+															uploadProgress.progress,
+															circumference,
+														)}`,
+													}}
+												/>
+											</svg>
+										</>
+									)}
 								</div>
-							</div>
-						) : null}
+							</>
+						)}
 
 						<VideoThumbnail
 							videoDuration={cap.duration}
@@ -623,10 +649,7 @@ export const CapCard = ({
 										: "group-hover:opacity-30",
 								"transition-opacity duration-200",
 							)}
-							containerClass={clsx(
-								imageStatus !== "success" && uploadProgress ? "hidden" : "",
-								"absolute inset-0",
-							)}
+							containerClass="absolute inset-0"
 							videoId={cap.id}
 							alt={`${cap.name} Thumbnail`}
 							imageStatus={imageStatus}

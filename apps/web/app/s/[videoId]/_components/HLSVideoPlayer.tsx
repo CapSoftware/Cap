@@ -1,6 +1,7 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
+import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -9,7 +10,23 @@ import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
+import { useUploadProgress } from "./ProgressCircle";
+
+const { circumference } = getProgressCircleConfig();
+
+function getProgressStatusText(
+	status: "uploading" | "processing" | "generating_thumbnail",
+) {
+	switch (status) {
+		case "processing":
+			return "Processing";
+		case "generating_thumbnail":
+			return "Finishing up";
+		default:
+			return "Uploading";
+	}
+}
+
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -270,10 +287,16 @@ export function HLSVideoPlayer({
 		videoId,
 		hasActiveUpload || false,
 	);
-	// if the video comes back from S3, just ignore the upload progress.
 	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
+	const isProcessing = uploadProgress?.status === "processing";
+	const isGeneratingThumbnail =
+		uploadProgress?.status === "generating_thumbnail";
 	const isUploadFailed = uploadProgress?.status === "failed";
+	const isUploadError = uploadProgress?.status === "error";
+	const hasFailedOrError = isUploadFailed || isUploadError;
+	const hasActiveProgress =
+		isUploading || isProcessing || isGeneratingThumbnail;
 
 	return (
 		<MediaPlayer
@@ -287,19 +310,20 @@ export function HLSVideoPlayer({
 			)}
 			autoHide
 		>
-			{isUploadFailed && (
+			{hasFailedOrError && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						Upload failed. Please try re-uploading from the Cap desktop app via
-						Settings {">"} Previous Recordings.
+						{isUploadError
+							? "Processing failed. Please try re-uploading from the Cap desktop app via Settings > Previous Recordings."
+							: "Upload stalled. Please try re-uploading from the Cap desktop app via Settings > Previous Recordings."}
 					</p>
 				</div>
 			)}
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					isUploading || videoLoaded || !isUploadFailed
+					hasActiveProgress || videoLoaded || !hasFailedOrError
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",
 				)}
@@ -309,40 +333,83 @@ export function HLSVideoPlayer({
 				</div>
 			</div>
 			<AnimatePresence>
-				{!videoLoaded && isUploading && (
-					<motion.div
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-[130px] md:size-32"
-					>
-						<ProgressCircle
-							progress={
-								uploadProgress?.status === "uploading"
-									? uploadProgress.progress
-									: 0
-							}
+				{!videoLoaded && hasActiveProgress && (
+					<>
+						<motion.div
+							initial={{ opacity: 0 }}
+							animate={{ opacity: 1 }}
+							exit={{ opacity: 0 }}
+							transition={{ duration: 0.2 }}
+							className="absolute inset-0 z-10 transition-all duration-300 bg-black/60 rounded-xl"
 						/>
-					</motion.div>
+						<motion.div
+							initial={{ opacity: 0, y: 10 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: 10 }}
+							transition={{ duration: 0.2 }}
+							className="flex absolute bottom-3 left-3 gap-2 items-center z-20"
+						>
+							<span className="text-sm font-semibold text-white">
+								{getProgressStatusText(
+									isProcessing
+										? "processing"
+										: isGeneratingThumbnail
+											? "generating_thumbnail"
+											: "uploading",
+								)}
+								{uploadProgress?.progress != null &&
+									uploadProgress.progress > 0 &&
+									` ${Math.round(uploadProgress.progress)}%`}
+							</span>
+							<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
+								<title>Progress</title>
+								<circle
+									cx="10"
+									cy="10"
+									r="8"
+									stroke="currentColor"
+									strokeWidth="3"
+									fill="none"
+									className="text-white/30"
+								/>
+								<circle
+									cx="10"
+									cy="10"
+									r="8"
+									stroke="currentColor"
+									strokeWidth="3"
+									fill="none"
+									strokeLinecap="round"
+									className="text-white transition-all duration-200 ease-out"
+									style={{
+										strokeDasharray: `${circumference} ${circumference}`,
+										strokeDashoffset: `${calculateStrokeDashoffset(uploadProgress?.progress ?? 0, circumference)}`,
+									}}
+								/>
+							</svg>
+						</motion.div>
+					</>
 				)}
-				{showPlayButton && videoLoaded && !hasPlayedOnce && !isUploading && (
-					<motion.div
-						whileHover={{ scale: 1.1 }}
-						whileTap={{ scale: 0.9 }}
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						onClick={() => videoRef.current?.play()}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
-					>
-						<FontAwesomeIcon
-							icon={faPlay}
-							className="text-white size-4 xs:size-8 md:size-12"
-						/>
-					</motion.div>
-				)}
+				{showPlayButton &&
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!hasActiveProgress && (
+						<motion.div
+							whileHover={{ scale: 1.1 }}
+							whileTap={{ scale: 0.9 }}
+							initial={{ opacity: 0, y: 10 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: 10 }}
+							transition={{ duration: 0.2 }}
+							onClick={() => videoRef.current?.play()}
+							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+						>
+							<FontAwesomeIcon
+								icon={faPlay}
+								className="text-white size-4 xs:size-8 md:size-12"
+							/>
+						</motion.div>
+					)}
 			</AnimatePresence>
 			<MediaPlayerVideo
 				src={undefined} // HLS source is handled by HLS.js
@@ -382,7 +449,7 @@ export function HLSVideoPlayer({
 			<MediaPlayerVolumeIndicator />
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
-				isUploadingOrFailed={isUploading || isUploadFailed}
+				isUploadingOrFailed={hasActiveProgress || hasFailedOrError}
 			>
 				<MediaPlayerControlsOverlay />
 				<MediaPlayerSeek />
