@@ -201,7 +201,10 @@ export async function processVideo(
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ): Promise<TempFileHandle> {
-	const opts = { ...DEFAULT_OPTIONS, ...options };
+	const definedOptions = Object.fromEntries(
+		Object.entries(options).filter(([, v]) => v !== undefined),
+	) as VideoProcessingOptions;
+	const opts = { ...DEFAULT_OPTIONS, ...definedOptions };
 	const outputTempFile = await createTempFile(".mp4");
 
 	const videoTranscode = needsVideoTranscode(metadata, opts);
