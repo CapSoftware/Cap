@@ -170,7 +170,8 @@ export async function downloadVideoToTemp(
 			throw new Error("No response body");
 		}
 
-		await Bun.write(tempFile.path, response.body);
+		const arrayBuffer = await response.arrayBuffer();
+		await Bun.write(tempFile.path, arrayBuffer);
 
 		const fileHandle = file(tempFile.path);
 		const fileSize = fileHandle.size;
@@ -412,16 +413,21 @@ export async function generateThumbnail(
 }
 
 export async function uploadToS3(
-	data: Uint8Array | Blob | ReadableStream<Uint8Array>,
+	data: Uint8Array | Blob,
 	presignedUrl: string,
 	contentType: string,
 ): Promise<void> {
+	const blob =
+		data instanceof Blob
+			? data
+			: new Blob([data.buffer as ArrayBuffer], { type: contentType });
 	const response = await fetch(presignedUrl, {
 		method: "PUT",
 		headers: {
 			"Content-Type": contentType,
+			"Content-Length": blob.size.toString(),
 		},
-		body: data,
+		body: blob,
 	});
 
 	if (!response.ok) {
