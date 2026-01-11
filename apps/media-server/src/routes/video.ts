@@ -165,7 +165,7 @@ video.post("/thumbnail", async (c) => {
 			},
 		);
 
-		return new Response(thumbnailData, {
+		return new Response(Buffer.from(thumbnailData), {
 			headers: {
 				"Content-Type": "image/jpeg",
 				"Content-Length": thumbnailData.length.toString(),
