@@ -459,17 +459,16 @@ export async function uploadFileToS3(
 	contentType: string,
 ): Promise<void> {
 	const fileHandle = file(filePath);
-	const stream = fileHandle.stream();
+	const arrayBuffer = await fileHandle.arrayBuffer();
 
 	const response = await fetch(presignedUrl, {
 		method: "PUT",
 		headers: {
 			"Content-Type": contentType,
-			"Content-Length": fileHandle.size.toString(),
+			"Content-Length": arrayBuffer.byteLength.toString(),
 		},
-		body: stream,
-		duplex: "half",
-	} as RequestInit);
+		body: arrayBuffer,
+	});
 
 	if (!response.ok) {
 		throw new Error(
