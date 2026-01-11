@@ -210,7 +210,7 @@ export async function processVideo(
 	const videoTranscode = needsVideoTranscode(metadata, opts);
 	const audioTranscode = needsAudioTranscode(metadata);
 
-	const ffmpegArgs: string[] = ["ffmpeg", "-i", inputPath];
+	const ffmpegArgs: string[] = ["ffmpeg", "-threads", "2", "-i", inputPath];
 
 	if (videoTranscode) {
 		ffmpegArgs.push(
@@ -246,6 +246,8 @@ export async function processVideo(
 		outputTempFile.path,
 	);
 
+	console.log(`[processVideo] Running FFmpeg: ${ffmpegArgs.join(" ")}`);
+
 	const proc = spawn({
 		cmd: ffmpegArgs,
 		stdout: "pipe",
@@ -261,6 +263,9 @@ export async function processVideo(
 		};
 		abortSignal.addEventListener("abort", abortCleanup, { once: true });
 	}
+
+	const stderrLines: string[] = [];
+	const MAX_STDERR_LINES = 50;
 
 	try {
 		await withTimeout(
@@ -284,6 +289,10 @@ export async function processVideo(
 						stderrBuffer = lines.pop() ?? "";
 
 						for (const line of lines) {
+							stderrLines.push(line);
+							if (stderrLines.length > MAX_STDERR_LINES) {
+								stderrLines.shift();
+							}
 							const progress = parseProgressFromStderr(line, totalDurationUs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
@@ -297,7 +306,11 @@ export async function processVideo(
 				const exitCode = await proc.exited;
 
 				if (exitCode !== 0) {
-					throw new Error(`FFmpeg exited with code ${exitCode}`);
+					const stderrOutput = stderrLines.join("\n");
+					console.error(`[processVideo] FFmpeg stderr:\n${stderrOutput}`);
+					throw new Error(
+						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
+					);
 				}
 
 				const outputFile = file(outputTempFile.path);
