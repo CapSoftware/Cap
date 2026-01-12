@@ -1195,10 +1195,12 @@ dependencies = [
  "cap-audio",
  "cap-camera",
  "cap-editor",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-fail",
  "cap-flags",
  "cap-media",
+ "cap-media-info",
  "cap-project",
  "cap-recording",
  "cap-rendering",
@@ -1248,6 +1250,7 @@ dependencies = [
  "specta",
  "specta-typescript",
  "swift-rs",
+ "sysinfo 0.35.2",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
@@ -1336,7 +1339,7 @@ dependencies = [
  "ffmpeg-next",
  "serde",
  "serde_json",
- "sysinfo",
+ "sysinfo 0.32.1",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -1556,6 +1559,7 @@ dependencies = [
  "libc",
  "libproc",
  "objc",
+ "objc2 0.6.2",
  "objc2-app-kit",
  "relative-path",
  "replace_with",
@@ -1571,6 +1575,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "specta",
+ "sysinfo 0.35.2",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -5912,6 +5917,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-io-kit"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71c1c64d6120e51cd86033f67176b1cb66780c2efe34dec55176f77befd93c0a"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-io-surface"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8928,6 +8943,20 @@ dependencies = [
  "ntapi",
  "rayon",
  "windows 0.54.0",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.35.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3ffa3e4ff2b324a57f7aeb3c349656c7b127c3c189520251a648102a92496e"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows 0.61.3",
 ]
 
 [[package]]
