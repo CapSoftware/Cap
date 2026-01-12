@@ -3,10 +3,10 @@ use cap_fail::fail;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CameraShape, CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform,
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
-    StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
+    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta,
+    ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::feeds::camera::CameraFeedLock;
 #[cfg(target_os = "macos")]
@@ -1760,24 +1760,26 @@ fn generate_zoom_segments_from_clicks_impl(
     mut moves: Vec<CursorMoveEvent>,
     max_duration: f64,
 ) -> Vec<ZoomSegment> {
-    const STOP_PADDING_SECONDS: f64 = 0.8;
-    const CLICK_PRE_PADDING: f64 = 0.6;
-    const CLICK_POST_PADDING: f64 = 1.6;
-    const MOVEMENT_PRE_PADDING: f64 = 0.4;
-    const MOVEMENT_POST_PADDING: f64 = 1.2;
-    const MERGE_GAP_THRESHOLD: f64 = 0.6;
-    const MIN_SEGMENT_DURATION: f64 = 1.3;
-    const MOVEMENT_WINDOW_SECONDS: f64 = 1.2;
-    const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.025;
-    const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.1;
+    const STOP_PADDING_SECONDS: f64 = 0.5;
+    const CLICK_GROUP_TIME_THRESHOLD_SECS: f64 = 2.5;
+    const CLICK_GROUP_SPATIAL_THRESHOLD: f64 = 0.15;
+    const CLICK_PRE_PADDING: f64 = 0.4;
+    const CLICK_POST_PADDING: f64 = 1.8;
+    const MOVEMENT_PRE_PADDING: f64 = 0.3;
+    const MOVEMENT_POST_PADDING: f64 = 1.5;
+    const MERGE_GAP_THRESHOLD: f64 = 0.8;
+    const MIN_SEGMENT_DURATION: f64 = 1.0;
+    const MOVEMENT_WINDOW_SECONDS: f64 = 1.5;
+    const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.02;
+    const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.08;
     const AUTO_ZOOM_AMOUNT: f64 = 1.5;
+    const SHAKE_FILTER_THRESHOLD: f64 = 0.33;
+    const SHAKE_FILTER_WINDOW_MS: f64 = 150.0;
 
     if max_duration <= 0.0 {
         return Vec::new();
     }
 
-    // We trim the tail of the recording to avoid using the final
-    // "stop recording" click as a zoom target.
     let activity_end_limit = if max_duration > STOP_PADDING_SECONDS {
         max_duration - STOP_PADDING_SECONDS
     } else {
@@ -1799,7 +1801,6 @@ fn generate_zoom_segments_from_clicks_impl(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Remove trailing click-down events that are too close to the end.
     while let Some(index) = clicks.iter().rposition(|c| c.down) {
         let time_secs = clicks[index].time_ms / 1000.0;
         if time_secs > activity_end_limit {
@@ -1809,16 +1810,77 @@ fn generate_zoom_segments_from_clicks_impl(
         }
     }
 
+    let click_positions: HashMap<usize, (f64, f64)> = clicks
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.down)
+        .filter_map(|(idx, click)| {
+            let click_time = click.time_ms;
+            moves
+                .iter()
+                .rfind(|m| m.time_ms <= click_time)
+                .map(|m| (idx, (m.x, m.y)))
+        })
+        .collect();
+
+    let mut click_groups: Vec<Vec<usize>> = Vec::new();
+    let down_clicks: Vec<(usize, &CursorClickEvent)> = clicks
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.down && c.time_ms / 1000.0 < activity_end_limit)
+        .collect();
+
+    for (idx, click) in &down_clicks {
+        let click_time = click.time_ms / 1000.0;
+        let click_pos = click_positions.get(idx);
+
+        let mut found_group = false;
+        for group in click_groups.iter_mut() {
+            let can_join = group.iter().any(|&group_idx| {
+                let group_click = &clicks[group_idx];
+                let group_time = group_click.time_ms / 1000.0;
+                let time_close = (click_time - group_time).abs() < CLICK_GROUP_TIME_THRESHOLD_SECS;
+
+                let spatial_close = match (click_pos, click_positions.get(&group_idx)) {
+                    (Some((x1, y1)), Some((x2, y2))) => {
+                        let dx = x1 - x2;
+                        let dy = y1 - y2;
+                        (dx * dx + dy * dy).sqrt() < CLICK_GROUP_SPATIAL_THRESHOLD
+                    }
+                    _ => true,
+                };
+
+                time_close && spatial_close
+            });
+
+            if can_join {
+                group.push(*idx);
+                found_group = true;
+                break;
+            }
+        }
+
+        if !found_group {
+            click_groups.push(vec![*idx]);
+        }
+    }
+
     let mut intervals: Vec<(f64, f64)> = Vec::new();
 
-    for click in clicks.into_iter().filter(|c| c.down) {
-        let time = click.time_ms / 1000.0;
-        if time >= activity_end_limit {
+    for group in click_groups {
+        if group.is_empty() {
             continue;
         }
 
-        let start = (time - CLICK_PRE_PADDING).max(0.0);
-        let end = (time + CLICK_POST_PADDING).min(activity_end_limit);
+        let times: Vec<f64> = group
+            .iter()
+            .map(|&idx| clicks[idx].time_ms / 1000.0)
+            .collect();
+        let group_start = times.iter().cloned().fold(f64::INFINITY, f64::min);
+        let group_end = times.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+        let start = (group_start - CLICK_PRE_PADDING).max(0.0);
+        let end = (group_end + CLICK_POST_PADDING).min(activity_end_limit);
 
         if end > start {
             intervals.push((start, end));
@@ -1828,6 +1890,7 @@ fn generate_zoom_segments_from_clicks_impl(
     let mut last_move_by_cursor: HashMap<String, (f64, f64, f64)> = HashMap::new();
     let mut distance_window: VecDeque<(f64, f64)> = VecDeque::new();
     let mut window_distance = 0.0_f64;
+    let mut shake_window: VecDeque<(f64, f64, f64)> = VecDeque::new();
 
     for mv in moves.iter() {
         let time = mv.time_ms / 1000.0;
@@ -1847,6 +1910,40 @@ fn generate_zoom_segments_from_clicks_impl(
 
         if distance <= f64::EPSILON {
             continue;
+        }
+
+        shake_window.push_back((mv.time_ms, mv.x, mv.y));
+        while let Some(&(old_time, _, _)) = shake_window.front() {
+            if mv.time_ms - old_time > SHAKE_FILTER_WINDOW_MS {
+                shake_window.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if shake_window.len() >= 3 {
+            let positions: Vec<(f64, f64)> =
+                shake_window.iter().map(|(_, x, y)| (*x, *y)).collect();
+            let mut direction_changes = 0;
+            for i in 1..positions.len() - 1 {
+                let dx1 = positions[i].0 - positions[i - 1].0;
+                let dy1 = positions[i].1 - positions[i - 1].1;
+                let dx2 = positions[i + 1].0 - positions[i].0;
+                let dy2 = positions[i + 1].1 - positions[i].1;
+
+                if (dx1 * dx2 + dy1 * dy2) < 0.0 {
+                    direction_changes += 1;
+                }
+            }
+
+            let total_dist: f64 = positions
+                .windows(2)
+                .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
+                .sum();
+
+            if direction_changes >= 2 && total_dist < SHAKE_FILTER_THRESHOLD * 3.0 {
+                continue;
+            }
         }
 
         distance_window.push_back((time, distance));
@@ -1910,6 +2007,10 @@ fn generate_zoom_segments_from_clicks_impl(
                 end,
                 amount: AUTO_ZOOM_AMOUNT,
                 mode: ZoomMode::Auto,
+                glide_direction: GlideDirection::None,
+                glide_speed: 0.5,
+                instant_animation: false,
+                edge_snap_ratio: 0.25,
             })
         })
         .collect()

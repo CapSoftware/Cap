@@ -495,7 +495,12 @@ pub fn estimate_input_latency(
             .unwrap_or_else(|| InputLatencyInfo::from_buffer_only(sample_rate, buffer_size_frames))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        windows::estimate_input_latency(sample_rate, buffer_size_frames, device_name)
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = device_name;
         InputLatencyInfo::from_buffer_only(sample_rate, buffer_size_frames)
@@ -732,6 +737,209 @@ mod macos {
             }
             DeviceTransportType::UNKNOWN => OutputTransportKind::Unknown,
             _ => OutputTransportKind::Wired,
+        }
+    }
+}
+
+#[cfg(windows)]
+mod windows {
+    use super::{InputLatencyInfo, OutputTransportKind, WIRELESS_MIN_LATENCY_SECS};
+    use tracing::{debug, trace};
+    use windows::{
+        Win32::Devices::FunctionDiscovery::PKEY_Device_EnumeratorName,
+        Win32::Media::Audio::{
+            DEVICE_STATE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+        },
+        Win32::System::Com::{
+            CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, STGM_READ,
+        },
+        core::PCWSTR,
+    };
+
+    const BLUETOOTH_DEVICE_PATTERNS: &[&str] = &[
+        "airpod",
+        "bluetooth",
+        "bt ",
+        "wireless",
+        "bose",
+        "sony wh",
+        "sony wf",
+        "jabra",
+        "beats",
+        "galaxy buds",
+        "pixel buds",
+        "anker",
+        "jbl ",
+        "soundcore",
+        "tozo",
+        "raycon",
+        "skullcandy",
+        "sennheiser momentum",
+        "audio-technica ath-m50xbt",
+        "marshall",
+        "b&o",
+        "bang & olufsen",
+        "shokz",
+        "aftershokz",
+    ];
+
+    fn is_likely_bluetooth_device(device_name: &str) -> bool {
+        let lower = device_name.to_lowercase();
+        BLUETOOTH_DEVICE_PATTERNS
+            .iter()
+            .any(|pattern| lower.contains(pattern))
+    }
+
+    fn detect_transport_via_mmdevice(device_name: &str) -> Option<OutputTransportKind> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+
+            let collection = enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE(1))
+                .ok()?;
+            let count = collection.GetCount().ok()?;
+
+            for i in 0..count {
+                let device: IMMDevice = match collection.Item(i) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                let props = match device.OpenPropertyStore(STGM_READ) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let friendly_name = get_device_friendly_name(&device);
+                let matches_name = friendly_name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(&device_name.to_lowercase()))
+                    .unwrap_or(false);
+
+                if !matches_name {
+                    continue;
+                }
+
+                if let Ok(bus_enum) = props.GetValue(&PKEY_Device_EnumeratorName) {
+                    let bus_name = bus_enum.Anonymous.Anonymous.Anonymous.pwszVal;
+                    if !bus_name.0.is_null() {
+                        let bus_str = PCWSTR(bus_name.0).to_string().ok()?;
+                        trace!(
+                            device = ?friendly_name,
+                            bus = %bus_str,
+                            "Windows audio device bus enumerator"
+                        );
+
+                        let bus_lower = bus_str.to_lowercase();
+                        if bus_lower.contains("bthenum") || bus_lower.contains("bluetooth") {
+                            debug!(
+                                device = ?friendly_name,
+                                "Detected Bluetooth audio device via Windows API"
+                            );
+                            return Some(OutputTransportKind::Wireless);
+                        }
+                    }
+                }
+
+                return Some(OutputTransportKind::Wired);
+            }
+
+            None
+        }
+    }
+
+    fn get_device_friendly_name(device: &IMMDevice) -> Option<String> {
+        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+
+        unsafe {
+            let props = device.OpenPropertyStore(STGM_READ).ok()?;
+            let name_val = props.GetValue(&PKEY_Device_FriendlyName).ok()?;
+            let name_ptr = name_val.Anonymous.Anonymous.Anonymous.pwszVal;
+            if name_ptr.0.is_null() {
+                return None;
+            }
+            PCWSTR(name_ptr.0).to_string().ok()
+        }
+    }
+
+    pub fn estimate_input_latency(
+        sample_rate: u32,
+        buffer_size_frames: u32,
+        device_name: Option<&str>,
+    ) -> InputLatencyInfo {
+        if sample_rate == 0 {
+            return InputLatencyInfo::new(0.0, 0.0, OutputTransportKind::Unknown);
+        }
+
+        let buffer_latency_secs = buffer_size_frames as f64 / sample_rate as f64;
+
+        let transport_kind = device_name
+            .and_then(|name| {
+                if let Some(transport) = detect_transport_via_mmdevice(name) {
+                    return Some(transport);
+                }
+
+                if is_likely_bluetooth_device(name) {
+                    debug!(
+                        device = %name,
+                        "Detected likely Bluetooth device via name pattern matching"
+                    );
+                    return Some(OutputTransportKind::Wireless);
+                }
+
+                None
+            })
+            .unwrap_or(OutputTransportKind::Unknown);
+
+        let device_latency_secs = match transport_kind {
+            OutputTransportKind::Wireless => {
+                debug!(
+                    device = ?device_name,
+                    latency_ms = WIRELESS_MIN_LATENCY_SECS * 1000.0,
+                    "Using wireless latency for audio device"
+                );
+                WIRELESS_MIN_LATENCY_SECS
+            }
+            _ => 0.01,
+        };
+
+        InputLatencyInfo::new(device_latency_secs, buffer_latency_secs, transport_kind)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn detects_airpods() {
+            assert!(is_likely_bluetooth_device("AirPods Pro"));
+            assert!(is_likely_bluetooth_device("airpods"));
+        }
+
+        #[test]
+        fn detects_generic_bluetooth() {
+            assert!(is_likely_bluetooth_device("Bluetooth Headset"));
+            assert!(is_likely_bluetooth_device("BT Audio"));
+        }
+
+        #[test]
+        fn does_not_detect_wired() {
+            assert!(!is_likely_bluetooth_device("Realtek HD Audio"));
+            assert!(!is_likely_bluetooth_device("USB Microphone"));
+            assert!(!is_likely_bluetooth_device("Blue Yeti"));
+        }
+
+        #[test]
+        fn wireless_mic_gets_higher_latency() {
+            let wireless = estimate_input_latency(48000, 1024, Some("AirPods Pro"));
+            let wired = estimate_input_latency(48000, 1024, Some("USB Microphone"));
+
+            assert!(wireless.device_latency_secs >= WIRELESS_MIN_LATENCY_SECS);
+            assert!(wired.device_latency_secs < WIRELESS_MIN_LATENCY_SECS);
+            assert!(wireless.total_latency_secs > wired.total_latency_secs);
         }
     }
 }

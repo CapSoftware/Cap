@@ -1,7 +1,115 @@
+use serde::Serialize;
+use specta::Type;
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareInfo {
+    pub cpu_brand: String,
+    pub cpu_cores: u32,
+    pub total_memory_mb: u64,
+    pub available_memory_mb: u64,
+    pub architecture: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayDiagnostics {
+    pub id: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate: u32,
+    pub scale_factor: f64,
+    pub is_primary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraDiagnostics {
+    pub device_id: String,
+    pub display_name: String,
+    pub model_id: Option<String>,
+    pub formats: Vec<CameraFormatInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraFormatInfo {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneDiagnostics {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageInfo {
+    pub recordings_path: String,
+    pub available_space_mb: u64,
+    pub total_space_mb: u64,
+}
+
+pub fn collect_hardware_info() -> HardwareInfo {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
+
+    HardwareInfo {
+        cpu_brand: sys
+            .cpus()
+            .first()
+            .map(|c| c.brand().to_string())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        cpu_cores: sys.cpus().len() as u32,
+        total_memory_mb: sys.total_memory() / (1024 * 1024),
+        available_memory_mb: sys.available_memory() / (1024 * 1024),
+        architecture: std::env::consts::ARCH.to_string(),
+    }
+}
+
+pub fn collect_displays() -> Vec<DisplayDiagnostics> {
+    let displays = crate::screen_capture::list_displays();
+
+    displays
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (cap_display, display))| {
+            let physical_size = display.physical_size();
+            let logical_size = display.logical_size();
+
+            let (width, height) = physical_size
+                .map(|s| (s.width() as u32, s.height() as u32))
+                .unwrap_or((0, 0));
+
+            let scale_factor = match (physical_size, logical_size) {
+                (Some(phys), Some(log)) if log.width() > 0.0 => phys.width() / log.width(),
+                _ => 1.0,
+            };
+
+            DisplayDiagnostics {
+                id: cap_display.id.to_string(),
+                name: cap_display.name,
+                width,
+                height,
+                refresh_rate: cap_display.refresh_rate,
+                scale_factor,
+                is_primary: idx == 0,
+            }
+        })
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use serde::Serialize;
-    use specta::Type;
+    use super::*;
 
     #[derive(Debug, Clone, Serialize, Type)]
     #[serde(rename_all = "camelCase")]
@@ -275,13 +383,17 @@ mod windows_impl {
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use serde::Serialize;
-    use specta::Type;
+    use super::*;
 
     #[derive(Debug, Clone, Serialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct MacOSVersionInfo {
+        pub major: u32,
+        pub minor: u32,
+        pub patch: u32,
         pub display_name: String,
+        pub build_number: String,
+        pub is_apple_silicon: bool,
     }
 
     #[derive(Debug, Clone, Serialize, Type)]
@@ -290,19 +402,122 @@ mod macos_impl {
         pub macos_version: Option<MacOSVersionInfo>,
         pub available_encoders: Vec<String>,
         pub screen_capture_supported: bool,
+        pub metal_supported: bool,
+        pub gpu_name: Option<String>,
     }
 
     pub fn collect_diagnostics() -> SystemDiagnostics {
+        let macos_version = get_macos_version();
         let available_encoders = get_available_encoders();
+        let metal_supported = check_metal_support();
+        let gpu_name = get_gpu_name();
 
         tracing::info!("System Diagnostics:");
+        if let Some(ref ver) = macos_version {
+            tracing::info!(
+                "  macOS: {} (Build {}), Apple Silicon: {}",
+                ver.display_name,
+                ver.build_number,
+                ver.is_apple_silicon
+            );
+        }
+        if let Some(ref gpu) = gpu_name {
+            tracing::info!("  GPU: {}", gpu);
+        }
+        tracing::info!("  Metal: {}", metal_supported);
         tracing::info!("  Encoders: {:?}", available_encoders);
 
         SystemDiagnostics {
-            macos_version: None,
+            macos_version,
             available_encoders,
             screen_capture_supported: true,
+            metal_supported,
+            gpu_name,
         }
+    }
+
+    fn get_macos_version() -> Option<MacOSVersionInfo> {
+        use std::process::Command;
+
+        let version_output = Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        let version_str = String::from_utf8_lossy(&version_output.stdout);
+        let version_str = version_str.trim();
+
+        let parts: Vec<u32> = version_str
+            .split('.')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+
+        let (major, minor, patch) = match parts.as_slice() {
+            [maj, min, pat, ..] => (*maj, *min, *pat),
+            [maj, min] => (*maj, *min, 0),
+            [maj] => (*maj, 0, 0),
+            _ => return None,
+        };
+
+        let build_output = Command::new("sw_vers").arg("-buildVersion").output().ok()?;
+        let build_number = String::from_utf8_lossy(&build_output.stdout)
+            .trim()
+            .to_string();
+
+        let is_apple_silicon = std::env::consts::ARCH == "aarch64";
+
+        let display_name = format!(
+            "macOS {}.{}.{} ({})",
+            major,
+            minor,
+            patch,
+            if is_apple_silicon {
+                "Apple Silicon"
+            } else {
+                "Intel"
+            }
+        );
+
+        Some(MacOSVersionInfo {
+            major,
+            minor,
+            patch,
+            display_name,
+            build_number,
+            is_apple_silicon,
+        })
+    }
+
+    fn check_metal_support() -> bool {
+        std::env::consts::ARCH == "aarch64"
+            || std::process::Command::new("system_profiler")
+                .args(["SPDisplaysDataType"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains("Metal"))
+                .unwrap_or(false)
+    }
+
+    fn get_gpu_name() -> Option<String> {
+        use std::process::Command;
+
+        let output = Command::new("system_profiler")
+            .args(["SPDisplaysDataType", "-json"])
+            .output()
+            .ok()?;
+
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+
+        json.get("SPDisplaysDataType")?
+            .as_array()?
+            .first()?
+            .get("sppci_model")
+            .or_else(|| {
+                json.get("SPDisplaysDataType")?
+                    .as_array()?
+                    .first()?
+                    .get("_name")
+            })?
+            .as_str()
+            .map(|s| s.to_string())
     }
 
     fn get_available_encoders() -> Vec<String> {

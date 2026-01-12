@@ -304,6 +304,8 @@ pub struct Camera {
     pub shape: CameraShape,
     #[serde(alias = "rounding_type")]
     pub rounding_type: CornerStyle,
+    #[serde(default = "Camera::default_scale_during_zoom")]
+    pub scale_during_zoom: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -321,6 +323,10 @@ impl Camera {
 
     fn default_rounding() -> f32 {
         100.0
+    }
+
+    fn default_scale_during_zoom() -> f32 {
+        0.7
     }
 }
 
@@ -341,6 +347,7 @@ impl Default for Camera {
             }),
             shape: CameraShape::Square,
             rounding_type: CornerStyle::default(),
+            scale_during_zoom: Self::default_scale_during_zoom(),
         }
     }
 }
@@ -412,18 +419,54 @@ pub struct CursorSmoothingPreset {
     pub friction: f32,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClickSpringConfig {
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+}
+
+impl Default for ClickSpringConfig {
+    fn default() -> Self {
+        Self {
+            tension: 700.0,
+            mass: 1.0,
+            friction: 30.0,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenMovementSpring {
+    pub stiffness: f32,
+    pub damping: f32,
+    pub mass: f32,
+}
+
+impl Default for ScreenMovementSpring {
+    fn default() -> Self {
+        Self {
+            stiffness: 200.0,
+            damping: 40.0,
+            mass: 2.25,
+        }
+    }
+}
+
 impl CursorAnimationStyle {
     pub fn preset(self) -> Option<CursorSmoothingPreset> {
         match self {
             Self::Slow => Some(CursorSmoothingPreset {
-                tension: 65.0,
-                mass: 1.8,
-                friction: 16.0,
+                tension: 200.0,
+                mass: 2.25,
+                friction: 40.0,
             }),
             Self::Mellow => Some(CursorSmoothingPreset {
-                tension: 120.0,
-                mass: 1.1,
-                friction: 18.0,
+                tension: 470.0,
+                mass: 3.0,
+                friction: 70.0,
             }),
             Self::Custom => None,
         }
@@ -445,6 +488,14 @@ pub struct CursorConfiguration {
     pub raw: bool,
     pub motion_blur: f32,
     pub use_svg: bool,
+    #[serde(default = "CursorConfiguration::default_rotation_amount")]
+    pub rotation_amount: f32,
+    #[serde(default)]
+    pub base_rotation: f32,
+    #[serde(default)]
+    pub click_spring: Option<ClickSpringConfig>,
+    #[serde(default)]
+    pub stop_movement_in_last_seconds: Option<f32>,
 }
 
 impl Default for CursorConfiguration {
@@ -454,15 +505,19 @@ impl Default for CursorConfiguration {
             hide: false,
             hide_when_idle: false,
             hide_when_idle_delay: Self::default_hide_when_idle_delay(),
-            size: 100,
+            size: 150,
             r#type: CursorType::default(),
             animation_style,
-            tension: 65.0,
-            mass: 1.8,
-            friction: 16.0,
-            raw: true,
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+            raw: false,
             motion_blur: 0.5,
             use_svg: true,
+            rotation_amount: Self::default_rotation_amount(),
+            base_rotation: 0.0,
+            click_spring: None,
+            stop_movement_in_last_seconds: None,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -479,8 +534,16 @@ impl CursorConfiguration {
         2.0
     }
 
+    fn default_rotation_amount() -> f32 {
+        0.5
+    }
+
     pub fn cursor_type(&self) -> &CursorType {
         &self.r#type
+    }
+
+    pub fn click_spring_config(&self) -> ClickSpringConfig {
+        self.click_spring.unwrap_or_default()
     }
 }
 
@@ -515,6 +578,17 @@ impl TimelineSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum GlideDirection {
+    #[default]
+    None,
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSegment {
@@ -522,6 +596,24 @@ pub struct ZoomSegment {
     pub end: f64,
     pub amount: f64,
     pub mode: ZoomMode,
+    #[serde(default)]
+    pub glide_direction: GlideDirection,
+    #[serde(default = "ZoomSegment::default_glide_speed")]
+    pub glide_speed: f64,
+    #[serde(default)]
+    pub instant_animation: bool,
+    #[serde(default = "ZoomSegment::default_edge_snap_ratio")]
+    pub edge_snap_ratio: f64,
+}
+
+impl ZoomSegment {
+    fn default_glide_speed() -> f64 {
+        0.5
+    }
+
+    fn default_edge_snap_ratio() -> f64 {
+        0.25
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -995,6 +1087,10 @@ pub struct ProjectConfiguration {
     pub annotations: Vec<Annotation>,
     #[serde(skip_serializing)]
     pub hidden_text_segments: Vec<usize>,
+    #[serde(default = "ProjectConfiguration::default_screen_motion_blur")]
+    pub screen_motion_blur: f32,
+    #[serde(default)]
+    pub screen_movement_spring: ScreenMovementSpring,
 }
 
 fn camera_config_needs_migration(value: &Value) -> bool {
@@ -1009,6 +1105,10 @@ fn camera_config_needs_migration(value: &Value) -> bool {
 }
 
 impl ProjectConfiguration {
+    fn default_screen_motion_blur() -> f32 {
+        0.5
+    }
+
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {
         for annotation in &self.annotations {
             annotation.validate()?;

@@ -41,7 +41,7 @@ impl AudioSource for Microphone {
             let audio_info = source_info.with_max_channels(MICROPHONE_TARGET_CHANNELS);
             let source_channels = source_info.channels;
             let target_channels = audio_info.channels;
-            let (tx, rx) = flume::bounded(8);
+            let (tx, rx) = flume::bounded(32);
 
             feed_lock
                 .ask(microphone::AddSender(tx))

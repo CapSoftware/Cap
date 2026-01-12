@@ -15,10 +15,10 @@ use tracing::{debug, info, warn};
 
 use crate::output_pipeline::AudioFrame;
 
-const DEFAULT_BUFFER_TIMEOUT: Duration = Duration::from_millis(80);
+const DEFAULT_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
 const MIN_BUFFER_TIMEOUT: Duration = Duration::from_millis(20);
-const MAX_BUFFER_TIMEOUT: Duration = Duration::from_millis(180);
-const BUFFER_TIMEOUT_HEADROOM: f64 = 2.0;
+const MAX_BUFFER_TIMEOUT: Duration = Duration::from_millis(250);
+const BUFFER_TIMEOUT_HEADROOM: f64 = 2.5;
 
 // Wait TICK_MS for frames to arrive
 // Assume all sources' frames for that tick have arrived after TICK_MS

@@ -5,7 +5,7 @@ use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
-use log::{debug, warn};
+use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
@@ -380,7 +380,6 @@ impl CaptionsLayer {
     }
 
     pub fn update_caption(&mut self, text: Option<String>, start: f32, end: f32) {
-        debug!("Updating caption - Text: {text:?}, Start: {start}, End: {end}");
         self.current_text = text;
         self.current_segment_start = start;
         self.current_segment_end = end;

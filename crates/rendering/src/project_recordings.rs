@@ -26,19 +26,47 @@ impl Video {
                 .best(ffmpeg::media::Type::Video)
                 .ok_or_else(|| "No video stream found".to_string())?;
 
-            let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-                .map_err(|e| format!("Failed to create decoder: {e}"))?
+            let decoder_ctx = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+            let decoder = decoder_ctx
                 .decoder()
                 .video()
                 .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
+            let width = decoder.width();
+            let height = decoder.height();
+
+            if width == 0 || height == 0 {
+                return Err("Invalid video dimensions".to_string());
+            }
+
             let rate = stream.avg_frame_rate();
-            let fps = rate.numerator() as f64 / rate.denominator() as f64;
+            let fps = if rate.denominator() != 0 {
+                rate.numerator() as f64 / rate.denominator() as f64
+            } else {
+                30.0
+            };
+
+            let duration = {
+                let container_duration = input.duration();
+                if container_duration > 0 {
+                    container_duration as f64 / 1_000_000.0
+                } else {
+                    let stream_duration = stream.duration();
+                    let time_base = stream.time_base();
+                    if stream_duration > 0 && time_base.denominator() > 0 {
+                        stream_duration as f64 * time_base.numerator() as f64
+                            / time_base.denominator() as f64
+                    } else {
+                        return Err("Could not determine video duration".to_string());
+                    }
+                }
+            };
 
             Ok(Video {
-                width: video_decoder.width(),
-                height: video_decoder.height(),
-                duration: input.duration() as f64 / 1_000_000.0,
+                width,
+                height,
+                duration,
                 fps: fps.round() as u32,
                 start_time,
             })

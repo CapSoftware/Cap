@@ -16,6 +16,17 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 

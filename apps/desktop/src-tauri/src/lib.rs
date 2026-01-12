@@ -16,6 +16,7 @@ mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod http_client;
+mod import;
 mod logging;
 mod notifications;
 mod permissions;
@@ -1024,7 +1025,7 @@ async fn get_current_recording(
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
 pub struct CurrentRecordingChanged;
 
-async fn create_screenshot(
+pub(crate) async fn create_screenshot(
     input: PathBuf,
     output: PathBuf,
     size: Option<(u32, u32)>,
@@ -1466,6 +1467,12 @@ async fn get_editor_project_path(window: Window) -> Result<PathBuf, String> {
 async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
     let path = editor.project_path.clone();
     RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_recording_meta_by_path(project_path: PathBuf) -> Result<RecordingMeta, String> {
+    RecordingMeta::load_for_project(&project_path).map_err(|e| e.to_string())
 }
 #[tauri::command]
 #[specta::specta]
@@ -2578,6 +2585,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
+            import::start_video_import,
+            import::check_import_ready,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -2627,6 +2636,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
+            get_recording_meta_by_path,
             set_pretty_name,
             set_server_url,
             set_camera_preview_state,
@@ -2673,6 +2683,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
+            import::VideoImportProgress,
             SetCaptureAreaPending,
             DevicesUpdated,
         ])
@@ -2782,6 +2793,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::RecordingControls.label().as_str(),
                     CapWindowId::Upgrade.label().as_str(),
+                    "editor",
+                    "screenshot-editor",
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
@@ -3434,6 +3447,45 @@ async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), St
             return Err(format!("Failed to load recording meta: {e}"));
         }
     };
+
+    if let Some(studio_meta) = meta.studio_meta()
+        && matches!(studio_meta.status(), StudioRecordingStatus::InProgress)
+    {
+        info!("Recording/import is in progress, waiting for completion...");
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+        const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+        let start = std::time::Instant::now();
+
+        loop {
+            if start.elapsed() > MAX_WAIT {
+                return Err("Timed out waiting for import to complete".to_string());
+            }
+
+            tokio::time::sleep(POLL_INTERVAL).await;
+
+            let current_meta = match RecordingMeta::load_for_project(path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            if let Some(current_studio) = current_meta.studio_meta() {
+                match current_studio.status() {
+                    StudioRecordingStatus::Complete => {
+                        info!("Recording/import completed");
+                        break;
+                    }
+                    StudioRecordingStatus::Failed { error } => {
+                        return Err(format!("Import failed: {error}"));
+                    }
+                    StudioRecordingStatus::InProgress => continue,
+                    StudioRecordingStatus::NeedsRemux => break,
+                }
+            }
+        }
+    }
+
+    let meta = RecordingMeta::load_for_project(path)
+        .map_err(|e| format!("Failed to reload recording meta: {e}"))?;
 
     if let Some(studio_meta) = meta.studio_meta()
         && recording::needs_fragment_remux(path, studio_meta)

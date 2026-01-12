@@ -35,6 +35,7 @@ clap = { version = "4.5.41", features = ["derive"] }
 directories = "6.0.0"
 inquire = "0.7.5"
 tokio.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

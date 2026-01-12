@@ -4,8 +4,31 @@ use tokio::runtime::Handle as TokioHandle;
 
 use cap_video_decode::avassetreader::KeyframeIndex;
 
-pub const MAX_DECODER_POOL_SIZE: usize = 3;
-pub const REPOSITION_THRESHOLD_SECS: f32 = 2.5;
+pub const BASE_DECODER_POOL_SIZE: usize = 5;
+pub const MAX_DECODER_POOL_SIZE: usize = 8;
+pub const BASE_REPOSITION_THRESHOLD_SECS: f32 = 5.0;
+pub const LONG_VIDEO_THRESHOLD_SECS: f64 = 600.0;
+pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f64 = 1800.0;
+
+pub fn calculate_optimal_pool_size(duration_secs: f64) -> usize {
+    if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
+        MAX_DECODER_POOL_SIZE
+    } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
+        BASE_DECODER_POOL_SIZE + 2
+    } else {
+        BASE_DECODER_POOL_SIZE
+    }
+}
+
+pub fn calculate_reposition_threshold(duration_secs: f64) -> f32 {
+    if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
+        10.0
+    } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
+        7.0
+    } else {
+        BASE_REPOSITION_THRESHOLD_SECS
+    }
+}
 
 pub struct DecoderPosition {
     pub id: usize,
@@ -43,11 +66,15 @@ pub struct DecoderPoolManager {
     positions: Vec<DecoderPosition>,
     access_history: BTreeMap<u32, u64>,
     total_accesses: u64,
+    reposition_threshold: f32,
+    optimal_pool_size: usize,
 }
 
 impl DecoderPoolManager {
     pub fn new(config: MultiPositionDecoderConfig) -> Self {
-        let initial_positions = Self::calculate_initial_positions(&config);
+        let optimal_pool_size = calculate_optimal_pool_size(config.duration_secs);
+        let reposition_threshold = calculate_reposition_threshold(config.duration_secs);
+        let initial_positions = Self::calculate_initial_positions(&config, optimal_pool_size);
 
         let positions: Vec<DecoderPosition> = initial_positions
             .into_iter()
@@ -55,31 +82,51 @@ impl DecoderPoolManager {
             .map(|(id, pos)| DecoderPosition::new(id, pos))
             .collect();
 
+        tracing::info!(
+            duration_secs = config.duration_secs,
+            optimal_pool_size = optimal_pool_size,
+            reposition_threshold = reposition_threshold,
+            "Configured decoder pool for video duration"
+        );
+
         Self {
             config,
             positions,
             access_history: BTreeMap::new(),
             total_accesses: 0,
+            reposition_threshold,
+            optimal_pool_size,
         }
     }
 
-    fn calculate_initial_positions(config: &MultiPositionDecoderConfig) -> Vec<f32> {
+    fn calculate_initial_positions(
+        config: &MultiPositionDecoderConfig,
+        pool_size: usize,
+    ) -> Vec<f32> {
         if let Some(ref kf_index) = config.keyframe_index {
-            let strategic = kf_index.get_strategic_positions(MAX_DECODER_POOL_SIZE);
+            let strategic = kf_index.get_strategic_positions(pool_size);
             strategic.into_iter().map(|t| t as f32).collect()
         } else {
             let duration = config.duration_secs as f32;
             if duration <= 0.0 {
                 vec![0.0]
             } else {
-                (0..MAX_DECODER_POOL_SIZE)
+                (0..pool_size)
                     .map(|i| {
-                        let frac = i as f32 / MAX_DECODER_POOL_SIZE as f32;
+                        let frac = i as f32 / pool_size as f32;
                         (duration * frac).min(duration)
                     })
                     .collect()
             }
         }
+    }
+
+    pub fn optimal_pool_size(&self) -> usize {
+        self.optimal_pool_size
+    }
+
+    pub fn reposition_threshold(&self) -> f32 {
+        self.reposition_threshold
     }
 
     pub fn find_best_decoder_for_time(&mut self, requested_time: f32) -> (usize, f32, bool) {
@@ -95,7 +142,7 @@ impl DecoderPoolManager {
         for position in &self.positions {
             let distance = (position.position_secs - requested_time).abs();
             let is_usable = position.position_secs <= requested_time
-                && (requested_time - position.position_secs) < REPOSITION_THRESHOLD_SECS;
+                && (requested_time - position.position_secs) < self.reposition_threshold;
 
             if is_usable && distance < best_distance {
                 best_distance = distance;
@@ -145,13 +192,13 @@ impl DecoderPoolManager {
 
         let top_hotspots: Vec<f32> = hotspots
             .into_iter()
-            .take(MAX_DECODER_POOL_SIZE)
+            .take(self.optimal_pool_size)
             .map(|(frame, _)| frame as f32 / self.config.fps as f32)
             .collect();
 
-        if top_hotspots.len() < MAX_DECODER_POOL_SIZE {
+        if top_hotspots.len() < self.optimal_pool_size {
             let mut result = top_hotspots;
-            let remaining = MAX_DECODER_POOL_SIZE - result.len();
+            let remaining = self.optimal_pool_size - result.len();
             let duration = self.config.duration_secs as f32;
             for i in 0..remaining {
                 let frac = (i + 1) as f32 / (remaining + 1) as f32;
@@ -178,11 +225,13 @@ pub struct ScrubDetector {
     request_rate: f64,
     is_scrubbing: bool,
     scrub_start_time: Option<std::time::Instant>,
+    last_frame_delta: u32,
 }
 
 impl ScrubDetector {
-    const SCRUB_THRESHOLD_RATE: f64 = 5.0;
-    const SCRUB_COOLDOWN_MS: u64 = 150;
+    const SCRUB_FRAME_JUMP_THRESHOLD: u32 = 5;
+    const SCRUB_COOLDOWN_MS: u64 = 100;
+    const SEQUENTIAL_PLAYBACK_THRESHOLD: u32 = 2;
 
     pub fn new() -> Self {
         Self {
@@ -191,6 +240,7 @@ impl ScrubDetector {
             request_rate: 0.0,
             is_scrubbing: false,
             scrub_start_time: None,
+            last_frame_delta: 0,
         }
     }
 
@@ -200,13 +250,15 @@ impl ScrubDetector {
         let elapsed_secs = elapsed.as_secs_f64().max(0.001);
 
         let frame_delta = frame.abs_diff(self.last_frame);
+        self.last_frame_delta = frame_delta;
 
         let instantaneous_rate = frame_delta as f64 / elapsed_secs;
         self.request_rate = self.request_rate * 0.7 + instantaneous_rate * 0.3;
 
-        let _was_scrubbing = self.is_scrubbing;
-
-        if self.request_rate > Self::SCRUB_THRESHOLD_RATE && frame_delta > 1 {
+        if frame_delta <= Self::SEQUENTIAL_PLAYBACK_THRESHOLD {
+            self.is_scrubbing = false;
+            self.scrub_start_time = None;
+        } else if frame_delta >= Self::SCRUB_FRAME_JUMP_THRESHOLD {
             self.is_scrubbing = true;
             if self.scrub_start_time.is_none() {
                 self.scrub_start_time = Some(now);
@@ -226,6 +278,18 @@ impl ScrubDetector {
         self.is_scrubbing
     }
 
+    pub fn request_rate(&self) -> f64 {
+        self.request_rate
+    }
+
+    pub fn last_frame(&self) -> u32 {
+        self.last_frame
+    }
+
+    pub fn last_frame_delta(&self) -> u32 {
+        self.last_frame_delta
+    }
+
     pub fn scrub_duration(&self) -> Option<std::time::Duration> {
         self.scrub_start_time.map(|start| start.elapsed())
     }
@@ -234,5 +298,74 @@ impl ScrubDetector {
 impl Default for ScrubDetector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_optimal_pool_size_short_video() {
+        assert_eq!(calculate_optimal_pool_size(60.0), BASE_DECODER_POOL_SIZE);
+        assert_eq!(calculate_optimal_pool_size(300.0), BASE_DECODER_POOL_SIZE);
+        assert_eq!(calculate_optimal_pool_size(599.0), BASE_DECODER_POOL_SIZE);
+    }
+
+    #[test]
+    fn test_calculate_optimal_pool_size_long_video() {
+        assert_eq!(
+            calculate_optimal_pool_size(600.0),
+            BASE_DECODER_POOL_SIZE + 2
+        );
+        assert_eq!(
+            calculate_optimal_pool_size(1200.0),
+            BASE_DECODER_POOL_SIZE + 2
+        );
+        assert_eq!(
+            calculate_optimal_pool_size(1799.0),
+            BASE_DECODER_POOL_SIZE + 2
+        );
+    }
+
+    #[test]
+    fn test_calculate_optimal_pool_size_very_long_video() {
+        assert_eq!(calculate_optimal_pool_size(1800.0), MAX_DECODER_POOL_SIZE);
+        assert_eq!(calculate_optimal_pool_size(3600.0), MAX_DECODER_POOL_SIZE);
+        assert_eq!(calculate_optimal_pool_size(7200.0), MAX_DECODER_POOL_SIZE);
+    }
+
+    #[test]
+    fn test_calculate_reposition_threshold_short_video() {
+        assert_eq!(
+            calculate_reposition_threshold(60.0),
+            BASE_REPOSITION_THRESHOLD_SECS
+        );
+        assert_eq!(
+            calculate_reposition_threshold(300.0),
+            BASE_REPOSITION_THRESHOLD_SECS
+        );
+    }
+
+    #[test]
+    fn test_calculate_reposition_threshold_long_video() {
+        assert_eq!(calculate_reposition_threshold(600.0), 7.0);
+        assert_eq!(calculate_reposition_threshold(1200.0), 7.0);
+    }
+
+    #[test]
+    fn test_calculate_reposition_threshold_very_long_video() {
+        assert_eq!(calculate_reposition_threshold(1800.0), 10.0);
+        assert_eq!(calculate_reposition_threshold(3600.0), 10.0);
+    }
+
+    #[test]
+    fn test_55_minute_video_gets_max_decoders() {
+        let duration_55_min = 55.0 * 60.0;
+        assert_eq!(
+            calculate_optimal_pool_size(duration_55_min),
+            MAX_DECODER_POOL_SIZE
+        );
+        assert_eq!(calculate_reposition_threshold(duration_55_min), 10.0);
     }
 }

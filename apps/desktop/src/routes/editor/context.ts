@@ -788,6 +788,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 		const [isWorkerReady, setIsWorkerReady] = createSignal(false);
 		const [canvasControls, setCanvasControls] =
 			createSignal<CanvasControls | null>(null);
+		const [performanceMode, setPerformanceMode] = createSignal(false);
 
 		let disposeWorkerReadyEffect: (() => void) | undefined;
 
@@ -796,49 +797,74 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			cleanupCropVideoPreloader();
 		});
 
-		const [editorInstance] = createResource(async () => {
-			console.log("[Editor] Creating editor instance...");
-			const instance = await commands.createEditorInstance();
-			console.log("[Editor] Editor instance created, setting up WebSocket");
+		const [editorInstance, { refetch: refetchEditorInstance }] = createResource(
+			async () => {
+				console.log("[Editor] Creating editor instance...");
 
-			preloadCropVideoMetadata(
-				`${instance.path}/content/segments/segment-0/display.mp4`,
-			);
+				let instance;
+				let lastError;
+				for (let attempt = 0; attempt < 5; attempt++) {
+					try {
+						instance = await commands.createEditorInstance();
+						break;
+					} catch (e) {
+						lastError = e;
+						console.warn(
+							`[Editor] Attempt ${attempt + 1}/5 failed:`,
+							e,
+							"- retrying...",
+						);
+						await new Promise((resolve) =>
+							setTimeout(resolve, 500 * (attempt + 1)),
+						);
+					}
+				}
 
-			const requestFrame = () => {
-				events.renderFrameEvent.emit({
-					frame_number: 0,
-					fps: FPS,
-					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
+				if (!instance) {
+					throw lastError;
+				}
+
+				console.log("[Editor] Editor instance created, setting up WebSocket");
+
+				preloadCropVideoMetadata(
+					`${instance.path}/content/segments/segment-0/display.mp4`,
+				);
+
+				const requestFrame = () => {
+					events.renderFrameEvent.emit({
+						frame_number: 0,
+						fps: FPS,
+						resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
+					});
+				};
+
+				const [ws, _wsConnected, workerReady, controls] = createImageDataWS(
+					instance.framesSocketUrl,
+					setLatestFrame,
+					requestFrame,
+				);
+
+				setCanvasControls(controls);
+
+				disposeWorkerReadyEffect = createRoot((dispose) => {
+					createEffect(() => {
+						setIsWorkerReady(workerReady());
+					});
+					return dispose;
 				});
-			};
 
-			const [ws, _wsConnected, workerReady, controls] = createImageDataWS(
-				instance.framesSocketUrl,
-				setLatestFrame,
-				requestFrame,
-			);
-
-			setCanvasControls(controls);
-
-			disposeWorkerReadyEffect = createRoot((dispose) => {
-				createEffect(() => {
-					setIsWorkerReady(workerReady());
+				ws.addEventListener("open", () => {
+					setIsConnected(true);
+					requestFrame();
 				});
-				return dispose;
-			});
 
-			ws.addEventListener("open", () => {
-				setIsConnected(true);
-				requestFrame();
-			});
+				ws.addEventListener("close", () => {
+					setIsConnected(false);
+				});
 
-			ws.addEventListener("close", () => {
-				setIsConnected(false);
-			});
-
-			return instance;
-		});
+				return instance;
+			},
+		);
 
 		const metaQuery = createQuery(() => ({
 			queryKey: ["editor", "meta"],
@@ -851,11 +877,14 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
 		return {
 			editorInstance,
+			refetchEditorInstance,
 			latestFrame,
 			presets: createPresets(),
 			metaQuery,
 			isWorkerReady,
 			canvasControls,
+			performanceMode,
+			setPerformanceMode,
 		};
 	}, null!);
 
