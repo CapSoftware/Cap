@@ -446,7 +446,7 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
-pub const FRAME_CACHE_SIZE: usize = 60;
+pub const FRAME_CACHE_SIZE: usize = 180;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
@@ -468,12 +468,12 @@ impl AsyncVideoDecoderHandle {
             return None;
         }
 
-        match tokio::time::timeout(std::time::Duration::from_millis(1000), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_millis(2000), rx).await {
             Ok(result) => result.ok(),
             Err(_) => {
                 tracing::warn!(
                     time = adjusted_time,
-                    "Frame decode request timed out after 1000ms"
+                    "Frame decode request timed out after 2000ms"
                 );
                 None
             }
