@@ -66,6 +66,8 @@ pub enum QueueFrameError {
     NotReadyForMore,
     #[error("NoEncoder")]
     NoEncoder,
+    #[error("ResamplingFailed/{0}")]
+    ResamplingFailed(ffmpeg::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -377,9 +379,31 @@ impl MP4Encoder {
         let processed_frame: std::borrow::Cow<'_, frame::Audio> =
             if let Some(resampler) = &mut self.audio_resampler {
                 let mut resampled = frame::Audio::empty();
-                resampler.run(frame, &mut resampled).ok();
-                resampled.set_rate(self.audio_output_rate);
-                std::borrow::Cow::Owned(resampled)
+                match resampler.run(frame, &mut resampled) {
+                    Ok(_) => {
+                        resampled.set_rate(self.audio_output_rate);
+                        if resampled.samples() == 0 {
+                            warn!(
+                                input_samples = frame.samples(),
+                                input_rate = frame.rate(),
+                                output_rate = self.audio_output_rate,
+                                "Audio resampling produced 0 samples"
+                            );
+                            return Ok(());
+                        }
+                        std::borrow::Cow::Owned(resampled)
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            input_samples = frame.samples(),
+                            input_rate = frame.rate(),
+                            output_rate = self.audio_output_rate,
+                            "Audio resampling failed"
+                        );
+                        return Err(QueueFrameError::ResamplingFailed(e));
+                    }
+                }
             } else {
                 std::borrow::Cow::Borrowed(frame)
             };
@@ -387,6 +411,11 @@ impl MP4Encoder {
         let frame = processed_frame.as_ref();
 
         if frame.samples() == 0 {
+            warn!(
+                rate = frame.rate(),
+                channels = frame.channels(),
+                "Received audio frame with 0 samples, skipping"
+            );
             return Ok(());
         }
 
