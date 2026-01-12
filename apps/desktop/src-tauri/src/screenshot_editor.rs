@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
-    RendererLayers,
+    RendererLayers, ZoomFocusInterpolator,
 };
 use image::{GenericImageView, RgbImage, buffer::ConvertBuffer};
 use relative_path::RelativePathBuf;
@@ -335,14 +335,24 @@ impl ScreenshotEditorInstances {
                         let (base_w, base_h) =
                             ProjectUniforms::get_base_size(&constants.options, &current_config);
 
+                        let cursor_events = cap_project::CursorEvents::default();
+                        let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+                            &cursor_events,
+                            None,
+                            current_config.screen_movement_spring,
+                            0.0,
+                        );
+
                         let uniforms = ProjectUniforms::new(
                             &constants,
                             &current_config,
                             0,
                             30,
                             cap_project::XY::new(base_w, base_h),
-                            &cap_project::CursorEvents::default(),
+                            &cursor_events,
                             &segment_frames,
+                            0.0,
+                            &zoom_focus_interpolator,
                         );
 
                         let rendered_frame = frame_renderer
