@@ -10,7 +10,7 @@ use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::Ordering},
 };
 use tracing::{info, instrument};
@@ -32,11 +32,13 @@ impl ExportSettings {
 }
 
 async fn do_export(
-    project_path: &PathBuf,
+    project_path: &Path,
     settings: &ExportSettings,
     progress: &tauri::ipc::Channel<FramesRendered>,
+    force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
-    let exporter_base = ExporterBase::builder(project_path.clone())
+    let exporter_base = ExporterBase::builder(project_path.to_path_buf())
+        .with_force_ffmpeg_decoder(force_ffmpeg)
         .build()
         .await
         .map_err(|e| e.to_string())?;
@@ -80,7 +82,6 @@ async fn do_export(
 
 fn is_frame_decode_error(error: &str) -> bool {
     error.contains("Failed to decode video frames")
-        || error.contains("FrameDecodeFailed")
         || error.contains("Too many consecutive frame failures")
 }
 
@@ -96,13 +97,11 @@ pub async fn export_video(
         ExportSettings::Mp4(s) => s.force_ffmpeg_decoder,
         ExportSettings::Gif(_) => false,
     };
-    cap_rendering::set_force_ffmpeg_decoder(force_ffmpeg);
 
-    let result = do_export(&project_path, &settings, &progress).await;
+    let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
 
     match result {
         Ok(path) => {
-            cap_rendering::set_force_ffmpeg_decoder(false);
             info!("Exported to {} completed", path.display());
             Ok(path)
         }
@@ -112,11 +111,7 @@ pub async fn export_video(
                 e
             );
 
-            cap_rendering::set_force_ffmpeg_decoder(true);
-
-            let retry_result = do_export(&project_path, &settings, &progress).await;
-
-            cap_rendering::set_force_ffmpeg_decoder(false);
+            let retry_result = do_export(&project_path, &settings, &progress, true).await;
 
             match retry_result {
                 Ok(path) => {
@@ -133,7 +128,6 @@ pub async fn export_video(
             }
         }
         Err(e) => {
-            cap_rendering::set_force_ffmpeg_decoder(false);
             sentry::capture_message(&e, sentry::Level::Error);
             Err(e)
         }
@@ -279,7 +273,7 @@ pub async fn generate_export_preview(
         .map_err(|e| format!("Failed to create render constants: {e}"))?,
     );
 
-    let segments = create_segments(&recording_meta, studio_meta)
+    let segments = create_segments(&recording_meta, studio_meta, false)
         .await
         .map_err(|e| format!("Failed to create segments: {e}"))?;
 

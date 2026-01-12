@@ -1086,12 +1086,13 @@ export function ExportPage() {
 											</p>
 										</Show>
 
-										<Show
-											when={ostype() === "macos" && settings.format === "Mp4"}
-										>
+										<Show when={ostype() === "macos"}>
 											<div class="mt-4 pt-3 border-t border-gray-4">
 												<button
 													type="button"
+													role="switch"
+													aria-checked={forceFfmpegDecoder()}
+													aria-label="Force FFmpeg decoder"
 													class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
 													onClick={() =>
 														setForceFfmpegDecoder(!forceFfmpegDecoder())

@@ -248,7 +248,7 @@ impl EditorInstance {
             meta.as_ref(),
         )?);
 
-        let segments = create_segments(&recording_meta, meta.as_ref()).await?;
+        let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
 
         let render_constants = Arc::new(
             RenderVideoConstants::new(
@@ -581,6 +581,7 @@ pub struct SegmentMedia {
 pub async fn create_segments(
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
+    force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
@@ -622,6 +623,7 @@ pub async fn create_segments(
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
                 0,
+                force_ffmpeg,
             )
             .await
             .map_err(|e| format!("SingleSegment / {e}"))?;
@@ -667,6 +669,7 @@ pub async fn create_segments(
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
+                    force_ffmpeg,
                 )
                 .await
                 .map_err(|e| format!("MultipleSegments {i} / {e}"))?;

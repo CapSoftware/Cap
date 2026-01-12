@@ -2,28 +2,11 @@ use ::ffmpeg::Rational;
 use std::{
     fmt,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, mpsc},
     time::Duration,
 };
 use tokio::sync::oneshot;
 use tracing::info;
-
-static FORCE_FFMPEG_DECODER: AtomicBool = AtomicBool::new(false);
-
-pub fn set_force_ffmpeg_decoder(force: bool) {
-    FORCE_FFMPEG_DECODER.store(force, Ordering::SeqCst);
-    if force {
-        tracing::info!("FFmpeg decoder forced via experimental setting");
-    }
-}
-
-pub fn is_ffmpeg_decoder_forced() -> bool {
-    FORCE_FFMPEG_DECODER.load(Ordering::SeqCst)
-}
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -569,13 +552,14 @@ pub async fn spawn_decoder(
     path: PathBuf,
     fps: u32,
     offset: f64,
+    force_ffmpeg: bool,
 ) -> Result<AsyncVideoDecoderHandle, String> {
     let path_display = path.display().to_string();
     let timeout_duration = Duration::from_secs(30);
 
     #[cfg(target_os = "macos")]
     {
-        if is_ffmpeg_decoder_forced() {
+        if force_ffmpeg {
             info!(
                 "Video '{}' using FFmpeg decoder (forced via experimental setting)",
                 name
@@ -668,6 +652,7 @@ pub async fn spawn_decoder(
 
     #[cfg(target_os = "windows")]
     {
+        let _ = force_ffmpeg;
         let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
         let (tx, rx) = mpsc::channel();
 
@@ -704,6 +689,7 @@ pub async fn spawn_decoder(
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
+        let _ = force_ffmpeg;
         let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
         let (tx, rx) = mpsc::channel();
 

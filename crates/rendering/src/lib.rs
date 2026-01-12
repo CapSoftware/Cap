@@ -7,7 +7,6 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-pub use decoder::{is_ffmpeg_decoder_forced, set_force_ffmpeg_decoder};
 use frame_pipeline::{RenderSession, finish_encoder};
 use futures::FutureExt;
 use futures::future::OptionFuture;
@@ -121,6 +120,7 @@ impl RecordingSegmentDecoders {
         meta: &StudioRecordingMeta,
         segment: SegmentVideoPaths,
         segment_i: usize,
+        force_ffmpeg: bool,
     ) -> Result<Self, String> {
         let latest_start_time = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => None,
@@ -149,6 +149,7 @@ impl RecordingSegmentDecoders {
                         .unwrap_or(0.0)
                 }
             },
+            force_ffmpeg,
         )
         .await
         .map_err(|e| format!("Screen:{e}"))?;
@@ -175,6 +176,7 @@ impl RecordingSegmentDecoders {
                             .unwrap_or(0.0)
                     }
                 },
+                force_ffmpeg,
             )
             .then(|r| async { r.map_err(|e| format!("Camera:{e}")) })
         }))
