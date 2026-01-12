@@ -4,7 +4,7 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { trackDeep } from "@solid-primitives/deep";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
-import { createMutation } from "@tanstack/solid-query";
+import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
@@ -45,6 +45,7 @@ import {
 import { EditorErrorScreen } from "./EditorErrorScreen";
 import { ExportPage } from "./ExportPage";
 import { Header } from "./Header";
+import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
@@ -58,19 +59,96 @@ const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
 export function Editor() {
 	const [projectPath] = createResource(() => commands.getEditorProjectPath());
 
+	const rawMetaQuery = createQuery(() => ({
+		queryKey: ["editor", "raw-meta", projectPath()],
+		queryFn: projectPath()
+			? () => commands.getRecordingMetaByPath(projectPath()!)
+			: skipToken,
+		staleTime: Infinity,
+		gcTime: 0,
+		refetchOnWindowFocus: false,
+		refetchOnMount: false,
+		refetchOnReconnect: false,
+	}));
+
+	const rawImportStatus = createMemo(() => {
+		const meta = rawMetaQuery.data;
+		if (!meta) return "loading" as const;
+		const status = (meta as { status?: { status: string } }).status;
+		if (status?.status === "InProgress") return "importing" as const;
+		return "ready" as const;
+	});
+
+	const [lockedToImporting, setLockedToImporting] = createSignal(false);
+
+	createEffect(() => {
+		if (rawImportStatus() === "importing") {
+			setLockedToImporting(true);
+		}
+	});
+
+	const importStatus = () => {
+		if (lockedToImporting()) return "importing" as const;
+		return rawImportStatus();
+	};
+
+	const [importAborted, setImportAborted] = createSignal(false);
+
+	onCleanup(() => {
+		setImportAborted(true);
+	});
+
+	const handleImportComplete = async () => {
+		const path = projectPath();
+		if (!path) return;
+
+		for (let i = 0; i < 20; i++) {
+			if (importAborted()) return;
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			if (importAborted()) return;
+			const ready = await commands.checkImportReady(path);
+			if (ready) {
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+				if (importAborted()) return;
+				window.location.reload();
+				return;
+			}
+		}
+		if (importAborted()) return;
+		console.error("Import verification timed out");
+		window.location.reload();
+	};
+
 	return (
-		<EditorInstanceContextProvider>
-			<EditorContent projectPath={projectPath()} />
-		</EditorInstanceContextProvider>
+		<Switch
+			fallback={
+				<div class="flex items-center justify-center h-full w-full">
+					<div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-500" />
+				</div>
+			}
+		>
+			<Match when={importStatus() === "importing" && projectPath()}>
+				<ImportProgress
+					projectPath={projectPath()!}
+					onComplete={handleImportComplete}
+					onError={(error) => console.error("Import failed:", error)}
+				/>
+			</Match>
+			<Match when={importStatus() === "ready" && projectPath()}>
+				<EditorInstanceContextProvider>
+					<EditorContent projectPath={projectPath()!} />
+				</EditorInstanceContextProvider>
+			</Match>
+		</Switch>
 	);
 }
 
-function EditorContent(props: { projectPath: string | undefined }) {
+function EditorContent(props: { projectPath: string }) {
 	const ctx = useEditorInstanceContext();
 
 	const errorInfo = () => {
 		const error = ctx.editorInstance.error;
-		if (!error || !props.projectPath) return null;
+		if (!error) return null;
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		return { error: errorMessage, projectPath: props.projectPath };
 	};

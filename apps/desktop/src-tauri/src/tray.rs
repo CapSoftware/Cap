@@ -35,6 +35,7 @@ pub enum TrayItem {
     RecordDisplay,
     RecordWindow,
     RecordArea,
+    ImportVideo,
     ViewAllRecordings,
     ViewAllScreenshots,
     OpenSettings,
@@ -54,6 +55,7 @@ impl From<TrayItem> for MenuId {
             TrayItem::RecordDisplay => "record_display",
             TrayItem::RecordWindow => "record_window",
             TrayItem::RecordArea => "record_area",
+            TrayItem::ImportVideo => "import_video",
             TrayItem::ViewAllRecordings => "view_all_recordings",
             TrayItem::ViewAllScreenshots => "view_all_screenshots",
             TrayItem::OpenSettings => "open_settings",
@@ -86,6 +88,7 @@ impl TryFrom<MenuId> for TrayItem {
             "record_display" => Ok(TrayItem::RecordDisplay),
             "record_window" => Ok(TrayItem::RecordWindow),
             "record_area" => Ok(TrayItem::RecordArea),
+            "import_video" => Ok(TrayItem::ImportVideo),
             "view_all_recordings" => Ok(TrayItem::ViewAllRecordings),
             "view_all_screenshots" => Ok(TrayItem::ViewAllScreenshots),
             "open_settings" => Ok(TrayItem::OpenSettings),
@@ -411,6 +414,13 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
                 None::<&str>,
             )?,
             &MenuItem::with_id(app, TrayItem::RecordArea, "Record Area", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::ImportVideo,
+                "Import Video...",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &mode_submenu,
             &previous_submenu,
@@ -619,6 +629,43 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         target_mode: Some(RecordingTargetMode::Area),
                     }
                     .emit(&app_handle);
+                }
+                Ok(TrayItem::ImportVideo) => {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let file_path = app
+                            .dialog()
+                            .file()
+                            .add_filter(
+                                "Video Files",
+                                &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
+                            )
+                            .blocking_pick_file();
+
+                        if let Some(file_path) = file_path {
+                            let path = match file_path.into_path() {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::error!("Invalid file path: {e}");
+                                    return;
+                                }
+                            };
+
+                            match crate::import::start_video_import(app.clone(), path).await {
+                                Ok(project_path) => {
+                                    let _ = ShowCapWindow::Editor { project_path }.show(&app).await;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to import video: {e}");
+                                    app.dialog()
+                                        .message(format!("Failed to import video: {e}"))
+                                        .title("Import Error")
+                                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                                        .blocking_show();
+                                }
+                            }
+                        }
+                    });
                 }
                 Ok(TrayItem::ViewAllRecordings) => {
                     let _ = RequestOpenSettings {
