@@ -686,5 +686,13 @@ pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
         return Ok(false);
     }
 
-    Ok(probe_video_can_decode(&video_path).unwrap_or(false))
+    if !probe_video_can_decode(&video_path).unwrap_or(false) {
+        return Ok(false);
+    }
+
+    if get_media_duration(&video_path).is_none() {
+        return Ok(false);
+    }
+
+    Ok(true)
 }
