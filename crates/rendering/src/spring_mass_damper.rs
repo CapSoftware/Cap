@@ -20,14 +20,16 @@ const REST_VELOCITY_THRESHOLD: f32 = 0.0001;
 const REST_DISPLACEMENT_THRESHOLD: f32 = 0.00001;
 
 fn solve_spring_1d(displacement: f32, velocity: f32, t: f32, omega0: f32, zeta: f32) -> (f32, f32) {
-    if zeta < 1.0 - 1e-6 {
+    const CRITICAL_EPSILON: f32 = 0.01;
+
+    if zeta < 1.0 - CRITICAL_EPSILON {
         let omega_d = omega0 * (1.0 - zeta * zeta).sqrt();
         let decay = (-zeta * omega0 * t).exp();
         let cos_term = (omega_d * t).cos();
         let sin_term = (omega_d * t).sin();
 
         let a = displacement;
-        let b = (velocity + displacement * zeta * omega0) / omega_d.max(1e-6);
+        let b = (velocity + displacement * zeta * omega0) / omega_d.max(1e-4);
 
         let new_disp = decay * (a * cos_term + b * sin_term);
         let new_vel = decay
@@ -35,7 +37,7 @@ fn solve_spring_1d(displacement: f32, velocity: f32, t: f32, omega0: f32, zeta: 
                 - (a * omega_d + b * zeta * omega0) * sin_term);
 
         (new_disp, new_vel)
-    } else if zeta > 1.0 + 1e-6 {
+    } else if zeta > 1.0 + CRITICAL_EPSILON {
         let sqrt_term = (zeta * zeta - 1.0).sqrt();
         let s1 = -omega0 * (zeta - sqrt_term);
         let s2 = -omega0 * (zeta + sqrt_term);
