@@ -160,6 +160,13 @@ export function ExportPage() {
 		{ name: "export_settings" },
 	);
 
+	const VALID_COMPRESSIONS: ExportCompression[] = [
+		"Maximum",
+		"Social",
+		"Web",
+		"Potato",
+	];
+
 	const settings = mergeProps(_settings, () => {
 		const ret: Partial<Settings> = {};
 		if (hasTransparentBackground() && _settings.format === "Mp4")
@@ -167,6 +174,9 @@ export function ExportPage() {
 		else if (_settings.format === "Gif" && _settings.exportTo === "link")
 			ret.format = "Mp4";
 		else if (!["Mp4", "Gif"].includes(_settings.format)) ret.format = "Mp4";
+
+		if (!VALID_COMPRESSIONS.includes(_settings.compression))
+			ret.compression = "Maximum";
 
 		Object.defineProperty(ret, "organizationId", {
 			get() {
