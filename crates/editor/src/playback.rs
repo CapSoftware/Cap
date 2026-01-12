@@ -4,7 +4,10 @@ use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latenc
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
+use cap_rendering::{
+    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
+    spring_mass_damper::SpringMassDamperSimulationConfig,
+};
 #[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
@@ -636,6 +639,20 @@ impl Playback {
                         );
                     }
 
+                    let cursor_smoothing =
+                        (!cached_project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+                            tension: cached_project.cursor.tension,
+                            mass: cached_project.cursor.mass,
+                            friction: cached_project.cursor.friction,
+                        });
+
+                    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+                        &segment_media.cursor,
+                        cursor_smoothing,
+                        cached_project.screen_movement_spring,
+                        duration,
+                    );
+
                     let uniforms = ProjectUniforms::new(
                         &self.render_constants,
                         &cached_project,
@@ -644,6 +661,8 @@ impl Playback {
                         resolution_base,
                         &segment_media.cursor,
                         &segment_frames,
+                        duration,
+                        &zoom_focus_interpolator,
                     );
 
                     self.renderer

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
+use cap_project::{ClickSpringConfig, CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
 
 use crate::{
     Coord, RawDisplayUVSpace,
@@ -9,6 +9,8 @@ use crate::{
 
 const CLICK_REACTION_WINDOW_MS: f64 = 160.0;
 const MIN_MASS: f32 = 0.1;
+const SHAKE_THRESHOLD_UV: f64 = 0.015;
+const SHAKE_DETECTION_WINDOW_MS: f64 = 100.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SpringProfile {
@@ -24,11 +26,26 @@ struct CursorSpringPresets {
 }
 
 impl CursorSpringPresets {
-    fn new(base: SpringMassDamperSimulationConfig) -> Self {
+    fn new(
+        base: SpringMassDamperSimulationConfig,
+        click_spring: Option<ClickSpringConfig>,
+    ) -> Self {
+        let snappy = click_spring
+            .map(|c| SpringMassDamperSimulationConfig {
+                tension: c.tension,
+                mass: c.mass,
+                friction: c.friction,
+            })
+            .unwrap_or(SpringMassDamperSimulationConfig {
+                tension: 700.0,
+                mass: 1.0,
+                friction: 30.0,
+            });
+
         Self {
             default: base,
-            snappy: scale_config(base, 1.65, 0.65, 1.25),
-            drag: scale_config(base, 1.25, 0.85, 1.1),
+            snappy,
+            drag: scale_config(base, 0.8, 1.2, 1.3),
         }
     }
 
@@ -113,6 +130,15 @@ pub fn interpolate_cursor(
     time_secs: f32,
     smoothing: Option<SpringMassDamperSimulationConfig>,
 ) -> Option<InterpolatedCursorPosition> {
+    interpolate_cursor_with_click_spring(cursor, time_secs, smoothing, None)
+}
+
+pub fn interpolate_cursor_with_click_spring(
+    cursor: &CursorEvents,
+    time_secs: f32,
+    smoothing: Option<SpringMassDamperSimulationConfig>,
+    click_spring: Option<ClickSpringConfig>,
+) -> Option<InterpolatedCursorPosition> {
     let time_ms = (time_secs * 1000.0) as f64;
 
     if cursor.moves.is_empty() {
@@ -146,8 +172,14 @@ pub fn interpolate_cursor(
     }
 
     if let Some(smoothing_config) = smoothing {
-        let prepared_moves = densify_cursor_moves(&cursor.moves);
-        let events = get_smoothed_cursor_events(cursor, prepared_moves.as_ref(), smoothing_config);
+        let filtered_moves = filter_cursor_shake(&cursor.moves);
+        let prepared_moves = densify_cursor_moves(filtered_moves.as_ref());
+        let events = get_smoothed_cursor_events_with_click_spring(
+            cursor,
+            prepared_moves.as_ref(),
+            smoothing_config,
+            click_spring,
+        );
         interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
     } else {
         let (pos, cursor_id, velocity) = cursor.moves.windows(2).find_map(|chunk| {
@@ -178,37 +210,45 @@ pub fn interpolate_cursor(
     }
 }
 
+#[allow(dead_code)]
 fn get_smoothed_cursor_events(
     cursor: &CursorEvents,
     moves: &[CursorMoveEvent],
     smoothing_config: SpringMassDamperSimulationConfig,
+) -> Vec<SmoothedCursorEvent> {
+    get_smoothed_cursor_events_with_click_spring(cursor, moves, smoothing_config, None)
+}
+
+fn get_smoothed_cursor_events_with_click_spring(
+    cursor: &CursorEvents,
+    moves: &[CursorMoveEvent],
+    smoothing_config: SpringMassDamperSimulationConfig,
+    click_spring: Option<ClickSpringConfig>,
 ) -> Vec<SmoothedCursorEvent> {
     let mut last_time = 0.0;
 
     let mut events = vec![];
 
     let mut sim = SpringMassDamperSimulation::new(smoothing_config);
-    let presets = CursorSpringPresets::new(smoothing_config);
+    let presets = CursorSpringPresets::new(smoothing_config, click_spring);
     let mut context = CursorSpringContext::new(&cursor.clicks);
 
     sim.set_position(XY::new(moves[0].x, moves[0].y).map(|v| v as f32));
     sim.set_velocity(XY::new(0.0, 0.0));
+    sim.set_target_position(sim.position);
 
     if moves[0].time_ms > 0.0 {
         events.push(SmoothedCursorEvent {
             time: 0.0,
-            target_position: sim.position,
+            target_position: sim.target_position,
             position: sim.position,
             velocity: sim.velocity,
             cursor_id: moves[0].cursor_id.clone(),
         })
     }
 
-    for (i, m) in moves.iter().enumerate() {
-        let target_position = moves
-            .get(i + 1)
-            .map(|e| XY::new(e.x, e.y).map(|v| v as f32))
-            .unwrap_or(sim.target_position);
+    for m in moves.iter() {
+        let target_position = XY::new(m.x, m.y).map(|v| v as f32);
         sim.set_target_position(target_position);
 
         context.advance_to(m.time_ms);
@@ -219,10 +259,15 @@ fn get_smoothed_cursor_events(
 
         last_time = m.time_ms as f32;
 
+        let clamped_position = XY::new(
+            sim.position.x.clamp(0.0, 1.0),
+            sim.position.y.clamp(0.0, 1.0),
+        );
+
         events.push(SmoothedCursorEvent {
             time: m.time_ms as f32,
             target_position,
-            position: sim.position,
+            position: clamped_position,
             velocity: sim.velocity,
             cursor_id: m.cursor_id.clone(),
         });
@@ -265,8 +310,13 @@ fn interpolate_smoothed_position(
         }
     };
 
+    let clamped_position = XY::new(
+        sim.position.x.clamp(0.0, 1.0) as f64,
+        sim.position.y.clamp(0.0, 1.0) as f64,
+    );
+
     Some(InterpolatedCursorPosition {
-        position: Coord::new(sim.position.map(|v| v as f64)),
+        position: Coord::new(clamped_position),
         velocity: sim.velocity,
         cursor_id,
     })
@@ -276,6 +326,64 @@ const CURSOR_FRAME_DURATION_MS: f64 = 1000.0 / 60.0;
 const GAP_INTERPOLATION_THRESHOLD_MS: f64 = CURSOR_FRAME_DURATION_MS * 4.0;
 const MIN_CURSOR_TRAVEL_FOR_INTERPOLATION: f64 = 0.02;
 const MAX_INTERPOLATED_STEPS: usize = 120;
+
+fn filter_cursor_shake<'a>(moves: &'a [CursorMoveEvent]) -> Cow<'a, [CursorMoveEvent]> {
+    if moves.len() < 3 {
+        return Cow::Borrowed(moves);
+    }
+
+    let mut filtered = Vec::with_capacity(moves.len());
+    filtered.push(moves[0].clone());
+
+    let mut i = 1;
+    while i < moves.len() - 1 {
+        let prev = filtered.last().unwrap();
+        let curr = &moves[i];
+        let next = &moves[i + 1];
+
+        if curr.cursor_id != prev.cursor_id || curr.cursor_id != next.cursor_id {
+            filtered.push(curr.clone());
+            i += 1;
+            continue;
+        }
+
+        let time_window = next.time_ms - prev.time_ms;
+        if time_window > SHAKE_DETECTION_WINDOW_MS {
+            filtered.push(curr.clone());
+            i += 1;
+            continue;
+        }
+
+        let dir_to_curr = (curr.x - prev.x, curr.y - prev.y);
+        let dir_to_next = (next.x - curr.x, next.y - curr.y);
+
+        let dot = dir_to_curr.0 * dir_to_next.0 + dir_to_curr.1 * dir_to_next.1;
+        let is_reversal = dot < 0.0;
+
+        let displacement_curr = (dir_to_curr.0.powi(2) + dir_to_curr.1.powi(2)).sqrt();
+        let displacement_next = (dir_to_next.0.powi(2) + dir_to_next.1.powi(2)).sqrt();
+        let is_small_movement =
+            displacement_curr < SHAKE_THRESHOLD_UV && displacement_next < SHAKE_THRESHOLD_UV;
+
+        if is_reversal && is_small_movement {
+            i += 1;
+            continue;
+        }
+
+        filtered.push(curr.clone());
+        i += 1;
+    }
+
+    if moves.len() > 1 {
+        filtered.push(moves.last().unwrap().clone());
+    }
+
+    if filtered.len() == moves.len() {
+        return Cow::Borrowed(moves);
+    }
+
+    Cow::Owned(filtered)
+}
 
 fn densify_cursor_moves<'a>(moves: &'a [CursorMoveEvent]) -> Cow<'a, [CursorMoveEvent]> {
     if moves.len() < 2 {

@@ -34,10 +34,11 @@ mod layers;
 mod mask;
 mod project_recordings;
 mod scene;
-mod spring_mass_damper;
+pub mod spring_mass_damper;
 mod text;
 pub mod yuv_converter;
 mod zoom;
+pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
@@ -48,6 +49,7 @@ use mask::interpolate_masks;
 use scene::*;
 use text::{PreparedText, prepare_texts};
 use zoom::*;
+pub use zoom_focus_interpolation::ZoomFocusInterpolator;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
@@ -260,6 +262,27 @@ pub async fn render_video_to_channel(
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
+    let cursor_smoothing =
+        (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        });
+
+    let zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
+        .iter()
+        .map(|segment| {
+            let mut interp = ZoomFocusInterpolator::new(
+                &segment.cursor,
+                cursor_smoothing,
+                project.screen_movement_spring,
+                duration,
+            );
+            interp.precompute();
+            interp
+        })
+        .collect();
+
     let mut frame_number = 0;
 
     let mut frame_renderer = FrameRenderer::new(constants);
@@ -272,7 +295,7 @@ pub async fn render_video_to_channel(
 
     let mut last_successful_frame: Option<RenderedFrame> = None;
     let mut consecutive_failures = 0u32;
-    const MAX_CONSECUTIVE_FAILURES: u32 = 30;
+    const MAX_CONSECUTIVE_FAILURES: u32 = 200;
 
     loop {
         if frame_number >= total_frames {
@@ -299,11 +322,12 @@ pub async fn render_video_to_channel(
 
         let mut segment_frames = None;
         let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 3;
+        const MAX_RETRIES: u32 = 5;
 
         while segment_frames.is_none() && retry_count < MAX_RETRIES {
             if retry_count > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(50 * retry_count as u64)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * retry_count as u64))
+                    .await;
             }
 
             segment_frames = render_segment
@@ -331,6 +355,8 @@ pub async fn render_video_to_channel(
         let frame = if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
 
+            let zoom_focus_interp = &zoom_focus_interpolators[segment.recording_clip as usize];
+
             let uniforms = ProjectUniforms::new(
                 constants,
                 project,
@@ -339,6 +365,8 @@ pub async fn render_video_to_channel(
                 resolution_base,
                 &render_segment.cursor,
                 &segment_frames,
+                duration,
+                zoom_focus_interp,
             );
 
             match frame_renderer
@@ -1059,10 +1087,11 @@ impl ProjectUniforms {
         zoom: &InterpolatedZoom,
         scene: &InterpolatedScene,
         base_size: f32,
-        zoom_size: f32,
+        scale_during_zoom: f32,
     ) -> f32 {
         let t = zoom.t as f32;
-        let lerp = t * zoom_size * base_size + (1.0 - t) * base_size;
+        let zoomed_size = base_size * scale_during_zoom;
+        let lerp = t * zoomed_size + (1.0 - t) * base_size;
         lerp * scene.camera_scale as f32
     }
 
@@ -1080,6 +1109,7 @@ impl ProjectUniforms {
         resolve_motion_descriptor(&analysis, base_amount, CAMERA_MULTIPLIER, CAMERA_MULTIPLIER)
     }
 
+    #[allow(dead_code)]
     fn auto_zoom_focus(
         cursor_events: &CursorEvents,
         time_secs: f32,
@@ -1186,6 +1216,8 @@ impl ProjectUniforms {
         resolution_base: XY<u32>,
         cursor_events: &CursorEvents,
         segment_frames: &DecodedSegmentFrames,
+        total_duration: f64,
+        zoom_focus_interpolator: &ZoomFocusInterpolator,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -1198,9 +1230,28 @@ impl ProjectUniforms {
         };
         let current_recording_time = segment_frames.recording_time;
         let prev_recording_time = (segment_frames.recording_time - 1.0 / fps_f32).max(0.0);
-        let user_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
+
+        let cursor_stop_time = project
+            .cursor
+            .stop_movement_in_last_seconds
+            .map(|seconds| (total_duration - seconds as f64).max(0.0) as f32);
+
+        let cursor_time_for_interp = if let Some(stop_time) = cursor_stop_time {
+            current_recording_time.min(stop_time)
+        } else {
+            current_recording_time
+        };
+
+        let prev_cursor_time_for_interp = if let Some(stop_time) = cursor_stop_time {
+            prev_recording_time.min(stop_time)
+        } else {
+            prev_recording_time
+        };
+
+        let cursor_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
+        let screen_motion_blur = project.screen_motion_blur.clamp(0.0, 1.0);
         let has_previous = frame_number > 0;
-        let normalized_motion = normalized_motion_amount(user_motion_blur, fps_f32);
+        let normalized_screen_motion = normalized_motion_amount(screen_motion_blur, fps_f32);
 
         let crop = Self::get_crop(options, project);
 
@@ -1211,10 +1262,10 @@ impl ProjectUniforms {
         });
 
         let interpolated_cursor =
-            interpolate_cursor(cursor_events, current_recording_time, cursor_smoothing);
+            interpolate_cursor(cursor_events, cursor_time_for_interp, cursor_smoothing);
 
         let prev_interpolated_cursor =
-            interpolate_cursor(cursor_events, prev_recording_time, cursor_smoothing);
+            interpolate_cursor(cursor_events, prev_cursor_time_for_interp, cursor_smoothing);
 
         let zoom_segments = project
             .timeline
@@ -1228,28 +1279,28 @@ impl ProjectUniforms {
             .map(|t| t.scene_segments.as_slice())
             .unwrap_or(&[]);
 
-        let zoom_focus = Self::auto_zoom_focus(
-            cursor_events,
-            current_recording_time,
-            cursor_smoothing,
-            interpolated_cursor.clone(),
-        );
+        let zoom_focus = zoom_focus_interpolator.interpolate(current_recording_time);
 
-        let prev_zoom_focus = Self::auto_zoom_focus(
-            cursor_events,
-            prev_recording_time,
-            cursor_smoothing,
-            prev_interpolated_cursor.clone(),
-        );
+        let prev_zoom_focus = zoom_focus_interpolator.interpolate(prev_recording_time);
 
-        let zoom = InterpolatedZoom::new(
+        let actual_cursor_coord = interpolated_cursor
+            .as_ref()
+            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
+
+        let prev_actual_cursor_coord = prev_interpolated_cursor
+            .as_ref()
+            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
+
+        let zoom = InterpolatedZoom::new_with_cursor(
             SegmentsCursor::new(frame_time as f64, zoom_segments),
             zoom_focus,
+            actual_cursor_coord,
         );
 
-        let prev_zoom = InterpolatedZoom::new(
+        let prev_zoom = InterpolatedZoom::new_with_cursor(
             SegmentsCursor::new(prev_frame_time as f64, zoom_segments),
             prev_zoom_focus,
+            prev_actual_cursor_coord,
         );
 
         let scene =
@@ -1288,7 +1339,7 @@ impl ProjectUniforms {
                 MotionBounds::new(start, end),
                 MotionBounds::new(prev_start, prev_end),
                 has_previous,
-                normalized_motion,
+                normalized_screen_motion,
                 scene_blur_strength,
             );
             let descriptor = display_motion.descriptor;
@@ -1375,15 +1426,12 @@ impl ProjectUniforms {
                 let camera_padding = CAMERA_PADDING * resolution_scale;
 
                 let base_size = project.camera.size / 100.0;
-                let zoom_size = project
-                    .camera
-                    .zoom_size
-                    .unwrap_or(cap_project::Camera::default_zoom_size())
-                    / 100.0;
+                let scale_during_zoom = project.camera.scale_during_zoom;
 
-                let zoomed_size = Self::camera_zoom_factor(&zoom, &scene, base_size, zoom_size);
+                let zoomed_size =
+                    Self::camera_zoom_factor(&zoom, &scene, base_size, scale_during_zoom);
                 let prev_zoomed_size =
-                    Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, zoom_size);
+                    Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, scale_during_zoom);
 
                 let aspect = frame_size[0] / frame_size[1];
                 let camera_size_for = |scale: f32| match project.camera.shape {
@@ -1460,7 +1508,7 @@ impl ProjectUniforms {
                     current_bounds,
                     prev_bounds,
                     has_previous,
-                    normalized_motion,
+                    normalized_screen_motion,
                 );
 
                 let crop_bounds = match project.camera.shape {
@@ -1644,7 +1692,7 @@ impl ProjectUniforms {
             frame_number,
             prev_cursor: prev_interpolated_cursor,
             display_parent_motion_px: display_motion_parent,
-            motion_blur_amount: user_motion_blur,
+            motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
         }
