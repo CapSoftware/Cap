@@ -44,9 +44,12 @@ fn solve_spring_1d(displacement: f32, velocity: f32, t: f32, omega0: f32, zeta: 
         let denom = s1 - s2;
 
         if denom.abs() < 1e-10 {
-            let decay = (-omega0 * t).exp();
-            let new_disp = decay * (displacement + (velocity + displacement * omega0) * t);
-            let new_vel = decay * (velocity - omega0 * displacement);
+            let s_avg = 0.5 * (s1 + s2);
+            let decay = (s_avg * t).exp();
+            let new_disp = decay * (displacement + (velocity - displacement * s_avg) * t);
+            let new_vel = decay
+                * ((velocity - displacement * s_avg)
+                    + s_avg * (displacement + (velocity - displacement * s_avg) * t));
             (new_disp, new_vel)
         } else {
             let c1 = (velocity - displacement * s2) / denom;

@@ -74,9 +74,18 @@ export function Editor() {
 	const rawImportStatus = createMemo(() => {
 		const meta = rawMetaQuery.data;
 		if (!meta) return "loading" as const;
-		const metaWithStatus = meta as { status?: { status: string } };
-		if (metaWithStatus.status?.status === "InProgress")
+		if (
+			"inner" in meta &&
+			meta.inner &&
+			typeof meta.inner === "object" &&
+			"status" in meta.inner &&
+			meta.inner.status &&
+			typeof meta.inner.status === "object" &&
+			"status" in meta.inner.status &&
+			meta.inner.status.status === "InProgress"
+		) {
 			return "importing" as const;
+		}
 		return "ready" as const;
 	});
 
