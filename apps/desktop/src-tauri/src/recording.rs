@@ -1818,8 +1818,7 @@ fn generate_zoom_segments_from_clicks_impl(
             let click_time = click.time_ms;
             moves
                 .iter()
-                .filter(|m| m.time_ms <= click_time)
-                .next_back()
+                .rfind(|m| m.time_ms <= click_time)
                 .map(|m| (idx, (m.x, m.y)))
         })
         .collect();
