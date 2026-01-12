@@ -1208,6 +1208,7 @@ impl ProjectUniforms {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,

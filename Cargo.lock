@@ -1058,6 +1058,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 

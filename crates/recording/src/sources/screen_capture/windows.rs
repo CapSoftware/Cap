@@ -368,14 +368,43 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
         async {
             let mut error_tx = Some(error_tx);
+            let audio_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+            let audio_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
             let capturer = scap_cpal::create_capturer(
-                move |data, info, config| {
-                    use scap_ffmpeg::*;
+                {
+                    let audio_frame_counter = audio_frame_counter.clone();
+                    let audio_drop_counter = audio_drop_counter.clone();
+                    move |data, info, config| {
+                        use scap_ffmpeg::*;
 
-                    let timestamp = Timestamp::from_cpal(info.timestamp().capture);
+                        let timestamp = Timestamp::from_cpal(info.timestamp().capture);
+                        let frame = AudioFrame::new(data.as_ffmpeg(config), timestamp);
 
-                    let _ = tx.try_send(AudioFrame::new(data.as_ffmpeg(config), timestamp));
+                        const MAX_RETRIES: u32 = 3;
+                        const RETRY_DELAY_US: u64 = 500;
+
+                        let mut retries = 0;
+                        let mut current_frame = Some(frame);
+
+                        while let Some(f) = current_frame.take() {
+                            match tx.try_send(f) {
+                                Ok(()) => {
+                                    audio_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    break;
+                                }
+                                Err(err) if err.is_full() && retries < MAX_RETRIES => {
+                                    retries += 1;
+                                    std::thread::sleep(Duration::from_micros(RETRY_DELAY_US));
+                                    current_frame = Some(err.into_inner());
+                                }
+                                Err(_) => {
+                                    audio_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 },
                 move |e| {
                     if let Some(error_tx) = error_tx.take() {
@@ -383,6 +412,32 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                     }
                 },
             )?;
+
+            tokio::spawn({
+                async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let captured = audio_frame_counter.load(atomic::Ordering::Relaxed);
+                        let dropped = audio_drop_counter.load(atomic::Ordering::Relaxed);
+                        let total = captured + dropped;
+                        if dropped > 0 {
+                            let drop_pct = if total > 0 {
+                                100.0 * dropped as f64 / total as f64
+                            } else {
+                                0.0
+                            };
+                            warn!(
+                                captured = captured,
+                                dropped = dropped,
+                                drop_pct = format!("{:.1}%", drop_pct),
+                                "System audio capture dropping frames due to full channel"
+                            );
+                        } else if captured > 0 {
+                            debug!(captured = captured, "System audio frames captured");
+                        }
+                    }
+                }
+            });
 
             Ok(Self { capturer })
         }
