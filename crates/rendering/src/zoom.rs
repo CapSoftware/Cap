@@ -901,8 +901,7 @@ mod test {
             let result = zoom.ensure_cursor_visible(cursor_pos);
             assert!(
                 cursor_is_visible_in_zoom(&result, cursor_pos),
-                "Cursor at {:?} should be visible",
-                cursor_pos
+                "Cursor at {cursor_pos:?} should be visible"
             );
         }
     }

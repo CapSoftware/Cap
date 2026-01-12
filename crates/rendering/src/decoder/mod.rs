@@ -2,11 +2,28 @@ use ::ffmpeg::Rational;
 use std::{
     fmt,
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 use tokio::sync::oneshot;
 use tracing::info;
+
+static FORCE_FFMPEG_DECODER: AtomicBool = AtomicBool::new(false);
+
+pub fn set_force_ffmpeg_decoder(force: bool) {
+    FORCE_FFMPEG_DECODER.store(force, Ordering::SeqCst);
+    if force {
+        tracing::info!("FFmpeg decoder forced via experimental setting");
+    }
+}
+
+pub fn is_ffmpeg_decoder_forced() -> bool {
+    FORCE_FFMPEG_DECODER.load(Ordering::SeqCst)
+}
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -468,12 +485,12 @@ impl AsyncVideoDecoderHandle {
             return None;
         }
 
-        match tokio::time::timeout(std::time::Duration::from_millis(2000), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_millis(1000), rx).await {
             Ok(result) => result.ok(),
             Err(_) => {
                 tracing::warn!(
                     time = adjusted_time,
-                    "Frame decode request timed out after 2000ms"
+                    "Frame decode request timed out after 1000ms"
                 );
                 None
             }
@@ -505,6 +522,48 @@ impl AsyncVideoDecoderHandle {
     }
 }
 
+async fn spawn_ffmpeg_decoder(
+    name: &'static str,
+    path: PathBuf,
+    fps: u32,
+    offset: f64,
+    timeout_duration: Duration,
+    path_display: &str,
+) -> Result<AsyncVideoDecoderHandle, String> {
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
+    let (tx, rx) = mpsc::channel();
+
+    ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+        .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
+
+    match tokio::time::timeout(timeout_duration, ready_rx).await {
+        Ok(Ok(Ok(init_result))) => {
+            info!(
+                "Video '{}' using {} decoder ({}x{})",
+                name, init_result.decoder_type, init_result.width, init_result.height
+            );
+            let status = DecoderStatus {
+                decoder_type: init_result.decoder_type,
+                video_width: init_result.width,
+                video_height: init_result.height,
+                fallback_reason: None,
+            };
+            Ok(AsyncVideoDecoderHandle {
+                sender: tx,
+                offset,
+                status,
+            })
+        }
+        Ok(Ok(Err(e))) => Err(format!(
+            "'{name}' FFmpeg decoder initialization failed: {e}"
+        )),
+        Ok(Err(e)) => Err(format!("'{name}' FFmpeg decoder channel closed: {e}")),
+        Err(_) => Err(format!(
+            "'{name}' FFmpeg decoder timed out after 30s initializing: {path_display}"
+        )),
+    }
+}
+
 pub async fn spawn_decoder(
     name: &'static str,
     path: PathBuf,
@@ -516,34 +575,94 @@ pub async fn spawn_decoder(
 
     #[cfg(target_os = "macos")]
     {
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
-        let (tx, rx) = mpsc::channel();
+        if is_ffmpeg_decoder_forced() {
+            info!(
+                "Video '{}' using FFmpeg decoder (forced via experimental setting)",
+                name
+            );
+            return spawn_ffmpeg_decoder(name, path, fps, offset, timeout_duration, &path_display)
+                .await;
+        }
 
-        avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx, ready_tx);
+        let avasset_result = {
+            let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
+            let (tx, rx) = mpsc::channel();
 
-        match tokio::time::timeout(timeout_duration, ready_rx).await {
-            Ok(Ok(Ok(init_result))) => {
-                info!(
-                    "Video '{}' using {} decoder ({}x{})",
-                    name, init_result.decoder_type, init_result.width, init_result.height
-                );
-                let status = DecoderStatus {
-                    decoder_type: init_result.decoder_type,
-                    video_width: init_result.width,
-                    video_height: init_result.height,
-                    fallback_reason: None,
-                };
-                Ok(AsyncVideoDecoderHandle {
-                    sender: tx,
-                    offset,
-                    status,
-                })
+            avassetreader::AVAssetReaderDecoder::spawn(name, path.clone(), fps, rx, ready_tx);
+
+            match tokio::time::timeout(timeout_duration, ready_rx).await {
+                Ok(Ok(Ok(init_result))) => {
+                    info!(
+                        "Video '{}' using {} decoder ({}x{})",
+                        name, init_result.decoder_type, init_result.width, init_result.height
+                    );
+                    let status = DecoderStatus {
+                        decoder_type: init_result.decoder_type,
+                        video_width: init_result.width,
+                        video_height: init_result.height,
+                        fallback_reason: None,
+                    };
+                    Ok(AsyncVideoDecoderHandle {
+                        sender: tx,
+                        offset,
+                        status,
+                    })
+                }
+                Ok(Ok(Err(e))) => Err(format!("AVAssetReader initialization failed: {e}")),
+                Ok(Err(e)) => Err(format!("AVAssetReader channel closed: {e}")),
+                Err(_) => Err(format!(
+                    "AVAssetReader timed out after 30s initializing: {path_display}"
+                )),
             }
-            Ok(Ok(Err(e))) => Err(format!("'{name}' decoder initialization failed: {e}")),
-            Ok(Err(e)) => Err(format!("'{name}' decoder channel closed: {e}")),
-            Err(_) => Err(format!(
-                "'{name}' decoder timed out after 30s initializing: {path_display}"
-            )),
+        };
+
+        match avasset_result {
+            Ok(handle) => Ok(handle),
+            Err(avasset_error) => {
+                tracing::warn!(
+                    name = name,
+                    error = %avasset_error,
+                    "AVAssetReader failed, falling back to FFmpeg decoder"
+                );
+
+                let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
+                let (tx, rx) = mpsc::channel();
+
+                if let Err(e) = ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx) {
+                    return Err(format!(
+                        "'{name}' decoder failed - AVAssetReader: {avasset_error}, FFmpeg: {e}"
+                    ));
+                }
+
+                match tokio::time::timeout(timeout_duration, ready_rx).await {
+                    Ok(Ok(Ok(init_result))) => {
+                        info!(
+                            "Video '{}' using {} decoder ({}x{}) after AVAssetReader failure",
+                            name, init_result.decoder_type, init_result.width, init_result.height
+                        );
+                        let status = DecoderStatus {
+                            decoder_type: init_result.decoder_type,
+                            video_width: init_result.width,
+                            video_height: init_result.height,
+                            fallback_reason: Some(avasset_error),
+                        };
+                        Ok(AsyncVideoDecoderHandle {
+                            sender: tx,
+                            offset,
+                            status,
+                        })
+                    }
+                    Ok(Ok(Err(e))) => Err(format!(
+                        "'{name}' decoder failed - AVAssetReader: {avasset_error}, FFmpeg: {e}"
+                    )),
+                    Ok(Err(e)) => Err(format!(
+                        "'{name}' decoder failed - AVAssetReader: {avasset_error}, FFmpeg channel: {e}"
+                    )),
+                    Err(_) => Err(format!(
+                        "'{name}' decoder failed - AVAssetReader: {avasset_error}, FFmpeg timed out"
+                    )),
+                }
+            }
         }
     }
 

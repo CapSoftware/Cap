@@ -7,6 +7,7 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
+pub use decoder::{is_ffmpeg_decoder_forced, set_force_ffmpeg_decoder};
 use frame_pipeline::{RenderSession, finish_encoder};
 use futures::FutureExt;
 use futures::future::OptionFuture;
@@ -235,6 +236,13 @@ pub enum RenderingError {
     ImageLoadError(String),
     #[error("Error polling wgpu: {0}")]
     PollError(#[from] wgpu::PollError),
+    #[error(
+        "Failed to decode video frames. The recording may be corrupted or incomplete. Try re-recording or contact support if the issue persists."
+    )]
+    FrameDecodeFailed {
+        frame_number: u32,
+        consecutive_failures: u32,
+    },
 }
 
 pub struct RenderSegment {
@@ -322,12 +330,11 @@ pub async fn render_video_to_channel(
 
         let mut segment_frames = None;
         let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 5;
+        const MAX_RETRIES: u32 = 3;
 
         while segment_frames.is_none() && retry_count < MAX_RETRIES {
             if retry_count > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(100 * retry_count as u64))
-                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(50 * retry_count as u64)).await;
             }
 
             segment_frames = render_segment
@@ -423,7 +430,10 @@ pub async fn render_video_to_channel(
                     consecutive_failures = consecutive_failures,
                     "Too many consecutive frame failures - aborting export"
                 );
-                return Err(RenderingError::BufferMapWaitingFailed);
+                return Err(RenderingError::FrameDecodeFailed {
+                    frame_number: current_frame_number,
+                    consecutive_failures,
+                });
             }
 
             if let Some(ref last_frame) = last_successful_frame {
@@ -431,8 +441,8 @@ pub async fn render_video_to_channel(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    "Frame decode failed after {} retries - using previous frame",
-                    MAX_RETRIES
+                    max_retries = MAX_RETRIES,
+                    "Frame decode failed after retries - using previous frame"
                 );
                 let mut fallback = last_frame.clone();
                 fallback.frame_number = current_frame_number;
@@ -443,8 +453,8 @@ pub async fn render_video_to_channel(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    "First frame decode failed after {} retries - cannot continue",
-                    MAX_RETRIES
+                    max_retries = MAX_RETRIES,
+                    "First frame decode failed after retries - cannot continue"
                 );
                 continue;
             }

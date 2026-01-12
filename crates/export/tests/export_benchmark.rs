@@ -26,6 +26,7 @@ async fn run_export(project_path: PathBuf) -> Result<(PathBuf, Duration, u32), S
         resolution_base: XY::new(1920, 1080),
         compression: ExportCompression::Maximum,
         custom_bpp: None,
+        force_ffmpeg_decoder: false,
     };
 
     let start = Instant::now();

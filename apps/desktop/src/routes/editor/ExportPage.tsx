@@ -224,6 +224,7 @@ export function ExportPage() {
 		COMPRESSION_TO_BPP[_settings.compression] ?? 0.15,
 	);
 	const [advancedMode, setAdvancedMode] = createSignal(false);
+	const [forceFfmpegDecoder, setForceFfmpegDecoder] = createSignal(false);
 
 	const isCustomBpp = () => {
 		const currentBpp = compressionBpp();
@@ -369,6 +370,7 @@ export function ExportPage() {
 						},
 						compression: settings.compression,
 						custom_bpp: customBpp,
+						force_ffmpeg_decoder: forceFfmpegDecoder(),
 					}
 				: {
 						format: "Gif",
@@ -1082,6 +1084,42 @@ export function ExportPage() {
 											<p class="text-[10px] text-amber-11 mt-1">
 												Using custom bitrate
 											</p>
+										</Show>
+
+										<Show
+											when={ostype() === "macos" && settings.format === "Mp4"}
+										>
+											<div class="mt-4 pt-3 border-t border-gray-4">
+												<button
+													type="button"
+													class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
+													onClick={() =>
+														setForceFfmpegDecoder(!forceFfmpegDecoder())
+													}
+												>
+													<div
+														class={cx(
+															"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+															forceFfmpegDecoder() ? "bg-blue-9" : "bg-gray-5",
+														)}
+													>
+														<div
+															class={cx(
+																"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
+																forceFfmpegDecoder()
+																	? "translate-x-4"
+																	: "translate-x-0.5",
+															)}
+														/>
+													</div>
+													<div class="text-left">
+														<span class="block">Force FFmpeg decoder</span>
+														<span class="text-[10px] text-gray-9">
+															Skip hardware decoder (auto-fallback enabled)
+														</span>
+													</div>
+												</button>
+											</div>
 										</Show>
 									</div>
 								</Show>
