@@ -13,7 +13,7 @@ use tracing::{info, trace, warn};
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]
 pub enum ExportCompression {
-    Minimal,
+    Maximum,
     Social,
     Web,
     Potato,
@@ -22,7 +22,7 @@ pub enum ExportCompression {
 impl ExportCompression {
     pub fn bits_per_pixel(&self) -> f32 {
         match self {
-            Self::Minimal => 0.3,
+            Self::Maximum => 0.3,
             Self::Social => 0.15,
             Self::Web => 0.08,
             Self::Potato => 0.04,
@@ -35,6 +35,14 @@ pub struct Mp4ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
     pub compression: ExportCompression,
+    pub custom_bpp: Option<f32>,
+}
+
+impl Mp4ExportSettings {
+    pub fn effective_bpp(&self) -> f32 {
+        self.custom_bpp
+            .unwrap_or_else(|| self.compression.bits_per_pixel())
+    }
 }
 
 impl Mp4ExportSettings {
@@ -80,7 +88,7 @@ impl Mp4ExportSettings {
                 base.output_path.clone(),
                 |o| {
                     H264Encoder::builder(video_info)
-                        .with_bpp(self.compression.bits_per_pixel())
+                        .with_bpp(self.effective_bpp())
                         .build(o)
                 },
                 |o| {
