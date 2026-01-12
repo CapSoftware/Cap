@@ -28,7 +28,7 @@ fn check_ffmpeg_available() -> bool {
         .unwrap_or(false)
 }
 
-fn generate_test_video(output_path: &PathBuf, duration_secs: u32) -> Result<(), String> {
+fn generate_test_video(output_path: &Path, duration_secs: u32) -> Result<(), String> {
     let status = Command::new("ffmpeg")
         .args([
             "-y",
@@ -64,7 +64,7 @@ fn generate_test_video(output_path: &PathBuf, duration_secs: u32) -> Result<(), 
     Ok(())
 }
 
-fn create_cap_project(project_dir: &PathBuf, duration_secs: u32) -> Result<(), String> {
+fn create_cap_project(project_dir: &Path, duration_secs: u32) -> Result<(), String> {
     let content_dir = project_dir.join("content");
     fs::create_dir_all(&content_dir).map_err(|e| format!("Failed to create content dir: {e}"))?;
 

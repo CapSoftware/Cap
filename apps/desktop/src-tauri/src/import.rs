@@ -73,6 +73,10 @@ fn emit_progress(
     .emit(app);
 }
 
+fn check_project_exists(project_path: &Path) -> bool {
+    project_path.exists() && project_path.join("recording-meta.json").exists()
+}
+
 fn generate_project_name(source_path: &Path) -> String {
     let stem = source_path
         .file_stem()
@@ -153,6 +157,7 @@ fn transcode_video(
     output_path: &Path,
     audio_output_path: Option<&Path>,
     project_path_str: &str,
+    project_path: &Path,
 ) -> Result<(u32, Option<u32>), ImportError> {
     use std::time::Duration as StdDuration;
 
@@ -165,7 +170,7 @@ fn transcode_video(
     let output_width = ensure_even(video_info.width);
     let output_height = ensure_even(video_info.height);
     let fps = video_info.frame_rate.0 as u32 / video_info.frame_rate.1.max(1) as u32;
-    let fps = fps.max(1).min(120);
+    let fps = fps.clamp(1, 120);
 
     let duration = get_media_duration(source_path);
     let total_frames = duration
@@ -224,7 +229,7 @@ fn transcode_video(
             })?;
 
             audio_encoder = Some(Box::new(
-                OpusEncoder::init(audio_info.clone(), &mut audio_out)
+                OpusEncoder::init(*audio_info, &mut audio_out)
                     .map_err(|e| ImportError::EncoderFailed(e.to_string()))?,
             ));
             audio_out.write_header().map_err(|e| {
@@ -305,6 +310,12 @@ fn transcode_video(
                 let progress = (frames_processed as f64 / total_frames as f64).min(0.99);
                 if progress - last_progress >= 0.01 {
                     last_progress = progress;
+
+                    if !check_project_exists(project_path) {
+                        info!("Import cancelled: project directory was deleted");
+                        return Err(ImportError::TranscodeFailed("Import cancelled".to_string()));
+                    }
+
                     emit_progress(
                         app,
                         project_path_str,
@@ -512,6 +523,12 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
         let source_path_clone = source_path.clone();
         let output_path_clone = output_video_path.clone();
         let audio_path_clone = output_audio_path.clone();
+        let project_path_clone = project_path.clone();
+
+        if !check_project_exists(&project_path) {
+            info!("Import aborted before start: project directory missing");
+            return;
+        }
 
         let result = tokio::task::spawn_blocking(move || {
             transcode_video(
@@ -520,6 +537,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                 &output_path_clone,
                 Some(&audio_path_clone),
                 &project_path_str_clone,
+                &project_path_clone,
             )
         })
         .await;

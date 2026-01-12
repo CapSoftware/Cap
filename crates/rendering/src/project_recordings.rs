@@ -26,12 +26,15 @@ impl Video {
                 .best(ffmpeg::media::Type::Video)
                 .ok_or_else(|| "No video stream found".to_string())?;
 
-            let params = stream.parameters();
+            let decoder_ctx = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+            let decoder = decoder_ctx
+                .decoder()
+                .video()
+                .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
-            let (width, height) = unsafe {
-                let ptr = params.as_ptr();
-                ((*ptr).width as u32, (*ptr).height as u32)
-            };
+            let width = decoder.width();
+            let height = decoder.height();
 
             if width == 0 || height == 0 {
                 return Err("Invalid video dimensions".to_string());
