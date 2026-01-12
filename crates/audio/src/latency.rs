@@ -744,10 +744,12 @@ mod macos {
 #[cfg(windows)]
 mod windows {
     use super::{InputLatencyInfo, OutputTransportKind, WIRELESS_MIN_LATENCY_SECS};
-    use tracing::{debug, trace, warn};
+    use tracing::{debug, trace};
     use windows::{
-        Win32::Devices::FunctionDiscovery::PKEY_Device_BusEnumeratorName,
-        Win32::Media::Audio::{IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture},
+        Win32::Devices::FunctionDiscovery::PKEY_Device_EnumeratorName,
+        Win32::Media::Audio::{
+            DEVICE_STATE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+        },
         Win32::System::Com::{
             CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, STGM_READ,
         },
@@ -795,7 +797,9 @@ mod windows {
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
 
-            let collection = enumerator.EnumAudioEndpoints(eCapture, 1).ok()?;
+            let collection = enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE(1))
+                .ok()?;
             let count = collection.GetCount().ok()?;
 
             for i in 0..count {
@@ -819,7 +823,7 @@ mod windows {
                     continue;
                 }
 
-                if let Ok(bus_enum) = props.GetValue(&PKEY_Device_BusEnumeratorName) {
+                if let Ok(bus_enum) = props.GetValue(&PKEY_Device_EnumeratorName) {
                     let bus_name = bus_enum.Anonymous.Anonymous.Anonymous.pwszVal;
                     if !bus_name.is_null() {
                         let bus_str = PCWSTR(bus_name).to_string().ok()?;

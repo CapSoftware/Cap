@@ -1819,7 +1819,7 @@ fn generate_zoom_segments_from_clicks_impl(
             moves
                 .iter()
                 .filter(|m| m.time_ms <= click_time)
-                .last()
+                .next_back()
                 .map(|m| (idx, (m.x, m.y)))
         })
         .collect();

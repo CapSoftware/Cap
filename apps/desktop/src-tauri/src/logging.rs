@@ -117,7 +117,7 @@ fn collect_storage_info(recordings_path: &std::path::Path) -> Option<StorageInfo
     for disk in disks.iter() {
         if recordings_path.starts_with(disk.mount_point()) {
             let mount_point_len = disk.mount_point().as_os_str().len();
-            if best_match.map_or(true, |(_, len)| mount_point_len > len) {
+            if best_match.is_none_or(|(_, len)| mount_point_len > len) {
                 best_match = Some((disk, mount_point_len));
             }
         }
