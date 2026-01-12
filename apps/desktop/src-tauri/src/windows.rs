@@ -481,9 +481,15 @@ impl ShowCapWindow {
                     .maximizable(true)
                     .inner_size(1275.0, 800.0)
                     .min_inner_size(1275.0, 800.0)
-                    .center()
                     .focused(true)
                     .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Editor window on macOS: {}", e);
+                    }
+                }
 
                 #[cfg(windows)]
                 {
@@ -515,9 +521,15 @@ impl ShowCapWindow {
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .min_inner_size(800.0, 600.0)
-                    .center()
                     .focused(true)
                     .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center ScreenshotEditor window on macOS: {}", e);
+                    }
+                }
 
                 #[cfg(windows)]
                 {
