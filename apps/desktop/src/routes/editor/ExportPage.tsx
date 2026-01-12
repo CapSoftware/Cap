@@ -48,14 +48,14 @@ export const COMPRESSION_OPTIONS: Array<{
 	value: ExportCompression;
 	bpp: number;
 }> = [
-	{ label: "Minimal", value: "Minimal", bpp: 0.3 },
+	{ label: "Maximum", value: "Maximum", bpp: 0.3 },
 	{ label: "Social Media", value: "Social", bpp: 0.15 },
 	{ label: "Web", value: "Web", bpp: 0.08 },
 	{ label: "Potato", value: "Potato", bpp: 0.04 },
 ];
 
 const COMPRESSION_TO_BPP: Record<ExportCompression, number> = {
-	Minimal: 0.3,
+	Maximum: 0.3,
 	Social: 0.15,
 	Web: 0.08,
 	Potato: 0.04,
@@ -155,7 +155,7 @@ export function ExportPage() {
 			fps: 30,
 			exportTo: "file",
 			resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-			compression: "Minimal",
+			compression: "Maximum",
 		}),
 		{ name: "export_settings" },
 	);
@@ -213,13 +213,28 @@ export function ExportPage() {
 	const [compressionBpp, setCompressionBpp] = createSignal(
 		COMPRESSION_TO_BPP[_settings.compression] ?? 0.15,
 	);
+	const [advancedMode, setAdvancedMode] = createSignal(false);
+
+	const isCustomBpp = () => {
+		const currentBpp = compressionBpp();
+		return !COMPRESSION_OPTIONS.some(
+			(opt) => Math.abs(opt.bpp - currentBpp) < 0.001,
+		);
+	};
+
+	const matchingPreset = () => {
+		const currentBpp = compressionBpp();
+		return COMPRESSION_OPTIONS.find(
+			(opt) => Math.abs(opt.bpp - currentBpp) < 0.001,
+		);
+	};
 
 	createEffect(
 		on(
 			() => _settings.compression,
 			(compression) => {
 				const bpp = COMPRESSION_TO_BPP[compression];
-				if (bpp !== undefined) setCompressionBpp(bpp);
+				if (bpp !== undefined && !advancedMode()) setCompressionBpp(bpp);
 			},
 		),
 	);
@@ -331,6 +346,7 @@ export function ExportPage() {
 	const exportWithSettings = (
 		onProgress: (progress: FramesRendered) => void,
 	) => {
+		const customBpp = advancedMode() && isCustomBpp() ? compressionBpp() : null;
 		const { promise, cancel } = createExportTask(
 			projectPath,
 			settings.format === "Mp4"
@@ -342,6 +358,7 @@ export function ExportPage() {
 							y: settings.resolution.height,
 						},
 						compression: settings.compression,
+						custom_bpp: customBpp,
 					}
 				: {
 						format: "Gif",
@@ -966,32 +983,98 @@ export function ExportPage() {
 							>
 								<div class="grid grid-cols-4 gap-1.5">
 									<For each={[...COMPRESSION_OPTIONS].reverse()}>
-										{(option) => (
-											<button
-												type="button"
-												class={cx(
-													"px-2 py-2 text-xs font-medium rounded-lg border transition-colors",
-													settings.compression === option.value
-														? "bg-gray-3 border-gray-5 text-gray-12"
-														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
-												)}
-												onClick={() => {
-													setPreviewLoading(true);
-													setCompressionBpp(option.bpp);
-													setSettings("compression", option.value);
-												}}
-											>
-												{option.label === "Social Media"
-													? "Social"
-													: option.label}
-											</button>
-										)}
+										{(option) => {
+											const isSelected = () => {
+												if (advancedMode() && isCustomBpp()) return false;
+												return settings.compression === option.value;
+											};
+											return (
+												<button
+													type="button"
+													class={cx(
+														"px-2 py-2 text-xs font-medium rounded-lg border transition-colors",
+														isSelected()
+															? "bg-gray-3 border-gray-5 text-gray-12"
+															: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+													)}
+													onClick={() => {
+														setPreviewLoading(true);
+														setCompressionBpp(option.bpp);
+														setSettings("compression", option.value);
+													}}
+												>
+													{option.label === "Social Media"
+														? "Social"
+														: option.label}
+												</button>
+											);
+										}}
 									</For>
 								</div>
 								<div class="flex justify-between text-[10px] text-gray-10 mt-1.5 px-0.5">
 									<span>Smaller file</span>
 									<span>Larger file</span>
 								</div>
+
+								<button
+									type="button"
+									class="flex items-center gap-2 mt-3 text-xs text-gray-11 hover:text-gray-12 transition-colors"
+									onClick={() => setAdvancedMode(!advancedMode())}
+								>
+									<div
+										class={cx(
+											"w-8 h-4 rounded-full transition-colors relative",
+											advancedMode() ? "bg-blue-9" : "bg-gray-5",
+										)}
+									>
+										<div
+											class={cx(
+												"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
+												advancedMode() ? "translate-x-4" : "translate-x-0.5",
+											)}
+										/>
+									</div>
+									<span>Advanced</span>
+								</button>
+
+								<Show when={advancedMode()}>
+									<div class="mt-3 space-y-2">
+										<div class="flex items-center justify-between text-xs">
+											<span class="text-gray-11">Bits per pixel</span>
+											<span class="text-gray-12 font-medium tabular-nums">
+												{compressionBpp().toFixed(2)}
+											</span>
+										</div>
+										<input
+											type="range"
+											min="0.02"
+											max="0.5"
+											step="0.01"
+											value={compressionBpp()}
+											onInput={(e) => {
+												const value = Number.parseFloat(e.currentTarget.value);
+												setPreviewLoading(true);
+												setCompressionBpp(value);
+												const preset = COMPRESSION_OPTIONS.find(
+													(opt) => Math.abs(opt.bpp - value) < 0.001,
+												);
+												if (preset) {
+													setSettings("compression", preset.value);
+												}
+											}}
+											class="w-full h-1.5 bg-gray-4 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-9 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-110"
+										/>
+										<div class="flex justify-between text-[10px] text-gray-9">
+											<span>0.02 (tiny)</span>
+											<span>0.50 (huge)</span>
+										</div>
+										<Show when={isCustomBpp()}>
+											<p class="text-[10px] text-amber-11 mt-1">
+												Using custom bitrate
+											</p>
+										</Show>
+									</div>
+								</Show>
 							</Field>
 						</Show>
 					</div>

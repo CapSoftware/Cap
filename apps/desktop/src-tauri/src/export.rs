@@ -142,7 +142,7 @@ pub async fn get_export_estimates(
             };
 
             let compression_factor = match mp4_settings.compression {
-                cap_export::mp4::ExportCompression::Minimal => 1.0,
+                cap_export::mp4::ExportCompression::Maximum => 1.0,
                 cap_export::mp4::ExportCompression::Social => 1.1,
                 cap_export::mp4::ExportCompression::Web => 1.15,
                 cap_export::mp4::ExportCompression::Potato => 1.2,
