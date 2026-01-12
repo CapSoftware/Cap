@@ -576,6 +576,7 @@ function createRecordingMutations(
 				fps: FPS,
 				resolution_base: OUTPUT_SIZE,
 				compression: "Web",
+				custom_bpp: null,
 			},
 			onProgress,
 		);

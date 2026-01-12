@@ -80,6 +80,7 @@ function ShareButton() {
 						y: RESOLUTION_OPTIONS._1080p.height,
 					},
 					compression: "Web",
+					custom_bpp: null,
 				},
 				(msg) => {
 					setUploadState(
