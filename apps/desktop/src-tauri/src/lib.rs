@@ -16,6 +16,7 @@ mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod http_client;
+mod import;
 mod logging;
 mod notifications;
 mod permissions;
@@ -1467,6 +1468,12 @@ async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, 
     let path = editor.project_path.clone();
     RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+#[specta::specta]
+async fn get_recording_meta_by_path(project_path: PathBuf) -> Result<RecordingMeta, String> {
+    RecordingMeta::load_for_project(&project_path).map_err(|e| e.to_string())
+}
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor))]
@@ -2578,6 +2585,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             export::get_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
+            import::start_video_import,
+            import::check_import_ready,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -2627,6 +2636,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
+            get_recording_meta_by_path,
             set_pretty_name,
             set_server_url,
             set_camera_preview_state,
@@ -2673,6 +2683,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
+            import::VideoImportProgress,
             SetCaptureAreaPending,
             DevicesUpdated,
         ])
@@ -2782,6 +2793,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::RecordingControls.label().as_str(),
                     CapWindowId::Upgrade.label().as_str(),
+                    "editor",
+                    "screenshot-editor",
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",

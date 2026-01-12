@@ -4,7 +4,7 @@ use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
-    RendererLayers,
+    RendererLayers, ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
@@ -266,6 +266,25 @@ pub async fn generate_export_preview(
         .ok_or_else(|| "Failed to decode frame".to_string())?;
 
     let frame_number = (frame_time * settings.fps as f64).floor() as u32;
+    let total_duration = project_config
+        .timeline
+        .as_ref()
+        .map(|t| t.duration())
+        .unwrap_or(0.0);
+
+    let cursor_smoothing =
+        (!project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+            tension: project_config.cursor.tension,
+            mass: project_config.cursor.mass,
+            friction: project_config.cursor.friction,
+        });
+
+    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+        &render_segment.cursor,
+        cursor_smoothing,
+        project_config.screen_movement_spring,
+        total_duration,
+    );
 
     let uniforms = ProjectUniforms::new(
         &render_constants,
@@ -275,6 +294,8 @@ pub async fn generate_export_preview(
         settings.resolution_base,
         &render_segment.cursor,
         &segment_frames,
+        total_duration,
+        &zoom_focus_interpolator,
     );
 
     let mut frame_renderer = FrameRenderer::new(&render_constants);
@@ -384,6 +405,25 @@ pub async fn generate_export_preview_fast(
     let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
 
     let frame_number = (frame_time * settings.fps as f64).floor() as u32;
+    let total_duration = project_config
+        .timeline
+        .as_ref()
+        .map(|t| t.duration())
+        .unwrap_or(0.0);
+
+    let cursor_smoothing =
+        (!project_config.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+            tension: project_config.cursor.tension,
+            mass: project_config.cursor.mass,
+            friction: project_config.cursor.friction,
+        });
+
+    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+        &segment_media.cursor,
+        cursor_smoothing,
+        project_config.screen_movement_spring,
+        total_duration,
+    );
 
     let uniforms = ProjectUniforms::new(
         &editor.render_constants,
@@ -393,6 +433,8 @@ pub async fn generate_export_preview_fast(
         settings.resolution_base,
         &segment_media.cursor,
         &segment_frames,
+        total_duration,
+        &zoom_focus_interpolator,
     );
 
     let mut frame_renderer = FrameRenderer::new(&editor.render_constants);
