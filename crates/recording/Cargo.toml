@@ -56,6 +56,7 @@ kameo = "0.17.2"
 inquire = "0.7.5"
 replace_with = "0.1.8"
 retry = "2.1.0"
+sysinfo = "0.35"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -63,6 +64,7 @@ cidre = { workspace = true }
 screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
+objc2 = "0.6"
 objc2-app-kit = "0.3.1"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
