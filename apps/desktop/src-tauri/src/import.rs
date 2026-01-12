@@ -6,8 +6,8 @@ use cap_enc_ffmpeg::{
 };
 use cap_media_info::{AudioInfo, FFRational, Pixel, VideoInfo, ensure_even};
 use cap_project::{
-    AudioMeta, Cursors, MultipleSegment, MultipleSegments, Platform, RecordingMeta,
-    RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
+    AudioMeta, Cursors, InstantRecordingMeta, MultipleSegment, MultipleSegments, Platform,
+    RecordingMeta, RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
 };
 use ffmpeg::{
     ChannelLayout,
@@ -169,8 +169,11 @@ fn transcode_video(
 
     let output_width = ensure_even(video_info.width);
     let output_height = ensure_even(video_info.height);
-    let fps = video_info.frame_rate.0 as u32 / video_info.frame_rate.1.max(1) as u32;
-    let fps = fps.clamp(1, 120);
+    let fps = if video_info.frame_rate.0 > 0 && video_info.frame_rate.1 > 0 {
+        (video_info.frame_rate.0 as u32 / video_info.frame_rate.1 as u32).clamp(1, 120)
+    } else {
+        30
+    };
 
     let duration = get_media_duration(source_path);
     let total_frames = duration
@@ -269,18 +272,25 @@ fn transcode_video(
                     || video_frame.width() != output_width
                     || video_frame.height() != output_height
                 {
-                    let scaler = scaler.get_or_insert_with(|| {
-                        ffmpeg::software::scaling::Context::get(
-                            video_frame.format(),
-                            video_frame.width(),
-                            video_frame.height(),
-                            ffmpeg::format::Pixel::YUV420P,
-                            output_width,
-                            output_height,
-                            ffmpeg::software::scaling::Flags::BILINEAR,
-                        )
-                        .expect("Failed to create scaler")
-                    });
+                    if scaler.is_none() {
+                        scaler = Some(
+                            ffmpeg::software::scaling::Context::get(
+                                video_frame.format(),
+                                video_frame.width(),
+                                video_frame.height(),
+                                ffmpeg::format::Pixel::YUV420P,
+                                output_width,
+                                output_height,
+                                ffmpeg::software::scaling::Flags::BILINEAR,
+                            )
+                            .map_err(|e| {
+                                ImportError::TranscodeFailed(format!(
+                                    "Failed to create scaler: {e}"
+                                ))
+                            })?,
+                        );
+                    }
+                    let scaler = scaler.as_mut().unwrap();
 
                     let mut scaled_frame = ffmpeg::frame::Video::empty();
                     scaled_frame.set_format(ffmpeg::format::Pixel::YUV420P);
@@ -648,15 +658,21 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
 #[tauri::command]
 #[specta::specta]
 pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
-    let meta_path = project_path.join("recording-meta.json");
-    if !meta_path.exists() {
-        return Ok(false);
-    }
+    let meta = match RecordingMeta::load_for_project(&project_path) {
+        Ok(m) => m,
+        Err(_) => return Ok(false),
+    };
 
-    let meta_content =
-        std::fs::read_to_string(&meta_path).map_err(|e| format!("Failed to read metadata: {e}"))?;
+    let is_complete = match &meta.inner {
+        RecordingMetaInner::Studio(studio) => {
+            matches!(studio.status(), StudioRecordingStatus::Complete)
+        }
+        RecordingMetaInner::Instant(instant) => {
+            matches!(instant, InstantRecordingMeta::Complete { .. })
+        }
+    };
 
-    if !meta_content.contains("\"status\":\"Complete\"") {
+    if !is_complete {
         return Ok(false);
     }
 
@@ -670,9 +686,5 @@ pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
         return Ok(false);
     }
 
-    match probe_video_can_decode(&video_path) {
-        Ok(true) => Ok(true),
-        Ok(false) => Ok(false),
-        Err(_) => Ok(false),
-    }
+    Ok(probe_video_can_decode(&video_path).unwrap_or(false))
 }
