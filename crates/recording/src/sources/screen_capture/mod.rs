@@ -1,5 +1,7 @@
 use cap_cursor_capture::CursorCropBounds;
-use cap_media_info::{AudioInfo, VideoInfo, ensure_even};
+#[cfg(target_os = "macos")]
+use cap_media_info::ensure_even;
+use cap_media_info::{AudioInfo, VideoInfo};
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
