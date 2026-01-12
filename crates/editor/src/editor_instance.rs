@@ -8,10 +8,11 @@ use cap_project::{
 };
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    RenderedFrame, SegmentVideoPaths, Video, get_duration,
+    RenderedFrame, SegmentVideoPaths, Video, ZoomFocusInterpolator, get_duration,
+    spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -20,6 +21,24 @@ use std::{
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
+
+fn get_video_duration_fallback(path: &Path) -> Option<f64> {
+    let input = ffmpeg::format::input(path).ok()?;
+
+    let container_duration = input.duration();
+    if container_duration > 0 {
+        return Some(container_duration as f64 / 1_000_000.0);
+    }
+
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    let stream_duration = stream.duration();
+    let time_base = stream.time_base();
+    if stream_duration > 0 && time_base.denominator() > 0 {
+        Some(stream_duration as f64 * time_base.numerator() as f64 / time_base.denominator() as f64)
+    } else {
+        None
+    }
+}
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -80,11 +99,17 @@ impl EditorInstance {
                         Ok(v) => v.duration,
                         Err(e) => {
                             warn!(
-                                "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                "Failed to load video for duration calculation: {} (path: {}), trying fallback",
                                 e,
                                 display_path.display()
                             );
-                            5.0
+                            match get_video_duration_fallback(&display_path) {
+                                Some(d) => d,
+                                None => {
+                                    warn!("Fallback also failed, using default duration 5.0s");
+                                    5.0
+                                }
+                            }
                         }
                     };
                     vec![TimelineSegment {
@@ -104,11 +129,17 @@ impl EditorInstance {
                             Ok(v) => v.duration,
                             Err(e) => {
                                 warn!(
-                                    "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                    "Failed to load video for duration calculation: {} (path: {}), trying fallback",
                                     e,
                                     display_path.display()
                                 );
-                                5.0
+                                match get_video_duration_fallback(&display_path) {
+                                    Some(d) => d,
+                                    None => {
+                                        warn!("Fallback also failed, using default duration 5.0s");
+                                        5.0
+                                    }
+                                }
                             }
                         };
                         if duration <= 0.0 {
@@ -425,6 +456,27 @@ impl EditorInstance {
                             }
 
                             if let Some(segment_frames) = segment_frames_opt {
+                                let total_duration = project
+                                    .timeline
+                                    .as_ref()
+                                    .map(|t| t.duration())
+                                    .unwrap_or(0.0);
+
+                                let cursor_smoothing = (!project.cursor.raw).then_some(
+                                    SpringMassDamperSimulationConfig {
+                                        tension: project.cursor.tension,
+                                        mass: project.cursor.mass,
+                                        friction: project.cursor.friction,
+                                    },
+                                );
+
+                                let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+                                    &segment_medias.cursor,
+                                    cursor_smoothing,
+                                    project.screen_movement_spring,
+                                    total_duration,
+                                );
+
                                 let uniforms = ProjectUniforms::new(
                                     &self.render_constants,
                                     &project,
@@ -433,6 +485,8 @@ impl EditorInstance {
                                     resolution_base,
                                     &segment_medias.cursor,
                                     &segment_frames,
+                                    total_duration,
+                                    &zoom_focus_interpolator,
                                 );
                                 self.renderer
                                     .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
@@ -504,6 +558,26 @@ pub async fn create_segments(
                 .transpose()?
                 .map(Arc::new);
 
+            let cursor = Arc::new(
+                s.cursor
+                    .as_ref()
+                    .map(|cursor_path| {
+                        let full_path = recording_meta.path(cursor_path);
+                        match CursorEvents::load_from_file(&full_path) {
+                            Ok(events) => events,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to load cursor events from {}: {}",
+                                    full_path.display(),
+                                    e
+                                );
+                                CursorEvents::default()
+                            }
+                        }
+                    })
+                    .unwrap_or_default(),
+            );
+
             let decoders = RecordingSegmentDecoders::new(
                 recording_meta,
                 meta,
@@ -519,7 +593,7 @@ pub async fn create_segments(
             Ok(vec![SegmentMedia {
                 audio,
                 system_audio: None,
-                cursor: Default::default(),
+                cursor,
                 decoders,
             }])
         }
