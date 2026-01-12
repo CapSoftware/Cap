@@ -140,7 +140,9 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             let scale =
                 display.physical_size().unwrap().width() / display.logical_size().unwrap().width();
 
-            PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
+            let width = ensure_even((logical_size.width() * scale) as u32) as f64;
+            let height = ensure_even((logical_size.height() * scale) as u32) as f64;
+            PhysicalSize::new(width, height)
         };
 
         debug!("size: {:?}", size);
