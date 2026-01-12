@@ -27,6 +27,24 @@ const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 let mainThreadNv12Buffer: Uint8ClampedArray | null = null;
 let mainThreadNv12BufferSize = 0;
 
+export type FpsStats = {
+	fps: number;
+	renderFps: number;
+	avgFrameMs: number;
+	minFrameMs: number;
+	maxFrameMs: number;
+	mbPerSec: number;
+};
+
+let globalFpsStatsGetter: (() => FpsStats) | null = null;
+
+export function getFpsStats(): FpsStats | null {
+	if (globalFpsStatsGetter) {
+		return globalFpsStatsGetter();
+	}
+	return null;
+}
+
 function convertNv12ToRgbaMainThread(
 	nv12Data: Uint8ClampedArray,
 	width: number,
@@ -572,7 +590,7 @@ export function createImageDataWS(
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
 
-	const getFpsStats = () => ({
+	const getLocalFpsStats = (): FpsStats => ({
 		fps:
 			frameCount > 0 && frameTimeSum > 0
 				? 1000 / (frameTimeSum / frameCount)
@@ -584,7 +602,8 @@ export function createImageDataWS(
 		mbPerSec: totalBytesReceived / 1_000_000,
 	});
 
-	(globalThis as Record<string, unknown>).__capFpsStats = getFpsStats;
+	globalFpsStatsGetter = getLocalFpsStats;
+	(globalThis as Record<string, unknown>).__capFpsStats = getLocalFpsStats;
 
 	const NV12_MAGIC = 0x4e563132;
 
