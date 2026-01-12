@@ -20,7 +20,9 @@ use specta::Type;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
-use tracing::{error, info};
+use tracing::{debug, error, info};
+
+use crate::create_screenshot;
 
 #[derive(Serialize, Type, Clone, Debug)]
 pub enum ImportStage {
@@ -169,8 +171,9 @@ fn transcode_video(
 
     let output_width = ensure_even(video_info.width);
     let output_height = ensure_even(video_info.height);
-    let fps = if video_info.frame_rate.0 > 0 && video_info.frame_rate.1 > 0 {
-        (video_info.frame_rate.0 as u32 / video_info.frame_rate.1 as u32).clamp(1, 120)
+    let fps = if video_info.frame_rate.1 > 0 {
+        ((video_info.frame_rate.0 as f64 / video_info.frame_rate.1 as f64).round() as u32)
+            .clamp(1, 120)
     } else {
         30
     };
@@ -335,17 +338,15 @@ fn transcode_video(
                     );
                 }
             }
-        } else if let Some((audio_idx, decoder, _)) = audio_decoder.as_mut() {
-            if stream_index == *audio_idx {
-                if let (Some(encoder), Some(audio_out)) =
-                    (audio_encoder.as_mut(), audio_output.as_mut())
-                {
-                    decoder.send_packet(&packet)?;
+        } else if let Some((audio_idx, decoder, _)) = audio_decoder.as_mut()
+            && stream_index == *audio_idx
+            && let (Some(encoder), Some(audio_out)) =
+                (audio_encoder.as_mut(), audio_output.as_mut())
+        {
+            decoder.send_packet(&packet)?;
 
-                    while decoder.receive_frame(&mut audio_frame).is_ok() {
-                        encoder.send_frame(audio_frame.clone(), audio_out);
-                    }
-                }
+            while decoder.receive_frame(&mut audio_frame).is_ok() {
+                encoder.send_frame(audio_frame.clone(), audio_out);
             }
         }
     }
@@ -420,10 +421,10 @@ fn transcode_video(
     if let Ok(file) = std::fs::File::open(output_path) {
         let _ = file.sync_all();
     }
-    if let Some(audio_path) = audio_output_path {
-        if let Ok(file) = std::fs::File::open(audio_path) {
-            let _ = file.sync_all();
-        }
+    if let Some(audio_path) = audio_output_path
+        && let Ok(file) = std::fs::File::open(audio_path)
+    {
+        let _ = file.sync_all();
     }
 
     Ok((fps, sample_rate))
@@ -619,6 +620,21 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                     return;
                 }
 
+                let screenshots_dir = project_path.join("screenshots");
+                if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
+                    error!("Failed to create screenshots directory: {:?}", e);
+                } else {
+                    let display_screenshot = screenshots_dir.join("display.jpg");
+                    let video_path = output_video_path.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            create_screenshot(video_path, display_screenshot, None).await
+                        {
+                            error!("Failed to create thumbnail for imported video: {}", e);
+                        }
+                    });
+                }
+
                 emit_progress(
                     &app,
                     &project_path_str,
@@ -658,9 +674,14 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
 #[tauri::command]
 #[specta::specta]
 pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
+    debug!("check_import_ready called for: {:?}", project_path);
+
     let meta = match RecordingMeta::load_for_project(&project_path) {
         Ok(m) => m,
-        Err(_) => return Ok(false),
+        Err(e) => {
+            debug!("check_import_ready: meta load failed: {:?}", e);
+            return Ok(false);
+        }
     };
 
     let is_complete = match &meta.inner {
@@ -673,6 +694,7 @@ pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
     };
 
     if !is_complete {
+        debug!("check_import_ready: not complete yet");
         return Ok(false);
     }
 
@@ -683,16 +705,31 @@ pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
         .join("display.mp4");
 
     if !video_path.exists() {
+        debug!(
+            "check_import_ready: video path doesn't exist: {:?}",
+            video_path
+        );
         return Ok(false);
     }
 
-    if !probe_video_can_decode(&video_path).unwrap_or(false) {
+    let can_decode = probe_video_can_decode(&video_path);
+    debug!(
+        "check_import_ready: probe_video_can_decode result: {:?}",
+        can_decode
+    );
+    if !can_decode.unwrap_or(false) {
         return Ok(false);
     }
 
-    if get_media_duration(&video_path).is_none() {
+    let duration = get_media_duration(&video_path);
+    debug!(
+        "check_import_ready: get_media_duration result: {:?}",
+        duration
+    );
+    if duration.is_none() {
         return Ok(false);
     }
 
+    debug!("check_import_ready: all checks passed, returning true");
     Ok(true)
 }
