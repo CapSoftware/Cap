@@ -425,10 +425,8 @@ impl InterpolatedZoom {
             },
         };
 
-        if is_auto_mode {
-            if let Some(cursor_coord) = actual_cursor {
-                return result.ensure_cursor_visible((cursor_coord.x, cursor_coord.y));
-            }
+        if is_auto_mode && let Some(cursor_coord) = actual_cursor {
+            return result.ensure_cursor_visible((cursor_coord.x, cursor_coord.y));
         }
 
         result

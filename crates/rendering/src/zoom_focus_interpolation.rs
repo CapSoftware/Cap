@@ -142,10 +142,10 @@ impl ZoomFocusInterpolator {
             return Coord::new(XY::new(pos.x as f64, pos.y as f64));
         }
 
-        if let Some(last) = events.last() {
-            if time_ms >= last.time {
-                return Coord::new(XY::new(last.position.x as f64, last.position.y as f64));
-            }
+        if let Some(last) = events.last()
+            && time_ms >= last.time
+        {
+            return Coord::new(XY::new(last.position.x as f64, last.position.y as f64));
         }
 
         let idx = events
