@@ -825,8 +825,8 @@ mod windows {
 
                 if let Ok(bus_enum) = props.GetValue(&PKEY_Device_EnumeratorName) {
                     let bus_name = bus_enum.Anonymous.Anonymous.Anonymous.pwszVal;
-                    if !bus_name.is_null() {
-                        let bus_str = PCWSTR(bus_name).to_string().ok()?;
+                    if !bus_name.0.is_null() {
+                        let bus_str = PCWSTR(bus_name.0).to_string().ok()?;
                         trace!(
                             device = ?friendly_name,
                             bus = %bus_str,
@@ -858,10 +858,10 @@ mod windows {
             let props = device.OpenPropertyStore(STGM_READ).ok()?;
             let name_val = props.GetValue(&PKEY_Device_FriendlyName).ok()?;
             let name_ptr = name_val.Anonymous.Anonymous.Anonymous.pwszVal;
-            if name_ptr.is_null() {
+            if name_ptr.0.is_null() {
                 return None;
             }
-            PCWSTR(name_ptr).to_string().ok()
+            PCWSTR(name_ptr.0).to_string().ok()
         }
     }
 
