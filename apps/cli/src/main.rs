@@ -168,6 +168,7 @@ impl Export {
             resolution_base: XY::new(1920, 1080),
             compression: cap_export::mp4::ExportCompression::Maximum,
             custom_bpp: None,
+            force_ffmpeg_decoder: false,
         }
         .export(exporter_base, move |_f| {
             // print!("\rrendered frame {f}");

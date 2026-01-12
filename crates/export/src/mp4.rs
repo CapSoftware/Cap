@@ -36,6 +36,8 @@ pub struct Mp4ExportSettings {
     pub resolution_base: XY<u32>,
     pub compression: ExportCompression,
     pub custom_bpp: Option<f32>,
+    #[serde(default)]
+    pub force_ffmpeg_decoder: bool,
 }
 
 impl Mp4ExportSettings {

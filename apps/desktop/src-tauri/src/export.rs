@@ -10,7 +10,7 @@ use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::Ordering},
 };
 use tracing::{info, instrument};
@@ -31,21 +31,17 @@ impl ExportSettings {
     }
 }
 
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(progress))]
-pub async fn export_video(
-    project_path: PathBuf,
-    progress: tauri::ipc::Channel<FramesRendered>,
-    settings: ExportSettings,
+async fn do_export(
+    project_path: &Path,
+    settings: &ExportSettings,
+    progress: &tauri::ipc::Channel<FramesRendered>,
+    force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
-    let exporter_base = ExporterBase::builder(project_path)
+    let exporter_base = ExporterBase::builder(project_path.to_path_buf())
+        .with_force_ffmpeg_decoder(force_ffmpeg)
         .build()
         .await
-        .map_err(|e| {
-            sentry::capture_message(&e.to_string(), sentry::Level::Error);
-            e.to_string()
-        })?;
+        .map_err(|e| e.to_string())?;
 
     let total_frames = exporter_base.total_frames(settings.fps());
 
@@ -54,11 +50,11 @@ pub async fn export_video(
         total_frames,
     });
 
-    let output_path = match settings {
-        ExportSettings::Mp4(settings) => {
-            settings
+    match settings {
+        ExportSettings::Mp4(mp4_settings) => {
+            let progress = progress.clone();
+            mp4_settings
                 .export(exporter_base, move |frame_index| {
-                    // Ensure progress never exceeds total frames
                     progress
                         .send(FramesRendered {
                             rendered_count: (frame_index + 1).min(total_frames),
@@ -68,10 +64,10 @@ pub async fn export_video(
                 })
                 .await
         }
-        ExportSettings::Gif(settings) => {
-            settings
+        ExportSettings::Gif(gif_settings) => {
+            let progress = progress.clone();
+            gif_settings
                 .export(exporter_base, move |frame_index| {
-                    // Ensure progress never exceeds total frames
                     progress
                         .send(FramesRendered {
                             rendered_count: (frame_index + 1).min(total_frames),
@@ -82,14 +78,60 @@ pub async fn export_video(
                 .await
         }
     }
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?;
+}
 
-    info!("Exported to {} completed", output_path.display());
+fn is_frame_decode_error(error: &str) -> bool {
+    error.contains("Failed to decode video frames")
+        || error.contains("Too many consecutive frame failures")
+}
 
-    Ok(output_path)
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(progress))]
+pub async fn export_video(
+    project_path: PathBuf,
+    progress: tauri::ipc::Channel<FramesRendered>,
+    settings: ExportSettings,
+) -> Result<PathBuf, String> {
+    let force_ffmpeg = match &settings {
+        ExportSettings::Mp4(s) => s.force_ffmpeg_decoder,
+        ExportSettings::Gif(_) => false,
+    };
+
+    let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
+
+    match result {
+        Ok(path) => {
+            info!("Exported to {} completed", path.display());
+            Ok(path)
+        }
+        Err(e) if !force_ffmpeg && is_frame_decode_error(&e) => {
+            info!(
+                "Export failed with frame decode error, retrying with FFmpeg decoder: {}",
+                e
+            );
+
+            let retry_result = do_export(&project_path, &settings, &progress, true).await;
+
+            match retry_result {
+                Ok(path) => {
+                    info!(
+                        "Export succeeded with FFmpeg decoder fallback: {}",
+                        path.display()
+                    );
+                    Ok(path)
+                }
+                Err(retry_e) => {
+                    sentry::capture_message(&retry_e, sentry::Level::Error);
+                    Err(retry_e)
+                }
+            }
+        }
+        Err(e) => {
+            sentry::capture_message(&e, sentry::Level::Error);
+            Err(e)
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]
@@ -231,7 +273,7 @@ pub async fn generate_export_preview(
         .map_err(|e| format!("Failed to create render constants: {e}"))?,
     );
 
-    let segments = create_segments(&recording_meta, studio_meta)
+    let segments = create_segments(&recording_meta, studio_meta, false)
         .await
         .map_err(|e| format!("Failed to create segments: {e}"))?;
 

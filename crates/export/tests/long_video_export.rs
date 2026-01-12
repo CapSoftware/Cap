@@ -133,6 +133,7 @@ async fn run_export(project_path: PathBuf, fps: u32) -> Result<(PathBuf, Duratio
         resolution_base: XY::new(TEST_VIDEO_WIDTH, TEST_VIDEO_HEIGHT),
         compression: ExportCompression::Potato,
         custom_bpp: None,
+        force_ffmpeg_decoder: false,
     };
 
     let total_frames = exporter_base.total_frames(fps);
