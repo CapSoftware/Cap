@@ -295,6 +295,9 @@ async deleteWhisperModel(modelPath: string) : Promise<null> {
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
 },
+async prewarmTargetSelectOverlays() : Promise<null> {
+    return await TAURI_INVOKE("prewarm_target_select_overlays");
+},
 async openTargetSelectOverlays(focusedTarget: ScreenCaptureTarget | null, specificDisplayId: string | null) : Promise<null> {
     return await TAURI_INVOKE("open_target_select_overlays", { focusedTarget, specificDisplayId });
 },

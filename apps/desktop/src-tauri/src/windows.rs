@@ -396,16 +396,28 @@ impl ShowCapWindow {
                 _ => {}
             }
 
-            window.show().ok();
-            window.unminimize().ok();
-            window.set_focus().ok();
-
-            if let Self::Main { init_target_mode } = self {
+            if let Self::Main {
+                init_target_mode: Some(target_mode),
+            } = self
+            {
+                window.hide().ok();
                 let _ = RequestSetTargetMode {
-                    target_mode: *init_target_mode,
+                    target_mode: Some(*target_mode),
                     display_id: cursor_display_id,
                 }
                 .emit(app);
+            } else {
+                window.show().ok();
+                window.unminimize().ok();
+                window.set_focus().ok();
+
+                if let Self::Main { init_target_mode } = self {
+                    let _ = RequestSetTargetMode {
+                        target_mode: *init_target_mode,
+                        display_id: cursor_display_id,
+                    }
+                    .emit(app);
+                }
             }
 
             return Ok(window);

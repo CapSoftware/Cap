@@ -1,6 +1,6 @@
 use crate::{
     NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
-    RequestOpenRecordingPicker, RequestOpenSettings, recording,
+    RequestOpenSettings, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     windows::ShowCapWindow,
 };
@@ -613,22 +613,22 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     });
                 }
                 Ok(TrayItem::RecordDisplay) => {
-                    let _ = RequestOpenRecordingPicker {
-                        target_mode: Some(RecordingTargetMode::Display),
-                    }
-                    .emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::open_target_picker(&app, RecordingTargetMode::Display).await;
+                    });
                 }
                 Ok(TrayItem::RecordWindow) => {
-                    let _ = RequestOpenRecordingPicker {
-                        target_mode: Some(RecordingTargetMode::Window),
-                    }
-                    .emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::open_target_picker(&app, RecordingTargetMode::Window).await;
+                    });
                 }
                 Ok(TrayItem::RecordArea) => {
-                    let _ = RequestOpenRecordingPicker {
-                        target_mode: Some(RecordingTargetMode::Area),
-                    }
-                    .emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::open_target_picker(&app, RecordingTargetMode::Area).await;
+                    });
                 }
                 Ok(TrayItem::ImportVideo) => {
                     let app = app.clone();
