@@ -17,7 +17,7 @@ name: cap-so-docker-template
 # - S3_PATH_STYLE: true for R2/most S3-compatible, false for AWS S3 virtual-hosted style
 #
 # Option 2: Local MinIO storage (included on this compose)
-# Deploy MinIO as a separate service in the same network or and set:
+# Deploy MinIO as a separate service in the same network and set:
 # - CAP_AWS_ACCESS_KEY: MinIO root user
 # - CAP_AWS_SECRET_KEY: MinIO root password
 # - CAP_AWS_BUCKET: Your bucket name (e.g., capso)
