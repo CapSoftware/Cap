@@ -112,7 +112,11 @@ const Links = [
 	},
 ];
 
-export const Navbar = () => {
+interface NavbarProps {
+	stars?: string;
+}
+
+export const Navbar = ({ stars }: NavbarProps) => {
 	const pathname = usePathname();
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
 	const auth = useCurrentUser();
@@ -222,7 +226,7 @@ export const Navbar = () => {
 								size="sm"
 								className="w-full font-medium sm:w-auto"
 							>
-								Github
+								{`GitHub${stars ? ` (${stars})` : ""}`}
 							</Button>
 							<Suspense
 								fallback={
@@ -288,7 +292,11 @@ export const Navbar = () => {
 				</nav>
 			</header>
 			{showMobileMenu && (
-				<MobileMenu setShowMobileMenu={setShowMobileMenu} auth={auth} />
+				<MobileMenu
+					setShowMobileMenu={setShowMobileMenu}
+					auth={auth}
+					stars={stars}
+				/>
 			)}
 		</>
 	);
