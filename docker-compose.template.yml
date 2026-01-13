@@ -49,9 +49,14 @@ services:
       MEDIA_SERVER_URL: http://cap-media-server:3456
       # CHANGE THESE TO YOUR OWN VALUES
       MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
-
     ports:
       - 3000:3000
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   ps-mysql:
     container_name: cap-primary-db
@@ -69,6 +74,12 @@ services:
       ]
     ports:
       - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     volumes:
       - ps-mysql:/var/lib/mysql
 
@@ -80,6 +91,13 @@ services:
       PORT: 3456
     ports:
       - "3456:3456"
+    # TO DO: Enable healthcheck after media server image is published (wget mostly works but double check if wget is present inside container)
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3456/ || exit 1"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 10s
 
   # Local S3 Strorage
   minio:
@@ -94,6 +112,12 @@ services:
       # CHANGE THESE TO YOUR OWN VALUES
       - MINIO_ROOT_USER=capS3root
       - MINIO_ROOT_PASSWORD=capS3root
+    healthcheck:
+        test: ["CMD", "mc", "ready", "local"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
     volumes:
       - minio-data:/data
       - minio-certs:/certs
