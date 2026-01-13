@@ -683,8 +683,7 @@ impl AVAssetReaderDecoder {
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
                                     let _ = req.sender.send(data.to_decoded_frame());
                                 } else {
-                                    const MAX_FALLBACK_DISTANCE: u32 = 90;
-
+                                    const MAX_FALLBACK_DISTANCE: u32 = 300;
                                     let nearest = cache
                                         .range(..=req.frame)
                                         .next_back()
@@ -695,7 +694,14 @@ impl AVAssetReaderDecoder {
                                         if distance <= MAX_FALLBACK_DISTANCE {
                                             let _ =
                                                 req.sender.send(cached.data().to_decoded_frame());
+                                        } else {
+                                            let _ = req
+                                                .sender
+                                                .send(cache_frame.data().to_decoded_frame());
                                         }
+                                    } else {
+                                        let _ =
+                                            req.sender.send(cache_frame.data().to_decoded_frame());
                                     }
                                 }
                             } else {
@@ -755,16 +761,14 @@ impl AVAssetReaderDecoder {
                 this.pool_manager.update_decoder_position(decoder_idx, pos);
             }
 
-            let mut unfulfilled_count = 0u32;
             let decoder_returned_no_frames = frames_iterated == 0;
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
                     let _ = req.sender.send(data.to_decoded_frame());
                 } else {
-                    const MAX_FALLBACK_DISTANCE: u32 = 90;
-                    const MAX_FALLBACK_DISTANCE_EOF: u32 = 180;
-
+                    const MAX_FALLBACK_DISTANCE: u32 = 300;
+                    const MAX_FALLBACK_DISTANCE_EOF: u32 = 600;
                     let fallback_distance = if decoder_returned_no_frames {
                         MAX_FALLBACK_DISTANCE_EOF
                     } else {
@@ -785,25 +789,41 @@ impl AVAssetReaderDecoder {
                         } else if let Some(ref first) = *first_ever_frame.borrow() {
                             let _ = req.sender.send(first.to_decoded_frame());
                         } else {
-                            unfulfilled_count += 1;
+                            tracing::warn!(
+                                requested_frame = req.frame,
+                                cache_size = cache.len(),
+                                frames_iterated = frames_iterated,
+                                decoder_returned_no_frames = decoder_returned_no_frames,
+                                width = video_width,
+                                height = video_height,
+                                "No fallback frame available - sending black frame"
+                            );
+                            let black_frame_data =
+                                vec![0u8; (video_width * video_height * 4) as usize];
+                            let black_frame =
+                                DecodedFrame::new(black_frame_data, video_width, video_height);
+                            let _ = req.sender.send(black_frame);
                         }
                     } else if let Some(ref last) = *last_sent_frame.borrow() {
                         let _ = req.sender.send(last.to_decoded_frame());
                     } else if let Some(ref first) = *first_ever_frame.borrow() {
                         let _ = req.sender.send(first.to_decoded_frame());
                     } else {
-                        unfulfilled_count += 1;
+                        tracing::warn!(
+                            requested_frame = req.frame,
+                            cache_size = cache.len(),
+                            frames_iterated = frames_iterated,
+                            decoder_returned_no_frames = decoder_returned_no_frames,
+                            width = video_width,
+                            height = video_height,
+                            "No fallback frame available - sending black frame"
+                        );
+                        let black_frame_data = vec![0u8; (video_width * video_height * 4) as usize];
+                        let black_frame =
+                            DecodedFrame::new(black_frame_data, video_width, video_height);
+                        let _ = req.sender.send(black_frame);
                     }
                 }
-            }
-
-            if unfulfilled_count > 0 {
-                tracing::warn!(
-                    unfulfilled_count = unfulfilled_count,
-                    cache_size = cache.len(),
-                    frames_iterated = frames_iterated,
-                    "Frame requests could not be fulfilled - frames not in cache or nearby"
-                );
             }
         }
     }
