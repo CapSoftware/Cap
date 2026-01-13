@@ -43,6 +43,7 @@ pub struct DisplayInformation {
     name: Option<String>,
     physical_size: Option<PhysicalSize>,
     logical_size: Option<LogicalSize>,
+    logical_bounds: Option<LogicalBounds>,
     refresh_rate: String,
 }
 
@@ -53,16 +54,34 @@ pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
     focused_target: Option<ScreenCaptureTarget>,
+    specific_display_id: Option<String>,
 ) -> Result<(), String> {
-    let displays = scap_targets::Display::list()
-        .into_iter()
-        .map(|d| d.id())
-        .collect::<Vec<_>>();
-    for display_id in displays {
-        let _ = ShowCapWindow::TargetSelectOverlay { display_id }
-            .show(&app)
-            .await;
+    let display_id = if let Some(id_str) = specific_display_id {
+        id_str
+            .parse::<DisplayId>()
+            .unwrap_or_else(|_| Display::primary().id())
+    } else if let Some(display) = focused_target.as_ref().and_then(|t| t.display()) {
+        display.id()
+    } else {
+        Display::get_containing_cursor()
+            .map(|d| d.id())
+            .unwrap_or_else(|| Display::primary().id())
+    };
+
+    for (id, window) in app.webview_windows() {
+        if let Ok(CapWindowId::TargetSelectOverlay {
+            display_id: existing_id,
+        }) = CapWindowId::from_str(&id)
+        {
+            if existing_id != display_id {
+                let _ = window.close();
+            }
+        }
     }
+
+    let _ = ShowCapWindow::TargetSelectOverlay { display_id }
+        .show(&app)
+        .await;
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
         .ok()
@@ -232,6 +251,7 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
         name: display.name(),
         physical_size: display.physical_size(),
         logical_size: display.logical_size(),
+        logical_bounds: display.raw_handle().logical_bounds(),
         refresh_rate: display.refresh_rate().to_string(),
     })
 }

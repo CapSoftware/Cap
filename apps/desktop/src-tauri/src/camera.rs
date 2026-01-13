@@ -198,7 +198,7 @@ impl InitializedCameraPreview {
             1.0
         };
 
-        let size = resize_window(&window, default_state, aspect, true)
+        let size = resize_window(&window, default_state, aspect, false)
             .context("Error resizing Tauri window")?;
 
         let (tx, rx) = oneshot::channel();

@@ -381,7 +381,7 @@ function Inner() {
 										setOptions({
 											targetMode: "area",
 										});
-										commands.openTargetSelectOverlays(null);
+										commands.openTargetSelectOverlays(null, null);
 									}}
 								>
 									Adjust recording area
@@ -494,8 +494,8 @@ function Inner() {
 						if (options.mode === "screenshot") return;
 						const bounds = crop();
 						const interacting = isInteracting();
+						const displayInfo = areaDisplayInfo.data;
 
-						// Find the camera window if we haven't yet
 						let win = cameraWindow();
 						if (!win) {
 							// Try to find it
@@ -569,6 +569,11 @@ function Inner() {
 							bounds.width > newWidth + padding * 2 &&
 							bounds.height > newHeight + padding * 2
 						) {
+							const displayOriginX =
+								displayInfo?.logical_bounds?.position?.x ?? 0;
+							const displayOriginY =
+								displayInfo?.logical_bounds?.position?.y ?? 0;
+
 							const newX = Math.round(
 								bounds.x + bounds.width - newWidth - padding,
 							);
@@ -577,8 +582,8 @@ function Inner() {
 							);
 
 							setTargetState({
-								x: newX * scaleFactor,
-								y: newY * scaleFactor,
+								x: (newX + displayOriginX) * scaleFactor,
+								y: (newY + displayOriginY) * scaleFactor,
 								width: newWidth * scaleFactor,
 								height: newHeight * scaleFactor,
 							});

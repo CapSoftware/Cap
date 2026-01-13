@@ -902,6 +902,12 @@ pub struct RequestOpenRecordingPicker {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestSetTargetMode {
+    pub target_mode: Option<RecordingTargetMode>,
+    pub display_id: Option<String>,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
     page: String,
 }
@@ -2673,6 +2679,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RecordingStopped,
             RequestStartRecording,
             RequestOpenRecordingPicker,
+            RequestSetTargetMode,
             RequestOpenSettings,
             RequestScreenCapturePrewarm,
             NewNotification,

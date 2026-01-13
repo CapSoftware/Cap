@@ -74,11 +74,16 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                 let position = b.position();
                 let size = b.size().map(|v| (v / 2.0).floor() * 2.0);
 
+                let left = position.x().max(0.0) as u32;
+                let top = position.y().max(0.0) as u32;
+                let right = (position.x() + size.width()).max(0.0) as u32;
+                let bottom = (position.y() + size.height()).max(0.0) as u32;
+
                 D3D11_BOX {
-                    left: position.x() as u32,
-                    top: position.y() as u32,
-                    right: (position.x() + size.width()) as u32,
-                    bottom: (position.y() + size.height()) as u32,
+                    left,
+                    top,
+                    right: right.max(left),
+                    bottom: bottom.max(top),
                     front: 0,
                     back: 1,
                 }

@@ -641,7 +641,10 @@ function Page() {
 			reconcile({ variant: "display", id: target.id }),
 		);
 		setOptions("targetMode", "display");
-		commands.openTargetSelectOverlays({ variant: "display", id: target.id });
+		commands.openTargetSelectOverlays(
+			{ variant: "display", id: target.id },
+			null,
+		);
 		setDisplayMenuOpen(false);
 		displayTriggerRef?.focus();
 	};
@@ -652,7 +655,10 @@ function Page() {
 			reconcile({ variant: "window", id: target.id }),
 		);
 		setOptions("targetMode", "window");
-		commands.openTargetSelectOverlays({ variant: "window", id: target.id });
+		commands.openTargetSelectOverlays(
+			{ variant: "window", id: target.id },
+			null,
+		);
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
 
@@ -680,7 +686,7 @@ function Page() {
 		};
 		const targetMode = __CAP__?.initialTargetMode ?? null;
 		setOptions({ targetMode });
-		if (targetMode) await commands.openTargetSelectOverlays(null);
+		if (targetMode) await commands.openTargetSelectOverlays(null, null);
 		else await commands.closeTargetSelectOverlays();
 
 		const currentWindow = getCurrentWindow();
@@ -705,11 +711,23 @@ function Page() {
 			);
 		});
 
+		const unlistenSetTargetMode = events.requestSetTargetMode.listen(
+			async (event) => {
+				const newTargetMode = event.payload.target_mode;
+				const displayId = event.payload.display_id;
+				setOptions({ targetMode: newTargetMode });
+				if (newTargetMode)
+					await commands.openTargetSelectOverlays(null, displayId);
+				else await commands.closeTargetSelectOverlays();
+			},
+		);
+
 		commands.updateAuthPlan();
 
 		onCleanup(async () => {
 			(await unlistenFocus)?.();
 			(await unlistenResize)?.();
+			(await unlistenSetTargetMode)?.();
 		});
 	});
 
@@ -834,7 +852,7 @@ function Page() {
 		if (isRecording()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		setOptions("targetMode", nextMode);
-		if (nextMode) commands.openTargetSelectOverlays(null);
+		if (nextMode) commands.openTargetSelectOverlays(null, null);
 		else commands.closeTargetSelectOverlays();
 	};
 
