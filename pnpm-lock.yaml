@@ -118,7 +118,7 @@ importers:
         version: 0.14.10(solid-js@1.9.6)
       '@solidjs/start':
         specifier: ^1.1.3
-        version: 1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)
+        version: 1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)
       '@tanstack/solid-query':
         specifier: ^5.51.21
         version: 5.75.4(solid-js@1.9.6)
@@ -208,7 +208,7 @@ importers:
         version: 9.0.1
       vinxi:
         specifier: ^0.5.6
-        version: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+        version: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
       webcodecs:
         specifier: ^0.1.0
         version: 0.1.0
@@ -313,7 +313,7 @@ importers:
     devDependencies:
       '@types/bun':
         specifier: latest
-        version: 1.3.5
+        version: 1.3.6
 
   apps/storybook:
     dependencies:
@@ -470,7 +470,7 @@ importers:
         version: 0.0.14
       '@kubiks/otel-drizzle':
         specifier: ^2.1.0
-        version: 2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))
+        version: 2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))
       '@mux/mux-node':
         specifier: ^8.5.1
         version: 8.8.0(encoding@0.1.13)
@@ -605,7 +605,7 @@ importers:
         version: 16.5.0
       drizzle-orm:
         specifier: 0.44.6
-        version: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2)
+        version: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2)
       dub:
         specifier: ^0.64.0
         version: 0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.76)
@@ -702,6 +702,9 @@ importers:
       react-hot-toast:
         specifier: ^2.4.1
         version: 2.5.2(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+      react-markdown:
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.1.13)(react@19.1.1)
       react-rnd:
         specifier: ^10.4.1
         version: 10.5.2(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -963,7 +966,7 @@ importers:
         version: 0.47.0(@effect/experimental@0.56.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4)(ioredis@5.6.1))(@effect/platform@0.92.1(effect@3.18.4))(@effect/sql@0.44.2(@effect/experimental@0.56.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4)(ioredis@5.6.1))(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4))(effect@3.18.4)
       '@kubiks/otel-drizzle':
         specifier: ^2.1.0
-        version: 2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))
+        version: 2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))
       '@mattrax/mysql-planetscale':
         specifier: ^0.0.3
         version: 0.0.3
@@ -984,7 +987,7 @@ importers:
         version: 1.0.5(react@19.1.1)
       drizzle-orm:
         specifier: 0.44.6
-        version: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2)
+        version: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2)
       dub:
         specifier: ^0.64.0
         version: 0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.76)
@@ -1350,7 +1353,7 @@ importers:
         version: 3.1.0(@aws-sdk/credential-provider-web-identity@3.965.0)
       drizzle-orm:
         specifier: 0.44.6
-        version: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2)
+        version: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2)
       effect:
         specifier: ^3.18.4
         version: 3.18.4
@@ -4697,8 +4700,8 @@ packages:
     resolution: {integrity: sha512-JD6DerIKdJGmRp4jQyX5FlrQjA4tjOw1cvfsPAZXfOOEErMUHjPcPSICS+6WnM0nB0efSFARh0KAZss+bvExOA==}
     engines: {node: '>=14'}
 
-  '@oxc-project/types@0.107.0':
-    resolution: {integrity: sha512-QFDRbYfV2LVx8tyqtyiah3jQPUj1mK2+RYwxyFWyGoys6XJnwTdlzO6rdNNHOPorHAu5Uo34oWRKcvNpbJarmQ==}
+  '@oxc-project/types@0.108.0':
+    resolution: {integrity: sha512-7lf13b2IA/kZO6xgnIZA88sq3vwrxWk+2vxf6cc+omwYCRTiA5e63Beqf3fz/v8jEviChWWmFYBwzfSeyrsj7Q==}
 
   '@oxc-project/types@0.94.0':
     resolution: {integrity: sha512-+UgQT/4o59cZfH6Cp7G0hwmqEQ0wE+AdIwhikdwnhWI9Dp8CgSY081+Q3O67/wq3VJu8mgUEB93J9EHHn70fOw==}
@@ -5648,8 +5651,8 @@ packages:
     cpu: [arm64]
     os: [android]
 
-  '@rolldown/binding-android-arm64@1.0.0-beta.59':
-    resolution: {integrity: sha512-6yLLgyswYwiCfls9+hoNFY9F8TQdwo15hpXDHzlAR0X/GojeKF+AuNcXjYNbOJ4zjl/5D6lliE8CbpB5t1OWIQ==}
+  '@rolldown/binding-android-arm64@1.0.0-beta.60':
+    resolution: {integrity: sha512-hOW6iQXtpG4uCW1zGK56+KhEXGttSkTp2ykncW/nkOIF/jOKTqbM944Q73HVeMXP1mPRvE2cZwNp3xeLIeyIGQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [android]
@@ -5660,8 +5663,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@rolldown/binding-darwin-arm64@1.0.0-beta.59':
-    resolution: {integrity: sha512-hqGXRc162qCCIOAcHN2Cw4eXiVTwYsMFLOhAy1IG2CxY+dwc/l4Ga+dLPkLor3Ikqy5WDn+7kxHbbh6EmshEpQ==}
+  '@rolldown/binding-darwin-arm64@1.0.0-beta.60':
+    resolution: {integrity: sha512-vyDA4HXY2mP8PPtl5UE17uGPxUNG4m1wkfa3kAkR8JWrFbarV97UmLq22IWrNhtBPa89xqerzLK8KoVmz5JqCQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [darwin]
@@ -5672,8 +5675,8 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@rolldown/binding-darwin-x64@1.0.0-beta.59':
-    resolution: {integrity: sha512-ezvvGuhteE15JmMhJW0wS7BaXmhwLy1YHeEwievYaPC1PgGD86wgBKfOpHr9tSKllAXbCe0BeeMvasscWLhKdA==}
+  '@rolldown/binding-darwin-x64@1.0.0-beta.60':
+    resolution: {integrity: sha512-WnxyqxAKP2BsxouwGY/RCF5UFw/LA4QOHhJ7VEl+UCelHokiwqNHRbryLAyRy3TE1FZ5eae+vAFcaetAu/kWLw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [darwin]
@@ -5684,8 +5687,8 @@ packages:
     cpu: [x64]
     os: [freebsd]
 
-  '@rolldown/binding-freebsd-x64@1.0.0-beta.59':
-    resolution: {integrity: sha512-4fhKVJiEYVd5n6no/mrL3LZ9kByfCGwmONOrdtvx8DJGDQhehH/q3RfhG3V/4jGKhpXgbDjpIjkkFdybCTcgew==}
+  '@rolldown/binding-freebsd-x64@1.0.0-beta.60':
+    resolution: {integrity: sha512-JtyWJ+zXOHof5gOUYwdTWI2kL6b8q9eNwqB/oD4mfUFaC/COEB2+47JMhcq78dey9Ahmec3DZKRDZPRh9hNAMQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [freebsd]
@@ -5696,8 +5699,8 @@ packages:
     cpu: [arm]
     os: [linux]
 
-  '@rolldown/binding-linux-arm-gnueabihf@1.0.0-beta.59':
-    resolution: {integrity: sha512-T3Y52sW6JAhvIqArBw+wtjNU1Ieaz4g0NBxyjSJoW971nZJBZygNlSYx78G4cwkCmo1dYTciTPDOnQygLV23pA==}
+  '@rolldown/binding-linux-arm-gnueabihf@1.0.0-beta.60':
+    resolution: {integrity: sha512-LrMoKqpHx+kCaNSk84iSBd4yVOymLIbxJQtvFjDN2CjQraownR+IXcwYDblFcj9ivmS54T3vCboXBbm3s1zbPQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm]
     os: [linux]
@@ -5708,8 +5711,8 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@rolldown/binding-linux-arm64-gnu@1.0.0-beta.59':
-    resolution: {integrity: sha512-NIW40jQDSQap2KDdmm9z3B/4OzWJ6trf8dwx3FD74kcQb3v34ThsBFTtzE5KjDuxnxgUlV+DkAu+XgSMKrgufw==}
+  '@rolldown/binding-linux-arm64-gnu@1.0.0-beta.60':
+    resolution: {integrity: sha512-sqI+Vdx1gmXJMsXN3Fsewm3wlt7RHvRs1uysSp//NLsCoh9ZFEUr4ZzGhWKOg6Rvf+njNu/vCsz96x7wssLejQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [linux]
@@ -5720,8 +5723,8 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@rolldown/binding-linux-arm64-musl@1.0.0-beta.59':
-    resolution: {integrity: sha512-CCKEk+H+8c0WGe/8n1E20n85Tq4Pv+HNAbjP1KfUXW+01aCWSMjU56ChNrM2tvHnXicfm7QRNoZyfY8cWh7jLQ==}
+  '@rolldown/binding-linux-arm64-musl@1.0.0-beta.60':
+    resolution: {integrity: sha512-8xlqGLDtTP8sBfYwneTDu8+PRm5reNEHAuI/+6WPy9y350ls0KTFd3EJCOWEXWGW0F35ko9Fn9azmurBTjqOrQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [linux]
@@ -5732,8 +5735,8 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@rolldown/binding-linux-x64-gnu@1.0.0-beta.59':
-    resolution: {integrity: sha512-VlfwJ/HCskPmQi8R0JuAFndySKVFX7yPhE658o27cjSDWWbXVtGkSbwaxstii7Q+3Rz87ZXN+HLnb1kd4R9Img==}
+  '@rolldown/binding-linux-x64-gnu@1.0.0-beta.60':
+    resolution: {integrity: sha512-iR4nhVouVZK1CiGGGyz+prF5Lw9Lmz30Rl36Hajex+dFVFiegka604zBwzTp5Tl0BZnr50ztnVJ30tGrBhDr8Q==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [linux]
@@ -5744,8 +5747,8 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@rolldown/binding-linux-x64-musl@1.0.0-beta.59':
-    resolution: {integrity: sha512-kuO92hTRyGy0Ts3Nsqll0rfO8eFsEJe9dGQGktkQnZ2hrJrDVN0y419dMgKy/gB2S2o7F2dpWhpfQOBehZPwVA==}
+  '@rolldown/binding-linux-x64-musl@1.0.0-beta.60':
+    resolution: {integrity: sha512-HbfNcqNeqxFjSMf1Kpe8itr2e2lr0Bm6HltD2qXtfU91bSSikVs9EWsa1ThshQ1v2ZvxXckGjlVLtah6IoslPg==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [linux]
@@ -5756,8 +5759,8 @@ packages:
     cpu: [arm64]
     os: [openharmony]
 
-  '@rolldown/binding-openharmony-arm64@1.0.0-beta.59':
-    resolution: {integrity: sha512-PXAebvNL4sYfCqi8LdY4qyFRacrRoiPZLo3NoUmiTxm7MPtYYR8CNtBGNokqDmMuZIQIecRaD/jbmFAIDz7DxQ==}
+  '@rolldown/binding-openharmony-arm64@1.0.0-beta.60':
+    resolution: {integrity: sha512-BiiamFcgTJ+ZFOUIMO9AHXUo9WXvHVwGfSrJ+Sv0AsTd2w3VN7dJGiH3WRcxKFetljJHWvGbM4fdpY5lf6RIvw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [openharmony]
@@ -5767,8 +5770,8 @@ packages:
     engines: {node: '>=14.0.0'}
     cpu: [wasm32]
 
-  '@rolldown/binding-wasm32-wasi@1.0.0-beta.59':
-    resolution: {integrity: sha512-yJoklQg7XIZq8nAg0bbkEXcDK6sfpjxQGxpg2Nd6ERNtvg+eOaEBRgPww0BVTrYFQzje1pB5qPwC2VnJHT3koQ==}
+  '@rolldown/binding-wasm32-wasi@1.0.0-beta.60':
+    resolution: {integrity: sha512-6roXGbHMdR2ucnxXuwbmQvk8tuYl3VGu0yv13KxspyKBxxBd4RS6iykzLD6mX2gMUHhfX8SVWz7n/62gfyKHow==}
     engines: {node: '>=14.0.0'}
     cpu: [wasm32]
 
@@ -5778,8 +5781,8 @@ packages:
     cpu: [arm64]
     os: [win32]
 
-  '@rolldown/binding-win32-arm64-msvc@1.0.0-beta.59':
-    resolution: {integrity: sha512-ljZ4+McmCbIuZwEBaoGtiG8Rq2nJjaXEnLEIx+usWetXn1ECjXY0LAhkELxOV6ytv4ensEmoJJ8nXg47hRMjlw==}
+  '@rolldown/binding-win32-arm64-msvc@1.0.0-beta.60':
+    resolution: {integrity: sha512-JBOm8/DC/CKnHyMHoJFdvzVHxUixid4dGkiTqGflxOxO43uSJMpl77pSPXvzwZ/VXwqblU2V0/PanyCBcRLowQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [win32]
@@ -5796,8 +5799,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@rolldown/binding-win32-x64-msvc@1.0.0-beta.59':
-    resolution: {integrity: sha512-bMY4tTIwbdZljW+xe/ln1hvs0SRitahQSXfWtvgAtIzgSX9Ar7KqJzU7lRm33YTRFIHLULRi53yNjw9nJGd6uQ==}
+  '@rolldown/binding-win32-x64-msvc@1.0.0-beta.60':
+    resolution: {integrity: sha512-MKF0B823Efp+Ot8KsbwIuGhKH58pf+2rSM6VcqyNMlNBHheOM0Gf7JmEu+toc1jgN6fqjH7Et+8hAzsLVkIGfA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [x64]
     os: [win32]
@@ -5805,8 +5808,8 @@ packages:
   '@rolldown/pluginutils@1.0.0-beta.42':
     resolution: {integrity: sha512-N7pQzk9CyE7q0bBN/q0J8s6Db279r5kUZc6d7/wWRe9/zXqC52HQovVyu6iXPIDY4BEzzgbVLhVFXrOuGJ22ZQ==}
 
-  '@rolldown/pluginutils@1.0.0-beta.59':
-    resolution: {integrity: sha512-aoh6LAJRyhtazs98ydgpNOYstxUlsOV1KJXcpf/0c0vFcUA8uyd/hwKRhqE/AAPNqAho9RliGsvitCoOzREoVA==}
+  '@rolldown/pluginutils@1.0.0-beta.60':
+    resolution: {integrity: sha512-Jz4aqXRPVtqkH1E3jRDzLO5cgN5JwW+WG0wXGE4NiJd25nougv/AHzxmKCzmVQUYnxLmTM0M4wrZp+LlC2FKLg==}
 
   '@rollup/plugin-alias@5.1.1':
     resolution: {integrity: sha512-PR9zDb+rOzkRb2VD+EuKB7UC41vU5DIwZ5qqCpk0KJudcWAyi8rvYOhS7+L5aZCspw1stTViLgN5v6FF1p5cgQ==}
@@ -6823,10 +6826,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@10.2.0-alpha.14':
-    resolution: {integrity: sha512-PZQ0oSVSfKaGe+h48MSGoH3wmcYRPbcmuX8G7GLORViW+x7gILLr0e3D5MF5C9rc4BHpfxikaXa3Gq5krUYeKQ==}
+  '@storybook/builder-vite@10.2.0-alpha.17':
+    resolution: {integrity: sha512-Pa/UkrJf2Ys7qq8TVHo7cMU6quH1a8KjfwxwS3A5qCT+i8S0HOwhvq8uz0Xg0vF7HmMydqdm6S9uamJ6QXaMvg==}
     peerDependencies:
-      storybook: ^10.2.0-alpha.14
+      storybook: ^10.2.0-alpha.17
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -6837,12 +6840,12 @@ packages:
       prettier:
         optional: true
 
-  '@storybook/csf-plugin@10.2.0-alpha.14':
-    resolution: {integrity: sha512-uACCM01OIzeBPOFeNDygxjIqLTlYDQHpzVvMveRz8kcHrP+1jOi6Cq5efMXMmmtb2ltwhr39bblkqLcZCz0lkg==}
+  '@storybook/csf-plugin@10.2.0-alpha.17':
+    resolution: {integrity: sha512-rVJmGElA10pahiqBfM7UZN0kXlAGM1OOJ/Ty28/poD8R15Un788Ss2Pi/puv+vf4eggrvQGNisDqHt6XvT2g8g==}
     peerDependencies:
       esbuild: '*'
       rollup: '*'
-      storybook: ^10.2.0-alpha.14
+      storybook: ^10.2.0-alpha.17
       vite: '*'
       webpack: '*'
     peerDependenciesMeta:
@@ -7472,8 +7475,8 @@ packages:
   '@types/braces@3.0.5':
     resolution: {integrity: sha512-SQFof9H+LXeWNz8wDe7oN5zu7ket0qwMu5vZubW4GCJ8Kkeh6nBWUz87+KTz/G3Kqsrp0j/W253XJb3KMEeg3w==}
 
-  '@types/bun@1.3.5':
-    resolution: {integrity: sha512-RnygCqNrd3srIPEWBd5LFeUYG7plCoH2Yw9WaZGyNmdTEei+gWaHqydbaIRkIkcbXwhBT94q78QljxN0Sk838w==}
+  '@types/bun@1.3.6':
+    resolution: {integrity: sha512-uWCv6FO/8LcpREhenN1d1b6fcspAB+cefwD7uti8C8VffIv0Um08TKMn98FynpTiU38+y2dUO55T11NgDt8VAA==}
 
   '@types/cacheable-request@6.0.3':
     resolution: {integrity: sha512-IQ3EbTzGxIigb1I3qPZc1rWJnH0BmSKv5QYTalEwweFvyBDLSAe24zP0le/hyi7ecGfZVlIVAg4BZqb8WBwKqw==}
@@ -8715,8 +8718,8 @@ packages:
     resolution: {integrity: sha512-bkXY9WsVpY7CvMhKSR6pZilZu9Ln5WDrKVBUXf2S443etkmEO4V58heTecXcUIsNsi4Rx8JUO4NfX1IcQl4deg==}
     engines: {node: '>=18.20'}
 
-  bun-types@1.3.5:
-    resolution: {integrity: sha512-inmAYe2PFLs0SUbFOWSVD24sg1jFlMPxOjOSSCYqUgn4Hsc3rDc7dFvfVYjFPNHtov6kgUeulV4SxbuIV/stPw==}
+  bun-types@1.3.6:
+    resolution: {integrity: sha512-OlFwHcnNV99r//9v5IIOgQ9Uk37gZqrNMCcqEaExdkVq3Avwqok1bJFmvGMCkCE0FqzdY8VMOZpfpR3lwI+CsQ==}
 
   bundle-name@4.1.0:
     resolution: {integrity: sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q==}
@@ -10874,6 +10877,9 @@ packages:
   html-to-text@9.0.5:
     resolution: {integrity: sha512-qY60FjREgVZL03vJU6IfMV4GDjGBIoOyvuFdpBDIX9yTlDw0TjxVBQp+P8NvpdIXNJvfWBTNul7fsAQJq2FNpg==}
     engines: {node: '>=14'}
+
+  html-url-attributes@3.0.1:
+    resolution: {integrity: sha512-ol6UPyBWqsrO6EJySPz2O7ZSr856WDrEzM5zMqp+FJJLGMW35cLYmmZnl0vztAZxRUoNZJFTCohfjuIJ8I4QBQ==}
 
   html-void-elements@3.0.0:
     resolution: {integrity: sha512-bEqo66MRXsUGxWHV5IP0PUiAWwoEjba4VCzg0LjFJBpchPaTfyfCKTG6bc5F8ucKec3q5y6qOdGyYTSBEvhCrg==}
@@ -13133,6 +13139,12 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
 
+  react-markdown@10.1.0:
+    resolution: {integrity: sha512-qKxVopLT/TyA6BX3Ue5NwabOsAzm0Q7kAPwq6L+wWDwisYs7R8vZ0nRXqq6rkueboxpkjvLGU9fWifiX/ZZFxQ==}
+    peerDependencies:
+      '@types/react': '>=18'
+      react: '>=18'
+
   react-promise-suspense@0.3.4:
     resolution: {integrity: sha512-I42jl7L3Ze6kZaq+7zXWSunBa3b1on5yfvUW6Eo/3fFOj6dZ5Bqmcd264nJbTK/gn1HjjILAjSwnZbV4RpSaNQ==}
 
@@ -13458,8 +13470,8 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
-  rolldown@1.0.0-beta.59:
-    resolution: {integrity: sha512-Slm000Gd8/AO9z4Kxl4r8mp/iakrbAuJ1L+7ddpkNxgQ+Vf37WPvY63l3oeyZcfuPD1DRrUYBsRPIXSOhvOsmw==}
+  rolldown@1.0.0-beta.60:
+    resolution: {integrity: sha512-YYgpv7MiTp9LdLj1fzGzCtij8Yi2OKEc3HQtfbIxW4yuSgpQz9518I69U72T5ErPA/ATOXqlcisiLrWy+5V9YA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
@@ -18708,10 +18720,10 @@ snapshots:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
       solid-js: 1.9.6
 
-  '@kubiks/otel-drizzle@2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))':
+  '@kubiks/otel-drizzle@2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))':
     dependencies:
       '@opentelemetry/api': 1.9.0
-      drizzle-orm: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2)
+      drizzle-orm: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2)
 
   '@logdna/tail-file@2.2.0': {}
 
@@ -19703,7 +19715,7 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.37.0': {}
 
-  '@oxc-project/types@0.107.0': {}
+  '@oxc-project/types@0.108.0': {}
 
   '@oxc-project/types@0.94.0': {}
 
@@ -20682,61 +20694,61 @@ snapshots:
   '@rolldown/binding-android-arm64@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-android-arm64@1.0.0-beta.59':
+  '@rolldown/binding-android-arm64@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-darwin-arm64@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-darwin-arm64@1.0.0-beta.59':
+  '@rolldown/binding-darwin-arm64@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-darwin-x64@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-darwin-x64@1.0.0-beta.59':
+  '@rolldown/binding-darwin-x64@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-freebsd-x64@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-freebsd-x64@1.0.0-beta.59':
+  '@rolldown/binding-freebsd-x64@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-linux-arm-gnueabihf@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-linux-arm-gnueabihf@1.0.0-beta.59':
+  '@rolldown/binding-linux-arm-gnueabihf@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-linux-arm64-gnu@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-linux-arm64-gnu@1.0.0-beta.59':
+  '@rolldown/binding-linux-arm64-gnu@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-linux-arm64-musl@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-linux-arm64-musl@1.0.0-beta.59':
+  '@rolldown/binding-linux-arm64-musl@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-linux-x64-gnu@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-linux-x64-gnu@1.0.0-beta.59':
+  '@rolldown/binding-linux-x64-gnu@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-linux-x64-musl@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-linux-x64-musl@1.0.0-beta.59':
+  '@rolldown/binding-linux-x64-musl@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-openharmony-arm64@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-openharmony-arm64@1.0.0-beta.59':
+  '@rolldown/binding-openharmony-arm64@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-wasm32-wasi@1.0.0-beta.42':
@@ -20744,7 +20756,7 @@ snapshots:
       '@napi-rs/wasm-runtime': 1.0.6
     optional: true
 
-  '@rolldown/binding-wasm32-wasi@1.0.0-beta.59':
+  '@rolldown/binding-wasm32-wasi@1.0.0-beta.60':
     dependencies:
       '@napi-rs/wasm-runtime': 1.1.1
     optional: true
@@ -20752,7 +20764,7 @@ snapshots:
   '@rolldown/binding-win32-arm64-msvc@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-win32-arm64-msvc@1.0.0-beta.59':
+  '@rolldown/binding-win32-arm64-msvc@1.0.0-beta.60':
     optional: true
 
   '@rolldown/binding-win32-ia32-msvc@1.0.0-beta.42':
@@ -20761,12 +20773,12 @@ snapshots:
   '@rolldown/binding-win32-x64-msvc@1.0.0-beta.42':
     optional: true
 
-  '@rolldown/binding-win32-x64-msvc@1.0.0-beta.59':
+  '@rolldown/binding-win32-x64-msvc@1.0.0-beta.60':
     optional: true
 
   '@rolldown/pluginutils@1.0.0-beta.42': {}
 
-  '@rolldown/pluginutils@1.0.0-beta.59': {}
+  '@rolldown/pluginutils@1.0.0-beta.60': {}
 
   '@rollup/plugin-alias@5.1.1(rollup@4.40.2)':
     optionalDependencies:
@@ -21974,11 +21986,11 @@ snapshots:
     dependencies:
       solid-js: 1.9.6
 
-  '@solidjs/start@1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)':
+  '@solidjs/start@1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)':
     dependencies:
       '@tanstack/server-functions-plugin': 1.119.2(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
-      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
-      '@vinxi/server-components': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
+      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
+      '@vinxi/server-components': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
       defu: 6.1.4
       error-stack-parser: 2.1.4
       html-to-image: 1.11.13
@@ -21989,7 +22001,7 @@ snapshots:
       source-map-js: 1.2.1
       terracotta: 1.0.6(solid-js@1.9.6)
       tinyglobby: 0.2.13
-      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
       vite-plugin-solid: 2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
     transitivePeerDependencies:
       - '@testing-library/jest-dom'
@@ -22119,9 +22131,9 @@ snapshots:
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)
 
-  '@storybook/builder-vite@10.2.0-alpha.14(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
+  '@storybook/builder-vite@10.2.0-alpha.17(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
     dependencies:
-      '@storybook/csf-plugin': 10.2.0-alpha.14(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
+      '@storybook/csf-plugin': 10.2.0-alpha.17(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
       '@vitest/mocker': 3.2.4(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
       storybook: 8.6.12(prettier@3.7.4)
       ts-dedent: 2.2.0
@@ -22153,7 +22165,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@storybook/csf-plugin@10.2.0-alpha.14(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
+  '@storybook/csf-plugin@10.2.0-alpha.17(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
     dependencies:
       storybook: 8.6.12(prettier@3.7.4)
       unplugin: 2.3.10
@@ -22785,9 +22797,9 @@ snapshots:
 
   '@types/braces@3.0.5': {}
 
-  '@types/bun@1.3.5':
+  '@types/bun@1.3.6':
     dependencies:
-      bun-types: 1.3.5
+      bun-types: 1.3.6
 
   '@types/cacheable-request@6.0.3':
     dependencies:
@@ -23379,7 +23391,7 @@ snapshots:
       untun: 0.1.3
       uqr: 0.1.2
 
-  '@vinxi/plugin-directives@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
+  '@vinxi/plugin-directives@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
     dependencies:
       '@babel/parser': 7.27.2
       acorn: 8.14.1
@@ -23390,18 +23402,18 @@ snapshots:
       magicast: 0.2.11
       recast: 0.23.11
       tslib: 2.8.1
-      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
 
-  '@vinxi/server-components@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
+  '@vinxi/server-components@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
     dependencies:
-      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
+      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
       acorn: 8.14.1
       acorn-loose: 8.5.0
       acorn-typescript: 1.4.13(acorn@8.14.1)
       astring: 1.9.0
       magicast: 0.2.11
       recast: 0.23.11
-      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
 
   '@virtual-grid/core@2.0.1': {}
 
@@ -24512,7 +24524,7 @@ snapshots:
 
   builtin-modules@5.0.0: {}
 
-  bun-types@1.3.5:
+  bun-types@1.3.6:
     dependencies:
       '@types/node': 20.19.21
 
@@ -25107,9 +25119,9 @@ snapshots:
 
   dayjs@1.11.13: {}
 
-  db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2):
+  db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2):
     optionalDependencies:
-      drizzle-orm: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2)
+      drizzle-orm: 0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2)
       mysql2: 3.15.2
 
   debounce@2.2.0: {}
@@ -25387,12 +25399,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2):
+  drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2):
     optionalDependencies:
       '@cloudflare/workers-types': 4.20250507.0
       '@opentelemetry/api': 1.9.0
       '@planetscale/database': 1.19.0
-      bun-types: 1.3.5
+      bun-types: 1.3.6
       mysql2: 3.15.2
 
   dts-resolver@2.1.2: {}
@@ -27145,6 +27157,8 @@ snapshots:
       htmlparser2: 8.0.2
       selderee: 0.11.0
 
+  html-url-attributes@3.0.1: {}
+
   html-void-elements@3.0.0: {}
 
   htmlparser2@8.0.2:
@@ -28709,7 +28723,7 @@ snapshots:
       cors: 2.8.5
       next: 15.5.9(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
 
-  nitropack@2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(xml2js@0.6.2):
+  nitropack@2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(xml2js@0.6.2):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.4.0
       '@netlify/functions': 3.1.5(encoding@0.1.13)(rollup@4.40.2)
@@ -28731,7 +28745,7 @@ snapshots:
       cookie-es: 2.0.0
       croner: 9.0.0
       crossws: 0.3.5
-      db0: 0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2)
+      db0: 0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2)
       defu: 6.1.4
       destr: 2.0.5
       dot-prop: 9.0.0
@@ -28763,7 +28777,7 @@ snapshots:
       pretty-bytes: 6.1.1
       radix3: 1.1.2
       rollup: 4.40.2
-      rollup-plugin-visualizer: 5.14.0(rollup@4.40.2)
+      rollup-plugin-visualizer: 5.14.0(rolldown@1.0.0-beta.60)(rollup@4.40.2)
       scule: 1.3.0
       semver: 7.7.2
       serve-placeholder: 2.0.2
@@ -28777,7 +28791,7 @@ snapshots:
       unenv: 2.0.0-rc.15
       unimport: 5.0.1
       unplugin-utils: 0.2.4
-      unstorage: 1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(ioredis@5.6.1)
+      unstorage: 1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(ioredis@5.6.1)
       untyped: 2.0.0
       unwasm: 0.3.9
       youch: 4.1.0-beta.7
@@ -29736,6 +29750,24 @@ snapshots:
     dependencies:
       react: 19.1.1
 
+  react-markdown@10.1.0(@types/react@19.1.13)(react@19.1.1):
+    dependencies:
+      '@types/hast': 3.0.4
+      '@types/mdast': 4.0.4
+      '@types/react': 19.1.13
+      devlop: 1.1.0
+      hast-util-to-jsx-runtime: 2.3.6
+      html-url-attributes: 3.0.1
+      mdast-util-to-hast: 13.2.0
+      react: 19.1.1
+      remark-parse: 11.0.0
+      remark-rehype: 11.1.2
+      unified: 11.0.5
+      unist-util-visit: 5.0.0
+      vfile: 6.0.3
+    transitivePeerDependencies:
+      - supports-color
+
   react-promise-suspense@0.3.4:
     dependencies:
       fast-deep-equal: 2.0.1
@@ -30115,7 +30147,7 @@ snapshots:
     dependencies:
       glob: 7.2.3
 
-  rolldown-plugin-dts@0.16.11(rolldown@1.0.0-beta.59)(typescript@5.8.3):
+  rolldown-plugin-dts@0.16.11(rolldown@1.0.0-beta.60)(typescript@5.8.3):
     dependencies:
       '@babel/generator': 7.28.3
       '@babel/parser': 7.28.4
@@ -30126,7 +30158,7 @@ snapshots:
       dts-resolver: 2.1.2
       get-tsconfig: 4.11.0
       magic-string: 0.30.19
-      rolldown: 1.0.0-beta.59
+      rolldown: 1.0.0-beta.60
     optionalDependencies:
       typescript: 5.8.3
     transitivePeerDependencies:
@@ -30154,24 +30186,24 @@ snapshots:
       '@rolldown/binding-win32-ia32-msvc': 1.0.0-beta.42
       '@rolldown/binding-win32-x64-msvc': 1.0.0-beta.42
 
-  rolldown@1.0.0-beta.59:
+  rolldown@1.0.0-beta.60:
     dependencies:
-      '@oxc-project/types': 0.107.0
-      '@rolldown/pluginutils': 1.0.0-beta.59
+      '@oxc-project/types': 0.108.0
+      '@rolldown/pluginutils': 1.0.0-beta.60
     optionalDependencies:
-      '@rolldown/binding-android-arm64': 1.0.0-beta.59
-      '@rolldown/binding-darwin-arm64': 1.0.0-beta.59
-      '@rolldown/binding-darwin-x64': 1.0.0-beta.59
-      '@rolldown/binding-freebsd-x64': 1.0.0-beta.59
-      '@rolldown/binding-linux-arm-gnueabihf': 1.0.0-beta.59
-      '@rolldown/binding-linux-arm64-gnu': 1.0.0-beta.59
-      '@rolldown/binding-linux-arm64-musl': 1.0.0-beta.59
-      '@rolldown/binding-linux-x64-gnu': 1.0.0-beta.59
-      '@rolldown/binding-linux-x64-musl': 1.0.0-beta.59
-      '@rolldown/binding-openharmony-arm64': 1.0.0-beta.59
-      '@rolldown/binding-wasm32-wasi': 1.0.0-beta.59
-      '@rolldown/binding-win32-arm64-msvc': 1.0.0-beta.59
-      '@rolldown/binding-win32-x64-msvc': 1.0.0-beta.59
+      '@rolldown/binding-android-arm64': 1.0.0-beta.60
+      '@rolldown/binding-darwin-arm64': 1.0.0-beta.60
+      '@rolldown/binding-darwin-x64': 1.0.0-beta.60
+      '@rolldown/binding-freebsd-x64': 1.0.0-beta.60
+      '@rolldown/binding-linux-arm-gnueabihf': 1.0.0-beta.60
+      '@rolldown/binding-linux-arm64-gnu': 1.0.0-beta.60
+      '@rolldown/binding-linux-arm64-musl': 1.0.0-beta.60
+      '@rolldown/binding-linux-x64-gnu': 1.0.0-beta.60
+      '@rolldown/binding-linux-x64-musl': 1.0.0-beta.60
+      '@rolldown/binding-openharmony-arm64': 1.0.0-beta.60
+      '@rolldown/binding-wasm32-wasi': 1.0.0-beta.60
+      '@rolldown/binding-win32-arm64-msvc': 1.0.0-beta.60
+      '@rolldown/binding-win32-x64-msvc': 1.0.0-beta.60
 
   rollup-plugin-inject@3.0.2:
     dependencies:
@@ -30183,13 +30215,14 @@ snapshots:
     dependencies:
       rollup-plugin-inject: 3.0.2
 
-  rollup-plugin-visualizer@5.14.0(rollup@4.40.2):
+  rollup-plugin-visualizer@5.14.0(rolldown@1.0.0-beta.60)(rollup@4.40.2):
     dependencies:
       open: 8.4.2
       picomatch: 4.0.3
       source-map: 0.7.4
       yargs: 17.7.2
     optionalDependencies:
+      rolldown: 1.0.0-beta.60
       rollup: 4.40.2
 
   rollup-pluginutils@2.8.2:
@@ -30784,7 +30817,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.7.4)))(esbuild@0.25.5)(rollup@4.40.2)(solid-js@1.9.6)(storybook@8.6.12(prettier@3.7.4))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5)):
     dependencies:
-      '@storybook/builder-vite': 10.2.0-alpha.14(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
+      '@storybook/builder-vite': 10.2.0-alpha.17(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.7.4))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.7.4))
       magic-string: 0.30.17
       solid-js: 1.9.6
@@ -31430,8 +31463,8 @@ snapshots:
       diff: 8.0.2
       empathic: 2.0.0
       hookable: 5.5.3
-      rolldown: 1.0.0-beta.59
-      rolldown-plugin-dts: 0.16.11(rolldown@1.0.0-beta.59)(typescript@5.8.3)
+      rolldown: 1.0.0-beta.60
+      rolldown-plugin-dts: 0.16.11(rolldown@1.0.0-beta.60)(typescript@5.8.3)
       semver: 7.7.2
       tinyexec: 1.0.1
       tinyglobby: 0.2.15
@@ -31864,7 +31897,7 @@ snapshots:
       '@unrs/resolver-binding-win32-ia32-msvc': 1.7.2
       '@unrs/resolver-binding-win32-x64-msvc': 1.7.2
 
-  unstorage@1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(ioredis@5.6.1):
+  unstorage@1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(ioredis@5.6.1):
     dependencies:
       anymatch: 3.1.3
       chokidar: 4.0.3
@@ -31876,7 +31909,7 @@ snapshots:
       ufo: 1.6.1
     optionalDependencies:
       '@planetscale/database': 1.19.0
-      db0: 0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2)
+      db0: 0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2)
       ioredis: 5.6.1
 
   untun@0.1.3:
@@ -32035,7 +32068,7 @@ snapshots:
       d3-time: 3.1.0
       d3-timer: 3.0.1
 
-  vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1):
+  vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1):
     dependencies:
       '@babel/core': 7.27.1
       '@babel/plugin-syntax-jsx': 7.27.1(@babel/core@7.27.1)
@@ -32057,7 +32090,7 @@ snapshots:
       hookable: 5.5.3
       http-proxy: 1.18.1
       micromatch: 4.0.8
-      nitropack: 2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(xml2js@0.6.2)
+      nitropack: 2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(rolldown@1.0.0-beta.60)(xml2js@0.6.2)
       node-fetch-native: 1.6.6
       path-to-regexp: 6.3.0
       pathe: 1.1.2
@@ -32068,7 +32101,7 @@ snapshots:
       ufo: 1.6.1
       unctx: 2.4.1
       unenv: 1.10.0
-      unstorage: 1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.5)(mysql2@3.15.2))(mysql2@3.15.2))(ioredis@5.6.1)
+      unstorage: 1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(bun-types@1.3.6)(mysql2@3.15.2))(mysql2@3.15.2))(ioredis@5.6.1)
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
       zod: 3.25.76
     transitivePeerDependencies:

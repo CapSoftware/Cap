@@ -125,6 +125,7 @@
 		"react-hls-player": "^3.0.7",
 		"react-hook-form": "^7.49.2",
 		"react-hot-toast": "^2.4.1",
+		"react-markdown": "^10.1.0",
 		"react-rnd": "^10.4.1",
 		"react-scroll-parallax": "^3.4.5",
 		"react-tooltip": "^5.26.3",
