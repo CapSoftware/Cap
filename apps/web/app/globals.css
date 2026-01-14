@@ -771,14 +771,14 @@ footer a {
 	min-width: max-content;
 }
 
-.prose p,
-.prose li,
-.prose a {
+.prose:not(.prose-sm) p,
+.prose:not(.prose-sm) li,
+.prose:not(.prose-sm) a {
 	@apply tracking-normal font-normal text-[1.125rem] leading-[1.75rem] !important;
 }
 
-.prose p,
-.prose li {
+.prose:not(.prose-sm) p,
+.prose:not(.prose-sm) li {
 	@apply text-gray-12 !important;
 }
 
