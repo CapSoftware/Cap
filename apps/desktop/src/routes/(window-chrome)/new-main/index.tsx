@@ -1,6 +1,11 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
+import {
+	createMutation,
+	queryOptions,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -478,17 +483,25 @@ function Page() {
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
 	const [hasOpenedWindowMenu, setHasOpenedWindowMenu] = createSignal(false);
 
+	const queryClient = useQueryClient();
+	onMount(() => {
+		queryClient.prefetchQuery(listDisplaysWithThumbnails);
+		queryClient.prefetchQuery(listWindowsWithThumbnails);
+	});
+
 	let displayTriggerRef: HTMLButtonElement | undefined;
 	let windowTriggerRef: HTMLButtonElement | undefined;
 
 	const displayTargets = useQuery(() => ({
 		...listDisplaysWithThumbnails,
 		refetchInterval: false,
+		enabled: hasOpenedDisplayMenu(),
 	}));
 
 	const windowTargets = useQuery(() => ({
 		...listWindowsWithThumbnails,
 		refetchInterval: false,
+		enabled: hasOpenedWindowMenu(),
 	}));
 
 	const recordings = useQuery(() => listRecordings);
