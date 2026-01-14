@@ -42,19 +42,13 @@ export default function () {
 	const [check, checkActions] = createResource(() => commands.doPermissionsCheck(initialCheck()));
 	const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">("permissions");
 
-	createEffect(() => {
-		if (!initialCheck()) {
-			createTimer(() => startTransition(() => checkActions.refetch()), 250, setInterval);
-		}
+	onMount(() => {
+		setInitialCheck(false);
+		createTimer(() => startTransition(() => checkActions.refetch()), 500, setInterval);
 	});
 
 	const requestPermission = (permission: OSPermission) => {
-		console.log({ permission });
-		try {
-			commands.requestPermission(permission);
-		} catch (err) {
-			console.error(`Error occurred while requesting permission: ${err}`);
-		}
+		commands.requestPermission(permission);
 		setInitialCheck(false);
 	};
 
@@ -75,7 +69,6 @@ export default function () {
 			hasCompletedStartup: true,
 		});
 
-		// Just proceed to the main window without saving mode to store
 		commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
 			getCurrentWindow().close();
 		});
@@ -94,7 +87,7 @@ export default function () {
 			<Show when={currentStep() === "permissions"}>
 				<div class="flex flex-col items-start justify-center gap-8 w-[380px] z-10">
 					<div class="flex flex-col gap-2 items-start">
-						<LogoSquare class="" />
+						<LogoSquare class="text-white" />
 						<h1 class="text-[32px] text-white font-medium leading-tight">
 							The screen recorder <br /> for designers
 						</h1>
@@ -114,14 +107,7 @@ export default function () {
 												<span class="text-white/70">{permission.description}</span>
 											</div>
 											<button
-												class="flex items-center justify-center h-8 px-3 rounded-[8px] border border-white/10 disabled:opacity-50 whitespace-nowrap"
-												style={{
-													background:
-														"linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--Bg-fill-active, #2E3138)",
-													"background-blend-mode": "plus-lighter, normal",
-													"box-shadow":
-														"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
-												}}
+												class="flex items-center justify-center h-8 px-3 rounded-[8px] border border-white/10 disabled:opacity-50 whitespace-nowrap text-white bg-white/10 hover:bg-white/20"
 												onClick={() =>
 													permissionCheck() !== "denied"
 														? requestPermission(permission.key)
@@ -143,24 +129,13 @@ export default function () {
 					</ul>
 
 					<button
-						class="px-3 h-10 flex flex-row gap-1 items-center justify-center disabled:opacity-50 rounded-[12px] hover:opacity-90"
-						style={
-							permissions.find((p) => !isPermitted(check()?.[p.key])) === undefined
-								? {
-										border: "0.5px solid var(--Highlight-extra, rgba(255, 255, 255, 0.15))",
-										background:
-											"linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--Bg-fill-brand, #0080F0)",
-										"background-blend-mode": "plus-lighter, normal",
-										"box-shadow":
-											"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
-								  }
-								: { background: "rgba(255,255,255,0.1)" }
-						}
+						type="button"
+						class="flex items-center justify-center h-10 px-4 rounded-[8px] border border-white/10 disabled:opacity-50 whitespace-nowrap text-white bg-white/10 hover:bg-white/20 gap-1"
 						disabled={permissions.find((p) => !isPermitted(check()?.[p.key])) !== undefined}
 						onClick={handleContinue}
 					>
-						<p class="text-white text-sm font-medium">Get Started</p>
-						<ArrowRightIcon class="size-4 text-white" />
+						<span class="text-sm font-medium">Get Started</span>
+						<ArrowRightIcon class="size-4" />
 					</button>
 				</div>
 			</Show>
@@ -175,7 +150,7 @@ export default function () {
 				<div
 					class="absolute inset-0 pointer-events-none"
 					style={{
-						background: "linear-gradient(to left, transparent 60%, #0a0a0a 95%)",
+						background: "linear-gradient(to left, transparent 60%, rgb(10 10 10) 95%)",
 					}}
 				/>
 			</div>
@@ -203,12 +178,12 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { Portal } from "solid-js/web";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { ArrowRightIcon, LogoSquare } from "~/icons";
 import { generalSettingsStore } from "~/store";
 import cloud1 from "../../assets/illustrations/cloud-1.png";
 import cloud2 from "../../assets/illustrations/cloud-2.png";
 import cloud3 from "../../assets/illustrations/cloud-3.png";
 import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
-import { ArrowRightIcon, LogoSquare } from "~/icons";
 
 function Startup(props: { onClose: () => void }) {
 	const [audioState, setAudioState] = makePersisted(createStore({ isMuted: false }), { name: "audioSettings" });

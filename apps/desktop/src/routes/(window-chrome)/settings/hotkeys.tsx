@@ -1,9 +1,24 @@
 import { createEventListener } from "@solid-primitives/event-listener";
-import { batch, createEffect, createResource, createSignal, For, Index, Match, Show, Switch } from "solid-js";
+import {
+	batch,
+	createEffect,
+	createResource,
+	createSignal,
+	For,
+	Index,
+	Match,
+	Show,
+	Switch,
+} from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore, hotkeysStore } from "~/store";
 
-import { commands, type Hotkey, type HotkeyAction, type HotkeysStore } from "~/utils/tauri";
+import {
+	commands,
+	type Hotkey,
+	type HotkeyAction,
+	type HotkeysStore,
+} from "~/utils/tauri";
 
 const ACTION_TEXT = {
 	startStudioRecording: "Start studio recording",
@@ -69,14 +84,18 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 			"stopRecording",
 			"restartRecording",
 			...(generalSettings.data?.enableNewRecordingFlow
-				? (["openRecordingPickerDisplay", "openRecordingPickerWindow", "openRecordingPickerArea"] as const)
+				? ([
+						"openRecordingPickerDisplay",
+						"openRecordingPickerWindow",
+						"openRecordingPickerArea",
+					] as const)
 				: []),
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (
 		<div class="flex flex-col flex-1 h-full custom-scroll">
 			{/* <div class="flex flex-col pb-4 border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">Shortcuts</h2>
+				<h2 class="text-lg font-medium text-white">Shortcuts</h2>
 				<p class="text-sm text-gray-10 w-full max-w-[500px]">
 					Configure system-wide keyboard shortcuts to control Cap
 				</p>
@@ -105,7 +124,14 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 									<Switch>
 										<Match when={listening()?.action === item()}>
 											<div class="flex flex-row-reverse gap-2 justify-between items-center h-full text-sm rounded-lg w-fit">
-												<Show when={hotkeys[item()]} fallback={<p class="text-[13px] text-gray-11">Set hotkeys...</p>}>
+												<Show
+													when={hotkeys[item()]}
+													fallback={
+														<p class="text-[13px] text-gray-11">
+															Set hotkeys...
+														</p>
+													}
+												>
 													{(binding) => <HotkeyText binding={binding()} />}
 												</Show>
 												<div class="flex flex-row items-center gap-[0.125rem]">
@@ -118,10 +144,13 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 																e.stopPropagation();
 
 																setListening();
-																commands.setHotkey(item(), hotkeys[item()] ?? null);
+																commands.setHotkey(
+																	item(),
+																	hotkeys[item()] ?? null,
+																);
 															}}
 														>
-															<IconCapCircleCheck class="transition-colors text-white/50 hover:text-white/80 size-5" />
+															<IconCapCircleCheck class="transition-colors text-gray-10 hover:text-white size-5" />
 														</button>
 													</Show>
 													<button
@@ -159,8 +188,8 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 													when={hotkeys[item()]}
 													fallback={
 														<p
-															class="flex items-center text-[14px] transition-colors hover:bg-white/5
-                        cursor-pointer px-2.5 h-8 bg-white/[0.03] border border-white/5 rounded-[8px] text-white/50 hover:text-white/80"
+															class="flex items-center text-[14px] transition-colors hover:bg-gray-4
+                        cursor-pointer px-2.5 h-8 bg-white/5 border border-white/5 rounded-[8px] text-gray-10 hover:text-white"
 														>
 															Record Shortcut
 														</p>
@@ -172,7 +201,9 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 										</Match>
 									</Switch>
 								</div>
-								{idx !== actions().length - 1 && <div class="w-full h-px bg-white/5" />}
+								{idx !== actions().length - 1 && (
+									<div class="w-full h-px bg-gray-4" />
+								)}
 							</>
 						);
 					}}
@@ -192,14 +223,16 @@ function HotkeyText(props: { binding: Hotkey }) {
 	if (props.binding.shift) keys.push("⇧");
 
 	// Add the main key
-	const mainKey = props.binding.code.startsWith("Key") ? props.binding.code[3] : props.binding.code;
+	const mainKey = props.binding.code.startsWith("Key")
+		? props.binding.code[3]
+		: props.binding.code;
 	keys.push(mainKey);
 
 	return (
 		<div class="flex gap-1 items-center w-fit group">
 			<For each={keys}>
 				{(key) => (
-					<kbd class="inline-flex justify-center w-fit text-xs items-center px-3 h-8 text-[13px] font-medium rounded-[8px] border size-6 text-white bg-white/[0.03] border-white/5 group-hover:border-white/10 transition-colors duration-200 group-hover:bg-white/10">
+					<kbd class="inline-flex justify-center w-fit text-xs items-center px-3 h-8 text-[13px] font-medium rounded-[8px] border size-6 text-white bg-white/5 border-white/5 group-hover:border-gray-6 transition-colors duration-200 group-hover:bg-gray-4">
 						{key}
 					</kbd>
 				)}
