@@ -302,6 +302,7 @@ pub enum ShowCapWindow {
     },
     TargetSelectOverlay {
         display_id: DisplayId,
+        target_mode: Option<RecordingTargetMode>,
     },
     CaptureArea {
         screen_id: DisplayId,
@@ -504,7 +505,10 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::TargetSelectOverlay { display_id } => {
+            Self::TargetSelectOverlay {
+                display_id,
+                target_mode,
+            } => {
                 let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
@@ -518,10 +522,17 @@ impl ShowCapWindow {
                 .title();
                 let should_protect = should_protect_window(app, &title);
 
+                let target_mode_param = match target_mode {
+                    Some(RecordingTargetMode::Display) => "&targetMode=display",
+                    Some(RecordingTargetMode::Window) => "&targetMode=window",
+                    Some(RecordingTargetMode::Area) => "&targetMode=area",
+                    None => "",
+                };
+
                 let mut window_builder = self
                     .window_builder(
                         app,
-                        format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}"),
+                        format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}{target_mode_param}"),
                     )
                     .maximized(false)
                     .resizable(false)
@@ -1196,9 +1207,11 @@ impl ShowCapWindow {
                 CapWindowId::Editor { id }
             }
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::TargetSelectOverlay { display_id } => CapWindowId::TargetSelectOverlay {
-                display_id: display_id.clone(),
-            },
+            ShowCapWindow::TargetSelectOverlay { display_id, .. } => {
+                CapWindowId::TargetSelectOverlay {
+                    display_id: display_id.clone(),
+                }
+            }
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
                     screen_id: screen_id.clone(),

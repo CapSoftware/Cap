@@ -2552,14 +2552,18 @@ pub async fn open_target_picker(
     let prewarmed = app.state::<target_select_overlay::PrewarmedOverlays>();
     let state = app.state::<target_select_overlay::WindowFocusManager>();
     let display_id = scap_targets::Display::get_containing_cursor().map(|d| d.id().to_string());
+
     let _ = target_select_overlay::open_target_select_overlays(
         app.clone(),
         state,
         prewarmed,
         None,
         display_id.clone(),
+        Some(target_mode),
     )
     .await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let _ = RequestSetTargetMode {
         target_mode: Some(target_mode),

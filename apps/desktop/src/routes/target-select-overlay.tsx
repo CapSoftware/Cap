@@ -114,8 +114,15 @@ function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
+		targetMode: "display" | "window" | "area";
 	}>();
 	const [options, setOptions] = useOptions();
+
+	onMount(() => {
+		if (params.targetMode) {
+			setOptions("targetMode", params.targetMode);
+		}
+	});
 
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
@@ -129,6 +136,13 @@ function Inner() {
 		setTargetUnderCursor(reconcile(event.payload));
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
+
+	const unsubSetTargetMode = events.requestSetTargetMode.listen((event) => {
+		if (event.payload.target_mode) {
+			setOptions("targetMode", event.payload.target_mode);
+		}
+	});
+	onCleanup(() => unsubSetTargetMode.then((unsub) => unsub()));
 
 	const windowIcon = useQuery(() => ({
 		queryKey: ["windowIcon", targetUnderCursor.window?.id],

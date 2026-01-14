@@ -10,6 +10,7 @@ use cap_recording::screen_capture::ScreenCaptureTarget;
 
 use crate::{
     App, ArcLock, general_settings,
+    recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
     windows::{CapWindowId, ShowCapWindow},
 };
@@ -71,6 +72,7 @@ pub async fn prewarm_target_select_overlays(
 
         match (ShowCapWindow::TargetSelectOverlay {
             display_id: display_id.clone(),
+            target_mode: None,
         })
         .show(&app)
         .await
@@ -102,6 +104,7 @@ pub async fn open_target_select_overlays(
     prewarmed: tauri::State<'_, PrewarmedOverlays>,
     focused_target: Option<ScreenCaptureTarget>,
     specific_display_id: Option<String>,
+    target_mode: Option<RecordingTargetMode>,
 ) -> Result<(), String> {
     let start = Instant::now();
 
@@ -128,25 +131,41 @@ pub async fn open_target_select_overlays(
         }
     }
 
+    let mut used_prewarmed = false;
     if let Some(window) = prewarmed.take(&display_id) {
         window.show().ok();
         window.set_focus().ok();
-    } else if start.elapsed() < Duration::from_secs(1) {
-        let _ = ShowCapWindow::TargetSelectOverlay {
-            display_id: display_id.clone(),
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let is_visible_after = window.is_visible().unwrap_or(false);
+
+        if is_visible_after {
+            used_prewarmed = true;
+        } else {
+            let _ = window.close();
         }
-        .show(&app)
-        .await;
-    } else {
-        let app_clone = app.clone();
-        let display_id_clone = display_id.clone();
-        tokio::spawn(async move {
+    }
+
+    if !used_prewarmed {
+        if start.elapsed() < Duration::from_secs(1) {
             let _ = ShowCapWindow::TargetSelectOverlay {
-                display_id: display_id_clone,
+                display_id: display_id.clone(),
+                target_mode,
             }
-            .show(&app_clone)
+            .show(&app)
             .await;
-        });
+        } else {
+            let app_clone = app.clone();
+            let display_id_clone = display_id.clone();
+            tokio::spawn(async move {
+                let _ = ShowCapWindow::TargetSelectOverlay {
+                    display_id: display_id_clone,
+                    target_mode,
+                }
+                .show(&app_clone)
+                .await;
+            });
+        }
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
