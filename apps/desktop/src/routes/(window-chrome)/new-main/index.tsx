@@ -635,15 +635,19 @@ function Page() {
 		return "Unable to load windows. Try using the Window button.";
 	};
 
-	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
+	const selectDisplayTarget = async (target: CaptureDisplayWithThumbnail) => {
 		setOptions(
 			"captureTarget",
 			reconcile({ variant: "display", id: target.id }),
 		);
-		setOptions("targetMode", "display");
-		commands.openTargetSelectOverlays({ variant: "display", id: target.id });
 		setDisplayMenuOpen(false);
 		displayTriggerRef?.focus();
+		await commands.openTargetSelectOverlays(
+			{ variant: "display", id: target.id },
+			null,
+			"display",
+		);
+		setOptions("targetMode", "display");
 	};
 
 	const selectWindowTarget = async (target: CaptureWindowWithThumbnail) => {
@@ -651,10 +655,14 @@ function Page() {
 			"captureTarget",
 			reconcile({ variant: "window", id: target.id }),
 		);
-		setOptions("targetMode", "window");
-		commands.openTargetSelectOverlays({ variant: "window", id: target.id });
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
+		await commands.openTargetSelectOverlays(
+			{ variant: "window", id: target.id },
+			null,
+			"window",
+		);
+		setOptions("targetMode", "window");
 
 		try {
 			await commands.focusWindow(target.id);
@@ -679,9 +687,13 @@ function Page() {
 			__CAP__?: { initialTargetMode?: RecordingTargetMode | null };
 		};
 		const targetMode = __CAP__?.initialTargetMode ?? null;
-		setOptions({ targetMode });
-		if (targetMode) await commands.openTargetSelectOverlays(null);
-		else await commands.closeTargetSelectOverlays();
+		if (targetMode) {
+			await commands.openTargetSelectOverlays(null, null, targetMode);
+			setOptions({ targetMode });
+		} else {
+			setOptions({ targetMode });
+			await commands.closeTargetSelectOverlays();
+		}
 
 		const currentWindow = getCurrentWindow();
 
@@ -705,11 +717,30 @@ function Page() {
 			);
 		});
 
+		const unlistenSetTargetMode = events.requestSetTargetMode.listen(
+			async (event) => {
+				const newTargetMode = event.payload.target_mode;
+				const displayId = event.payload.display_id;
+				if (newTargetMode) {
+					await commands.openTargetSelectOverlays(
+						null,
+						displayId,
+						newTargetMode,
+					);
+					setOptions({ targetMode: newTargetMode });
+				} else {
+					setOptions({ targetMode: newTargetMode });
+					await commands.closeTargetSelectOverlays();
+				}
+			},
+		);
+
 		commands.updateAuthPlan();
 
 		onCleanup(async () => {
 			(await unlistenFocus)?.();
 			(await unlistenResize)?.();
+			(await unlistenSetTargetMode)?.();
 		});
 	});
 
@@ -830,12 +861,16 @@ function Page() {
 		},
 	};
 
-	const toggleTargetMode = (mode: "display" | "window" | "area") => {
+	const toggleTargetMode = async (mode: "display" | "window" | "area") => {
 		if (isRecording()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
-		setOptions("targetMode", nextMode);
-		if (nextMode) commands.openTargetSelectOverlays(null);
-		else commands.closeTargetSelectOverlays();
+		if (nextMode) {
+			await commands.openTargetSelectOverlays(null, null, nextMode);
+			setOptions("targetMode", nextMode);
+		} else {
+			setOptions("targetMode", nextMode);
+			await commands.closeTargetSelectOverlays();
+		}
 	};
 
 	createEffect(() => {

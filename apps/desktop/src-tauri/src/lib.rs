@@ -902,6 +902,12 @@ pub struct RequestOpenRecordingPicker {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestSetTargetMode {
+    pub target_mode: Option<RecordingTargetMode>,
+    pub display_id: Option<String>,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
     page: String,
 }
@@ -2533,6 +2539,39 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
+pub async fn open_target_picker(
+    app: &tauri::AppHandle,
+    target_mode: recording_settings::RecordingTargetMode,
+) {
+    use tauri::Manager;
+
+    if let Some(window) = CapWindowId::Main.get(app) {
+        window.hide().ok();
+    }
+
+    let prewarmed = app.state::<target_select_overlay::PrewarmedOverlays>();
+    let state = app.state::<target_select_overlay::WindowFocusManager>();
+    let display_id = scap_targets::Display::get_containing_cursor().map(|d| d.id().to_string());
+
+    let _ = target_select_overlay::open_target_select_overlays(
+        app.clone(),
+        state,
+        prewarmed,
+        None,
+        display_id.clone(),
+        Some(target_mode),
+    )
+    .await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let _ = RequestSetTargetMode {
+        target_mode: Some(target_mode),
+        display_id,
+    }
+    .emit(app);
+}
+
 type FilteredRegistry = tracing_subscriber::layer::Layered<
     tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
     tracing_subscriber::Registry,
@@ -2650,6 +2689,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             captions::check_model_exists,
             captions::delete_whisper_model,
             captions::export_captions_srt,
+            target_select_overlay::prewarm_target_select_overlays,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
             target_select_overlay::update_camera_overlay_bounds,
@@ -2673,6 +2713,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RecordingStopped,
             RequestStartRecording,
             RequestOpenRecordingPicker,
+            RequestSetTargetMode,
             RequestOpenSettings,
             RequestScreenCapturePrewarm,
             NewNotification,
@@ -2820,6 +2861,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             general_settings::init(&app);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
+            app.manage(target_select_overlay::PrewarmedOverlays::default());
             app.manage(EditorWindowIds::default());
             app.manage(ScreenshotEditorWindowIds::default());
             #[cfg(target_os = "macos")]
@@ -2830,6 +2872,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(FinalizingRecordings::default());
 
             gpu_context::prewarm_gpu();
+
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let prewarmed = app.state::<target_select_overlay::PrewarmedOverlays>();
+                    let _ = target_select_overlay::prewarm_target_select_overlays(
+                        app.clone(),
+                        prewarmed,
+                    )
+                    .await;
+                }
+            });
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2988,11 +3043,15 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             RequestOpenRecordingPicker::listen_any_spawn(&app, async |event, app| {
-                let _ = ShowCapWindow::Main {
-                    init_target_mode: event.target_mode,
+                if let Some(target_mode) = event.target_mode {
+                    open_target_picker(&app, target_mode).await;
+                } else {
+                    let _ = ShowCapWindow::Main {
+                        init_target_mode: None,
+                    }
+                    .show(&app)
+                    .await;
                 }
-                .show(&app)
-                .await;
             });
 
             RequestOpenSettings::listen_any_spawn(&app, async |payload, app| {

@@ -1,6 +1,6 @@
 use crate::{
     NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
-    RequestOpenRecordingPicker, RequestOpenSettings, recording,
+    RequestOpenSettings, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     windows::ShowCapWindow,
 };
@@ -35,6 +35,7 @@ pub enum TrayItem {
     RecordDisplay,
     RecordWindow,
     RecordArea,
+    TakeScreenshot,
     ImportVideo,
     ViewAllRecordings,
     ViewAllScreenshots,
@@ -55,6 +56,7 @@ impl From<TrayItem> for MenuId {
             TrayItem::RecordDisplay => "record_display",
             TrayItem::RecordWindow => "record_window",
             TrayItem::RecordArea => "record_area",
+            TrayItem::TakeScreenshot => "take_screenshot",
             TrayItem::ImportVideo => "import_video",
             TrayItem::ViewAllRecordings => "view_all_recordings",
             TrayItem::ViewAllScreenshots => "view_all_screenshots",
@@ -88,6 +90,7 @@ impl TryFrom<MenuId> for TrayItem {
             "record_display" => Ok(TrayItem::RecordDisplay),
             "record_window" => Ok(TrayItem::RecordWindow),
             "record_area" => Ok(TrayItem::RecordArea),
+            "take_screenshot" => Ok(TrayItem::TakeScreenshot),
             "import_video" => Ok(TrayItem::ImportVideo),
             "view_all_recordings" => Ok(TrayItem::ViewAllRecordings),
             "view_all_screenshots" => Ok(TrayItem::ViewAllScreenshots),
@@ -388,70 +391,131 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
 
     let previous_submenu = create_previous_submenu(app, cache)?;
     let mode_submenu = create_mode_submenu(app)?;
+    let current_mode = get_current_mode(app);
+    let is_screenshot_mode = current_mode == RecordingMode::Screenshot;
 
-    Menu::with_items(
+    let menu = Menu::new(app)?;
+
+    menu.append(&MenuItem::with_id(
         app,
-        &[
-            &MenuItem::with_id(
-                app,
-                TrayItem::OpenCap,
-                "Open Main Window",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::RecordDisplay,
-                "Record Display",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::RecordWindow,
-                "Record Window",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app, TrayItem::RecordArea, "Record Area", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::ImportVideo,
-                "Import Video...",
-                true,
-                None::<&str>,
-            )?,
-            &PredefinedMenuItem::separator(app)?,
-            &mode_submenu,
-            &previous_submenu,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::ViewAllRecordings,
-                "View all recordings",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::ViewAllScreenshots,
-                "View all screenshots",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, TrayItem::UploadLogs, "Upload Logs", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app,
-                "version",
-                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
-                false,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
-        ],
-    )
+        TrayItem::OpenCap,
+        "Open Main Window",
+        true,
+        None::<&str>,
+    )?)?;
+
+    if is_screenshot_mode {
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::RecordDisplay,
+            "Screenshot Display",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::RecordWindow,
+            "Screenshot Window",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::RecordArea,
+            "Screenshot Area",
+            true,
+            None::<&str>,
+        )?)?;
+    } else {
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::RecordDisplay,
+            "Record Display",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::RecordWindow,
+            "Record Window",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::RecordArea,
+            "Record Area",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            TrayItem::TakeScreenshot,
+            "Take a Screenshot",
+            true,
+            None::<&str>,
+        )?)?;
+    }
+
+    menu.append(&MenuItem::with_id(
+        app,
+        TrayItem::ImportVideo,
+        "Import Video...",
+        true,
+        None::<&str>,
+    )?)?;
+
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&mode_submenu)?;
+    menu.append(&previous_submenu)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+
+    menu.append(&MenuItem::with_id(
+        app,
+        TrayItem::ViewAllRecordings,
+        "View all recordings",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        TrayItem::ViewAllScreenshots,
+        "View all screenshots",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        TrayItem::OpenSettings,
+        "Settings",
+        true,
+        None::<&str>,
+    )?)?;
+
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        TrayItem::UploadLogs,
+        "Upload Logs",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "version",
+        format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+        false,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        TrayItem::Quit,
+        "Quit Cap",
+        true,
+        None::<&str>,
+    )?)?;
+
+    Ok(menu)
 }
 
 fn add_new_item_to_cache(cache: &Arc<Mutex<PreviousItemsCache>>, app: &AppHandle, path: PathBuf) {
@@ -613,22 +677,42 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     });
                 }
                 Ok(TrayItem::RecordDisplay) => {
-                    let _ = RequestOpenRecordingPicker {
-                        target_mode: Some(RecordingTargetMode::Display),
-                    }
-                    .emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::open_target_picker(&app, RecordingTargetMode::Display).await;
+                    });
                 }
                 Ok(TrayItem::RecordWindow) => {
-                    let _ = RequestOpenRecordingPicker {
-                        target_mode: Some(RecordingTargetMode::Window),
-                    }
-                    .emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::open_target_picker(&app, RecordingTargetMode::Window).await;
+                    });
                 }
                 Ok(TrayItem::RecordArea) => {
-                    let _ = RequestOpenRecordingPicker {
-                        target_mode: Some(RecordingTargetMode::Area),
-                    }
-                    .emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::open_target_picker(&app, RecordingTargetMode::Area).await;
+                    });
+                }
+                Ok(TrayItem::TakeScreenshot) => {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        use cap_recording::screen_capture::ScreenCaptureTarget;
+                        use scap_targets::Display;
+
+                        let display =
+                            Display::get_containing_cursor().unwrap_or_else(Display::primary);
+                        let target = ScreenCaptureTarget::Display { id: display.id() };
+
+                        match recording::take_screenshot(app.clone(), target).await {
+                            Ok(path) => {
+                                let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to take screenshot: {e}");
+                            }
+                        }
+                    });
                 }
                 Ok(TrayItem::ImportVideo) => {
                     let app = app.clone();

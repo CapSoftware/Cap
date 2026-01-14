@@ -114,8 +114,15 @@ function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
+		targetMode: "display" | "window" | "area";
 	}>();
 	const [options, setOptions] = useOptions();
+
+	onMount(() => {
+		if (params.targetMode) {
+			setOptions("targetMode", params.targetMode);
+		}
+	});
 
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
@@ -129,6 +136,13 @@ function Inner() {
 		setTargetUnderCursor(reconcile(event.payload));
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
+
+	const unsubSetTargetMode = events.requestSetTargetMode.listen((event) => {
+		if (event.payload.target_mode) {
+			setOptions("targetMode", event.payload.target_mode);
+		}
+	});
+	onCleanup(() => unsubSetTargetMode.then((unsub) => unsub()));
 
 	const windowIcon = useQuery(() => ({
 		queryKey: ["windowIcon", targetUnderCursor.window?.id],
@@ -381,7 +395,7 @@ function Inner() {
 										setOptions({
 											targetMode: "area",
 										});
-										commands.openTargetSelectOverlays(null);
+										commands.openTargetSelectOverlays(null, null, "area");
 									}}
 								>
 									Adjust recording area
@@ -494,8 +508,8 @@ function Inner() {
 						if (options.mode === "screenshot") return;
 						const bounds = crop();
 						const interacting = isInteracting();
+						const displayInfo = areaDisplayInfo.data;
 
-						// Find the camera window if we haven't yet
 						let win = cameraWindow();
 						if (!win) {
 							// Try to find it
@@ -569,6 +583,11 @@ function Inner() {
 							bounds.width > newWidth + padding * 2 &&
 							bounds.height > newHeight + padding * 2
 						) {
+							const displayOriginX =
+								displayInfo?.logical_bounds?.position?.x ?? 0;
+							const displayOriginY =
+								displayInfo?.logical_bounds?.position?.y ?? 0;
+
 							const newX = Math.round(
 								bounds.x + bounds.width - newWidth - padding,
 							);
@@ -577,8 +596,8 @@ function Inner() {
 							);
 
 							setTargetState({
-								x: newX * scaleFactor,
-								y: newY * scaleFactor,
+								x: (newX + displayOriginX) * scaleFactor,
+								y: (newY + displayOriginY) * scaleFactor,
 								width: newWidth * scaleFactor,
 								height: newHeight * scaleFactor,
 							});
@@ -863,6 +882,19 @@ function RecordingControls(props: {
 		},
 	}));
 	const setCamera = createCameraMutation();
+
+	onMount(() => {
+		if (rawOptions.micName) {
+			setMicInput
+				.mutateAsync(rawOptions.micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
+		}
+
+		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
+			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
+			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
+	});
 
 	const selectedCamera = createMemo(() => {
 		if (!rawOptions.cameraID) return null;

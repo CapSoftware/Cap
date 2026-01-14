@@ -32,6 +32,8 @@ pub struct ScreenshotEditorInstance {
     pub config_tx: watch::Sender<ProjectConfiguration>,
     pub path: PathBuf,
     pub pretty_name: String,
+    pub image_width: u32,
+    pub image_height: u32,
 }
 
 impl ScreenshotEditorInstance {
@@ -300,6 +302,8 @@ impl ScreenshotEditorInstances {
                     config_tx,
                     path: path.clone(),
                     pretty_name: recording_meta.pretty_name.clone(),
+                    image_width: width,
+                    image_height: height,
                 });
 
                 // Spawn render loop
@@ -429,6 +433,8 @@ pub struct SerializedScreenshotEditorInstance {
     pub path: PathBuf,
     pub config: Option<ProjectConfiguration>,
     pub pretty_name: String,
+    pub image_width: u32,
+    pub image_height: u32,
 }
 
 #[tauri::command]
@@ -459,6 +465,8 @@ pub async fn create_screenshot_editor_instance(
         path: instance.path.clone(),
         config: Some(config),
         pretty_name: instance.pretty_name.clone(),
+        image_width: instance.image_width,
+        image_height: instance.image_height,
     })
 }
 

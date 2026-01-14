@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     str::FromStr,
     sync::{Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use base64::prelude::*;
@@ -10,6 +10,7 @@ use cap_recording::screen_capture::ScreenCaptureTarget;
 
 use crate::{
     App, ArcLock, general_settings,
+    recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
     windows::{CapWindowId, ShowCapWindow},
 };
@@ -43,25 +44,127 @@ pub struct DisplayInformation {
     name: Option<String>,
     physical_size: Option<PhysicalSize>,
     logical_size: Option<LogicalSize>,
+    logical_bounds: Option<LogicalBounds>,
     refresh_rate: String,
 }
 
 #[specta::specta]
 #[tauri::command]
-#[instrument(skip(app, state))]
+#[instrument(skip(app, prewarmed))]
+pub async fn prewarm_target_select_overlays(
+    app: AppHandle,
+    prewarmed: tauri::State<'_, PrewarmedOverlays>,
+) -> Result<(), String> {
+    if prewarmed.set_prewarming(true) {
+        return Ok(());
+    }
+
+    prewarmed.cleanup_stale();
+
+    let displays = scap_targets::Display::list();
+
+    for display in displays {
+        let display_id = display.id();
+
+        if prewarmed.has(&display_id) {
+            continue;
+        }
+
+        match (ShowCapWindow::TargetSelectOverlay {
+            display_id: display_id.clone(),
+            target_mode: None,
+        })
+        .show(&app)
+        .await
+        {
+            Ok(window) => {
+                prewarmed.store(display_id, window);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to prewarm overlay for display {}: {}",
+                    display_id,
+                    e
+                );
+            }
+        }
+    }
+
+    prewarmed.set_prewarming(false);
+
+    Ok(())
+}
+
+#[specta::specta]
+#[tauri::command]
+#[instrument(skip(app, state, prewarmed))]
 pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
+    prewarmed: tauri::State<'_, PrewarmedOverlays>,
     focused_target: Option<ScreenCaptureTarget>,
+    specific_display_id: Option<String>,
+    target_mode: Option<RecordingTargetMode>,
 ) -> Result<(), String> {
-    let displays = scap_targets::Display::list()
-        .into_iter()
-        .map(|d| d.id())
-        .collect::<Vec<_>>();
-    for display_id in displays {
-        let _ = ShowCapWindow::TargetSelectOverlay { display_id }
+    let start = Instant::now();
+
+    let display_id = if let Some(id_str) = specific_display_id {
+        id_str
+            .parse::<DisplayId>()
+            .unwrap_or_else(|_| Display::primary().id())
+    } else if let Some(display) = focused_target.as_ref().and_then(|t| t.display()) {
+        display.id()
+    } else {
+        Display::get_containing_cursor()
+            .map(|d| d.id())
+            .unwrap_or_else(|| Display::primary().id())
+    };
+
+    for (id, window) in app.webview_windows() {
+        if let Ok(CapWindowId::TargetSelectOverlay {
+            display_id: existing_id,
+        }) = CapWindowId::from_str(&id)
+            && existing_id != display_id
+        {
+            let _ = window.close();
+        }
+    }
+
+    let mut used_prewarmed = false;
+    if let Some(window) = prewarmed.take(&display_id) {
+        window.show().ok();
+        window.set_focus().ok();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let is_visible_after = window.is_visible().unwrap_or(false);
+
+        if is_visible_after {
+            used_prewarmed = true;
+        } else {
+            let _ = window.close();
+        }
+    }
+
+    if !used_prewarmed {
+        if start.elapsed() < Duration::from_secs(1) {
+            let _ = ShowCapWindow::TargetSelectOverlay {
+                display_id: display_id.clone(),
+                target_mode,
+            }
             .show(&app)
             .await;
+        } else {
+            let app_clone = app.clone();
+            let display_id_clone = display_id.clone();
+            tokio::spawn(async move {
+                let _ = ShowCapWindow::TargetSelectOverlay {
+                    display_id: display_id_clone,
+                    target_mode,
+                }
+                .show(&app_clone)
+                .await;
+            });
+        }
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
@@ -116,7 +219,6 @@ pub async fn open_target_select_overlays(
     {
         task.abort();
     } else {
-        // If task is already set we know we have already registered this.
         app.global_shortcut()
             .register("Escape")
             .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
@@ -232,6 +334,7 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
         name: display.name(),
         physical_size: display.physical_size(),
         logical_size: display.logical_size(),
+        logical_bounds: display.raw_handle().logical_bounds(),
         refresh_rate: display.refresh_rate().to_string(),
     })
 }
@@ -296,7 +399,66 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     Ok(())
 }
 
-// Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
+pub struct PrewarmedOverlays {
+    windows: Mutex<HashMap<String, (WebviewWindow, Instant)>>,
+    prewarming_in_progress: Mutex<bool>,
+}
+
+impl Default for PrewarmedOverlays {
+    fn default() -> Self {
+        Self {
+            windows: Mutex::new(HashMap::new()),
+            prewarming_in_progress: Mutex::new(false),
+        }
+    }
+}
+
+impl PrewarmedOverlays {
+    pub fn take(&self, display_id: &DisplayId) -> Option<WebviewWindow> {
+        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        windows.remove(&display_id.to_string()).map(|(w, _)| w)
+    }
+
+    pub fn store(&self, display_id: DisplayId, window: WebviewWindow) {
+        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        windows.insert(display_id.to_string(), (window, Instant::now()));
+    }
+
+    pub fn has(&self, display_id: &DisplayId) -> bool {
+        let windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((window, created_at)) = windows.get(&display_id.to_string()) {
+            if created_at.elapsed() > Duration::from_secs(30) {
+                return false;
+            }
+            !window.is_visible().unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    pub fn set_prewarming(&self, in_progress: bool) -> bool {
+        let mut prewarming = self
+            .prewarming_in_progress
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let was_prewarming = *prewarming;
+        *prewarming = in_progress;
+        was_prewarming
+    }
+
+    pub fn cleanup_stale(&self) {
+        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        windows.retain(|_, (window, created_at)| {
+            if created_at.elapsed() > Duration::from_secs(30) {
+                let _ = window.close();
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
 #[derive(Default)]
 pub struct WindowFocusManager {
     task: Mutex<Option<JoinHandle<()>>>,
@@ -304,13 +466,14 @@ pub struct WindowFocusManager {
 }
 
 impl WindowFocusManager {
-    /// Called when a window is created to spawn it's task
     pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         tasks.insert(
             id.to_string(),
             tokio::spawn(async move {
                 let app = window.app_handle();
+                let mut main_window_was_seen = false;
+
                 loop {
                     let cap_main = CapWindowId::Main.get(app);
                     let cap_settings = CapWindowId::Settings.get(app);
@@ -318,8 +481,12 @@ impl WindowFocusManager {
                     let main_window_available = cap_main.is_some();
                     let settings_window_available = cap_settings.is_some();
 
-                    // Close the overlay if both cap windows are gone.
-                    if !main_window_available && !settings_window_available {
+                    if main_window_available || settings_window_available {
+                        main_window_was_seen = true;
+                    }
+
+                    if main_window_was_seen && !main_window_available && !settings_window_available
+                    {
                         window.hide().ok();
                         break;
                     }
@@ -329,8 +496,6 @@ impl WindowFocusManager {
                         let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
                             || window.is_focused().unwrap_or_default();
 
-                        // If a Cap window is not focused we know something is trying to steal the focus.
-                        // We need to move the overlay above it. We don't use `always_on_top` on the overlay because we need the Cap window to stay above it.
                         if !should_refocus {
                             window.set_focus().ok();
                         }
