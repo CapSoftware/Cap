@@ -2154,16 +2154,7 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
 }
 
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
-    let meta = RecordingMeta::load_for_project(recording_dir)
-        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
-
-    let incomplete =
-        RecoveryManager::find_incomplete(recording_dir.parent().unwrap_or(recording_dir));
-
-    let incomplete_recording = incomplete
-        .into_iter()
-        .find(|r| r.project_path == recording_dir)
-        .or_else(|| analyze_recording_for_remux(recording_dir, &meta));
+    let incomplete_recording = RecoveryManager::find_incomplete_single(recording_dir);
 
     if let Some(recording) = incomplete_recording {
         RecoveryManager::recover(&recording)

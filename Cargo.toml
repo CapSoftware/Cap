@@ -64,6 +64,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "dispatch",
     "io_surface",
     "mtl",
+    "vt",
 ], default-features = false }
 
 windows = "0.60.0"

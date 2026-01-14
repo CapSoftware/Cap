@@ -69,6 +69,26 @@ pub enum RecoveryError {
 pub struct RecoveryManager;
 
 impl RecoveryManager {
+    pub fn find_incomplete_single(project_path: &Path) -> Option<IncompleteRecording> {
+        if !project_path.is_dir() {
+            return None;
+        }
+
+        if !project_path.join("recording-meta.json").exists() {
+            return None;
+        }
+
+        let meta = RecordingMeta::load_for_project(project_path).ok()?;
+
+        if let Some(studio_meta) = meta.studio_meta()
+            && Self::should_check_for_recovery(&studio_meta.status())
+        {
+            Self::analyze_incomplete(project_path, &meta)
+        } else {
+            None
+        }
+    }
+
     pub fn find_incomplete(recordings_dir: &Path) -> Vec<IncompleteRecording> {
         let mut incomplete = Vec::new();
 
@@ -298,25 +318,8 @@ impl RecoveryManager {
                         }
 
                         if Self::is_video_file(&path) {
-                            if let Some(init_path) = &init_segment {
-                                match probe_m4s_can_decode_with_init(init_path, &path) {
-                                    Ok(true) => Some(path),
-                                    Ok(false) => {
-                                        warn!(
-                                            "M4S segment {} has no decodable frames (with init)",
-                                            path.display()
-                                        );
-                                        None
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "M4S segment {} validation failed: {}",
-                                            path.display(),
-                                            e
-                                        );
-                                        None
-                                    }
-                                }
+                            if init_segment.is_some() {
+                                Some(path)
                             } else {
                                 match probe_video_can_decode(&path) {
                                     Ok(true) => Some(path),
