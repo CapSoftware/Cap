@@ -8,8 +8,8 @@ import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
-import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
+import { startAiGeneration } from "@/lib/generate-ai";
 import {
 	checkHasAudioTrackViaMediaServer,
 	extractAudioViaMediaServer,
@@ -61,7 +61,7 @@ export async function transcribeVideoWorkflow(
 	await cleanupTempAudio(videoId, userId, videoData.bucketId);
 
 	if (aiGenerationEnabled) {
-		await generateMetadata(videoId, userId);
+		await queueAiGeneration(videoId, userId);
 	}
 
 	return { success: true, message: "Transcription completed successfully" };
@@ -267,11 +267,11 @@ async function cleanupTempAudio(
 	} catch {}
 }
 
-async function generateMetadata(
+async function queueAiGeneration(
 	videoId: string,
 	userId: string,
 ): Promise<void> {
 	"use step";
 
-	await generateAiMetadata(videoId as Video.VideoId, userId);
+	await startAiGeneration(videoId as Video.VideoId, userId);
 }

@@ -131,6 +131,13 @@ const trackVideoView = (payload: {
 	});
 };
 
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
+
 interface ShareProps {
 	data: VideoData;
 	comments: MaybePromise<CommentWithAuthor[]>;
@@ -144,8 +151,7 @@ interface ShareProps {
 		title?: string | null;
 		summary?: string | null;
 		chapters?: { title: string; start: number }[] | null;
-		processing?: boolean;
-		generationSkipped?: boolean;
+		aiGenerationStatus?: AiGenerationStatus | null;
 	} | null;
 	aiGenerationEnabled: boolean;
 }
@@ -159,8 +165,7 @@ const useVideoStatus = (
 			title?: string | null;
 			summary?: string | null;
 			chapters?: { title: string; start: number }[] | null;
-			processing?: boolean;
-			generationSkipped?: boolean;
+			aiGenerationStatus?: AiGenerationStatus | null;
 		} | null;
 	},
 ) => {
@@ -181,8 +186,9 @@ const useVideoStatus = (
 						| "SKIPPED"
 						| "NO_AUDIO"
 						| null,
-					aiProcessing: initialData.aiData?.processing || false,
-					aiGenerationSkipped: initialData.aiData?.generationSkipped || false,
+					aiGenerationStatus:
+						(initialData.aiData?.aiGenerationStatus as AiGenerationStatus) ||
+						null,
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
@@ -213,15 +219,22 @@ const useVideoStatus = (
 						return false;
 					}
 
-					if (data.aiGenerationSkipped) {
+					if (
+						data.aiGenerationStatus === "SKIPPED" ||
+						data.aiGenerationStatus === "ERROR" ||
+						data.aiGenerationStatus === "COMPLETE"
+					) {
 						return false;
 					}
 
-					if (data.aiProcessing) {
+					if (
+						data.aiGenerationStatus === "QUEUED" ||
+						data.aiGenerationStatus === "PROCESSING"
+					) {
 						return true;
 					}
 
-					if (!data.summary && !data.chapters) {
+					if (!data.aiGenerationStatus && !data.summary && !data.chapters) {
 						return true;
 					}
 
@@ -277,8 +290,7 @@ export const Share = ({
 			title: videoStatus?.aiTitle || null,
 			summary: videoStatus?.summary || null,
 			chapters: videoStatus?.chapters || null,
-			processing: videoStatus?.aiProcessing || false,
-			generationSkipped: videoStatus?.aiGenerationSkipped || false,
+			aiGenerationStatus: videoStatus?.aiGenerationStatus || null,
 		}),
 		[videoStatus],
 	);
@@ -313,13 +325,20 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			if (aiData.generationSkipped) {
+			if (
+				aiData.aiGenerationStatus === "SKIPPED" ||
+				aiData.aiGenerationStatus === "ERROR" ||
+				aiData.aiGenerationStatus === "COMPLETE"
+			) {
 				return false;
 			}
-			if (aiData.processing === true) {
+			if (
+				aiData.aiGenerationStatus === "QUEUED" ||
+				aiData.aiGenerationStatus === "PROCESSING"
+			) {
 				return true;
 			}
-			if (!aiData.summary && !aiData.chapters) {
+			if (!aiData.aiGenerationStatus && !aiData.summary && !aiData.chapters) {
 				return true;
 			}
 		}
@@ -414,7 +433,7 @@ export const Share = ({
 								areCommentStampsDisabled={areCommentStampsDisabled}
 								areReactionStampsDisabled={areReactionStampsDisabled}
 								chapters={aiData?.chapters || []}
-								aiProcessing={aiData?.processing || false}
+								aiGenerationStatus={aiData?.aiGenerationStatus}
 								ref={playerRef}
 							/>
 						</div>

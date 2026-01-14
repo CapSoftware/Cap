@@ -1,6 +1,13 @@
 import ReactMarkdown from "react-markdown";
 import { formatTimeMinutes } from "./utils/transcript-utils";
 
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
+
 interface SummaryChaptersProps {
 	isSummaryDisabled: boolean;
 	areChaptersDisabled: boolean;
@@ -14,7 +21,7 @@ interface SummaryChaptersProps {
 					start: number;
 			  }[]
 			| null;
-		processing: boolean;
+		aiGenerationStatus: AiGenerationStatus | null;
 	};
 	aiLoading: boolean;
 }

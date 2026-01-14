@@ -49,21 +49,12 @@ export const EmbedVideo = forwardRef<
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
-		aiProcessing?: boolean;
 		ownerName?: string | null;
 		autoplay?: boolean;
 	}
 >(
 	(
-		{
-			data,
-			user,
-			comments,
-			chapters = [],
-			aiProcessing = false,
-			ownerName,
-			autoplay = false,
-		},
+		{ data, user, comments, chapters = [], ownerName, autoplay = false },
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement>(null);
