@@ -399,7 +399,20 @@ ${chunk.text}`;
 
 			const allChapters = chunkSummaries
 				.flatMap((c) => c.chapters)
-				.sort((a, b) => a.start - b.start);
+				.sort((a, b) => a.start - b.start)
+				.reduce(
+					(acc, chapter) => {
+						const lastChapter = acc[acc.length - 1];
+						if (
+							lastChapter &&
+							Math.abs(chapter.start - lastChapter.start) < 30
+						) {
+							return acc;
+						}
+						return [...acc, chapter];
+					},
+					[] as { title: string; start: number }[],
+				);
 			const allKeyPoints = chunkSummaries.flatMap((c) => c.keyPoints);
 
 			const sectionDetails = chunkSummaries
@@ -472,7 +485,6 @@ Return ONLY valid JSON without any markdown formatting or code blocks.`;
 			chapters?: { title: string; start: number }[];
 		} = {};
 		try {
-			// Remove markdown code blocks if present
 			let cleanContent = content;
 			if (content.includes("```json")) {
 				cleanContent = content
@@ -482,6 +494,24 @@ Return ONLY valid JSON without any markdown formatting or code blocks.`;
 				cleanContent = content.replace(/```\s*/g, "");
 			}
 			data = JSON.parse(cleanContent.trim());
+
+			if (data.chapters && data.chapters.length > 0) {
+				data.chapters = data.chapters
+					.sort((a, b) => a.start - b.start)
+					.reduce(
+						(acc, chapter) => {
+							const lastChapter = acc[acc.length - 1];
+							if (
+								lastChapter &&
+								Math.abs(chapter.start - lastChapter.start) < 30
+							) {
+								return acc;
+							}
+							return [...acc, chapter];
+						},
+						[] as { title: string; start: number }[],
+					);
+			}
 		} catch (e) {
 			console.error(`[generateAiMetadata] Error parsing AI response: ${e}`);
 			data = {
