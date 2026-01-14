@@ -14,6 +14,7 @@ export interface VideoProcessingOptions {
 	audioBitrate?: string;
 	crf?: number;
 	preset?: "ultrafast" | "fast" | "medium" | "slow";
+	remuxOnly?: boolean;
 }
 
 const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
@@ -23,6 +24,7 @@ const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	audioBitrate: "128k",
 	crf: 23,
 	preset: "medium",
+	remuxOnly: false,
 };
 
 export interface ThumbnailOptions {
@@ -207,8 +209,11 @@ export async function processVideo(
 	const opts = { ...DEFAULT_OPTIONS, ...definedOptions };
 	const outputTempFile = await createTempFile(".mp4");
 
-	const videoTranscode = needsVideoTranscode(metadata, opts);
-	const audioTranscode = needsAudioTranscode(metadata);
+	const remuxOnly = opts.remuxOnly;
+	const videoTranscode = remuxOnly
+		? false
+		: needsVideoTranscode(metadata, opts);
+	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 
 	const ffmpegArgs: string[] = ["ffmpeg", "-threads", "2", "-i", inputPath];
 
