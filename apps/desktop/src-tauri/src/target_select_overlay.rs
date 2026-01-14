@@ -124,10 +124,9 @@ pub async fn open_target_select_overlays(
         if let Ok(CapWindowId::TargetSelectOverlay {
             display_id: existing_id,
         }) = CapWindowId::from_str(&id)
+            && existing_id != display_id
         {
-            if existing_id != display_id {
-                let _ = window.close();
-            }
+            let _ = window.close();
         }
     }
 

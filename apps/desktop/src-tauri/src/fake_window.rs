@@ -82,22 +82,15 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
         loop {
             sleep(Duration::from_millis(1000 / 20)).await;
 
-            if is_recording_controls {
-                if let Some(cursor_display_id) = get_display_id_for_cursor() {
-                    let display_changed = current_display_id
-                        .as_ref()
-                        .map_or(true, |id| id != &cursor_display_id);
+            if is_recording_controls && let Some(cursor_display_id) = get_display_id_for_cursor() {
+                let display_changed = current_display_id.as_ref() != Some(&cursor_display_id);
 
-                    if display_changed {
-                        if let Some(display) = get_display_by_id(&cursor_display_id) {
-                            if let Some((pos_x, pos_y)) = calculate_bottom_center_position(&display)
-                            {
-                                let _ =
-                                    window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-                                current_display_id = Some(cursor_display_id);
-                            }
-                        }
-                    }
+                if display_changed
+                    && let Some(display) = get_display_by_id(&cursor_display_id)
+                    && let Some((pos_x, pos_y)) = calculate_bottom_center_position(&display)
+                {
+                    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+                    current_display_id = Some(cursor_display_id);
                 }
             }
 
