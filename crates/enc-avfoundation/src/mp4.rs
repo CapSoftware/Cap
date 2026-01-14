@@ -280,8 +280,6 @@ impl MP4Encoder {
         })
     }
 
-    /// Expects frames with whatever pts values you like
-    /// They will be made relative when encoding
     pub fn queue_video_frame(
         &mut self,
         frame: arc::R<cm::SampleBuf>,
@@ -337,8 +335,12 @@ impl MP4Encoder {
 
         self.last_video_pts = Some(pts_duration);
 
-        let mut timing = frame.timing_info(0).unwrap();
-        timing.pts = cm::Time::new(pts_duration.as_millis() as i64, 1_000);
+        let frame_duration_ms = self.video_frame_duration().as_millis() as i64;
+        let timing = SampleTimingInfo {
+            duration: cm::Time::new(frame_duration_ms.max(1), 1_000),
+            pts: cm::Time::new(pts_duration.as_millis() as i64, 1_000),
+            dts: cm::Time::invalid(),
+        };
         let new_frame = frame.copy_with_new_timing(&[timing]).unwrap();
         drop(frame);
 
@@ -350,8 +352,6 @@ impl MP4Encoder {
         Ok(())
     }
 
-    /// Expects frames with pts values relative to the first frame's pts
-    /// in the timebase of 1 / sample rate
     pub fn queue_audio_frame(
         &mut self,
         frame: &frame::Audio,
