@@ -84,6 +84,7 @@ export async function GET(request: NextRequest) {
 			.select({
 				email: users.email,
 				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
 			})
 			.from(users)
 			.where(eq(users.id, video.ownerId))
