@@ -190,6 +190,7 @@ function createScreenshotEditorContext() {
 		height: number;
 	} | null>(null);
 	const [isRenderReady, setIsRenderReady] = createSignal(false);
+	const [isImageFileReady, setIsImageFileReady] = createSignal(false);
 	let wsRef: WebSocket | null = null;
 
 	const [editorInstance] = createResource(async () => {
@@ -202,18 +203,20 @@ function createScreenshotEditorContext() {
 			}
 		}
 
+		setOriginalImageSize({
+			width: instance.imageWidth,
+			height: instance.imageHeight,
+		});
+
 		const hasReceivedWebSocketFrame = { value: false };
 
 		if (instance.path) {
-			const loadImage = (imagePath: string) => {
+			const loadImage = (imagePath: string, retryCount = 0) => {
 				const img = new Image();
 				img.crossOrigin = "anonymous";
 				img.src = convertFileSrc(imagePath);
 				img.onload = async () => {
-					setOriginalImageSize({
-						width: img.naturalWidth,
-						height: img.naturalHeight,
-					});
+					setIsImageFileReady(true);
 					if (hasReceivedWebSocketFrame.value) {
 						return;
 					}
@@ -240,21 +243,18 @@ function createScreenshotEditorContext() {
 						);
 					}
 				};
+				img.onerror = () => {
+					if (retryCount < 10) {
+						setTimeout(() => loadImage(imagePath, retryCount + 1), 200);
+					}
+				};
 				return img;
 			};
 
 			const pathStr = instance.path;
 			const isCapDir = pathStr.endsWith(".cap");
-
-			if (isCapDir) {
-				const originalPath = `${pathStr}/original.png`;
-				const img = loadImage(originalPath);
-				img.onerror = () => {
-					loadImage(pathStr);
-				};
-			} else {
-				loadImage(pathStr);
-			}
+			const imagePath = isCapDir ? `${pathStr}/original.png` : pathStr;
+			loadImage(imagePath);
 		}
 
 		const ws = new WebSocket(instance.framesSocketUrl);
@@ -660,6 +660,7 @@ function createScreenshotEditorContext() {
 		latestFrame,
 		originalImageSize,
 		isRenderReady,
+		isImageFileReady,
 		editorInstance,
 	};
 }

@@ -645,6 +645,7 @@ function Page() {
 		await commands.openTargetSelectOverlays(
 			{ variant: "display", id: target.id },
 			null,
+			"display",
 		);
 		setOptions("targetMode", "display");
 	};
@@ -659,6 +660,7 @@ function Page() {
 		await commands.openTargetSelectOverlays(
 			{ variant: "window", id: target.id },
 			null,
+			"window",
 		);
 		setOptions("targetMode", "window");
 
@@ -686,7 +688,7 @@ function Page() {
 		};
 		const targetMode = __CAP__?.initialTargetMode ?? null;
 		if (targetMode) {
-			await commands.openTargetSelectOverlays(null, null);
+			await commands.openTargetSelectOverlays(null, null, targetMode);
 			setOptions({ targetMode });
 		} else {
 			setOptions({ targetMode });
@@ -720,7 +722,11 @@ function Page() {
 				const newTargetMode = event.payload.target_mode;
 				const displayId = event.payload.display_id;
 				if (newTargetMode) {
-					await commands.openTargetSelectOverlays(null, displayId);
+					await commands.openTargetSelectOverlays(
+						null,
+						displayId,
+						newTargetMode,
+					);
 					setOptions({ targetMode: newTargetMode });
 				} else {
 					setOptions({ targetMode: newTargetMode });
@@ -859,11 +865,11 @@ function Page() {
 		if (isRecording()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		if (nextMode) {
-			await commands.openTargetSelectOverlays(null, null);
+			await commands.openTargetSelectOverlays(null, null, nextMode);
 			setOptions("targetMode", nextMode);
 		} else {
 			setOptions("targetMode", nextMode);
-			commands.closeTargetSelectOverlays();
+			await commands.closeTargetSelectOverlays();
 		}
 	};
 

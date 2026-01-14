@@ -33,7 +33,7 @@ import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
 	const ctx = useScreenshotEditorContext();
-	const { setDialog, project, originalImageSize } = ctx;
+	const { setDialog, project, originalImageSize, isImageFileReady } = ctx;
 	const path = () => ctx.editorInstance()?.path ?? "";
 
 	const { exportImage, isExporting } = useScreenshotExport();
@@ -99,7 +99,7 @@ export function Header() {
 		});
 	};
 
-	const isCropDisabled = () => !originalImageSize();
+	const isCropDisabled = () => !originalImageSize() || !isImageFileReady();
 
 	return (
 		<div

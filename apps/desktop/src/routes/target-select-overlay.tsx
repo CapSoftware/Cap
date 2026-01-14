@@ -395,7 +395,7 @@ function Inner() {
 										setOptions({
 											targetMode: "area",
 										});
-										commands.openTargetSelectOverlays(null, null);
+										commands.openTargetSelectOverlays(null, null, "area");
 									}}
 								>
 									Adjust recording area
@@ -882,6 +882,19 @@ function RecordingControls(props: {
 		},
 	}));
 	const setCamera = createCameraMutation();
+
+	onMount(() => {
+		if (rawOptions.micName) {
+			setMicInput
+				.mutateAsync(rawOptions.micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
+		}
+
+		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
+			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
+			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
+	});
 
 	const selectedCamera = createMemo(() => {
 		if (!rawOptions.cameraID) return null;

@@ -697,15 +697,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::TakeScreenshot) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        use cap_recording::screen_capture::{ScreenCaptureTarget, list_displays};
+                        use cap_recording::screen_capture::ScreenCaptureTarget;
+                        use scap_targets::Display;
 
-                        let displays = list_displays();
-                        let Some((display, _)) = displays.into_iter().next() else {
-                            tracing::error!("No displays found for screenshot");
-                            return;
-                        };
-
-                        let target = ScreenCaptureTarget::Display { id: display.id };
+                        let display =
+                            Display::get_containing_cursor().unwrap_or_else(Display::primary);
+                        let target = ScreenCaptureTarget::Display { id: display.id() };
 
                         match recording::take_screenshot(app.clone(), target).await {
                             Ok(path) => {
