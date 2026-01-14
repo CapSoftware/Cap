@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
@@ -35,16 +36,19 @@ export async function GET(request: NextRequest) {
 	}
 
 	if (video[0].transcriptionStatus === "COMPLETE") {
-		if (await isAiGenerationEnabled(user)) {
+		const metadata = (video[0].metadata as VideoMetadata) || {};
+		const needsAiGeneration =
+			!metadata.aiProcessing &&
+			!metadata.aiGenerationSkipped &&
+			!metadata.summary &&
+			!metadata.chapters;
+
+		if (needsAiGeneration && (await isAiGenerationEnabled(user))) {
 			Promise.resolve().then(() => {
 				generateAiMetadata(videoId, user.id).catch((error) => {
 					console.error("Error generating AI metadata:", error);
 				});
 			});
-		} else {
-			console.log(
-				`[transcribe-status] AI generation feature disabled for user ${user.id} (email: ${user.email}, pro: ${user.stripeSubscriptionStatus})`,
-			);
 		}
 	}
 

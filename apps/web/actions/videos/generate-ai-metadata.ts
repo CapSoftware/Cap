@@ -397,7 +397,9 @@ ${chunk.text}`;
 				}
 			}
 
-			const allChapters = chunkSummaries.flatMap((c) => c.chapters);
+			const allChapters = chunkSummaries
+				.flatMap((c) => c.chapters)
+				.sort((a, b) => a.start - b.start);
 			const allKeyPoints = chunkSummaries.flatMap((c) => c.keyPoints);
 
 			const sectionDetails = chunkSummaries
