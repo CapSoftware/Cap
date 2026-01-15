@@ -1,30 +1,17 @@
 # Cap Chrome Extension
 
-A Chrome extension for Cap that enables instant screen, tab, and camera recording directly from your browser.
+A Chrome extension that launches Cap's web-based recorder for instant screen, tab, and camera recording.
 
 ## Features
 
-- **Multiple Recording Modes**
-  - Screen recording (entire screen or specific window)
-  - Tab recording (current browser tab)
-  - Camera recording (webcam only)
-
-- **Recording Controls**
-  - Start/stop recording 
-  - Pause/resume during recording
+- **Quick Access**: One-click launcher to open Cap's web recorder
+- **Smart Tab Management**: Reuses existing recorder tabs instead of creating duplicates
+- **Full Recording Suite**: Access to all Cap recording features via the web app:
+  - Multiple recording modes (screen, window, tab, camera)
+  - Recording controls (start/stop, pause/resume)
+  - Device selection (camera and microphone)
   - Real-time recording timer
-  - On-page recording indicator
-
-- **Audio Options**
-  - Optional microphone audio
-  - System audio capture (for tab recording)
-  - High-quality audio encoding
-
-- **Seamless Integration**
   - Automatic upload to Cap
-  - Direct link to recorded video
-  - Progress tracking during upload
-  - Multipart upload for large files
 
 ## Installation
 
@@ -87,11 +74,7 @@ A Chrome extension for Cap that enables instant screen, tab, and camera recordin
 
 The extension requires the following permissions:
 
-- **`storage`**: Store authentication tokens and user preferences
 - **`tabs`**: Access tab information for tab recording
-- **`activeTab`**: Capture current tab content
-- **`scripting`**: Inject content script for recording indicator
-- **`offscreen`**: Create offscreen document for media capture
 
 ## Contributing
 

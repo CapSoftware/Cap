@@ -124,7 +124,7 @@ export const RecorderPageContent = () => {
 	});
 
 	const micEnabled = selectedMicId !== null;
-	const organisationId = user?.defaultOrgId;
+	const organisationId = user?.defaultOrgId ?? undefined;
 
 	useEffect(() => {
 		if (
@@ -170,17 +170,6 @@ export const RecorderPageContent = () => {
 		onRecordingStop: handleRecordingStopSound,
 	});
 
-	useEffect(() => {
-		console.log('Recording state:', {
-			canStartRecording,
-			isBrowserSupported,
-			supportCheckCompleted,
-			supportsDisplayRecording,
-			recordingMode,
-			organisationId,
-			unsupportedReason
-		});
-	}, [canStartRecording, isBrowserSupported, supportCheckCompleted, supportsDisplayRecording, recordingMode, organisationId, unsupportedReason]);
 
 	useEffect(() => {
 		if (
@@ -196,7 +185,7 @@ export const RecorderPageContent = () => {
 
 	const handleStopClick = () => {
 		stopRecording().catch((err: unknown) => {
-
+			console.error("Stop recording error", err);
 		});
 	};
 
@@ -388,7 +377,7 @@ export const RecorderPageContent = () => {
 							? handleStopClick
 							: () => {
 									startRecording().catch((err: unknown) => {
-
+										console.error('Failed to start recording:', err);
 									});
 								}
 					}
