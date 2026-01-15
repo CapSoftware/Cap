@@ -456,7 +456,20 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
+    const NORMAL_TIMEOUT_MS: u64 = 2000;
+    const INITIAL_SEEK_TIMEOUT_MS: u64 = 10000;
+
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
+        self.get_frame_with_timeout(time, Self::NORMAL_TIMEOUT_MS)
+            .await
+    }
+
+    pub async fn get_frame_initial(&self, time: f32) -> Option<DecodedFrame> {
+        self.get_frame_with_timeout(time, Self::INITIAL_SEEK_TIMEOUT_MS)
+            .await
+    }
+
+    async fn get_frame_with_timeout(&self, time: f32, timeout_ms: u64) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
@@ -468,12 +481,13 @@ impl AsyncVideoDecoderHandle {
             return None;
         }
 
-        match tokio::time::timeout(std::time::Duration::from_millis(2000), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await {
             Ok(result) => result.ok(),
             Err(_) => {
                 tracing::warn!(
                     time = adjusted_time,
-                    "Frame decode request timed out after 2000ms"
+                    timeout_ms = timeout_ms,
+                    "Frame decode request timed out"
                 );
                 None
             }

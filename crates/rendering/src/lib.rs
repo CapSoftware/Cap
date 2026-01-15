@@ -218,6 +218,35 @@ impl RecordingSegmentDecoders {
             recording_time: segment_time + self.segment_offset as f32,
         })
     }
+
+    pub async fn get_frames_initial(
+        &self,
+        segment_time: f32,
+        needs_camera: bool,
+        offsets: ClipOffsets,
+    ) -> Option<DecodedSegmentFrames> {
+        let camera_request_time = segment_time + offsets.camera;
+        let (screen, camera) = tokio::join!(
+            self.screen.get_frame_initial(segment_time),
+            OptionFuture::from(
+                needs_camera
+                    .then(|| self
+                        .camera
+                        .as_ref()
+                        .map(|d| d.get_frame_initial(camera_request_time)))
+                    .flatten()
+            )
+        );
+
+        let camera_frame = camera.flatten();
+
+        Some(DecodedSegmentFrames {
+            screen_frame: screen?,
+            camera_frame,
+            segment_time,
+            recording_time: segment_time + self.segment_offset as f32,
+        })
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -332,21 +361,38 @@ pub async fn render_video_to_channel(
 
         let mut segment_frames = None;
         let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 3;
+        const MAX_RETRIES: u32 = 5;
+        let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
 
         while segment_frames.is_none() && retry_count < MAX_RETRIES {
             if retry_count > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(50 * retry_count as u64)).await;
+                let delay = if is_initial_frame {
+                    500 * (retry_count as u64 + 1)
+                } else {
+                    50 * retry_count as u64
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            segment_frames = render_segment
-                .decoders
-                .get_frames(
-                    segment_time as f32,
-                    !project.camera.hide,
-                    clip_config.map(|v| v.offsets).unwrap_or_default(),
-                )
-                .await;
+            segment_frames = if is_initial_frame && retry_count == 0 {
+                render_segment
+                    .decoders
+                    .get_frames_initial(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    )
+                    .await
+            } else {
+                render_segment
+                    .decoders
+                    .get_frames(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    )
+                    .await
+            };
 
             if segment_frames.is_none() {
                 retry_count += 1;
@@ -355,6 +401,7 @@ pub async fn render_video_to_channel(
                         frame_number = current_frame_number,
                         segment_time = segment_time,
                         retry_count = retry_count,
+                        is_initial = is_initial_frame,
                         "Frame decode failed, retrying..."
                     );
                 }
@@ -1726,11 +1773,17 @@ pub struct FrameRenderer<'a> {
 }
 
 impl<'a> FrameRenderer<'a> {
+    const MAX_RENDER_RETRIES: u32 = 3;
+
     pub fn new(constants: &'a RenderVideoConstants) -> Self {
         Self {
             constants,
             session: None,
         }
+    }
+
+    pub fn reset_session(&mut self) {
+        self.session = None;
     }
 
     pub async fn render(
@@ -1740,29 +1793,67 @@ impl<'a> FrameRenderer<'a> {
         cursor: &CursorEvents,
         layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
-        let session = self.session.get_or_insert_with(|| {
-            RenderSession::new(
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying frame render after GPU error"
+                );
+                self.reset_session();
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                )
+            });
+
+            session.update_texture_size(
                 &self.constants.device,
                 uniforms.output_size.0,
                 uniforms.output_size.1,
+            );
+
+            match produce_frame(
+                self.constants,
+                segment_frames.clone(),
+                uniforms.clone(),
+                cursor,
+                layers,
+                session,
             )
-        });
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    tracing::warn!(
+                        frame_number = uniforms.frame_number,
+                        attempt = attempt + 1,
+                        "GPU buffer mapping failed, will retry"
+                    );
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(e)) => {
+                    tracing::warn!(
+                        frame_number = uniforms.frame_number,
+                        attempt = attempt + 1,
+                        error = %e,
+                        "GPU buffer async error, will retry"
+                    );
+                    last_error = Some(RenderingError::BufferMapFailed(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
-        session.update_texture_size(
-            &self.constants.device,
-            uniforms.output_size.0,
-            uniforms.output_size.1,
-        );
-
-        produce_frame(
-            self.constants,
-            segment_frames,
-            uniforms,
-            cursor,
-            layers,
-            session,
-        )
-        .await
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
     }
 }
 
