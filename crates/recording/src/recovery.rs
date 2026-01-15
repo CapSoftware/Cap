@@ -5,8 +5,7 @@ use std::{
 
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init, concatenate_video_fragments,
-    get_media_duration, get_video_fps, probe_m4s_can_decode_with_init, probe_media_valid,
-    probe_video_can_decode,
+    get_media_duration, get_video_fps, probe_media_valid, probe_video_can_decode,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
