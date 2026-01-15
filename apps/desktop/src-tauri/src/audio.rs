@@ -18,6 +18,7 @@ fn play_audio(bytes: &'static [u8]) {
 pub enum AppSounds {
     StartRecording,
     StopRecording,
+    Screenshot,
     Notification,
 }
 
@@ -31,6 +32,7 @@ impl AppSounds {
         match self {
             AppSounds::StartRecording => include_bytes!("../sounds/start-recording.ogg"),
             AppSounds::StopRecording => include_bytes!("../sounds/stop-recording.ogg"),
+            AppSounds::Screenshot => include_bytes!("../sounds/screenshot.ogg"),
             AppSounds::Notification => include_bytes!("../sounds/action.ogg"),
         }
     }

@@ -1205,6 +1205,8 @@ pub async fn take_screenshot(
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
 
+    AppSounds::Notification.play();
+
     let image_width = image.width();
     let image_height = image.height();
     let image_data = image.into_raw();
@@ -1316,8 +1318,6 @@ pub async fn take_screenshot(
                     &app_handle,
                     notifications::NotificationType::ScreenshotSaved,
                 );
-
-                AppSounds::StopRecording.play();
             }
             Ok(Err(e)) => {
                 error!("Failed to encode PNG: {e}");

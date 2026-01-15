@@ -788,6 +788,14 @@ function Inner() {
 								);
 
 								try {
+									const allWindows = await WebviewWindow.getAll();
+									for (const win of allWindows) {
+										if (win.label.startsWith("target-select-overlay-")) {
+											await win.hide();
+										}
+									}
+									await new Promise((resolve) => setTimeout(resolve, 50));
+
 									const path = await invoke<string>("take_screenshot", {
 										target,
 									});
