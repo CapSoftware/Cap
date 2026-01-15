@@ -309,7 +309,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                     let count =
                                         scaled_frame_count.fetch_add(1, atomic::Ordering::Relaxed)
                                             + 1;
-                                    if count % 300 == 0 {
+                                    if count.is_multiple_of(300) {
                                         debug!(scaled_frames = count, "Scaling frames");
                                     }
 
