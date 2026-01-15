@@ -27,7 +27,7 @@ use tracing::*;
 
 const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
-const LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
+const LARGE_FORWARD_JUMP_SECS: f64 = 0.5;
 
 struct AudioTimestampGenerator {
     sample_rate: u32,
