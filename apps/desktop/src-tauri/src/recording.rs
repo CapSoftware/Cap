@@ -376,7 +376,21 @@ pub fn format_project_name<'a>(
     datetime: Option<chrono::DateTime<chrono::Local>>,
 ) -> String {
     const DEFAULT_FILENAME_TEMPLATE: &str = "{target_name} ({target_kind}) {date} {time}";
+    const MAX_TARGET_NAME_CHARS: usize = 180;
     let datetime = datetime.unwrap_or(chrono::Local::now());
+
+    let truncated_target_name: std::borrow::Cow<'_, str> =
+        if target_name.chars().count() > MAX_TARGET_NAME_CHARS {
+            std::borrow::Cow::Owned(
+                target_name
+                    .chars()
+                    .take(MAX_TARGET_NAME_CHARS)
+                    .collect::<String>()
+                    + "...",
+            )
+        } else {
+            std::borrow::Cow::Borrowed(target_name)
+        };
 
     lazy_static! {
         static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
@@ -402,7 +416,7 @@ pub fn format_project_name<'a>(
     };
 
     let result = AC
-        .try_replace_all(haystack, &[recording_mode, mode, target_kind, target_name])
+        .try_replace_all(haystack, &[recording_mode, mode, target_kind, &truncated_target_name])
         .expect("AhoCorasick replace should never fail with default configuration");
 
     let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
