@@ -2551,7 +2551,7 @@ pub async fn open_target_picker(
 
     let prewarmed = app.state::<target_select_overlay::PrewarmedOverlays>();
     let state = app.state::<target_select_overlay::WindowFocusManager>();
-    let display_id = scap_targets::Display::get_containing_cursor().map(|d| d.id().to_string());
+    let display_id = None;
 
     let _ = target_select_overlay::open_target_select_overlays(
         app.clone(),

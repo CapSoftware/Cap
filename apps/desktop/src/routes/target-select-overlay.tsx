@@ -439,8 +439,19 @@ function Inner() {
 					const [snapToRatioEnabled, setSnapToRatioEnabled] =
 						createSignal(true);
 					const [isInteracting, setIsInteracting] = createSignal(false);
+					const isActiveDisplay = createMemo(() => {
+						const activeDisplayId = targetUnderCursor.display_id;
+						if (activeDisplayId) {
+							return activeDisplayId === displayId();
+						}
+						return params.isHoveredDisplay === "true";
+					});
+					const shouldShowOverlay = createMemo(
+						() => isInteracting() || isActiveDisplay(),
+					);
 					const shouldShowSelectionHint = createMemo(() => {
 						if (initialAreaBounds() !== undefined) return false;
+						if (!isActiveDisplay()) return false;
 						const bounds = crop();
 						return bounds.width <= 1 && bounds.height <= 1 && !isInteracting();
 					});
@@ -724,6 +735,7 @@ function Inner() {
 					createEffect(() => {
 						if (isInteracting()) return;
 						if (!isValid()) return;
+						if (!isActiveDisplay()) return;
 						const screenId = displayId();
 						if (!screenId) return;
 						const bounds = crop();
@@ -791,7 +803,12 @@ function Inner() {
 					});
 
 					return (
-						<div class="fixed w-screen h-screen">
+						<div
+							class="fixed w-screen h-screen"
+							classList={{
+								"opacity-0 pointer-events-none": !shouldShowOverlay(),
+							}}
+						>
 							<div
 								ref={controlsEl}
 								class="fixed z-50 transition-opacity"
