@@ -6,5 +6,13 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.action.onClicked.addListener(async () => {
-  chrome.tabs.create({ url: WEB_RECORDER_URL });
+  const tabs = await chrome.tabs.query({ url: WEB_RECORDER_URL });
+
+  if (tabs.length > 0) {
+    const tab = tabs[0];
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } else {
+    chrome.tabs.create({ url: WEB_RECORDER_URL });
+  }
 });
