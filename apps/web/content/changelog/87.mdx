@@ -1,0 +1,14 @@
+---
+title: Instant Mode Reliability, Prewarmed Target Picker, Multi-Display Fixes
+app: Cap Desktop
+publishedAt: "2026-01-15"
+version: 0.4.4
+image:
+---
+
+- **Instant mode fixes** — Fixed frame scaling when display dimensions change mid-recording on macOS, clamped crop bounds to prevent negative coordinates on Windows, and ensured monotonic frame timestamps in the MP4 encoder.
+- **Prewarmed target picker** — The target selection overlay now loads in the background so it opens instantly when you click Record Display, Record Window, or Record Area from the main window or tray menu.
+- **Multi-display window positioning** — The main window, camera preview, and recording controls now appear on the display containing your cursor instead of always defaulting to the primary display. The recording controls bar also follows your cursor when moving between monitors.
+- **Search and pagination for recordings** — Added search fields to the recordings and screenshots settings pages, along with pagination for large libraries.
+- **Tray menu screenshot support** — The tray menu now includes a "Take a Screenshot" option and shows mode-aware labels when in screenshot mode.
+- **Screenshot editor reliability** — The screenshot editor now loads images more reliably with proper retry handling and correct path resolution for `.cap` project files.
