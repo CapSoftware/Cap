@@ -78,6 +78,7 @@ pub async fn prewarm_target_select_overlays(
         .await
         {
             Ok(window) => {
+                let _ = window.set_ignore_cursor_events(true);
                 prewarmed.store(display_id, window);
             }
             Err(e) => {
@@ -132,6 +133,7 @@ pub async fn open_target_select_overlays(
 
     let mut used_prewarmed = false;
     if let Some(window) = prewarmed.take(&display_id) {
+        let _ = window.set_ignore_cursor_events(false);
         window.show().ok();
         window.set_focus().ok();
 
