@@ -2,12 +2,12 @@
 
 import { Button, LogoBadge, Switch } from "@cap/ui";
 import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeftIcon } from "lucide-react";
-import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
-import { CogIcon } from "../dashboard/_components/AnimatedIcons";
+import { CogIcon, LogoutIcon } from "../dashboard/_components/AnimatedIcons";
 import { CameraPreviewWindow } from "../dashboard/caps/components/web-recorder-dialog/CameraPreviewWindow";
 import { CameraSelector } from "../dashboard/caps/components/web-recorder-dialog/CameraSelector";
 import { InProgressRecordingBar } from "../dashboard/caps/components/web-recorder-dialog/InProgressRecordingBar";
@@ -18,6 +18,7 @@ import {
 } from "../dashboard/caps/components/web-recorder-dialog/RecordingModeSelector";
 import { useCameraDevices } from "../dashboard/caps/components/web-recorder-dialog/useCameraDevices";
 import { useDevicePreferences } from "../dashboard/caps/components/web-recorder-dialog/useDevicePreferences";
+import { useMediaPermission } from "../dashboard/caps/components/web-recorder-dialog/useMediaPermission";
 import { useMicrophoneDevices } from "../dashboard/caps/components/web-recorder-dialog/useMicrophoneDevices";
 import { useWebRecorder } from "../dashboard/caps/components/web-recorder-dialog/useWebRecorder";
 import { FREE_PLAN_MAX_RECORDING_MS } from "../dashboard/caps/components/web-recorder-dialog/web-recorder-constants";
@@ -34,7 +35,6 @@ export const RecorderPageContent = () => {
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
 
 	const user = useCurrentUser();
-	console.log('userrrrrrrrrr: ', user);
 
 	useEffect(() => {
 		setIsClient(true);
@@ -77,44 +77,38 @@ export const RecorderPageContent = () => {
 		playAudio(stopSoundRef.current);
 	}, [playAudio]);
 
-	useEffect(() => {
-		if (!user) return;
-
-		const requestPermissions = async () => {
-			try {
-				const savedCameraId = window.localStorage.getItem('cap-web-recorder-preferred-camera');
-				const savedMicId = window.localStorage.getItem('cap-web-recorder-preferred-microphone');
-
-				const constraints: MediaStreamConstraints = {
-					video: savedCameraId ? { deviceId: { exact: savedCameraId } } : true,
-					audio: savedMicId ? { deviceId: { exact: savedMicId } } : true
-				};
-
-				const stream = await navigator.mediaDevices.getUserMedia(constraints);
-				console.log('Permission granted, tracks:', stream.getTracks().map(t => ({ kind: t.kind, label: t.label, id: t.id })));
-				stream.getTracks().forEach(track => track.stop());
-			} catch (error) {
-				console.error('Permission request failed:', error);
-				try {
-					const stream = await navigator.mediaDevices.getUserMedia({
-						video: true,
-						audio: true
-					});
-					console.log('Fallback permission granted');
-					stream.getTracks().forEach(track => track.stop());
-				} catch (fallbackError) {
-					console.error('Fallback permission also failed:', fallbackError);
-				}
-			}
-		};
-
-		requestPermissions();
-	}, [user]);
+	const { requestPermission: requestCameraPermission } = useMediaPermission(
+		"camera",
+		!!user,
+	);
+	const { requestPermission: requestMicPermission } = useMediaPermission(
+		"microphone",
+		!!user,
+	);
 
 	const { devices: availableMics, refresh: refreshMics } =
 		useMicrophoneDevices(isClient);
 	const { devices: availableCameras, refresh: refreshCameras } =
 		useCameraDevices(isClient);
+
+	useEffect(() => {
+		if (!user) return;
+
+		const requestPermissions = async () => {
+			try {
+				await Promise.all([
+					requestCameraPermission(),
+					requestMicPermission(),
+				]);
+				refreshCameras();
+				refreshMics();
+			} catch (error) {
+				console.error("Permission request failed:", error);
+			}
+		};
+
+		requestPermissions();
+	}, [user, requestCameraPermission, requestMicPermission, refreshCameras, refreshMics]);
 	const {
 		rememberDevices,
 		selectedCameraId,
@@ -202,20 +196,8 @@ export const RecorderPageContent = () => {
 
 	const handleStopClick = () => {
 		stopRecording().catch((err: unknown) => {
-			console.error("Stop recording error", err);
-		});
-	};
 
-	const handleSignOut = async () => {
-		try {
-			await fetch("/api/auth/signout", {
-				method: "POST",
-				credentials: "include",
-			});
-			router.push(`/login?callbackUrl=${encodeURIComponent("/record")}`);
-		} catch (error) {
-			console.error("Sign out failed:", error);
-		}
+		});
 	};
 
 	const recordingTimerDisplayMs = user?.isPro
@@ -285,9 +267,29 @@ export const RecorderPageContent = () => {
 	return (
 		<>
 			<div className="p-5 relative">
-				<div className="flex items-center gap-3 mb-6 pb-4 border-b border-gray-3">
-					<LogoBadge className="w-8 h-8" />
-					<h1 className="text-xl font-semibold text-gray-12">Cap</h1>
+				<div className="flex items-center justify-between gap-3 mb-6 pb-4 border-b border-gray-3">
+					<div className="flex items-center gap-3">
+						<LogoBadge className="w-8 h-8" />
+						<h1 className="text-xl font-semibold text-gray-12">Cap</h1>
+					</div>
+					<button
+						type="button"
+						onClick={() => window.close()}
+						className="p-1 flex items-center justify-center rounded border-none bg-transparent text-gray-11 hover:bg-gray-3 transition-colors cursor-pointer"
+						title="Close"
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+						>
+							<line x1="18" y1="6" x2="6" y2="18" />
+							<line x1="6" y1="6" x2="18" y2="18" />
+						</svg>
+					</button>
 				</div>
 
 				<div className="mb-4">
@@ -311,22 +313,11 @@ export const RecorderPageContent = () => {
 							</button>
 							<button
 								type="button"
-								onClick={handleSignOut}
+								onClick={() => signOut()}
 								className="p-1 flex items-center justify-center rounded border-none bg-transparent text-gray-11 hover:bg-gray-3 transition-colors cursor-pointer"
 								title="Sign Out"
 							>
-								<svg
-									width="16"
-									height="16"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-								>
-									<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-									<polyline points="16 17 21 12 16 7" />
-									<line x1="21" y1="12" x2="9" y2="12" />
-								</svg>
+								<LogoutIcon size={16} />
 							</button>
 						</div>
 					</div>
@@ -397,7 +388,7 @@ export const RecorderPageContent = () => {
 							? handleStopClick
 							: () => {
 									startRecording().catch((err: unknown) => {
-										console.error("Start recording error", err);
+
 									});
 								}
 					}
