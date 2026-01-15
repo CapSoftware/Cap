@@ -191,7 +191,7 @@ async fn benchmark_decoder_creation(path: &Path, fps: u32, iterations: usize) ->
 
     for i in 0..iterations {
         let start = Instant::now();
-        let decoder = spawn_decoder("benchmark", path.to_path_buf(), fps, 0.0).await;
+        let decoder = spawn_decoder("benchmark", path.to_path_buf(), fps, 0.0, false).await;
         let elapsed = start.elapsed();
 
         match decoder {
@@ -320,7 +320,14 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     println!("      Done: {:.2}ms avg", results.decoder_creation_ms);
 
     println!("[2/5] Creating decoder for remaining tests...");
-    let decoder = match spawn_decoder("benchmark", config.video_path.clone(), config.fps, 0.0).await
+    let decoder = match spawn_decoder(
+        "benchmark",
+        config.video_path.clone(),
+        config.fps,
+        0.0,
+        false,
+    )
+    .await
     {
         Ok(d) => d,
         Err(e) => {
