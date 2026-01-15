@@ -10,6 +10,7 @@ import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { CogIcon } from "../dashboard/_components/AnimatedIcons";
 import { CameraPreviewWindow } from "../dashboard/caps/components/web-recorder-dialog/CameraPreviewWindow";
 import { CameraSelector } from "../dashboard/caps/components/web-recorder-dialog/CameraSelector";
+import { InProgressRecordingBar } from "../dashboard/caps/components/web-recorder-dialog/InProgressRecordingBar";
 import { MicrophoneSelector } from "../dashboard/caps/components/web-recorder-dialog/MicrophoneSelector";
 import {
 	type RecordingMode,
@@ -144,8 +145,12 @@ export const RecorderPageContent = () => {
 	const {
 		phase,
 		durationMs,
+		hasAudioTrack,
+		chunkUploads,
+		errorDownload,
 		isRecording,
 		isBusy,
+		isRestarting,
 		canStartRecording,
 		isBrowserSupported,
 		unsupportedReason,
@@ -153,7 +158,10 @@ export const RecorderPageContent = () => {
 		supportCheckCompleted,
 		screenCaptureWarning,
 		startRecording,
+		pauseRecording,
+		resumeRecording,
 		stopRecording,
+		restartRecording,
 	} = useWebRecorder({
 		organisationId,
 		selectedMicId,
@@ -213,6 +221,8 @@ export const RecorderPageContent = () => {
 	const recordingTimerDisplayMs = user?.isPro
 		? durationMs
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
+
+	const showInProgressBar = isRecording || isBusy || phase === "error";
 
 	const formatDuration = (ms: number) => {
 		const totalSeconds = Math.floor(ms / 1000);
@@ -474,6 +484,21 @@ export const RecorderPageContent = () => {
 					)}
 				</AnimatePresence>
 			</div>
+
+			{showInProgressBar && (
+				<InProgressRecordingBar
+					phase={phase}
+					durationMs={recordingTimerDisplayMs}
+					hasAudioTrack={hasAudioTrack}
+					chunkUploads={chunkUploads}
+					errorDownload={errorDownload}
+					onStop={handleStopClick}
+					onPause={pauseRecording}
+					onResume={resumeRecording}
+					onRestart={restartRecording}
+					isRestarting={isRestarting}
+				/>
+			)}
 
 			{selectedCameraId && (
 				<CameraPreviewWindow
