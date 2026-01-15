@@ -108,63 +108,111 @@ pub async fn open_target_select_overlays(
 ) -> Result<(), String> {
     let start = Instant::now();
 
-    let display_id = if let Some(id_str) = specific_display_id {
+    let resolved_specific_display_id = specific_display_id.as_ref().map(|id_str| {
         id_str
             .parse::<DisplayId>()
             .unwrap_or_else(|_| Display::primary().id())
+    });
+
+    let display_ids = if let Some(display_id) = resolved_specific_display_id.clone() {
+        vec![display_id]
     } else if let Some(display) = focused_target.as_ref().and_then(|t| t.display()) {
-        display.id()
+        vec![display.id()]
     } else {
-        Display::get_containing_cursor()
-            .map(|d| d.id())
-            .unwrap_or_else(|| Display::primary().id())
+        let displays = Display::list();
+        if displays.is_empty() {
+            vec![Display::primary().id()]
+        } else {
+            displays.into_iter().map(|display| display.id()).collect()
+        }
     };
+
+    let focus_display_id = resolved_specific_display_id
+        .or_else(|| {
+            focused_target
+                .as_ref()
+                .and_then(|t| t.display())
+                .map(|d| d.id())
+        })
+        .or_else(|| Display::get_containing_cursor().map(|d| d.id()))
+        .unwrap_or_else(|| Display::primary().id());
 
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay {
             display_id: existing_id,
         }) = CapWindowId::from_str(&id)
-            && existing_id != display_id
+            && !display_ids
+                .iter()
+                .any(|display_id| display_id == &existing_id)
         {
             let _ = window.close();
         }
     }
 
-    let mut used_prewarmed = false;
-    if let Some(window) = prewarmed.take(&display_id) {
-        window.show().ok();
-        window.set_focus().ok();
+    for display_id in &display_ids {
+        let mut used_prewarmed = false;
+        if let Some(window) = prewarmed.take(display_id) {
+            window.show().ok();
+            if display_id == &focus_display_id {
+                window.set_focus().ok();
+            }
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let is_visible_after = window.is_visible().unwrap_or(false);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let is_visible_after = window.is_visible().unwrap_or(false);
 
-        if is_visible_after {
-            used_prewarmed = true;
-        } else {
-            let _ = window.close();
+            if is_visible_after {
+                used_prewarmed = true;
+            } else {
+                let _ = window.close();
+            }
         }
-    }
 
-    if !used_prewarmed {
+        if used_prewarmed {
+            continue;
+        }
+
+        let should_focus = display_id == &focus_display_id;
+
         if start.elapsed() < Duration::from_secs(1) {
-            let _ = ShowCapWindow::TargetSelectOverlay {
+            if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
                 display_id: display_id.clone(),
                 target_mode,
-            }
+            })
             .show(&app)
-            .await;
+            .await
+            {
+                window.show().ok();
+                if should_focus {
+                    window.set_focus().ok();
+                }
+            }
         } else {
             let app_clone = app.clone();
             let display_id_clone = display_id.clone();
             tokio::spawn(async move {
-                let _ = ShowCapWindow::TargetSelectOverlay {
+                if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
                     display_id: display_id_clone,
                     target_mode,
-                }
+                })
                 .show(&app_clone)
-                .await;
+                .await
+                {
+                    window.show().ok();
+                    if should_focus {
+                        window.set_focus().ok();
+                    }
+                }
             });
         }
+    }
+
+    let focus_window = CapWindowId::TargetSelectOverlay {
+        display_id: focus_display_id,
+    }
+    .get(&app);
+
+    if let Some(window) = focus_window {
+        window.set_focus().ok();
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
