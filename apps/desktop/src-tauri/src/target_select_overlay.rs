@@ -78,6 +78,7 @@ pub async fn prewarm_target_select_overlays(
         .await
         {
             Ok(window) => {
+                let _ = window.hide();
                 let _ = window.set_ignore_cursor_events(true);
                 prewarmed.store(display_id, window);
             }
