@@ -1,10 +1,13 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button, LogoBadge, Switch } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowLeftIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { CogIcon } from "../dashboard/_components/AnimatedIcons";
 import { CameraPreviewWindow } from "../dashboard/caps/components/web-recorder-dialog/CameraPreviewWindow";
 import { CameraSelector } from "../dashboard/caps/components/web-recorder-dialog/CameraSelector";
 import { MicrophoneSelector } from "../dashboard/caps/components/web-recorder-dialog/MicrophoneSelector";
@@ -24,31 +27,16 @@ export const RecorderPageContent = () => {
 		useState<RecordingMode>("fullscreen");
 	const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
 	const [micSelectOpen, setMicSelectOpen] = useState(false);
+	const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
 	const [isClient, setIsClient] = useState(false);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
 
+	const user = useCurrentUser();
+	console.log('userrrrrrrrrr: ', user);
+
 	useEffect(() => {
 		setIsClient(true);
-		
-		const requestPermissions = async () => {
-			try {
-				const savedCameraId = window.localStorage.getItem('cap-web-recorder-preferred-camera');
-				const savedMicId = window.localStorage.getItem('cap-web-recorder-preferred-microphone');
-				
-				const constraints: MediaStreamConstraints = {
-					video: savedCameraId ? { deviceId: { exact: savedCameraId } } : true,
-					audio: savedMicId ? { deviceId: { exact: savedMicId } } : true
-				};
-				
-				const stream = await navigator.mediaDevices.getUserMedia(constraints);
-				stream.getTracks().forEach(track => track.stop());
-			} catch (error) {
-				console.log('Permission request failed or denied:', error);
-			}
-		};
-		
-		requestPermissions();
 	}, []);
 
 	useEffect(() => {
@@ -88,44 +76,52 @@ export const RecorderPageContent = () => {
 		playAudio(stopSoundRef.current);
 	}, [playAudio]);
 
-	const user = useCurrentUser();
-	const organisationId = user?.defaultOrgId;
+	useEffect(() => {
+		if (!user) return;
 
-	if (!user) {
-		return (
-			<div className="p-5">
-				<div className="flex flex-col items-center justify-center min-h-[300px]">
-					<div className="flex flex-col items-center gap-4">
-						<svg
-							className="animate-spin text-blue-9"
-							width="32"
-							height="32"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-						>
-							<circle cx="12" cy="12" r="10" opacity="0.25" />
-							<path d="M12 2a10 10 0 0 1 10 10" opacity="0.75" />
-						</svg>
-						<p className="text-sm font-medium text-gray-11">Loading user...</p>
-					</div>
-				</div>
-			</div>
-		);
-	}
+		const requestPermissions = async () => {
+			try {
+				const savedCameraId = window.localStorage.getItem('cap-web-recorder-preferred-camera');
+				const savedMicId = window.localStorage.getItem('cap-web-recorder-preferred-microphone');
+
+				const constraints: MediaStreamConstraints = {
+					video: savedCameraId ? { deviceId: { exact: savedCameraId } } : true,
+					audio: savedMicId ? { deviceId: { exact: savedMicId } } : true
+				};
+
+				const stream = await navigator.mediaDevices.getUserMedia(constraints);
+				console.log('Permission granted, tracks:', stream.getTracks().map(t => ({ kind: t.kind, label: t.label, id: t.id })));
+				stream.getTracks().forEach(track => track.stop());
+			} catch (error) {
+				console.error('Permission request failed:', error);
+				try {
+					const stream = await navigator.mediaDevices.getUserMedia({
+						video: true,
+						audio: true
+					});
+					console.log('Fallback permission granted');
+					stream.getTracks().forEach(track => track.stop());
+				} catch (fallbackError) {
+					console.error('Fallback permission also failed:', fallbackError);
+				}
+			}
+		};
+
+		requestPermissions();
+	}, [user]);
 
 	const { devices: availableMics, refresh: refreshMics } =
 		useMicrophoneDevices(isClient);
 	const { devices: availableCameras, refresh: refreshCameras } =
 		useCameraDevices(isClient);
-
 	const {
+		rememberDevices,
 		selectedCameraId,
 		selectedMicId,
 		setSelectedCameraId,
 		handleCameraChange,
 		handleMicChange,
+		handleRememberDevicesChange,
 	} = useDevicePreferences({
 		open: isClient,
 		availableCameras,
@@ -133,6 +129,7 @@ export const RecorderPageContent = () => {
 	});
 
 	const micEnabled = selectedMicId !== null;
+	const organisationId = user?.defaultOrgId;
 
 	useEffect(() => {
 		if (
@@ -163,7 +160,7 @@ export const RecorderPageContent = () => {
 		micEnabled,
 		recordingMode,
 		selectedCameraId,
-		isProUser: user.isPro,
+		isProUser: user?.isPro ?? false,
 		onRecordingSurfaceDetected: (mode) => {
 			setRecordingMode(mode);
 		},
@@ -207,13 +204,13 @@ export const RecorderPageContent = () => {
 				method: "POST",
 				credentials: "include",
 			});
-			router.push("/login");
+			router.push(`/login?callbackUrl=${encodeURIComponent("/record")}`);
 		} catch (error) {
 			console.error("Sign out failed:", error);
 		}
 	};
 
-	const recordingTimerDisplayMs = user.isPro
+	const recordingTimerDisplayMs = user?.isPro
 		? durationMs
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
 
@@ -223,6 +220,33 @@ export const RecorderPageContent = () => {
 		const seconds = totalSeconds % 60;
 		return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 	};
+
+	if (!user) {
+		return (
+			<div className="p-5">
+				<div className="flex flex-col items-center justify-center min-h-[300px] gap-4">
+					<LogoBadge className="w-16 h-16" />
+					<div className="text-center">
+						<h2 className="text-lg font-semibold text-gray-12 mb-2">
+							Sign in to Cap
+						</h2>
+						<p className="text-sm text-gray-11 mb-4">
+							Sign in to start recording your screen
+						</p>
+					</div>
+					<Button
+						onClick={() => {
+							router.push(`/login?callbackUrl=${encodeURIComponent("/record")}`);
+						}}
+						className="w-full"
+						variant="primary"
+					>
+						Sign In
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	if (!isClient) {
 		return (
@@ -250,38 +274,9 @@ export const RecorderPageContent = () => {
 
 	return (
 		<>
-			<div className="p-5">
+			<div className="p-5 relative">
 				<div className="flex items-center gap-3 mb-6 pb-4 border-b border-gray-3">
-					<svg
-						className="w-8 h-8"
-						xmlns="http://www.w3.org/2000/svg"
-						fill="none"
-						viewBox="0 0 40 40"
-						aria-label="Cap Logo"
-					>
-						<rect
-							width="39.5"
-							height="39.5"
-							x="0.25"
-							y="0.25"
-							fill="#fff"
-							rx="7.75"
-						/>
-						<rect
-							width="39.5"
-							height="39.5"
-							x="0.25"
-							y="0.25"
-							stroke="#E5E7EB"
-							strokeWidth="0.5"
-							rx="7.75"
-						/>
-						<path
-							fill="#3B82F6"
-							d="M20 8c-6.627 0-12 5.373-12 12s5.373 12 12 12 12-5.373 12-12S26.627 8 20 8zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10-10-4.477-10-10 4.477-10 10-10z"
-						/>
-						<circle cx="20" cy="20" r="6" fill="#3B82F6" />
-					</svg>
+					<LogoBadge className="w-8 h-8" />
 					<h1 className="text-xl font-semibold text-gray-12">Cap</h1>
 				</div>
 
@@ -295,25 +290,35 @@ export const RecorderPageContent = () => {
 								{user.name || user.email}
 							</span>
 						</div>
-						<button
-							type="button"
-							onClick={handleSignOut}
-							className="p-1 flex items-center justify-center rounded border-none bg-transparent text-gray-11 hover:bg-gray-3 transition-colors cursor-pointer"
-							title="Sign Out"
-						>
-							<svg
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
+						<div className="flex items-center gap-1">
+							<button
+								type="button"
+								onClick={() => setSettingsPanelOpen(true)}
+								className="p-1 flex items-center justify-center rounded border-none bg-transparent text-gray-11 hover:bg-gray-3 transition-colors cursor-pointer"
+								title="Settings"
 							>
-								<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-								<polyline points="16 17 21 12 16 7" />
-								<line x1="21" y1="12" x2="9" y2="12" />
-							</svg>
-						</button>
+								<CogIcon size={16} />
+							</button>
+							<button
+								type="button"
+								onClick={handleSignOut}
+								className="p-1 flex items-center justify-center rounded border-none bg-transparent text-gray-11 hover:bg-gray-3 transition-colors cursor-pointer"
+								title="Sign Out"
+							>
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+								>
+									<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+									<polyline points="16 17 21 12 16 7" />
+									<line x1="21" y1="12" x2="9" y2="12" />
+								</svg>
+							</button>
+						</div>
 					</div>
 				</div>
 
@@ -422,6 +427,52 @@ export const RecorderPageContent = () => {
 						{unsupportedReason}
 					</div>
 				)}
+
+				<AnimatePresence mode="wait">
+					{settingsPanelOpen && (
+						<motion.div
+							key="web-recorder-settings"
+							initial={{ opacity: 0, y: -12 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: -12 }}
+							transition={{ duration: 0.2, ease: "easeOut" }}
+							className="absolute inset-0 z-40 flex flex-col gap-4 p-4 border border-gray-3 rounded-lg bg-gray-1 shadow-lg dark:bg-gray-2"
+						>
+							<div className="flex items-center justify-between">
+								<button
+									type="button"
+									onClick={() => setSettingsPanelOpen(false)}
+									className="flex items-center gap-1 text-sm font-medium text-gray-11 transition-colors hover:text-gray-12"
+								>
+									<ArrowLeftIcon className="size-4" />
+									Back
+								</button>
+								<h2 className="text-sm font-semibold text-gray-12">
+									Recorder settings
+								</h2>
+								<span className="w-9 h-9" aria-hidden />
+							</div>
+							<div className="flex flex-col gap-3">
+								<div className="flex gap-4 justify-between items-start p-4 text-left rounded-xl border border-gray-3 bg-gray-1 dark:bg-gray-3">
+									<div className="flex flex-col gap-1 text-left">
+										<p className="text-sm font-medium text-gray-12">
+											Automatically select your last webcam/microphone
+										</p>
+										<p className="text-xs text-gray-10">
+											If available, the last used camera and mic will be
+											automatically selected.
+										</p>
+									</div>
+									<Switch
+										checked={rememberDevices}
+										onCheckedChange={handleRememberDevicesChange}
+										aria-label="Remember selected devices"
+									/>
+								</div>
+							</div>
+						</motion.div>
+					)}
+				</AnimatePresence>
 			</div>
 
 			{selectedCameraId && (
