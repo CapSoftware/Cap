@@ -15,6 +15,7 @@ fn play_audio(bytes: &'static [u8]) {
     });
 }
 
+#[allow(dead_code)]
 pub enum AppSounds {
     StartRecording,
     StopRecording,

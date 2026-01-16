@@ -304,7 +304,7 @@ async fn test_decoder(video_path: &Path, fps: u32, is_camera: bool) -> DecoderTe
     let name = if is_camera { "camera" } else { "display" };
 
     let start = Instant::now();
-    match spawn_decoder(name, video_path.to_path_buf(), fps, 0.0).await {
+    match spawn_decoder(name, video_path.to_path_buf(), fps, 0.0, false).await {
         Ok(decoder) => {
             result.init_time_ms = start.elapsed().as_secs_f64() * 1000.0;
             result.decoder_type = format!("{}", decoder.decoder_type());
@@ -347,7 +347,7 @@ async fn test_playback(
         }
     };
 
-    let decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0).await {
+    let decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0, false).await {
         Ok(d) => d,
         Err(e) => {
             result.errors.push(format!("Failed to create decoder: {e}"));
@@ -579,17 +579,18 @@ async fn test_camera_sync(
         result.drift_ok = true;
     }
 
-    let display_decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0).await {
-        Ok(d) => d,
-        Err(e) => {
-            result
-                .errors
-                .push(format!("Failed to create display decoder: {e}"));
-            return result;
-        }
-    };
+    let display_decoder =
+        match spawn_decoder("display", display_path.clone(), fps, 0.0, false).await {
+            Ok(d) => d,
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("Failed to create display decoder: {e}"));
+                return result;
+            }
+        };
 
-    let camera_decoder = match spawn_decoder("camera", camera_path.clone(), fps, 0.0).await {
+    let camera_decoder = match spawn_decoder("camera", camera_path.clone(), fps, 0.0, false).await {
         Ok(d) => {
             result.camera_decoder_ok = true;
             d
