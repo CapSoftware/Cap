@@ -75,14 +75,11 @@ export function Editor() {
 		const meta = rawMetaQuery.data;
 		if (!meta) return "loading" as const;
 		if (
-			"inner" in meta &&
-			meta.inner &&
-			typeof meta.inner === "object" &&
-			"status" in meta.inner &&
-			meta.inner.status &&
-			typeof meta.inner.status === "object" &&
-			"status" in meta.inner.status &&
-			meta.inner.status.status === "InProgress"
+			"status" in meta &&
+			meta.status &&
+			typeof meta.status === "object" &&
+			"status" in meta.status &&
+			meta.status.status === "InProgress"
 		) {
 			return "importing" as const;
 		}
