@@ -27,9 +27,7 @@ use tracing::{debug, info, warn};
 
 struct FrameScaler {
     session: arc::R<cidre::vt::PixelTransferSession>,
-    expected_width: usize,
-    expected_height: usize,
-    dst_buf: Option<arc::R<cv::PixelBuf>>,
+    pool: PixelBufferPool,
 }
 
 unsafe impl Send for FrameScaler {}
@@ -39,35 +37,18 @@ impl FrameScaler {
         let mut session = cidre::vt::PixelTransferSession::new().ok()?;
         session.set_scaling_letter_box().ok()?;
         session.set_realtime(true).ok()?;
+        let pool = PixelBufferPool::new(expected_width, expected_height)?;
 
-        Some(Self {
-            session,
-            expected_width,
-            expected_height,
-            dst_buf: None,
-        })
+        Some(Self { session, pool })
     }
 
-    fn scale_frame(&mut self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+    fn scale_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
         let src_image_buf = src_sample_buf.image_buf()?;
-
-        if self.dst_buf.is_none() {
-            let dst = cv::PixelBuf::new(
-                self.expected_width,
-                self.expected_height,
-                cv::PixelFormat::_420V,
-                None,
-            )
-            .ok()?;
-            self.dst_buf = Some(dst);
-        }
-
-        let dst_buf = self.dst_buf.as_ref()?;
+        let dst_buf = self.pool.next();
 
         self.session.transfer(src_image_buf, dst_buf).ok()?;
 
         let format_desc = cm::VideoFormatDesc::with_image_buf(dst_buf).ok()?;
-
         let timing = src_sample_buf.timing_info(0).ok()?;
 
         cm::SampleBuf::with_image_buf(dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
@@ -362,7 +343,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                         scaling_logged.store(true, atomic::Ordering::Relaxed);
                                     }
 
-                                    let Some(scaler) = scaler_guard.as_mut() else {
+                                    let Some(scaler) = scaler_guard.as_ref() else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
                                         return;
                                     };
