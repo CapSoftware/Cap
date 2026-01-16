@@ -456,8 +456,8 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
-    const NORMAL_TIMEOUT_MS: u64 = 2000;
-    const INITIAL_SEEK_TIMEOUT_MS: u64 = 10000;
+    const NORMAL_TIMEOUT_MS: u64 = 5000;
+    const INITIAL_SEEK_TIMEOUT_MS: u64 = 20000;
 
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
         self.get_frame_with_timeout(time, Self::NORMAL_TIMEOUT_MS)
@@ -531,7 +531,7 @@ async fn spawn_ffmpeg_decoder(
     let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
     let (tx, rx) = mpsc::channel();
 
-    ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+    ffmpeg::FfmpegDecoder::spawn_with_hw_config(name, path, fps, rx, ready_tx, true)
         .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
 
     match tokio::time::timeout(timeout_duration, ready_rx).await {
