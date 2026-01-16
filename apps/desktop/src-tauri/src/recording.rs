@@ -376,7 +376,21 @@ pub fn format_project_name<'a>(
     datetime: Option<chrono::DateTime<chrono::Local>>,
 ) -> String {
     const DEFAULT_FILENAME_TEMPLATE: &str = "{target_name} ({target_kind}) {date} {time}";
+    const MAX_TARGET_NAME_CHARS: usize = 180;
     let datetime = datetime.unwrap_or(chrono::Local::now());
+
+    let truncated_target_name: std::borrow::Cow<'_, str> =
+        if target_name.chars().count() > MAX_TARGET_NAME_CHARS {
+            std::borrow::Cow::Owned(
+                target_name
+                    .chars()
+                    .take(MAX_TARGET_NAME_CHARS)
+                    .collect::<String>()
+                    + "...",
+            )
+        } else {
+            std::borrow::Cow::Borrowed(target_name)
+        };
 
     lazy_static! {
         static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
@@ -402,7 +416,10 @@ pub fn format_project_name<'a>(
     };
 
     let result = AC
-        .try_replace_all(haystack, &[recording_mode, mode, target_kind, target_name])
+        .try_replace_all(
+            haystack,
+            &[recording_mode, mode, target_kind, &truncated_target_name],
+        )
         .expect("AhoCorasick replace should never fail with default configuration");
 
     let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
@@ -1188,6 +1205,8 @@ pub async fn take_screenshot(
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
 
+    AppSounds::Notification.play();
+
     let image_width = image.width();
     let image_height = image.height();
     let image_data = image.into_raw();
@@ -1299,8 +1318,6 @@ pub async fn take_screenshot(
                     &app_handle,
                     notifications::NotificationType::ScreenshotSaved,
                 );
-
-                AppSounds::StopRecording.play();
             }
             Ok(Err(e)) => {
                 error!("Failed to encode PNG: {e}");
@@ -2154,16 +2171,7 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
 }
 
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
-    let meta = RecordingMeta::load_for_project(recording_dir)
-        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
-
-    let incomplete =
-        RecoveryManager::find_incomplete(recording_dir.parent().unwrap_or(recording_dir));
-
-    let incomplete_recording = incomplete
-        .into_iter()
-        .find(|r| r.project_path == recording_dir)
-        .or_else(|| analyze_recording_for_remux(recording_dir, &meta));
+    let incomplete_recording = RecoveryManager::find_incomplete_single(recording_dir);
 
     if let Some(recording) = incomplete_recording {
         RecoveryManager::recover(&recording)
@@ -2173,125 +2181,6 @@ pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
     } else {
         Err("Could not find fragments to remux".to_string())
     }
-}
-
-fn analyze_recording_for_remux(
-    project_path: &Path,
-    meta: &RecordingMeta,
-) -> Option<cap_recording::recovery::IncompleteRecording> {
-    use cap_recording::recovery::{IncompleteRecording, RecoverableSegment};
-
-    let StudioRecordingMeta::MultipleSegments { inner, .. } = meta.studio_meta()? else {
-        return None;
-    };
-
-    let mut recoverable_segments = Vec::new();
-
-    for (index, segment) in inner.segments.iter().enumerate() {
-        let display_path = segment.display.path.to_path(project_path);
-        let (display_fragments, display_init_segment) = if display_path.is_dir() {
-            let frags = find_fragments_in_dir(&display_path);
-            let init = display_path.join("init.mp4");
-            (frags, if init.exists() { Some(init) } else { None })
-        } else if display_path.exists() {
-            (vec![display_path], None)
-        } else {
-            continue;
-        };
-
-        if display_fragments.is_empty() {
-            continue;
-        }
-
-        let (camera_fragments, camera_init_segment) = segment
-            .camera
-            .as_ref()
-            .map(|cam| {
-                let cam_path = cam.path.to_path(project_path);
-                if cam_path.is_dir() {
-                    let frags = find_fragments_in_dir(&cam_path);
-                    let init = cam_path.join("init.mp4");
-                    let init_seg = if init.exists() { Some(init) } else { None };
-                    if frags.is_empty() {
-                        (None, None)
-                    } else {
-                        (Some(frags), init_seg)
-                    }
-                } else if cam_path.exists() {
-                    (Some(vec![cam_path]), None)
-                } else {
-                    (None, None)
-                }
-            })
-            .unwrap_or((None, None));
-
-        let cursor_path = segment
-            .cursor
-            .as_ref()
-            .map(|c| c.to_path(project_path))
-            .filter(|p| p.exists());
-
-        let mic_fragments = segment.mic.as_ref().and_then(|mic| {
-            let mic_path = mic.path.to_path(project_path);
-            if mic_path.is_dir() {
-                let frags = find_fragments_in_dir(&mic_path);
-                if frags.is_empty() { None } else { Some(frags) }
-            } else if mic_path.exists() {
-                Some(vec![mic_path])
-            } else {
-                None
-            }
-        });
-
-        let system_audio_fragments = segment.system_audio.as_ref().and_then(|sys| {
-            let sys_path = sys.path.to_path(project_path);
-            if sys_path.is_dir() {
-                let frags = find_fragments_in_dir(&sys_path);
-                if frags.is_empty() { None } else { Some(frags) }
-            } else if sys_path.exists() {
-                Some(vec![sys_path])
-            } else {
-                None
-            }
-        });
-
-        recoverable_segments.push(RecoverableSegment {
-            index: index as u32,
-            display_fragments,
-            display_init_segment,
-            camera_fragments,
-            camera_init_segment,
-            mic_fragments,
-            system_audio_fragments,
-            cursor_path,
-        });
-    }
-
-    if recoverable_segments.is_empty() {
-        return None;
-    }
-
-    Some(IncompleteRecording {
-        project_path: project_path.to_path_buf(),
-        meta: meta.clone(),
-        recoverable_segments,
-        estimated_duration: Duration::ZERO,
-    })
-}
-
-fn find_fragments_in_dir(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    let mut fragments: Vec<_> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "mp4" || e == "m4a"))
-        .collect();
-
-    fragments.sort();
-    fragments
 }
 
 #[cfg(test)]

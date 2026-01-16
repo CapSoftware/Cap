@@ -87,6 +87,7 @@ pub struct EditorInstance {
     pub segment_medias: Arc<Vec<SegmentMedia>>,
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
+    pub export_active: AtomicBool,
 }
 
 impl EditorInstance {
@@ -288,6 +289,7 @@ impl EditorInstance {
             playback_active: playback_active_tx,
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
+            export_active: AtomicBool::new(false),
         });
 
         this.state.lock().await.preview_task =
@@ -393,9 +395,11 @@ impl EditorInstance {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
+            let mut has_rendered_first_frame = false;
 
             loop {
                 preview_rx.changed().await.unwrap();
+                has_rendered_first_frame = false;
 
                 loop {
                     let Some((frame_number, fps, resolution_base)) =
@@ -409,6 +413,11 @@ impl EditorInstance {
                     }
 
                     if *self.playback_active_rx.borrow() {
+                        break;
+                    }
+
+                    if self.export_active.load(Ordering::Acquire) {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         break;
                     }
 
@@ -437,7 +446,8 @@ impl EditorInstance {
                     let playback_is_active = *self.playback_active_rx.borrow();
                     let export_preview_is_active =
                         self.export_preview_active.load(Ordering::Acquire);
-                    if !playback_is_active && !export_preview_is_active {
+                    let export_is_active = self.export_active.load(Ordering::Acquire);
+                    if !playback_is_active && !export_preview_is_active && !export_is_active {
                         let prefetch_frames_count = 15u32;
                         let hide_camera = project.camera.hide;
                         let playback_rx = self.playback_active_rx.clone();
@@ -474,11 +484,7 @@ impl EditorInstance {
                         }
                     }
 
-                    let get_frames_future = segment_medias.decoders.get_frames(
-                        segment_time as f32,
-                        !project.camera.hide,
-                        clip_offsets,
-                    );
+                    let use_initial_timeout = !has_rendered_first_frame;
 
                     tokio::select! {
                         biased;
@@ -487,12 +493,28 @@ impl EditorInstance {
                             continue;
                         }
 
-                        segment_frames_opt = get_frames_future => {
+                        segment_frames_opt = async {
+                            if use_initial_timeout {
+                                segment_medias.decoders.get_frames_initial(
+                                    segment_time as f32,
+                                    !project.camera.hide,
+                                    clip_offsets,
+                                ).await
+                            } else {
+                                segment_medias.decoders.get_frames(
+                                    segment_time as f32,
+                                    !project.camera.hide,
+                                    clip_offsets,
+                                ).await
+                            }
+                        } => {
                             if preview_rx.has_changed().unwrap_or(false) {
                                 continue;
                             }
 
                             if let Some(segment_frames) = segment_frames_opt {
+                                has_rendered_first_frame = true;
+
                                 let total_duration = project
                                     .timeline
                                     .as_ref()

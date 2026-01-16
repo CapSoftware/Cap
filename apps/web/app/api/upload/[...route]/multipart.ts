@@ -425,6 +425,55 @@ app.post(
 						),
 					);
 
+					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+					if (video.source.type === "webMP4" && mediaServerUrl) {
+						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey);
+						const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
+							fileKey,
+							{
+								ContentType: "video/mp4",
+								CacheControl: "max-age=31536000",
+								Metadata: {
+									userId: user.id,
+									source: "cap-multipart-upload",
+								},
+							},
+						);
+
+						yield* Effect.tryPromise({
+							try: async () => {
+								const response = await fetch(
+									`${mediaServerUrl}/video/process`,
+									{
+										method: "POST",
+										headers: { "Content-Type": "application/json" },
+										body: JSON.stringify({
+											videoId,
+											userId: user.id,
+											videoUrl: inputUrl,
+											outputPresignedUrl,
+											remuxOnly: true,
+										}),
+									},
+								);
+
+								if (!response.ok) {
+									const errorText = await response.text().catch(() => "");
+									throw new Error(
+										`Media server remux failed: ${response.status} ${errorText}`,
+									);
+								}
+							},
+							catch: (cause) =>
+								cause instanceof Error ? cause : new Error(String(cause)),
+						}).pipe(
+							Effect.catchAll((error) => {
+								console.error("Failed to queue faststart remux:", error);
+								return Effect.succeed(null);
+							}),
+						);
+					}
+
 					if (Option.isNone(customBucket)) {
 						const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
 						if (distributionId) {

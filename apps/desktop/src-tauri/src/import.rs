@@ -88,7 +88,7 @@ fn generate_project_name(source_path: &Path) -> String {
     let now = chrono::Local::now();
     let date_str = now.format("%Y-%m-%d at %H.%M.%S").to_string();
 
-    format!("{} {}", stem, date_str)
+    format!("{stem} {date_str}")
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -443,12 +443,12 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
 
     let project_name = generate_project_name(&source_path);
     let sanitized_name = sanitize_filename(&project_name);
-    let project_dir_name = format!("{}.cap", sanitized_name);
+    let project_dir_name = format!("{sanitized_name}.cap");
 
     let mut project_path = recordings_dir.join(&project_dir_name);
     let mut counter = 1;
     while project_path.exists() {
-        let new_name = format!("{} ({}).cap", sanitized_name, counter);
+        let new_name = format!("{sanitized_name} ({counter}).cap");
         project_path = recordings_dir.join(new_name);
         counter += 1;
     }

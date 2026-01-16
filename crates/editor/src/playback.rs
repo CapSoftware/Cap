@@ -246,15 +246,26 @@ impl Playback {
                         let decoders = segment_media.decoders.clone();
                         let hide_camera = cached_project.camera.hide;
                         let segment_index = segment.recording_clip;
+                        let is_initial = frames_decoded < 10;
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.insert(frame_num);
                         }
 
                         in_flight.push(Box::pin(async move {
-                            let result = decoders
-                                .get_frames(segment_time as f32, !hide_camera, clip_offsets)
-                                .await;
+                            let result = if is_initial {
+                                decoders
+                                    .get_frames_initial(
+                                        segment_time as f32,
+                                        !hide_camera,
+                                        clip_offsets,
+                                    )
+                                    .await
+                            } else {
+                                decoders
+                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .await
+                            };
                             (frame_num, segment_index, result)
                         }));
                     }

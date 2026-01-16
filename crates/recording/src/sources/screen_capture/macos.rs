@@ -11,8 +11,9 @@ use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
 use std::{
+    ptr,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
     time::Duration,
@@ -22,7 +23,56 @@ use tokio_util::{
     future::FutureExt as _,
     sync::{CancellationToken, DropGuard},
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
+
+struct FrameScaler {
+    session: arc::R<cidre::vt::PixelTransferSession>,
+    expected_width: usize,
+    expected_height: usize,
+    dst_buf: Option<arc::R<cv::PixelBuf>>,
+}
+
+unsafe impl Send for FrameScaler {}
+
+impl FrameScaler {
+    fn new(expected_width: usize, expected_height: usize) -> Option<Self> {
+        let mut session = cidre::vt::PixelTransferSession::new().ok()?;
+        session.set_scaling_letter_box().ok()?;
+        session.set_realtime(true).ok()?;
+
+        Some(Self {
+            session,
+            expected_width,
+            expected_height,
+            dst_buf: None,
+        })
+    }
+
+    fn scale_frame(&mut self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+        let src_image_buf = src_sample_buf.image_buf()?;
+
+        if self.dst_buf.is_none() {
+            let dst = cv::PixelBuf::new(
+                self.expected_width,
+                self.expected_height,
+                cv::PixelFormat::_420V,
+                None,
+            )
+            .ok()?;
+            self.dst_buf = Some(dst);
+        }
+
+        let dst_buf = self.dst_buf.as_ref()?;
+
+        self.session.transfer(src_image_buf, dst_buf).ok()?;
+
+        let format_desc = cm::VideoFormatDesc::with_image_buf(dst_buf).ok()?;
+
+        let timing = src_sample_buf.timing_info(0).ok()?;
+
+        cm::SampleBuf::with_image_buf(dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+    }
+}
 
 fn get_screen_buffer_size() -> usize {
     std::env::var("CAP_SCREEN_BUFFER_SIZE")
@@ -184,10 +234,19 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
+        let expected_width = self.video_info.width as usize;
+        let expected_height = self.video_info.height as usize;
+        let frame_scaler: Arc<Mutex<Option<FrameScaler>>> = Arc::new(Mutex::new(None));
+        let scaling_logged = Arc::new(AtomicBool::new(false));
+        let scaled_frame_count = Arc::new(AtomicU64::new(0));
+
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
                 let drop_counter = drop_counter.clone();
+                let frame_scaler = frame_scaler.clone();
+                let scaling_logged = scaling_logged.clone();
+                let scaled_frame_count = scaled_frame_count.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -206,13 +265,78 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 return;
                             }
 
+                            let frame_width = image_buf.width();
+                            let frame_height = image_buf.height();
+
+                            let final_sample_buf =
+                                if frame_width != expected_width || frame_height != expected_height
+                                {
+                                    let Ok(mut scaler_guard) = frame_scaler.lock() else {
+                                        drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        return;
+                                    };
+
+                                    if scaler_guard.is_none() {
+                                        *scaler_guard =
+                                            FrameScaler::new(expected_width, expected_height);
+
+                                        if scaler_guard.is_some() {
+                                            info!(
+                                                expected_width,
+                                                expected_height,
+                                                frame_width,
+                                                frame_height,
+                                                "Display configuration changed, scaling frames to match original dimensions"
+                                            );
+                                        } else {
+                                            warn!(
+                                                "Failed to create frame scaler, dropping mismatched frames"
+                                            );
+                                        }
+                                        scaling_logged.store(true, atomic::Ordering::Relaxed);
+                                    }
+
+                                    let Some(scaler) = scaler_guard.as_mut() else {
+                                        drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        return;
+                                    };
+
+                                    let Some(scaled) = scaler.scale_frame(sample_buffer) else {
+                                        drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        return;
+                                    };
+
+                                    let count =
+                                        scaled_frame_count.fetch_add(1, atomic::Ordering::Relaxed)
+                                            + 1;
+                                    if count.is_multiple_of(300) {
+                                        debug!(scaled_frames = count, "Scaling frames");
+                                    }
+
+                                    scaled
+                                } else {
+                                    if scaling_logged.swap(false, atomic::Ordering::Relaxed) {
+                                        let count =
+                                            scaled_frame_count.swap(0, atomic::Ordering::Relaxed);
+                                        info!(
+                                            scaled_frames = count,
+                                            "Display dimensions restored, resuming direct capture"
+                                        );
+                                        if let Ok(mut guard) = frame_scaler.lock() {
+                                            *guard = None;
+                                        }
+                                    }
+
+                                    sample_buffer.retained()
+                                };
+
                             cap_fail::fail_ret!("screen_capture video frame skip");
 
                             video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
                             if video_tx
                                 .try_send(VideoFrame {
-                                    sample_buf: sample_buffer.retained(),
+                                    sample_buf: final_sample_buf,
                                     timestamp,
                                 })
                                 .is_err()

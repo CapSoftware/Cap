@@ -231,6 +231,7 @@ impl CapWindowId {
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
+            Self::TargetSelectOverlay { .. } => "Cap Target Select".to_string(),
             _ => "Cap".to_string(),
         }
     }

@@ -1,4 +1,4 @@
-use crate::editor_window::WindowEditorInstance;
+use crate::editor_window::{OptionalWindowEditorInstance, WindowEditorInstance};
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
@@ -11,9 +11,21 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tracing::{info, instrument};
+
+struct ExportActiveGuard<'a>(&'a AtomicBool);
+
+impl Drop for ExportActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+        tracing::info!("Resuming editor preview after export");
+    }
+}
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
@@ -87,15 +99,25 @@ fn is_frame_decode_error(error: &str) -> bool {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(progress))]
+#[instrument(skip(progress, editor))]
 pub async fn export_video(
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
+    editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    let force_ffmpeg = match &settings {
-        ExportSettings::Mp4(s) => s.force_ffmpeg_decoder,
-        ExportSettings::Gif(_) => false,
+    let force_ffmpeg = true;
+    tracing::info!(
+        "Using FFmpeg decoder for export (ensures all frames can be decoded regardless of keyframe positions)"
+    );
+
+    let _guard = if let Some(ref ed) = *editor {
+        ed.export_active.store(true, Ordering::Release);
+        tracing::info!("Pausing editor preview during export");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        Some(ExportActiveGuard(&ed.export_active))
+    } else {
+        None
     };
 
     let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
@@ -419,6 +441,10 @@ pub async fn generate_export_preview_fast(
 ) -> Result<ExportPreviewResult, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::time::Instant;
+
+    if editor.export_active.load(Ordering::Acquire) {
+        return Err("Export is in progress - preview generation skipped".to_string());
+    }
 
     let project_config = editor.project_config.1.borrow().clone();
 

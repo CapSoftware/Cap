@@ -32,6 +32,13 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorImage: ImageUpload.ImageUrl | null;
 };
 
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
+
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
@@ -44,7 +51,7 @@ export const ShareVideo = forwardRef<
 		areCaptionsDisabled?: boolean;
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
-		aiProcessing?: boolean;
+		aiGenerationStatus?: AiGenerationStatus | null;
 	}
 >(
 	(

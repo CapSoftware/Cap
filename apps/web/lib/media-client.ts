@@ -115,7 +115,10 @@ export async function extractAudioViaMediaServer(
 	const response = await fetchWithRetry(`${mediaServerUrl}/audio/extract`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ videoUrl }),
+		body: JSON.stringify({
+			videoUrl,
+			stream: true,
+		}),
 	});
 
 	if (!response.ok) {

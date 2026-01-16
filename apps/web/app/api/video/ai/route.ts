@@ -5,7 +5,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { startAiGeneration } from "@/lib/generate-ai";
 import { isAiGenerationEnabled } from "@/utils/flags";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +41,6 @@ export async function GET(request: NextRequest) {
 		const video = result[0];
 		const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
-		// If we have AI data, return it
 		if (metadata.summary || metadata.chapters) {
 			console.log(
 				`[AI API] Returning existing AI metadata for video ${videoId}`,
@@ -52,12 +51,16 @@ export async function GET(request: NextRequest) {
 					title: metadata.aiTitle ?? null,
 					summary: metadata.summary ?? null,
 					chapters: metadata.chapters ?? null,
+					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 				},
 				{ status: 200 },
 			);
 		}
 
-		if (metadata.aiProcessing) {
+		if (
+			metadata.aiGenerationStatus === "PROCESSING" ||
+			metadata.aiGenerationStatus === "QUEUED"
+		) {
 			console.log(
 				`[AI API] AI processing already in progress for video ${videoId}`,
 			);
@@ -65,6 +68,23 @@ export async function GET(request: NextRequest) {
 				{
 					processing: true,
 					message: "AI metadata generation in progress",
+					aiGenerationStatus: metadata.aiGenerationStatus,
+				},
+				{ status: 200 },
+			);
+		}
+
+		const canRetry =
+			metadata.aiGenerationStatus === "ERROR" ||
+			metadata.aiGenerationStatus === "SKIPPED";
+
+		if (!canRetry) {
+			return Response.json(
+				{
+					processing: false,
+					message:
+						"AI generation is not available for retry. Generation is triggered automatically when transcription completes.",
+					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 				},
 				{ status: 200 },
 			);
@@ -75,6 +95,7 @@ export async function GET(request: NextRequest) {
 				{
 					processing: false,
 					message: `Cannot generate AI metadata - transcription status: ${video.transcriptionStatus || "unknown"}`,
+					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
 				},
 				{ status: 200 },
 			);
@@ -95,7 +116,6 @@ export async function GET(request: NextRequest) {
 			!videoOwnerQuery[0] ||
 			!(await isAiGenerationEnabled(videoOwnerQuery[0]))
 		) {
-			const _videoOwner = videoOwnerQuery[0];
 			return Response.json(
 				{
 					processing: false,
@@ -106,23 +126,32 @@ export async function GET(request: NextRequest) {
 		}
 
 		try {
-			generateAiMetadata(videoId, video.ownerId).catch((error) => {
-				console.error("[AI API] Error generating AI metadata:", error);
-			});
+			const aiResult = await startAiGeneration(videoId, video.ownerId);
+
+			if (!aiResult.success) {
+				return Response.json(
+					{
+						processing: false,
+						error: aiResult.message,
+					},
+					{ status: 500 },
+				);
+			}
 
 			return Response.json(
 				{
 					processing: true,
-					message: "AI metadata generation started",
+					message: aiResult.message,
+					aiGenerationStatus: "QUEUED",
 				},
 				{ status: 200 },
 			);
 		} catch (error) {
-			console.error("[AI API] Error starting AI metadata generation:", error);
+			console.error("[AI API] Error starting AI generation workflow:", error);
 			return Response.json(
 				{
 					processing: false,
-					error: "Failed to start AI metadata generation",
+					error: "Failed to start AI generation workflow",
 				},
 				{ status: 500 },
 			);

@@ -16,7 +16,7 @@ const videoUrlSchema = z.object({
 
 const extractSchema = z.object({
 	videoUrl: z.string().url(),
-	stream: z.boolean().optional().default(false),
+	stream: z.boolean().optional().default(true),
 });
 
 function isBusyError(err: unknown): boolean {

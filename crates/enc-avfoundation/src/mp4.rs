@@ -25,6 +25,7 @@ pub struct MP4Encoder {
     timestamp_offset: Duration,
     is_writing: bool,
     is_paused: bool,
+    writer_failed: bool,
     video_frames_appended: usize,
     audio_frames_appended: usize,
     last_timestamp: Option<Duration>,
@@ -272,6 +273,7 @@ impl MP4Encoder {
             timestamp_offset: Duration::ZERO,
             is_writing: false,
             is_paused: false,
+            writer_failed: false,
             video_frames_appended: 0,
             audio_frames_appended: 0,
             last_timestamp: None,
@@ -280,13 +282,15 @@ impl MP4Encoder {
         })
     }
 
-    /// Expects frames with whatever pts values you like
-    /// They will be made relative when encoding
     pub fn queue_video_frame(
         &mut self,
         frame: arc::R<cm::SampleBuf>,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
+        if self.writer_failed {
+            return Err(QueueFrameError::Failed);
+        }
+
         if self.is_paused {
             return Ok(());
         };
@@ -337,12 +341,23 @@ impl MP4Encoder {
 
         self.last_video_pts = Some(pts_duration);
 
-        let mut timing = frame.timing_info(0).unwrap();
-        timing.pts = cm::Time::new(pts_duration.as_millis() as i64, 1_000);
+        let frame_duration_ms = self.video_frame_duration().as_millis() as i64;
+        let timing = SampleTimingInfo {
+            duration: cm::Time::new(frame_duration_ms.max(1), 1_000),
+            pts: cm::Time::new(pts_duration.as_millis() as i64, 1_000),
+            dts: cm::Time::invalid(),
+        };
         let new_frame = frame.copy_with_new_timing(&[timing]).unwrap();
         drop(frame);
 
-        append_sample_buf(&mut self.video_input, &self.asset_writer, &new_frame)?;
+        match append_sample_buf(&mut self.video_input, &self.asset_writer, &new_frame) {
+            Ok(()) => {}
+            Err(QueueFrameError::WriterFailed(err)) => {
+                self.writer_failed = true;
+                return Err(QueueFrameError::WriterFailed(err));
+            }
+            Err(e) => return Err(e),
+        }
 
         self.video_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
@@ -350,13 +365,15 @@ impl MP4Encoder {
         Ok(())
     }
 
-    /// Expects frames with pts values relative to the first frame's pts
-    /// in the timebase of 1 / sample rate
     pub fn queue_audio_frame(
         &mut self,
         frame: &frame::Audio,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
+        if self.writer_failed {
+            return Err(QueueFrameError::Failed);
+        }
+
         if self.is_paused || !self.is_writing {
             return Ok(());
         }
@@ -498,7 +515,14 @@ impl MP4Encoder {
         )
         .map_err(QueueFrameError::Construct)?;
 
-        append_sample_buf(audio_input, &self.asset_writer, &buffer)?;
+        match append_sample_buf(audio_input, &self.asset_writer, &buffer) {
+            Ok(()) => {}
+            Err(QueueFrameError::WriterFailed(err)) => {
+                self.writer_failed = true;
+                return Err(QueueFrameError::WriterFailed(err));
+            }
+            Err(e) => return Err(e),
+        }
 
         self.audio_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
@@ -756,18 +780,31 @@ fn append_sample_buf(
     writer: &av::AssetWriter,
     frame: &cm::SampleBuf,
 ) -> Result<(), QueueFrameError> {
+    let status = writer.status();
+    if status == av::asset::writer::Status::Failed {
+        return Err(match writer.error() {
+            Some(err) => QueueFrameError::WriterFailed(err),
+            None => QueueFrameError::Failed,
+        });
+    }
+    if status != av::asset::writer::Status::Writing {
+        return Err(QueueFrameError::Failed);
+    }
+
     match input.append_sample_buf(frame) {
         Ok(true) => {}
         Ok(false) => {
-            if writer.status() == av::asset::writer::Status::Failed {
+            let status = writer.status();
+            if status == av::asset::writer::Status::Failed {
                 return Err(match writer.error() {
                     Some(err) => QueueFrameError::WriterFailed(err),
                     None => QueueFrameError::Failed,
                 });
             }
-            if writer.status() == av::asset::writer::Status::Writing {
+            if status == av::asset::writer::Status::Writing {
                 return Err(QueueFrameError::NotReadyForMore);
             }
+            return Err(QueueFrameError::Failed);
         }
         Err(e) => return Err(QueueFrameError::AppendError(e.retained())),
     }

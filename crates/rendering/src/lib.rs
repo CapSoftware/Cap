@@ -218,6 +218,43 @@ impl RecordingSegmentDecoders {
             recording_time: segment_time + self.segment_offset as f32,
         })
     }
+
+    pub async fn get_frames_initial(
+        &self,
+        segment_time: f32,
+        needs_camera: bool,
+        offsets: ClipOffsets,
+    ) -> Option<DecodedSegmentFrames> {
+        let camera_request_time = segment_time + offsets.camera;
+        let (screen, camera) = tokio::join!(
+            self.screen.get_frame_initial(segment_time),
+            OptionFuture::from(
+                needs_camera
+                    .then(|| self
+                        .camera
+                        .as_ref()
+                        .map(|d| d.get_frame_initial(camera_request_time)))
+                    .flatten()
+            )
+        );
+
+        let camera_frame = camera.flatten();
+
+        Some(DecodedSegmentFrames {
+            screen_frame: screen?,
+            camera_frame,
+            segment_time,
+            recording_time: segment_time + self.segment_offset as f32,
+        })
+    }
+
+    pub fn screen_video_dimensions(&self) -> (u32, u32) {
+        self.screen.video_dimensions()
+    }
+
+    pub fn camera_video_dimensions(&self) -> Option<(u32, u32)> {
+        self.camera.as_ref().map(|c| c.video_dimensions())
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -303,6 +340,18 @@ pub async fn render_video_to_channel(
         constants.is_software_adapter,
     );
 
+    if let Some(first_segment) = render_segments.first() {
+        let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
+        let camera_dims = first_segment.decoders.camera_video_dimensions();
+        layers.prepare_for_video_dimensions(
+            &constants.device,
+            screen_w,
+            screen_h,
+            camera_dims.map(|(w, _)| w),
+            camera_dims.map(|(_, h)| h),
+        );
+    }
+
     let mut last_successful_frame: Option<RenderedFrame> = None;
     let mut consecutive_failures = 0u32;
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
@@ -332,21 +381,38 @@ pub async fn render_video_to_channel(
 
         let mut segment_frames = None;
         let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 3;
+        const MAX_RETRIES: u32 = 5;
+        let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
 
         while segment_frames.is_none() && retry_count < MAX_RETRIES {
             if retry_count > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(50 * retry_count as u64)).await;
+                let delay = if is_initial_frame {
+                    500 * (retry_count as u64 + 1)
+                } else {
+                    50 * retry_count as u64
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            segment_frames = render_segment
-                .decoders
-                .get_frames(
-                    segment_time as f32,
-                    !project.camera.hide,
-                    clip_config.map(|v| v.offsets).unwrap_or_default(),
-                )
-                .await;
+            segment_frames = if is_initial_frame {
+                render_segment
+                    .decoders
+                    .get_frames_initial(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    )
+                    .await
+            } else {
+                render_segment
+                    .decoders
+                    .get_frames(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    )
+                    .await
+            };
 
             if segment_frames.is_none() {
                 retry_count += 1;
@@ -355,6 +421,7 @@ pub async fn render_video_to_channel(
                         frame_number = current_frame_number,
                         segment_time = segment_time,
                         retry_count = retry_count,
+                        is_initial = is_initial_frame,
                         "Frame decode failed, retrying..."
                     );
                 }
@@ -1726,11 +1793,17 @@ pub struct FrameRenderer<'a> {
 }
 
 impl<'a> FrameRenderer<'a> {
+    const MAX_RENDER_RETRIES: u32 = 3;
+
     pub fn new(constants: &'a RenderVideoConstants) -> Self {
         Self {
             constants,
             session: None,
         }
+    }
+
+    pub fn reset_session(&mut self) {
+        self.session = None;
     }
 
     pub async fn render(
@@ -1740,29 +1813,67 @@ impl<'a> FrameRenderer<'a> {
         cursor: &CursorEvents,
         layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
-        let session = self.session.get_or_insert_with(|| {
-            RenderSession::new(
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying frame render after GPU error"
+                );
+                self.reset_session();
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                )
+            });
+
+            session.update_texture_size(
                 &self.constants.device,
                 uniforms.output_size.0,
                 uniforms.output_size.1,
+            );
+
+            match produce_frame(
+                self.constants,
+                segment_frames.clone(),
+                uniforms.clone(),
+                cursor,
+                layers,
+                session,
             )
-        });
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    tracing::warn!(
+                        frame_number = uniforms.frame_number,
+                        attempt = attempt + 1,
+                        "GPU buffer mapping failed, will retry"
+                    );
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(e)) => {
+                    tracing::warn!(
+                        frame_number = uniforms.frame_number,
+                        attempt = attempt + 1,
+                        error = %e,
+                        "GPU buffer async error, will retry"
+                    );
+                    last_error = Some(RenderingError::BufferMapFailed(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
-        session.update_texture_size(
-            &self.constants.device,
-            uniforms.output_size.0,
-            uniforms.output_size.1,
-        );
-
-        produce_frame(
-            self.constants,
-            segment_frames,
-            uniforms,
-            cursor,
-            layers,
-            session,
-        )
-        .await
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
     }
 }
 
@@ -1798,6 +1909,30 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+        }
+    }
+
+    pub fn prepare_for_video_dimensions(
+        &mut self,
+        device: &wgpu::Device,
+        screen_width: u32,
+        screen_height: u32,
+        camera_width: Option<u32>,
+        camera_height: Option<u32>,
+    ) {
+        tracing::info!(
+            screen_width = screen_width,
+            screen_height = screen_height,
+            camera_width = camera_width,
+            camera_height = camera_height,
+            "Pre-allocating YUV converter textures for video dimensions"
+        );
+        self.display
+            .prepare_for_video_dimensions(device, screen_width, screen_height);
+        if let (Some(cw), Some(ch)) = (camera_width, camera_height) {
+            self.camera.prepare_for_video_dimensions(device, cw, ch);
+            self.camera_only
+                .prepare_for_video_dimensions(device, cw, ch);
         }
     }
 

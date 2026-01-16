@@ -53,6 +53,7 @@ const processSchema = z.object({
 	maxHeight: z.number().max(4096).optional(),
 	crf: z.number().min(0).max(51).optional(),
 	preset: z.enum(["ultrafast", "fast", "medium", "slow"]).optional(),
+	remuxOnly: z.boolean().optional(),
 });
 
 function isBusyError(err: unknown): boolean {
@@ -323,6 +324,7 @@ async function processVideoAsync(
 				maxHeight: options.maxHeight,
 				crf: options.crf,
 				preset: options.preset,
+				remuxOnly: options.remuxOnly,
 			},
 			(progress, message) => {
 				const scaledProgress = 10 + progress * 0.7;
