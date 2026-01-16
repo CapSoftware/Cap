@@ -1,4 +1,4 @@
-use cap_media_info::{AudioInfo, VideoInfo};
+use cap_media_info::{AudioInfo, VideoInfo, ensure_even};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::{frame, software::resampling};
 use std::{path::PathBuf, time::Duration};
@@ -119,12 +119,15 @@ impl MP4Encoder {
                 .ok_or(InitError::NoVideoSettingsAssistant)?
                 .copy_mut();
 
-            let downscale = output_height
-                .map(|h| h as f32 / video_config.height as f32)
-                .unwrap_or(1.0);
-
-            let output_width = (video_config.width as f32 * downscale) as u32;
-            let output_height = output_height.unwrap_or(video_config.height);
+            let output_height = ensure_even(output_height.unwrap_or(video_config.height));
+            let output_width = if video_config.height == 0 {
+                ensure_even(video_config.width)
+            } else {
+                ensure_even(
+                    ((video_config.width as u64 * output_height as u64)
+                        / video_config.height as u64) as u32,
+                )
+            };
 
             output_settings.insert(
                 av::video_settings_keys::width(),

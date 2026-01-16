@@ -14,7 +14,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex,
-        atomic::{self, AtomicBool, AtomicU32, AtomicU64, AtomicUsize},
+        atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
     time::Duration,
 };
@@ -27,7 +27,7 @@ use tracing::{debug, info, warn};
 
 struct FrameScaler {
     session: arc::R<cidre::vt::PixelTransferSession>,
-    pool: PixelBufferPool,
+    pool: arc::R<cv::PixelBufPool>,
 }
 
 unsafe impl Send for FrameScaler {}
@@ -37,21 +37,21 @@ impl FrameScaler {
         let mut session = cidre::vt::PixelTransferSession::new().ok()?;
         session.set_scaling_letter_box().ok()?;
         session.set_realtime(true).ok()?;
-        let pool = PixelBufferPool::new(expected_width, expected_height)?;
+        let pool = create_pixel_buffer_pool(expected_width, expected_height)?;
 
         Some(Self { session, pool })
     }
 
     fn scale_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
         let src_image_buf = src_sample_buf.image_buf()?;
-        let dst_buf = self.pool.next();
+        let dst_buf = self.pool.pixel_buf().ok()?;
 
-        self.session.transfer(src_image_buf, dst_buf).ok()?;
+        self.session.transfer(src_image_buf, &dst_buf).ok()?;
 
-        let format_desc = cm::VideoFormatDesc::with_image_buf(dst_buf).ok()?;
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&dst_buf).ok()?;
         let timing = src_sample_buf.timing_info(0).ok()?;
 
-        cm::SampleBuf::with_image_buf(dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+        cm::SampleBuf::with_image_buf(&dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
     }
 }
 
@@ -62,35 +62,43 @@ fn get_pixel_buffer_pool_size() -> usize {
         .unwrap_or(20)
 }
 
-struct PixelBufferPool {
-    buffers: Vec<arc::R<cv::PixelBuf>>,
-    index: AtomicUsize,
-}
+fn create_pixel_buffer_pool(width: usize, height: usize) -> Option<arc::R<cv::PixelBufPool>> {
+    let min_count = get_pixel_buffer_pool_size();
 
-impl PixelBufferPool {
-    fn new(width: usize, height: usize) -> Option<Self> {
-        let pool_size = get_pixel_buffer_pool_size();
-        let mut buffers = Vec::with_capacity(pool_size);
-        for _ in 0..pool_size {
-            let buf = cv::PixelBuf::new(width, height, cv::PixelFormat::_420V, None).ok()?;
-            buffers.push(buf);
-        }
-        debug!(pool_size, width, height, "Pixel buffer pool initialized");
-        Some(Self {
-            buffers,
-            index: AtomicUsize::new(0),
-        })
-    }
+    let min_count_num = cf::Number::from_usize(min_count);
+    let width_num = cf::Number::from_usize(width);
+    let height_num = cf::Number::from_usize(height);
+    let io_props = cf::Dictionary::new();
 
-    fn next(&self) -> &arc::R<cv::PixelBuf> {
-        let index = self.index.fetch_add(1, atomic::Ordering::Relaxed) % self.buffers.len();
-        &self.buffers[index]
-    }
+    let pool_attr_keys: [&cf::Type; 1] =
+        [cv::pixel_buffer_pool::keys::minimum_buffer_count().as_ref()];
+    let pool_attr_values: [&cf::Type; 1] = [min_count_num.as_ref()];
+    let pool_attrs = cf::Dictionary::with_keys_values(&pool_attr_keys, &pool_attr_values)?;
+
+    let pixel_buf_attr_keys: [&cf::Type; 5] = [
+        cv::pixel_buffer::keys::pixel_format().as_ref(),
+        cv::pixel_buffer::keys::width().as_ref(),
+        cv::pixel_buffer::keys::height().as_ref(),
+        cv::pixel_buffer::keys::io_surf_props().as_ref(),
+        cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+    ];
+    let pixel_buf_attr_values: [&cf::Type; 5] = [
+        cv::PixelFormat::_420V.to_cf_number().as_ref(),
+        width_num.as_ref(),
+        height_num.as_ref(),
+        io_props.as_ref(),
+        cf::Boolean::value_true().as_ref(),
+    ];
+    let pixel_buf_attrs =
+        cf::Dictionary::with_keys_values(&pixel_buf_attr_keys, &pixel_buf_attr_values)?;
+
+    debug!(min_count, width, height, "Pixel buffer pool initialized");
+    cv::PixelBufPool::new(Some(pool_attrs.as_ref()), Some(pixel_buf_attrs.as_ref())).ok()
 }
 
 struct PixelBufferCopier {
     session: arc::R<cidre::vt::PixelTransferSession>,
-    pool: PixelBufferPool,
+    pool: arc::R<cv::PixelBufPool>,
 }
 
 unsafe impl Send for PixelBufferCopier {}
@@ -99,20 +107,20 @@ impl PixelBufferCopier {
     fn new(width: usize, height: usize) -> Option<Self> {
         let mut session = cidre::vt::PixelTransferSession::new().ok()?;
         session.set_realtime(true).ok()?;
-        let pool = PixelBufferPool::new(width, height)?;
+        let pool = create_pixel_buffer_pool(width, height)?;
         Some(Self { session, pool })
     }
 
     fn copy_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
         let src_image_buf = src_sample_buf.image_buf()?;
-        let dst_buf = self.pool.next();
+        let dst_buf = self.pool.pixel_buf().ok()?;
 
-        self.session.transfer(src_image_buf, dst_buf).ok()?;
+        self.session.transfer(src_image_buf, &dst_buf).ok()?;
 
-        let format_desc = cm::VideoFormatDesc::with_image_buf(dst_buf).ok()?;
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&dst_buf).ok()?;
         let timing = src_sample_buf.timing_info(0).ok()?;
 
-        cm::SampleBuf::with_image_buf(dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+        cm::SampleBuf::with_image_buf(&dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
     }
 }
 
