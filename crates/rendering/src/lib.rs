@@ -247,6 +247,14 @@ impl RecordingSegmentDecoders {
             recording_time: segment_time + self.segment_offset as f32,
         })
     }
+
+    pub fn screen_video_dimensions(&self) -> (u32, u32) {
+        self.screen.video_dimensions()
+    }
+
+    pub fn camera_video_dimensions(&self) -> Option<(u32, u32)> {
+        self.camera.as_ref().map(|c| c.video_dimensions())
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -332,6 +340,18 @@ pub async fn render_video_to_channel(
         constants.is_software_adapter,
     );
 
+    if let Some(first_segment) = render_segments.first() {
+        let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
+        let camera_dims = first_segment.decoders.camera_video_dimensions();
+        layers.prepare_for_video_dimensions(
+            &constants.device,
+            screen_w,
+            screen_h,
+            camera_dims.map(|(w, _)| w),
+            camera_dims.map(|(_, h)| h),
+        );
+    }
+
     let mut last_successful_frame: Option<RenderedFrame> = None;
     let mut consecutive_failures = 0u32;
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
@@ -374,7 +394,7 @@ pub async fn render_video_to_channel(
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            segment_frames = if is_initial_frame && retry_count == 0 {
+            segment_frames = if is_initial_frame {
                 render_segment
                     .decoders
                     .get_frames_initial(
@@ -1889,6 +1909,30 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+        }
+    }
+
+    pub fn prepare_for_video_dimensions(
+        &mut self,
+        device: &wgpu::Device,
+        screen_width: u32,
+        screen_height: u32,
+        camera_width: Option<u32>,
+        camera_height: Option<u32>,
+    ) {
+        tracing::info!(
+            screen_width = screen_width,
+            screen_height = screen_height,
+            camera_width = camera_width,
+            camera_height = camera_height,
+            "Pre-allocating YUV converter textures for video dimensions"
+        );
+        self.display
+            .prepare_for_video_dimensions(device, screen_width, screen_height);
+        if let (Some(cw), Some(ch)) = (camera_width, camera_height) {
+            self.camera.prepare_for_video_dimensions(device, cw, ch);
+            self.camera_only
+                .prepare_for_video_dimensions(device, cw, ch);
         }
     }
 

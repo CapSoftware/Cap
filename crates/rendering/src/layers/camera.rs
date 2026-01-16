@@ -300,4 +300,18 @@ impl CameraLayer {
             pass.draw(0..3, 0..1);
         }
     }
+
+    pub fn prepare_for_video_dimensions(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if let Err(e) = self
+            .yuv_converter
+            .prepare_for_dimensions(device, width, height)
+        {
+            tracing::warn!(
+                width = width,
+                height = height,
+                error = ?e,
+                "Failed to pre-allocate camera YUV converter textures"
+            );
+        }
+    }
 }
