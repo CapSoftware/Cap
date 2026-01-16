@@ -74,6 +74,41 @@ impl FrameScaler {
     }
 }
 
+struct PixelBufferCopier {
+    session: arc::R<cidre::vt::PixelTransferSession>,
+    width: usize,
+    height: usize,
+}
+
+unsafe impl Send for PixelBufferCopier {}
+
+impl PixelBufferCopier {
+    fn new(width: usize, height: usize) -> Option<Self> {
+        let mut session = cidre::vt::PixelTransferSession::new().ok()?;
+        session.set_realtime(true).ok()?;
+
+        Some(Self {
+            session,
+            width,
+            height,
+        })
+    }
+
+    fn copy_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+        let src_image_buf = src_sample_buf.image_buf()?;
+
+        let dst_buf =
+            cv::PixelBuf::new(self.width, self.height, cv::PixelFormat::_420V, None).ok()?;
+
+        self.session.transfer(src_image_buf, &dst_buf).ok()?;
+
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&dst_buf).ok()?;
+        let timing = src_sample_buf.timing_info(0).ok()?;
+
+        cm::SampleBuf::with_image_buf(&dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+    }
+}
+
 fn get_screen_buffer_size() -> usize {
     std::env::var("CAP_SCREEN_BUFFER_SIZE")
         .ok()
@@ -85,7 +120,7 @@ fn get_max_queue_depth() -> isize {
     std::env::var("CAP_MAX_QUEUE_DEPTH")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(4)
+        .unwrap_or(8)
 }
 
 #[derive(Debug)]
@@ -240,6 +275,10 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let scaling_logged = Arc::new(AtomicBool::new(false));
         let scaled_frame_count = Arc::new(AtomicU64::new(0));
 
+        let pixel_buffer_copier: Arc<Mutex<Option<PixelBufferCopier>>> = Arc::new(Mutex::new(
+            PixelBufferCopier::new(expected_width, expected_height),
+        ));
+
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
@@ -247,6 +286,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 let frame_scaler = frame_scaler.clone();
                 let scaling_logged = scaling_logged.clone();
                 let scaled_frame_count = scaled_frame_count.clone();
+                let pixel_buffer_copier = pixel_buffer_copier.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -327,7 +367,23 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                         }
                                     }
 
-                                    sample_buffer.retained()
+                                    let copied = if let Ok(copier_guard) = pixel_buffer_copier.lock() {
+                                        if let Some(copier) = copier_guard.as_ref() {
+                                            copier.copy_frame(sample_buffer)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    };
+
+                                    match copied {
+                                        Some(buf) => buf,
+                                        None => {
+                                            drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                            return;
+                                        }
+                                    }
                                 };
 
                             cap_fail::fail_ret!("screen_capture video frame skip");
