@@ -14,7 +14,7 @@ use std::{
     ptr,
     sync::{
         Arc, Mutex,
-        atomic::{self, AtomicBool, AtomicU32, AtomicU64},
+        atomic::{self, AtomicBool, AtomicU32, AtomicU64, AtomicUsize},
     },
     time::Duration,
 };
@@ -74,10 +74,42 @@ impl FrameScaler {
     }
 }
 
+fn get_pixel_buffer_pool_size() -> usize {
+    std::env::var("CAP_PIXEL_BUFFER_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20)
+}
+
+struct PixelBufferPool {
+    buffers: Vec<arc::R<cv::PixelBuf>>,
+    index: AtomicUsize,
+}
+
+impl PixelBufferPool {
+    fn new(width: usize, height: usize) -> Option<Self> {
+        let pool_size = get_pixel_buffer_pool_size();
+        let mut buffers = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            let buf = cv::PixelBuf::new(width, height, cv::PixelFormat::_420V, None).ok()?;
+            buffers.push(buf);
+        }
+        debug!(pool_size, width, height, "Pixel buffer pool initialized");
+        Some(Self {
+            buffers,
+            index: AtomicUsize::new(0),
+        })
+    }
+
+    fn next(&self) -> &arc::R<cv::PixelBuf> {
+        let index = self.index.fetch_add(1, atomic::Ordering::Relaxed) % self.buffers.len();
+        &self.buffers[index]
+    }
+}
+
 struct PixelBufferCopier {
     session: arc::R<cidre::vt::PixelTransferSession>,
-    width: usize,
-    height: usize,
+    pool: PixelBufferPool,
 }
 
 unsafe impl Send for PixelBufferCopier {}
@@ -86,26 +118,20 @@ impl PixelBufferCopier {
     fn new(width: usize, height: usize) -> Option<Self> {
         let mut session = cidre::vt::PixelTransferSession::new().ok()?;
         session.set_realtime(true).ok()?;
-
-        Some(Self {
-            session,
-            width,
-            height,
-        })
+        let pool = PixelBufferPool::new(width, height)?;
+        Some(Self { session, pool })
     }
 
     fn copy_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
         let src_image_buf = src_sample_buf.image_buf()?;
+        let dst_buf = self.pool.next();
 
-        let dst_buf =
-            cv::PixelBuf::new(self.width, self.height, cv::PixelFormat::_420V, None).ok()?;
+        self.session.transfer(src_image_buf, dst_buf).ok()?;
 
-        self.session.transfer(src_image_buf, &dst_buf).ok()?;
-
-        let format_desc = cm::VideoFormatDesc::with_image_buf(&dst_buf).ok()?;
+        let format_desc = cm::VideoFormatDesc::with_image_buf(dst_buf).ok()?;
         let timing = src_sample_buf.timing_info(0).ok()?;
 
-        cm::SampleBuf::with_image_buf(&dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+        cm::SampleBuf::with_image_buf(dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
     }
 }
 
