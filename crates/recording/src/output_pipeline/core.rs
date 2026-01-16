@@ -35,7 +35,6 @@ struct AudioTimestampGenerator {
 }
 
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
-const AUDIO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.05;
 
 impl AudioTimestampGenerator {
     fn new(sample_rate: u32) -> Self {
@@ -46,87 +45,13 @@ impl AudioTimestampGenerator {
     }
 
     fn next_timestamp(&mut self, frame_samples: u64) -> Duration {
-        let timestamp_secs = self.total_samples as f64 / self.sample_rate as f64;
+        let timestamp_nanos = if self.sample_rate == 0 {
+            0u128
+        } else {
+            (self.total_samples as u128 * 1_000_000_000u128) / self.sample_rate as u128
+        };
         self.total_samples += frame_samples;
-        Duration::from_secs_f64(timestamp_secs)
-    }
-}
-
-struct AudioDriftTracker {
-    baseline_offset_secs: Option<f64>,
-    drift_warning_logged: bool,
-    last_corrected_secs: f64,
-}
-
-impl AudioDriftTracker {
-    fn new() -> Self {
-        Self {
-            baseline_offset_secs: None,
-            drift_warning_logged: false,
-            last_corrected_secs: 0.0,
-        }
-    }
-
-    fn calculate_timestamp(
-        &mut self,
-        sample_based_duration: Duration,
-        wall_clock_elapsed: Duration,
-    ) -> Duration {
-        let sample_secs = sample_based_duration.as_secs_f64();
-        let wall_clock_secs = wall_clock_elapsed.as_secs_f64();
-        let max_allowed_secs = wall_clock_secs + AUDIO_WALL_CLOCK_TOLERANCE_SECS;
-
-        if wall_clock_secs < 2.0 || sample_secs < 2.0 {
-            let result_secs = sample_secs
-                .min(max_allowed_secs)
-                .max(self.last_corrected_secs);
-            self.last_corrected_secs = result_secs;
-            return Duration::from_secs_f64(result_secs);
-        }
-
-        if self.baseline_offset_secs.is_none() {
-            let offset = sample_secs - wall_clock_secs;
-            debug!(
-                wall_clock_secs,
-                sample_secs,
-                baseline_offset_secs = offset,
-                "AudioDriftTracker: Capturing baseline offset after warmup"
-            );
-            self.baseline_offset_secs = Some(offset);
-        }
-
-        let baseline = self.baseline_offset_secs.unwrap_or(0.0);
-        let adjusted_sample_secs = (sample_secs - baseline).max(0.0);
-
-        let drift_ratio = if adjusted_sample_secs > 0.0 {
-            wall_clock_secs / adjusted_sample_secs
-        } else {
-            1.0
-        };
-
-        let corrected_secs = if !(0.95..=1.05).contains(&drift_ratio) {
-            if !self.drift_warning_logged {
-                warn!(
-                    drift_ratio,
-                    wall_clock_secs,
-                    adjusted_sample_secs,
-                    baseline,
-                    "AudioDriftTracker: Significant audio clock drift detected, clamping"
-                );
-                self.drift_warning_logged = true;
-            }
-            let clamped_ratio = drift_ratio.clamp(0.98, 1.02);
-            adjusted_sample_secs * clamped_ratio
-        } else {
-            adjusted_sample_secs * drift_ratio
-        };
-
-        let final_secs = corrected_secs
-            .min(max_allowed_secs)
-            .max(self.last_corrected_secs);
-        self.last_corrected_secs = final_secs;
-
-        Duration::from_secs_f64(final_secs)
+        Duration::from_nanos(timestamp_nanos.min(u64::MAX as u128) as u64)
     }
 }
 
@@ -1150,7 +1075,7 @@ impl PreparedAudioSources {
         setup_ctx: &mut SetupCtx,
         muxer: Arc<Mutex<TMutex>>,
         stop_token: CancellationToken,
-        timestamps: Timestamps,
+        _timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
         shared_pause: SharedWallClockPause,
     ) {
@@ -1161,7 +1086,6 @@ impl PreparedAudioSources {
             let muxer = muxer.clone();
             async move {
                 let mut timestamp_generator = AudioTimestampGenerator::new(sample_rate);
-                let mut drift_tracker = AudioDriftTracker::new();
                 let mut dropped_during_pause: u64 = 0;
                 let mut frame_count: u64 = 0;
 
@@ -1182,32 +1106,18 @@ impl PreparedAudioSources {
                             let frame_samples = frame.inner.samples() as u64;
                             frame_count += 1;
 
-                            let raw_wall_clock = timestamps.instant().elapsed();
-                            let wall_clock_elapsed =
-                                raw_wall_clock.saturating_sub(total_pause_duration);
-
                             let sample_based_timestamp =
                                 timestamp_generator.next_timestamp(frame_samples);
-                            let timestamp = drift_tracker
-                                .calculate_timestamp(sample_based_timestamp, wall_clock_elapsed);
+                            let timestamp = sample_based_timestamp;
 
                             if frame_count.is_multiple_of(500) {
-                                let drift_ratio = if sample_based_timestamp.as_secs_f64() > 0.0 {
-                                    wall_clock_elapsed.as_secs_f64()
-                                        / sample_based_timestamp.as_secs_f64()
-                                } else {
-                                    1.0
-                                };
                                 debug!(
                                     frame_count,
-                                    wall_clock_secs = wall_clock_elapsed.as_secs_f64(),
                                     sample_based_secs = sample_based_timestamp.as_secs_f64(),
                                     corrected_secs = timestamp.as_secs_f64(),
-                                    drift_ratio,
-                                    baseline_offset = drift_tracker.baseline_offset_secs,
                                     total_samples = timestamp_generator.total_samples,
                                     total_pause_ms = total_pause_duration.as_millis(),
-                                    "Audio drift correction status"
+                                    "Audio timestamp status"
                                 );
                             }
 
