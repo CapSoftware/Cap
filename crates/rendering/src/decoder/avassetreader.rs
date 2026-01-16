@@ -253,12 +253,15 @@ struct DecoderHealth {
     consecutive_errors: u32,
     total_frames_decoded: u64,
     last_successful_decode: std::time::Instant,
+    reached_eof: bool,
+    last_successful_frame: Option<u32>,
 }
 
 impl DecoderHealth {
     const MAX_CONSECUTIVE_EMPTY: u32 = 5;
     const MAX_CONSECUTIVE_ERRORS: u32 = 10;
     const STALE_THRESHOLD_SECS: u64 = 10;
+    const EOF_TOLERANCE_EMPTY: u32 = 15;
 
     fn new() -> Self {
         Self {
@@ -266,14 +269,18 @@ impl DecoderHealth {
             consecutive_errors: 0,
             total_frames_decoded: 0,
             last_successful_decode: std::time::Instant::now(),
+            reached_eof: false,
+            last_successful_frame: None,
         }
     }
 
-    fn record_success(&mut self, frames_count: u32) {
+    fn record_success(&mut self, frames_count: u32, last_frame: u32) {
         self.consecutive_empty_iterations = 0;
         self.consecutive_errors = 0;
         self.total_frames_decoded += frames_count as u64;
         self.last_successful_decode = std::time::Instant::now();
+        self.reached_eof = false;
+        self.last_successful_frame = Some(last_frame);
     }
 
     fn record_empty_iteration(&mut self) {
@@ -284,7 +291,31 @@ impl DecoderHealth {
         self.consecutive_errors += 1;
     }
 
-    fn needs_recreation(&self) -> bool {
+    fn mark_eof(&mut self) {
+        self.reached_eof = true;
+    }
+
+    fn is_at_eof(&self) -> bool {
+        self.reached_eof
+    }
+
+    fn needs_recreation(&self, requested_frame: u32, total_frames_estimate: u32) -> bool {
+        if self.reached_eof {
+            return self.consecutive_empty_iterations >= Self::EOF_TOLERANCE_EMPTY;
+        }
+
+        let near_end = if total_frames_estimate > 0 {
+            let remaining = total_frames_estimate.saturating_sub(requested_frame);
+            remaining < 60
+        } else {
+            false
+        };
+
+        if near_end {
+            return self.consecutive_empty_iterations >= Self::EOF_TOLERANCE_EMPTY
+                || self.consecutive_errors >= Self::MAX_CONSECUTIVE_ERRORS;
+        }
+
         self.consecutive_empty_iterations >= Self::MAX_CONSECUTIVE_EMPTY
             || self.consecutive_errors >= Self::MAX_CONSECUTIVE_ERRORS
             || (self.total_frames_decoded > 0
@@ -295,6 +326,7 @@ impl DecoderHealth {
         self.consecutive_empty_iterations = 0;
         self.consecutive_errors = 0;
         self.last_successful_decode = std::time::Instant::now();
+        self.reached_eof = false;
     }
 }
 
@@ -381,6 +413,7 @@ pub struct AVAssetReaderDecoder {
     pool_manager: DecoderPoolManager,
     active_decoder_idx: usize,
     scrub_detector: ScrubDetector,
+    total_frames_estimate: u32,
 }
 
 impl AVAssetReaderDecoder {
@@ -442,12 +475,15 @@ impl AVAssetReaderDecoder {
             }
         }
 
+        let total_frames_estimate = (duration_secs * fps as f64).ceil() as u32;
+
         tracing::info!(
             decoder_count = decoders.len(),
             optimal_pool_size = pool_manager.optimal_pool_size(),
             reposition_threshold = pool_manager.reposition_threshold(),
             fps = fps,
             duration_secs = duration_secs,
+            total_frames_estimate = total_frames_estimate,
             "Initialized multi-position decoder pool"
         );
 
@@ -456,6 +492,7 @@ impl AVAssetReaderDecoder {
             pool_manager,
             active_decoder_idx: 0,
             scrub_detector: ScrubDetector::new(),
+            total_frames_estimate,
         })
     }
 
@@ -717,25 +754,56 @@ impl AVAssetReaderDecoder {
                 decoder.is_done = true;
             }
 
+            let last_frame_in_cache = cache.keys().max().copied().unwrap_or(0);
             if frames_iterated > 0 {
                 this.decoders[decoder_idx]
                     .health
-                    .record_success(frames_iterated);
+                    .record_success(frames_iterated, last_frame_in_cache);
             } else if !pending_requests.is_empty() {
                 this.decoders[decoder_idx].health.record_empty_iteration();
-                tracing::warn!(
-                    decoder_idx = decoder_idx,
-                    requested_frame = requested_frame,
-                    requested_time = requested_time,
-                    was_reset = was_reset,
-                    cache_size = cache.len(),
-                    consecutive_empty = this.decoders[decoder_idx]
-                        .health
-                        .consecutive_empty_iterations,
-                    "No frames decoded from video - decoder iterator returned no frames"
-                );
 
-                if this.decoders[decoder_idx].health.needs_recreation() {
+                let near_end = this.total_frames_estimate > 0
+                    && requested_frame > this.total_frames_estimate.saturating_sub(120);
+
+                let at_eof = near_end
+                    && this.decoders[decoder_idx]
+                        .health
+                        .consecutive_empty_iterations
+                        >= 3
+                    && !cache.is_empty()
+                    && cache.keys().max().copied().unwrap_or(0)
+                        > requested_frame.saturating_sub(60);
+
+                if at_eof && !this.decoders[decoder_idx].health.is_at_eof() {
+                    this.decoders[decoder_idx].health.mark_eof();
+                    tracing::info!(
+                        decoder_idx = decoder_idx,
+                        requested_frame = requested_frame,
+                        total_frames = this.total_frames_estimate,
+                        cache_max = cache.keys().max().copied().unwrap_or(0),
+                        "Decoder reached EOF - will use cached frames for remaining requests"
+                    );
+                }
+
+                if !at_eof {
+                    tracing::warn!(
+                        decoder_idx = decoder_idx,
+                        requested_frame = requested_frame,
+                        requested_time = requested_time,
+                        was_reset = was_reset,
+                        cache_size = cache.len(),
+                        consecutive_empty = this.decoders[decoder_idx]
+                            .health
+                            .consecutive_empty_iterations,
+                        near_end = near_end,
+                        "No frames decoded from video - decoder iterator returned no frames"
+                    );
+                }
+
+                if this.decoders[decoder_idx]
+                    .health
+                    .needs_recreation(requested_frame, this.total_frames_estimate)
+                {
                     if let Err(e) = this.decoders[decoder_idx].recreate(requested_time) {
                         tracing::error!(
                             decoder_idx = decoder_idx,
@@ -757,16 +825,23 @@ impl AVAssetReaderDecoder {
 
             let mut unfulfilled_count = 0u32;
             let decoder_returned_no_frames = frames_iterated == 0;
+            let decoder_at_eof = this.decoders[decoder_idx].health.is_at_eof();
+            let near_video_end = this.total_frames_estimate > 0
+                && requested_frame > this.total_frames_estimate.saturating_sub(120);
+
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
                     let _ = req.sender.send(data.to_decoded_frame());
                 } else {
                     const MAX_FALLBACK_DISTANCE: u32 = 90;
-                    const MAX_FALLBACK_DISTANCE_EOF: u32 = 180;
+                    const MAX_FALLBACK_DISTANCE_EOF: u32 = 300;
+                    const MAX_FALLBACK_DISTANCE_NEAR_END: u32 = 180;
 
-                    let fallback_distance = if decoder_returned_no_frames {
+                    let fallback_distance = if decoder_at_eof || decoder_returned_no_frames {
                         MAX_FALLBACK_DISTANCE_EOF
+                    } else if near_video_end {
+                        MAX_FALLBACK_DISTANCE_NEAR_END
                     } else {
                         MAX_FALLBACK_DISTANCE
                     };
