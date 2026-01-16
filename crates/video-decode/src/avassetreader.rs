@@ -141,13 +141,25 @@ impl KeyframeIndex {
             return self.keyframes.iter().map(|(_, time)| *time).collect();
         }
 
-        let step = total_keyframes / num_positions;
-        self.keyframes
-            .iter()
-            .step_by(step.max(1))
-            .take(num_positions)
-            .map(|(_, time)| *time)
-            .collect()
+        let mut positions: Vec<f64> = Vec::with_capacity(num_positions);
+
+        positions.push(self.keyframes[0].1);
+
+        if num_positions > 2 {
+            let inner_count = num_positions - 2;
+            let step = (total_keyframes - 1) as f64 / (inner_count + 1) as f64;
+            for i in 1..=inner_count {
+                let idx = (step * i as f64).round() as usize;
+                let idx = idx.min(total_keyframes - 2);
+                positions.push(self.keyframes[idx].1);
+            }
+        }
+
+        if num_positions > 1 {
+            positions.push(self.keyframes[total_keyframes - 1].1);
+        }
+
+        positions
     }
 
     pub fn fps(&self) -> f64 {
