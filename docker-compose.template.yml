@@ -4,6 +4,29 @@ name: cap-so-docker-template
 # IT IS NOT MEANT FOR PRODUCTION DEPLOYMENT WITHOUT MODIFICATIONS TO ENVIRONMENT VARIABLES
 # IT IS MEANT FOR LOCAL EVALUATION AND DEVELOPMENT PURPOSES ONLY
 
+# Storage Configuration:
+# Option 1: Remote S3-compatible storage (AWS S3, Cloudflare R2, etc.)
+# Set these environment variables:
+# - CAP_AWS_ACCESS_KEY: Your S3/R2 access key
+# - CAP_AWS_SECRET_KEY: Your S3/R2 secret key  
+# - CAP_AWS_BUCKET: Your S3/R2 bucket name
+# - CAP_AWS_REGION: Your S3/R2 region (e.g., us-east-1, auto for R2)
+# - CAP_AWS_ENDPOINT: Your S3/R2 endpoint URL
+# - S3_PUBLIC_ENDPOINT: Public endpoint for your bucket (same as CAP_AWS_ENDPOINT for most cases)
+# - S3_INTERNAL_ENDPOINT: Internal endpoint (same as CAP_AWS_ENDPOINT for most cases)
+# - S3_PATH_STYLE: true for R2/most S3-compatible, false for AWS S3 virtual-hosted style
+#
+# Option 2: Local MinIO storage (included on this compose)
+# Deploy MinIO as a separate service in the same network and set:
+# - CAP_AWS_ACCESS_KEY: MinIO root user
+# - CAP_AWS_SECRET_KEY: MinIO root password
+# - CAP_AWS_BUCKET: Your bucket name (e.g., capso)
+# - CAP_AWS_REGION: us-east-1 (or any region)
+# - CAP_AWS_ENDPOINT: http://minio:9000 (internal MinIO endpoint)
+# - S3_PUBLIC_ENDPOINT: http://your-minio-domain:9000 (public MinIO endpoint)
+# - S3_INTERNAL_ENDPOINT: http://minio:9000 (internal MinIO endpoint)
+# - S3_PATH_STYLE: true
+
 services:
   cap-web:
     container_name: cap-web
@@ -21,14 +44,19 @@ services:
       CAP_AWS_SECRET_KEY: capS3root
       CAP_AWS_BUCKET: capso
       CAP_AWS_REGION: us-east-1
-      S3_PUBLIC_ENDPOINT: http://localhost:3902
-      S3_INTERNAL_ENDPOINT: http://minio:3902
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_INTERNAL_ENDPOINT: http://minio:9000
       MEDIA_SERVER_URL: http://cap-media-server:3456
       # CHANGE THESE TO YOUR OWN VALUES
       MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
-
     ports:
       - 3000:3000
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   ps-mysql:
     container_name: cap-primary-db
@@ -46,6 +74,12 @@ services:
       ]
     ports:
       - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     volumes:
       - ps-mysql:/var/lib/mysql
 
@@ -57,23 +91,35 @@ services:
       PORT: 3456
     ports:
       - "3456:3456"
+    # TO DO: Enable healthcheck after media server image is published (wget mostly works but double check if wget is present inside container)
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3456/ || exit 1"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 10s
 
-  # Local S3 Strorage
+  # Local S3 Storage
   minio:
     container_name: cap-minio-storage
-    image: "bitnami/minio:latest"
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z # Released on 15 October 2025 (includes fix for CVE-2025-62506)
     restart: unless-stopped
+    command: 'server /data --console-address ":9001"'
     ports:
-      - "3902:3902"
-      - "3903:3903"
+      - "9000:9000" # API
+      - "9001:9001" # Console
     environment:
-      - MINIO_API_PORT_NUMBER=3902
-      - MINIO_CONSOLE_PORT_NUMBER=3903
       # CHANGE THESE TO YOUR OWN VALUES
       - MINIO_ROOT_USER=capS3root
       - MINIO_ROOT_PASSWORD=capS3root
+    healthcheck:
+        test: ["CMD", "mc", "ready", "local"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
     volumes:
-      - minio-data:/bitnami/minio/data
+      - minio-data:/data
       - minio-certs:/certs
 volumes:
   ps-mysql:
