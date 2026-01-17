@@ -1,15 +1,17 @@
 {
-	"permissions": {
-		"allow": [
-			"Bash(pnpm typecheck:*)",
-			"Bash(pnpm lint:*)",
-			"Bash(pnpm build:*)",
-			"Bash(cargo check:*)",
-			"Bash(cargo fmt:*)",
-			"Bash(pnpm format:*)",
-			"Bash(pnpm exec biome check:*)"
-		],
-		"deny": [],
-		"ask": []
-	}
+  "permissions": {
+    "allow": [
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(pnpm format:*)",
+      "Bash(pnpm exec biome check:*)",
+      "Bash(/opt/homebrew/bin/pnpm format)",
+      "Bash(~/.cargo/bin/cargo check -p scap-targets)"
+    ],
+    "deny": [],
+    "ask": []
+  }
 }

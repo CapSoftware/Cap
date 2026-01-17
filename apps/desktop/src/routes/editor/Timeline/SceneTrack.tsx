@@ -472,7 +472,7 @@ export function SceneTrack(props: {
 
 									return (
 										<Show when={ctx.width() > 80}>
-											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
+											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-white animate-in fade-in">
 												<span class="opacity-70">Scene</span>
 												<div class="flex gap-1 items-center text-md">
 													{getSceneIcon(segment.mode)}
@@ -551,7 +551,7 @@ export function SceneTrack(props: {
 						}}
 					>
 						<SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#5C1BC4] via-[#975CFA] to-[#5C1BC4] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
+							<p class="w-full text-center text-white text-md text-primary">
 								+
 							</p>
 						</SegmentContent>

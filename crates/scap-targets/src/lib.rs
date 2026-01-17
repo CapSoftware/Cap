@@ -196,6 +196,14 @@ impl Window {
             ))
         }
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn get_background_windows_in_area(area_bounds: &LogicalBounds) -> Vec<Self> {
+        WindowImpl::get_background_windows_in_area(area_bounds)
+            .into_iter()
+            .map(Self)
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, PartialEq, Debug)]

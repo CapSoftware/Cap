@@ -618,7 +618,7 @@ export function ClipTrack(
 															? `Clip ${seg.recordingSegment}`
 															: "Clip"}
 													</span>
-													<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
+													<div class="flex gap-1 items-center text-md text-white">
 														<IconLucideClock class="size-3.5" />{" "}
 														{formatTime(seg.end - seg.start)}
 														<Show when={seg.timescale !== 1}>

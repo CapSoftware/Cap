@@ -556,17 +556,17 @@ export function ZoomTrack(props: {
 													<Switch>
 														<Match when={ctx.width() < 40}>
 															<div class="flex justify-center items-center">
-																<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
+																<IconLucideSearch class="size-3.5 text-white" />
 															</div>
 														</Match>
 														<Match when={ctx.width() < 100}>
-															<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+															<div class="flex gap-1 items-center text-xs whitespace-nowrap text-white">
 																<IconLucideSearch class="size-3" />
 																<span>{zoomPercentage()}</span>
 															</div>
 														</Match>
 														<Match when={true}>
-															<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
+															<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-white animate-in fade-in">
 																<span class="opacity-70">Zoom</span>
 																<div class="flex gap-1 items-center text-md">
 																	<IconLucideSearch class="size-3.5" />
@@ -647,7 +647,7 @@ export function ZoomTrack(props: {
 						segment={details()}
 					>
 						<SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
+							<p class="w-full text-center text-white text-md text-primary">
 								+
 							</p>
 						</SegmentContent>

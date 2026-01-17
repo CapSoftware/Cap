@@ -537,6 +537,65 @@ impl WindowImpl {
 
         None
     }
+
+    pub fn list_in_area(area_bounds: &LogicalBounds) -> Vec<Self> {
+        Self::list()
+            .into_iter()
+            .filter_map(|window| {
+                let bounds = window.logical_bounds()?;
+                if bounds.intersects(area_bounds) {
+                    Some(window)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn get_background_windows_in_area(area_bounds: &LogicalBounds) -> Vec<Self> {
+        let mut windows_in_area: Vec<(Self, i32)> = Self::list_in_area(area_bounds)
+            .into_iter()
+            .filter_map(|window| {
+                let level = window.level()?;
+                if level > 5 {
+                    return None;
+                }
+                Some((window, level))
+            })
+            .collect();
+
+        windows_in_area.sort_by(|a, b| b.1.cmp(&a.1));
+
+        if windows_in_area.is_empty() {
+            return vec![];
+        }
+
+        let mut visible_regions: Vec<LogicalBounds> = Vec::new();
+        let mut background_windows: Vec<Self> = Vec::new();
+
+        for (window, _level) in windows_in_area {
+            let Some(window_bounds) = window.logical_bounds() else {
+                continue;
+            };
+
+            let clipped_bounds = window_bounds.intersect(area_bounds);
+            let Some(clipped_bounds) = clipped_bounds else {
+                continue;
+            };
+
+            let is_completely_occluded = visible_regions.iter().any(|visible| {
+                visible.contains_bounds(&clipped_bounds)
+            });
+
+            if is_completely_occluded {
+                background_windows.push(window);
+            } else {
+                visible_regions.push(clipped_bounds);
+            }
+        }
+
+        background_windows
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]

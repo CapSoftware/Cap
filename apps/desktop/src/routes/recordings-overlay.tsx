@@ -451,19 +451,19 @@ function ActionProgressOverlay(props: {
 			class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
 		>
 			<div class="w-[80%] text-center">
-				<h3 class="mb-3 text-sm font-medium text-gray-1 dark:text-gray-12">
+				<h3 class="mb-3 text-sm font-medium text-white">
 					{props.title}
 				</h3>
 				<div class="w-full bg-gray-10 rounded-full h-2.5 mb-2">
 					<div
-						class="bg-blue-9 text-gray-1 dark:text-gray-12 h-2.5 rounded-full transition-all duration-200"
+						class="bg-blue-9 h-2.5 rounded-full transition-all duration-200"
 						style={{
 							width: `${Math.max(0, Math.min(100, props.progressPercentage))}%`,
 						}}
 					/>
 				</div>
 
-				<p class="mt-2 text-xs text-gray-1 dark:text-gray-12">
+				<p class="mt-2 text-xs text-white">
 					{typeof props.progressMessage === "string"
 						? props.progressMessage
 						: `${Math.floor(props.progressPercentage)}%`}

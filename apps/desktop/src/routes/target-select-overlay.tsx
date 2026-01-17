@@ -903,8 +903,8 @@ function RecordingControls(props: {
 						<Show when={selectedWorkspace()?.avatarUrl && selectedWorkspace()?.avatarUrl !== null}>
 							<img src={selectedWorkspace()?.avatarUrl ?? ""} alt="" class="size-5 rounded-full object-cover" />
 						</Show>
-						<span class="text-sm text-gray-12">{selectedWorkspace()?.name}</span>
-						<DoubleArrowSwitcher class="size-3 text-gray-11" />
+						<span class="text-sm text-white">{selectedWorkspace()?.name}</span>
+						<DoubleArrowSwitcher class="size-3 text-white/70" />
 					</div>
 				</Show>
 				<Show when={!auth.data}>
@@ -928,11 +928,11 @@ function RecordingControls(props: {
 					}}
 				>
 					<div class="flex items-center gap-1 py-1 px-3 transition-colors hover:bg-blue-10 cursor-pointer">
-						{auth.data && <RecordFill class="size-4" />}
+						{auth.data && <RecordFill class="size-4 text-white" />}
 						<div class="text-sm font-medium text-white text-nowrap px-1">
 							{!auth.data ? "Open Inflight" : "Start Recording"}
 						</div>
-						{!auth.data && <ArrowUpRight class="size-4" />}
+						{!auth.data && <ArrowUpRight class="size-4 text-white" />}
 					</div>
 					{/* <div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
 						{rawOptions.mode === "studio" ? <IconCapFilmCut class="size-4" /> : <IconCapInstant class="size-4" />}

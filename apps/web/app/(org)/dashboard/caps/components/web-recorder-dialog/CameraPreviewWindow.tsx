@@ -566,7 +566,7 @@ export const CameraPreviewWindow = ({
 
 				<div
 					className={clsx(
-						"relative overflow-hidden border-none shadow-lg bg-black text-gray-12",
+						"relative overflow-hidden border-none shadow-lg bg-black text-white",
 						shape === "round" ? "rounded-full" : "rounded-3xl",
 					)}
 					style={{
