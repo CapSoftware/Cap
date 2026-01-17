@@ -155,10 +155,21 @@ impl RecoveryManager {
             .filter(|e| e.path().is_dir())
             .collect();
 
-        segment_dirs.sort_by_key(|e| e.file_name());
+        segment_dirs.sort_by_key(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_prefix("segment-")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
 
-        for (index, segment_entry) in segment_dirs.iter().enumerate() {
+        for segment_entry in &segment_dirs {
             let segment_path = segment_entry.path();
+
+            let folder_name = segment_entry.file_name().to_string_lossy().to_string();
+            let index: u32 = folder_name
+                .strip_prefix("segment-")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
 
             let display_dir = segment_path.join("display");
             let display_info = Self::find_complete_fragments_with_init(&display_dir);
@@ -205,7 +216,7 @@ impl RecoveryManager {
             let cursor_path = Self::probe_cursor(&segment_path.join("cursor.json"));
 
             recoverable_segments.push(RecoverableSegment {
-                index: index as u32,
+                index,
                 display_fragments,
                 display_init_segment,
                 camera_fragments,
@@ -901,11 +912,7 @@ impl RecoveryManager {
             .iter()
             .enumerate()
             .filter_map(|(i, segment)| {
-                let segment_base = format!("content/segments/segment-{i}");
-                let display_path = recording
-                    .project_path
-                    .join(&segment_base)
-                    .join("display.mp4");
+                let display_path = recording.project_path.join(segment.display.path.as_str());
 
                 let duration = get_media_duration(&display_path)
                     .map(|d| d.as_secs_f64())
