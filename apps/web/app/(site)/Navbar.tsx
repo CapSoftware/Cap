@@ -224,7 +224,7 @@ export const Navbar = ({ stars }: NavbarProps) => {
 								target="_blank"
 								href="https://github.com/CapSoftware/Cap"
 								size="sm"
-								className="w-full font-medium sm:w-auto"
+								className="w-full font-medium sm:w-auto whitespace-nowrap"
 							>
 								{`GitHub${stars ? ` (${stars})` : ""}`}
 							</Button>
@@ -310,7 +310,7 @@ function LoginOrDashboard() {
 			variant="dark"
 			href={auth ? "/dashboard" : "/signup"}
 			size="sm"
-			className="w-full font-medium sm:w-auto"
+			className="w-full font-medium sm:w-auto whitespace-nowrap"
 		>
 			{auth ? "Dashboard" : "Sign Up"}
 		</Button>
