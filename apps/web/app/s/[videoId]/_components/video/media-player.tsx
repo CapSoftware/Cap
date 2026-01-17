@@ -833,6 +833,14 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 			[dispatch, props.onClick],
 		);
 
+		const onContextMenu = React.useCallback(
+			(event: React.MouseEvent<HTMLVideoElement>) => {
+				event.preventDefault();
+				props.onContextMenu?.(event);
+			},
+			[props.onContextMenu],
+		);
+
 		const VideoPrimitive = asChild ? Slot : "video";
 
 		return (
@@ -844,6 +852,7 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 				id={context.mediaId}
 				ref={composedRef}
 				onClick={onPlayToggle}
+				onContextMenu={onContextMenu}
 			/>
 		);
 	},
