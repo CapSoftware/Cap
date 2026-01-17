@@ -46,8 +46,28 @@ impl ScreenCaptureFormat for Direct3DCapture {
         let supported_config = output_device.default_output_config().unwrap();
 
         let mut info = AudioInfo::from_stream_config(&supported_config);
-
-        info.sample_format = ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed);
+        let sample_format = info.sample_format;
+        info.sample_format = match sample_format {
+            ffmpeg::format::Sample::U8(_) => {
+                ffmpeg::format::Sample::U8(ffmpeg::format::sample::Type::Packed)
+            }
+            ffmpeg::format::Sample::I16(_) => {
+                ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed)
+            }
+            ffmpeg::format::Sample::I32(_) => {
+                ffmpeg::format::Sample::I32(ffmpeg::format::sample::Type::Packed)
+            }
+            ffmpeg::format::Sample::I64(_) => {
+                ffmpeg::format::Sample::I64(ffmpeg::format::sample::Type::Packed)
+            }
+            ffmpeg::format::Sample::F32(_) => {
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed)
+            }
+            ffmpeg::format::Sample::F64(_) => {
+                ffmpeg::format::Sample::F64(ffmpeg::format::sample::Type::Packed)
+            }
+            other => other,
+        };
 
         info
     }
