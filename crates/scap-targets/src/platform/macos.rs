@@ -573,7 +573,7 @@ impl WindowImpl {
         let mut visible_regions: Vec<LogicalBounds> = Vec::new();
         let mut background_windows: Vec<Self> = Vec::new();
 
-        for (window, _level) in windows_in_area {
+        for (window, _) in windows_in_area {
             let Some(window_bounds) = window.logical_bounds() else {
                 continue;
             };

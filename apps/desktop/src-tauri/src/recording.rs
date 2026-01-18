@@ -2,8 +2,6 @@ use anyhow::anyhow;
 use cap_fail::fail;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
-#[cfg(target_os = "macos")]
-use scap_targets;
 use cap_project::{
     CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform, ProjectConfiguration,
     RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus,
@@ -26,6 +24,8 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
+#[cfg(target_os = "macos")]
+use scap_targets;
 use futures::{FutureExt, stream};
 use serde::{Deserialize, Serialize};
 use specta::Type;
