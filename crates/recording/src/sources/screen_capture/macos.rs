@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use anyhow::{Context, anyhow};
+use scap_targets;
 use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
@@ -234,6 +235,23 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let cancel_token = CancellationToken::new();
         let capturer = Capturer::new(Arc::new(builder.build()?));
 
+        let area_capture_info = self.config.crop_bounds.map(|bounds| {
+            let display_position = display.raw_handle().logical_position();
+            let absolute_bounds = scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(
+                    bounds.position().x() + display_position.x(),
+                    bounds.position().y() + display_position.y(),
+                ),
+                bounds.size(),
+            );
+            AreaCaptureInfo {
+                area_bounds: absolute_bounds,
+                display: display.clone(),
+                shareable_content: self.shareable_content.clone(),
+                base_excluded_windows: self.excluded_windows.clone(),
+            }
+        });
+
         Ok((
             VideoSourceConfig {
                 inner: ChannelVideoSourceConfig::new(self.video_info, video_rx),
@@ -242,6 +260,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 video_frame_counter: video_frame_counter.clone(),
                 cancel_token: cancel_token.clone(),
                 drop_guard: cancel_token.drop_guard(),
+                area_capture_info,
             },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
@@ -329,6 +348,23 @@ impl Capturer {
     fn mark_stopped(&self) {
         self.started.store(false, atomic::Ordering::Relaxed);
     }
+
+    async fn update_content_filter(
+        &self,
+        filter: cidre::arc::R<cidre::sc::ContentFilter>,
+    ) -> anyhow::Result<()> {
+        self.capturer
+            .update_content_filter(filter)
+            .await
+            .map_err(|err| anyhow!(format!("{err}")))
+    }
+}
+
+pub struct AreaCaptureInfo {
+    pub area_bounds: scap_targets::bounds::LogicalBounds,
+    pub display: Display,
+    pub shareable_content: arc::R<sc::ShareableContent>,
+    pub base_excluded_windows: Vec<WindowId>,
 }
 
 pub struct VideoSourceConfig {
@@ -338,6 +374,7 @@ pub struct VideoSourceConfig {
     cancel_token: CancellationToken,
     drop_guard: DropGuard,
     video_frame_counter: Arc<AtomicU32>,
+    area_capture_info: Option<AreaCaptureInfo>,
 }
 pub struct VideoSource {
     inner: ChannelVideoSource<VideoFrame>,
@@ -366,6 +403,7 @@ impl output_pipeline::VideoSource for VideoSource {
             cancel_token,
             drop_guard,
             video_frame_counter,
+            area_capture_info,
         } = config;
 
         let monitor_capturer = capturer.clone();
@@ -403,6 +441,72 @@ impl output_pipeline::VideoSource for VideoSource {
                 }
             }
         });
+
+        if let Some(area_info) = area_capture_info {
+            let filter_capturer = capturer.clone();
+            let filter_cancel = cancel_token.clone();
+            ctx.tasks().spawn("area-capture-filter-monitor", async move {
+                let mut last_background_windows: Vec<WindowId> = Vec::new();
+
+                loop {
+                    select! {
+                        _ = filter_cancel.cancelled() => break Ok(()),
+                        _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                            let current_background = scap_targets::Window::get_background_windows_in_area(&area_info.area_bounds)
+                                .into_iter()
+                                .map(|w| w.id())
+                                .collect::<Vec<_>>();
+
+                            if current_background != last_background_windows {
+                                debug!(
+                                    "Background windows changed: {:?} -> {:?}",
+                                    last_background_windows.len(),
+                                    current_background.len()
+                                );
+
+                                let mut all_excluded = area_info.base_excluded_windows.clone();
+                                for window_id in &current_background {
+                                    if !all_excluded.contains(window_id) {
+                                        all_excluded.push(window_id.clone());
+                                    }
+                                }
+
+                                let mut excluded_sc_windows = Vec::new();
+                                for window_id in &all_excluded {
+                                    if let Some(window) = Window::from_id(window_id) {
+                                        if let Some(sc_window) = window
+                                            .raw_handle()
+                                            .as_sc(area_info.shareable_content.clone())
+                                            .await
+                                        {
+                                            excluded_sc_windows.push(sc_window);
+                                        }
+                                    }
+                                }
+
+                                if let Some(new_filter) = area_info
+                                    .display
+                                    .raw_handle()
+                                    .as_content_filter_excluding_windows(
+                                        area_info.shareable_content.clone(),
+                                        excluded_sc_windows,
+                                    )
+                                    .await
+                                {
+                                    if let Err(e) = filter_capturer.update_content_filter(new_filter).await {
+                                        warn!("Failed to update content filter: {e}");
+                                    } else {
+                                        debug!("Updated content filter to exclude {} background windows", current_background.len());
+                                    }
+                                }
+
+                                last_background_windows = current_background;
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         ChannelVideoSource::setup(inner, video_tx, ctx)
             .await
