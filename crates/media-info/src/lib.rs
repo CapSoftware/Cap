@@ -24,7 +24,9 @@ pub enum AudioInfoError {
 }
 
 impl AudioInfo {
-    pub const MAX_AUDIO_CHANNELS: u16 = 16;
+    /// Maximum number of audio channels supported by FFmpeg channel layouts.
+    /// Matches the highest channel count in `channel_layout_raw` (7.1 surround = 8 channels).
+    pub const MAX_AUDIO_CHANNELS: u16 = 8;
 
     pub const fn new(
         sample_format: Sample,
@@ -115,7 +117,12 @@ impl AudioInfo {
     }
 
     pub fn channel_layout(&self) -> ChannelLayout {
-        Self::channel_layout_raw(self.channels as u16).unwrap()
+        // Clamp channels to supported range and return appropriate layout.
+        // This prevents panics when audio devices report unusual channel counts
+        // (e.g., 0 channels or more than 8 channels).
+        let clamped_channels = (self.channels as u16).clamp(1, 8);
+        Self::channel_layout_raw(clamped_channels)
+            .unwrap_or(ChannelLayout::STEREO)
     }
 
     pub fn sample_size(&self) -> usize {
@@ -393,6 +400,35 @@ mod tests {
             assert_eq!(frame.planes(), 2);
             assert_eq!(&frame.data(0)[0..2], &[1, 1]);
             assert_eq!(&frame.data(1)[0..2], &[2, 2]);
+        }
+
+        #[test]
+        fn channel_layout_returns_valid_layout_for_supported_counts() {
+            // Test all supported channel counts (1-8)
+            for channels in 1..=8u16 {
+                let info = AudioInfo::new_raw(Sample::F32(Type::Planar), 48000, channels);
+                // Should not panic and should return a valid layout
+                let layout = info.channel_layout();
+                assert!(!layout.is_empty());
+            }
+        }
+
+        #[test]
+        fn channel_layout_handles_zero_channels() {
+            // Zero channels should be clamped to 1 (MONO)
+            let info = AudioInfo::new_raw(Sample::F32(Type::Planar), 48000, 0);
+            let layout = info.channel_layout();
+            assert_eq!(layout, ChannelLayout::MONO);
+        }
+
+        #[test]
+        fn channel_layout_handles_excessive_channels() {
+            // More than 8 channels should be clamped to 8 (7.1 surround)
+            for channels in [9, 10, 16, 32, 64] {
+                let info = AudioInfo::new_raw(Sample::F32(Type::Planar), 48000, channels);
+                let layout = info.channel_layout();
+                assert_eq!(layout, ChannelLayout::_7POINT1);
+            }
         }
     }
 }
