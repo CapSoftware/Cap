@@ -65,3 +65,4 @@ seo/
 # OpenCode commands (local)
 .opencode/
 analysis/
+analysis/plans/
