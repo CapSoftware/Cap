@@ -1,0 +1,52 @@
+[package]
+name = "cap-test"
+version = "0.1.0"
+edition = "2024"
+description = "Unified testing harness for Cap"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cap-test"
+path = "src/main.rs"
+
+[dependencies]
+cap-recording = { path = "../recording", features = ["test-utils"] }
+cap-media-info = { path = "../media-info" }
+cap-project = { path = "../project" }
+scap-targets = { path = "../scap-targets" }
+cap-camera = { path = "../camera" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+cpal = { workspace = true }
+ffmpeg = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+flume = { workspace = true }
+
+kameo = "0.17.2"
+clap = { version = "4.5", features = ["derive"] }
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+colored = "3"
+indicatif = "0.17"
+uuid = { version = "1", features = ["v4"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sysinfo = "0.35"
+parking_lot = "0.12"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+] }
