@@ -26,6 +26,8 @@ pub enum AudioInfoError {
 impl AudioInfo {
     /// Maximum number of audio channels supported by FFmpeg channel layouts.
     /// Matches the highest channel count in `channel_layout_raw` (7.1 surround = 8 channels).
+    /// Note: Actual device channel counts may exceed this; we store the real count
+    /// but clamp to this value when creating FFmpeg frames.
     pub const MAX_AUDIO_CHANNELS: u16 = 8;
 
     pub const fn new(
@@ -71,18 +73,16 @@ impl AudioInfo {
             SupportedBufferSize::Unknown => 1024,
         });
 
-        let raw_channels = config.channels();
-        let channels = if Self::channel_layout_raw(raw_channels).is_some() {
-            raw_channels
-        } else {
-            raw_channels.clamp(1, Self::MAX_AUDIO_CHANNELS)
-        };
+        // Store the actual channel count from the device, even if it exceeds
+        // MAX_AUDIO_CHANNELS. This ensures audio data parsing works correctly.
+        // The clamping to supported FFmpeg layouts happens in channel_layout()
+        // and wrap_frame_with_max_channels() when creating output frames.
+        let raw_channels = config.channels().max(1); // At least 1 channel
 
         Self {
             sample_format,
             sample_rate: config.sample_rate().0,
-            // we do this here and only here bc we know it's cpal-related
-            channels: channels.into(),
+            channels: raw_channels.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
         }
@@ -146,13 +146,15 @@ impl AudioInfo {
         packed_data: &[u8],
         max_channels: usize,
     ) -> frame::Audio {
-        // Handle 0 channels by treating as mono to avoid division by zero
-        // and unreachable code paths. This can happen with misconfigured audio devices.
-        let effective_channels = self.channels.max(1);
-        let out_channels = effective_channels.min(max_channels.max(1));
+        // Use actual channel count for parsing input data (at least 1 to avoid div by zero)
+        let input_channels = self.channels.max(1);
+        // Clamp output channels to both max_channels and MAX_AUDIO_CHANNELS for FFmpeg compatibility
+        let out_channels = input_channels
+            .min(max_channels.max(1))
+            .min(Self::MAX_AUDIO_CHANNELS as usize);
 
         let sample_size = self.sample_size();
-        let packed_sample_size = sample_size * effective_channels;
+        let packed_sample_size = sample_size * input_channels;
         let samples = packed_data.len() / packed_sample_size;
 
         let mut frame = frame::Audio::new(
@@ -162,10 +164,10 @@ impl AudioInfo {
         );
         frame.set_rate(self.sample_rate);
 
-        if effective_channels == 1 || (frame.is_packed() && effective_channels <= out_channels) {
+        if input_channels == 1 || (frame.is_packed() && input_channels <= out_channels) {
             // frame is allocated with parameters derived from packed_data, so this is safe
             frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data);
-        } else if frame.is_packed() && effective_channels > out_channels {
+        } else if frame.is_packed() && input_channels > out_channels {
             for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
                 let start = chunk_index * sample_size * out_channels;
 
@@ -207,6 +209,12 @@ impl AudioInfo {
         let mut this = *self;
         this.channels = this.channels.min(channels as usize);
         this
+    }
+
+    /// Returns a version of this AudioInfo with channels clamped for FFmpeg compatibility.
+    /// FFmpeg channel layouts only support up to 8 channels (7.1 surround).
+    pub fn for_ffmpeg_output(&self) -> Self {
+        self.with_max_channels(Self::MAX_AUDIO_CHANNELS)
     }
 }
 
