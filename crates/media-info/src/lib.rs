@@ -146,10 +146,13 @@ impl AudioInfo {
         packed_data: &[u8],
         max_channels: usize,
     ) -> frame::Audio {
-        let out_channels = self.channels.min(max_channels);
+        // Handle 0 channels by treating as mono to avoid division by zero
+        // and unreachable code paths. This can happen with misconfigured audio devices.
+        let effective_channels = self.channels.max(1);
+        let out_channels = effective_channels.min(max_channels.max(1));
 
         let sample_size = self.sample_size();
-        let packed_sample_size = sample_size * self.channels;
+        let packed_sample_size = sample_size * effective_channels;
         let samples = packed_data.len() / packed_sample_size;
 
         let mut frame = frame::Audio::new(
@@ -159,12 +162,10 @@ impl AudioInfo {
         );
         frame.set_rate(self.sample_rate);
 
-        if self.channels == 0 {
-            unreachable!()
-        } else if self.channels == 1 || (frame.is_packed() && self.channels <= out_channels) {
+        if effective_channels == 1 || (frame.is_packed() && effective_channels <= out_channels) {
             // frame is allocated with parameters derived from packed_data, so this is safe
             frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data);
-        } else if frame.is_packed() && self.channels > out_channels {
+        } else if frame.is_packed() && effective_channels > out_channels {
             for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
                 let start = chunk_index * sample_size * out_channels;
 
@@ -429,6 +430,17 @@ mod tests {
                 let layout = info.channel_layout();
                 assert_eq!(layout, ChannelLayout::_7POINT1);
             }
+        }
+
+        #[test]
+        fn wrap_frame_handles_zero_channels() {
+            // Zero channels should be treated as mono to avoid division by zero
+            let info = AudioInfo::new_raw(Sample::U8(Type::Packed), 2, 0);
+            let input = &[1, 2, 3, 4];
+            // This should not panic
+            let frame = info.wrap_frame(input);
+            // With effective_channels = 1, all input should be copied as mono
+            assert_eq!(&frame.data(0)[0..input.len()], input);
         }
     }
 }
