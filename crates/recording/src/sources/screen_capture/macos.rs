@@ -128,7 +128,7 @@ fn get_screen_buffer_size() -> usize {
     std::env::var("CAP_SCREEN_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(4)
+        .unwrap_or(15)
 }
 
 fn get_max_queue_depth() -> isize {
