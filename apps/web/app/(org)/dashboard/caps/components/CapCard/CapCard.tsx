@@ -20,6 +20,7 @@ import {
 	faGear,
 	faLink,
 	faLock,
+	faPencil,
 	faShare,
 	faTrash,
 	faUnlock,
@@ -477,6 +478,16 @@ export const CapCard = ({
 									>
 										<FontAwesomeIcon className="size-3" icon={faChartSimple} />
 										<p className="text-sm text-gray-12">View analytics</p>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
+											router.push(`/editor/${cap.id}`);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faPencil} />
+										<p className="text-sm text-gray-12">Edit video</p>
 									</DropdownMenuItem>
 								</>
 							)}
