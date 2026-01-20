@@ -32,25 +32,25 @@ export function Header({ videoId }: HeaderProps) {
 	}, [videoId, project]);
 
 	return (
-		<header className="flex items-center justify-between h-14 px-4 border-b border-gray-4 bg-gray-2 shrink-0">
-			<div className="flex items-center gap-4">
+		<header className="flex items-center justify-between h-12 sm:h-14 px-2 sm:px-4 border-b border-gray-4 bg-gray-2 shrink-0">
+			<div className="flex items-center gap-2 sm:gap-4 min-w-0">
 				<Link
 					href={`/s/${videoId}`}
 					className="flex items-center gap-2 text-gray-11 hover:text-gray-12 transition-colors"
 				>
 					<ArrowLeft className="size-4" />
-					<span className="text-sm">Back</span>
+					<span className="text-sm hidden sm:inline">Back</span>
 				</Link>
 
-				<div className="h-5 w-px bg-gray-4" />
+				<div className="h-5 w-px bg-gray-4 hidden sm:block" />
 
-				<h1 className="text-sm font-medium text-gray-12 truncate max-w-[300px]">
+				<h1 className="text-sm font-medium text-gray-12 truncate max-w-[120px] sm:max-w-[200px] md:max-w-[300px]">
 					{video.name}
 				</h1>
 			</div>
 
-			<div className="flex items-center gap-2">
-				<div className="flex items-center gap-1 mr-2">
+			<div className="flex items-center gap-1 sm:gap-2">
+				<div className="flex items-center gap-1 mr-1 sm:mr-2">
 					<button
 						type="button"
 						onClick={history.undo}
@@ -78,8 +78,8 @@ export function Header({ videoId }: HeaderProps) {
 					disabled={isExporting}
 					spinner={isExporting}
 				>
-					<Download className="size-4 mr-1.5" />
-					Export
+					<Download className="size-4 sm:mr-1.5" />
+					<span className="hidden sm:inline">Export</span>
 				</Button>
 			</div>
 		</header>
