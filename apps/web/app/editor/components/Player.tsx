@@ -38,9 +38,7 @@ export function Player() {
 						setEditorState((state) => ({ ...state, playing: false }))
 					}
 					preload="metadata"
-				>
-					<track kind="captions" />
-				</video>
+				/>
 			</div>
 			<PlayerControls />
 		</div>
