@@ -1,0 +1,712 @@
+"use client";
+
+import { Switch } from "@cap/ui";
+import {
+	Camera,
+	Image,
+	MessageSquare,
+	MousePointer2,
+	Volume2,
+} from "lucide-react";
+import { useCallback, useState } from "react";
+import type {
+	AspectRatio,
+	BackgroundSource,
+	CursorAnimationStyle,
+} from "../types/project-config";
+import { useEditorContext } from "./context";
+
+const TABS = [
+	{ id: "background", icon: Image, label: "Background" },
+	{ id: "camera", icon: Camera, label: "Camera" },
+	{ id: "audio", icon: Volume2, label: "Audio" },
+	{ id: "cursor", icon: MousePointer2, label: "Cursor" },
+	{ id: "captions", icon: MessageSquare, label: "Captions" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+const ASPECT_RATIOS: Array<{ value: AspectRatio; label: string }> = [
+	{ value: "wide", label: "16:9" },
+	{ value: "vertical", label: "9:16" },
+	{ value: "square", label: "1:1" },
+	{ value: "classic", label: "4:3" },
+	{ value: "tall", label: "3:4" },
+];
+
+const BACKGROUND_COLORS = [
+	"#FFFFFF",
+	"#000000",
+	"#FF0000",
+	"#FF8C00",
+	"#FFD700",
+	"#32CD32",
+	"#4785FF",
+	"#800080",
+];
+
+const CURSOR_STYLES: Array<{
+	value: typeof CursorAnimationStyle.Type;
+	label: string;
+	description: string;
+}> = [
+	{
+		value: "slow",
+		label: "Slow",
+		description: "Gentle follow with higher inertia",
+	},
+	{
+		value: "mellow",
+		label: "Mellow",
+		description: "Balanced smoothing for tutorials",
+	},
+	{ value: "custom", label: "Custom", description: "Manually tune physics" },
+];
+
+interface SliderProps {
+	value: number;
+	onChange: (value: number) => void;
+	min: number;
+	max: number;
+	step?: number;
+	disabled?: boolean;
+	formatLabel?: (value: number) => string;
+}
+
+function Slider({
+	value,
+	onChange,
+	min,
+	max,
+	step = 1,
+	disabled = false,
+	formatLabel,
+}: SliderProps) {
+	const percentage = ((value - min) / (max - min)) * 100;
+
+	return (
+		<div className="flex items-center gap-3 w-full">
+			<input
+				type="range"
+				min={min}
+				max={max}
+				step={step}
+				value={value}
+				onChange={(e) => onChange(Number(e.target.value))}
+				disabled={disabled}
+				className="flex-1 h-2 bg-gray-3 rounded-lg appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed accent-blue-9"
+				style={{
+					background: `linear-gradient(to right, var(--blue-9) 0%, var(--blue-9) ${percentage}%, var(--gray-4) ${percentage}%, var(--gray-4) 100%)`,
+				}}
+			/>
+			{formatLabel && (
+				<span className="text-xs text-gray-11 w-12 text-right">
+					{formatLabel(value)}
+				</span>
+			)}
+		</div>
+	);
+}
+
+interface FieldProps {
+	label: string;
+	children: React.ReactNode;
+	icon?: React.ReactNode;
+	action?: React.ReactNode;
+}
+
+function Field({ label, children, icon, action }: FieldProps) {
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="flex items-center justify-between">
+				<div className="flex items-center gap-2 text-sm font-medium text-gray-12">
+					{icon && <span className="text-gray-11">{icon}</span>}
+					{label}
+				</div>
+				{action}
+			</div>
+			{children}
+		</div>
+	);
+}
+
+function BackgroundPanel() {
+	const { project, setProject } = useEditorContext();
+	const background = project.background;
+
+	const handleSourceTypeChange = useCallback(
+		(type: BackgroundSource["type"]) => {
+			let newSource: BackgroundSource;
+			switch (type) {
+				case "color":
+					newSource = { type: "color", value: [255, 255, 255] };
+					break;
+				case "gradient":
+					newSource = {
+						type: "gradient",
+						from: [69, 104, 220],
+						to: [176, 106, 179],
+					};
+					break;
+				case "wallpaper":
+					newSource = { type: "wallpaper", path: null };
+					break;
+				case "image":
+					newSource = { type: "image", path: null };
+					break;
+				default:
+					return;
+			}
+			setProject({
+				...project,
+				background: { ...background, source: newSource },
+			});
+		},
+		[project, background, setProject],
+	);
+
+	const handleColorChange = useCallback(
+		(hex: string) => {
+			const r = parseInt(hex.slice(1, 3), 16);
+			const g = parseInt(hex.slice(3, 5), 16);
+			const b = parseInt(hex.slice(5, 7), 16);
+			setProject({
+				...project,
+				background: {
+					...background,
+					source: { type: "color", value: [r, g, b] },
+				},
+			});
+		},
+		[project, background, setProject],
+	);
+
+	return (
+		<div className="flex flex-col gap-6">
+			<Field label="Aspect Ratio">
+				<div className="flex flex-wrap gap-2">
+					{ASPECT_RATIOS.map(({ value, label }) => (
+						<button
+							type="button"
+							key={value}
+							onClick={() => setProject({ ...project, aspectRatio: value })}
+							className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+								project.aspectRatio === value
+									? "border-blue-8 bg-blue-3 text-blue-11"
+									: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+							}`}
+						>
+							{label}
+						</button>
+					))}
+					<button
+						type="button"
+						onClick={() => setProject({ ...project, aspectRatio: null })}
+						className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+							project.aspectRatio === null
+								? "border-blue-8 bg-blue-3 text-blue-11"
+								: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+						}`}
+					>
+						Auto
+					</button>
+				</div>
+			</Field>
+
+			<Field label="Background Type">
+				<div className="grid grid-cols-4 gap-2">
+					{(["color", "gradient", "wallpaper", "image"] as const).map(
+						(type) => (
+							<button
+								type="button"
+								key={type}
+								onClick={() => handleSourceTypeChange(type)}
+								className={`px-3 py-2 text-xs rounded-lg border transition-colors capitalize ${
+									background.source.type === type
+										? "border-blue-8 bg-blue-3 text-blue-11"
+										: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+								}`}
+							>
+								{type}
+							</button>
+						),
+					)}
+				</div>
+			</Field>
+
+			{background.source.type === "color" && (
+				<Field label="Color">
+					<div className="flex flex-wrap gap-2">
+						{BACKGROUND_COLORS.map((color) => (
+							<button
+								type="button"
+								key={color}
+								onClick={() => handleColorChange(color)}
+								className="size-8 rounded-lg border border-gray-4 hover:border-gray-6 transition-colors"
+								style={{ backgroundColor: color }}
+							/>
+						))}
+					</div>
+				</Field>
+			)}
+
+			<Field label="Padding">
+				<Slider
+					value={background.padding}
+					onChange={(value) =>
+						setProject({
+							...project,
+							background: { ...background, padding: value },
+						})
+					}
+					min={0}
+					max={50}
+					formatLabel={(v) => `${v}%`}
+				/>
+			</Field>
+
+			<Field label="Rounding">
+				<Slider
+					value={background.rounding}
+					onChange={(value) =>
+						setProject({
+							...project,
+							background: { ...background, rounding: value },
+						})
+					}
+					min={0}
+					max={100}
+					formatLabel={(v) => `${v}%`}
+				/>
+			</Field>
+
+			<Field label="Shadow">
+				<Slider
+					value={background.shadow}
+					onChange={(value) =>
+						setProject({
+							...project,
+							background: { ...background, shadow: value },
+						})
+					}
+					min={0}
+					max={100}
+					formatLabel={(v) => `${v}%`}
+				/>
+			</Field>
+		</div>
+	);
+}
+
+function CameraPanel() {
+	const { project, setProject } = useEditorContext();
+	const camera = project.camera;
+
+	return (
+		<div className="flex flex-col gap-6">
+			<Field
+				label="Show Camera"
+				action={
+					<Switch
+						checked={!camera.hide}
+						onCheckedChange={(checked) =>
+							setProject({
+								...project,
+								camera: { ...camera, hide: !checked },
+							})
+						}
+					/>
+				}
+			>
+				<p className="text-xs text-gray-10">
+					Toggle visibility of camera overlay
+				</p>
+			</Field>
+
+			{!camera.hide && (
+				<>
+					<Field
+						label="Mirror"
+						action={
+							<Switch
+								checked={camera.mirror}
+								onCheckedChange={(checked) =>
+									setProject({
+										...project,
+										camera: { ...camera, mirror: checked },
+									})
+								}
+							/>
+						}
+					>
+						<p className="text-xs text-gray-10">Flip camera horizontally</p>
+					</Field>
+
+					<Field label="Size">
+						<Slider
+							value={camera.size}
+							onChange={(value) =>
+								setProject({
+									...project,
+									camera: { ...camera, size: value },
+								})
+							}
+							min={10}
+							max={50}
+							formatLabel={(v) => `${v}%`}
+						/>
+					</Field>
+
+					<Field label="Rounding">
+						<Slider
+							value={camera.rounding}
+							onChange={(value) =>
+								setProject({
+									...project,
+									camera: { ...camera, rounding: value },
+								})
+							}
+							min={0}
+							max={100}
+							formatLabel={(v) => `${v}%`}
+						/>
+					</Field>
+
+					<Field label="Position">
+						<div className="grid grid-cols-3 gap-2">
+							{(["left", "center", "right"] as const).map((x) =>
+								(["top", "bottom"] as const).map((y) => (
+									<button
+										type="button"
+										key={`${x}-${y}`}
+										onClick={() =>
+											setProject({
+												...project,
+												camera: { ...camera, position: { x, y } },
+											})
+										}
+										className={`px-2 py-1.5 text-xs rounded-lg border transition-colors capitalize ${
+											camera.position.x === x && camera.position.y === y
+												? "border-blue-8 bg-blue-3 text-blue-11"
+												: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+										}`}
+									>
+										{y} {x}
+									</button>
+								)),
+							)}
+						</div>
+					</Field>
+
+					<Field label="Shadow">
+						<Slider
+							value={camera.shadow}
+							onChange={(value) =>
+								setProject({
+									...project,
+									camera: { ...camera, shadow: value },
+								})
+							}
+							min={0}
+							max={100}
+							formatLabel={(v) => `${v}%`}
+						/>
+					</Field>
+				</>
+			)}
+		</div>
+	);
+}
+
+function AudioPanel() {
+	const { project, setProject } = useEditorContext();
+	const audio = project.audio;
+
+	return (
+		<div className="flex flex-col gap-6">
+			<Field
+				label="Mute Audio"
+				action={
+					<Switch
+						checked={audio.mute}
+						onCheckedChange={(checked) =>
+							setProject({
+								...project,
+								audio: { ...audio, mute: checked },
+							})
+						}
+					/>
+				}
+			>
+				<p className="text-xs text-gray-10">Disable all audio in the video</p>
+			</Field>
+
+			<Field label="Microphone Volume">
+				<Slider
+					value={audio.micVolumeDb}
+					onChange={(value) =>
+						setProject({
+							...project,
+							audio: { ...audio, micVolumeDb: value },
+						})
+					}
+					min={-30}
+					max={10}
+					step={0.1}
+					disabled={audio.mute}
+					formatLabel={(v) =>
+						v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+					}
+				/>
+			</Field>
+
+			<Field label="System Audio Volume">
+				<Slider
+					value={audio.systemVolumeDb}
+					onChange={(value) =>
+						setProject({
+							...project,
+							audio: { ...audio, systemVolumeDb: value },
+						})
+					}
+					min={-30}
+					max={10}
+					step={0.1}
+					disabled={audio.mute}
+					formatLabel={(v) =>
+						v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+					}
+				/>
+			</Field>
+		</div>
+	);
+}
+
+function CursorPanel() {
+	const { project, setProject } = useEditorContext();
+	const cursor = project.cursor;
+
+	return (
+		<div className="flex flex-col gap-6">
+			<Field
+				label="Show Cursor"
+				action={
+					<Switch
+						checked={!cursor.hide}
+						onCheckedChange={(checked) =>
+							setProject({
+								...project,
+								cursor: { ...cursor, hide: !checked },
+							})
+						}
+					/>
+				}
+			>
+				<p className="text-xs text-gray-10">Toggle cursor visibility</p>
+			</Field>
+
+			{!cursor.hide && (
+				<>
+					<Field label="Cursor Type">
+						<div className="flex gap-2">
+							{(["auto", "pointer", "circle"] as const).map((type) => (
+								<button
+									type="button"
+									key={type}
+									onClick={() =>
+										setProject({
+											...project,
+											cursor: { ...cursor, type },
+										})
+									}
+									className={`px-3 py-1.5 text-sm rounded-lg border transition-colors capitalize ${
+										cursor.type === type
+											? "border-blue-8 bg-blue-3 text-blue-11"
+											: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+									}`}
+								>
+									{type}
+								</button>
+							))}
+						</div>
+					</Field>
+
+					<Field label="Size">
+						<Slider
+							value={cursor.size}
+							onChange={(value) =>
+								setProject({
+									...project,
+									cursor: { ...cursor, size: value },
+								})
+							}
+							min={20}
+							max={300}
+							formatLabel={(v) => `${v}%`}
+						/>
+					</Field>
+
+					<Field
+						label="Hide When Idle"
+						action={
+							<Switch
+								checked={cursor.hideWhenIdle}
+								onCheckedChange={(checked) =>
+									setProject({
+										...project,
+										cursor: { ...cursor, hideWhenIdle: checked },
+									})
+								}
+							/>
+						}
+					>
+						<p className="text-xs text-gray-10">Fade cursor after inactivity</p>
+					</Field>
+
+					{cursor.hideWhenIdle && (
+						<Field label="Idle Delay">
+							<Slider
+								value={cursor.hideWhenIdleDelay}
+								onChange={(value) =>
+									setProject({
+										...project,
+										cursor: { ...cursor, hideWhenIdleDelay: value },
+									})
+								}
+								min={0.5}
+								max={5}
+								step={0.1}
+								formatLabel={(v) => `${v.toFixed(1)}s`}
+							/>
+						</Field>
+					)}
+
+					<Field label="Movement Style">
+						<div className="flex flex-col gap-2">
+							{CURSOR_STYLES.map(({ value, label, description }) => (
+								<button
+									type="button"
+									key={value}
+									onClick={() =>
+										setProject({
+											...project,
+											cursor: { ...cursor, animationStyle: value },
+										})
+									}
+									className={`p-3 text-left rounded-lg border transition-colors ${
+										cursor.animationStyle === value
+											? "border-blue-8 bg-blue-3"
+											: "border-gray-4 bg-gray-2 hover:border-gray-6"
+									}`}
+								>
+									<div className="text-sm font-medium text-gray-12">
+										{label}
+									</div>
+									<div className="text-xs text-gray-10">{description}</div>
+								</button>
+							))}
+						</div>
+					</Field>
+				</>
+			)}
+		</div>
+	);
+}
+
+function CaptionsPanel() {
+	const { project } = useEditorContext();
+	const captions = project.captions;
+
+	return (
+		<div className="flex flex-col gap-6">
+			{captions ? (
+				<Field
+					label="Captions"
+					action={
+						<Switch
+							checked={captions.settings.enabled}
+							onCheckedChange={() => {}}
+						/>
+					}
+				>
+					<p className="text-xs text-gray-10">
+						Enable captions overlay on video
+					</p>
+				</Field>
+			) : (
+				<div className="flex flex-col items-center justify-center py-8 text-center">
+					<MessageSquare className="size-8 text-gray-8 mb-3" />
+					<p className="text-sm text-gray-11">No captions available</p>
+					<p className="text-xs text-gray-10 mt-1">
+						Generate captions from the video page
+					</p>
+				</div>
+			)}
+		</div>
+	);
+}
+
+export function ConfigSidebar() {
+	const [activeTab, setActiveTab] = useState<TabId>("background");
+	const { editorState } = useEditorContext();
+
+	const renderPanel = () => {
+		if (editorState.timeline.selection) {
+			return (
+				<div className="flex flex-col items-center justify-center py-8 text-center">
+					<p className="text-sm text-gray-11">Clip selected</p>
+					<p className="text-xs text-gray-10 mt-1">
+						Click away to edit project settings
+					</p>
+				</div>
+			);
+		}
+
+		switch (activeTab) {
+			case "background":
+				return <BackgroundPanel />;
+			case "camera":
+				return <CameraPanel />;
+			case "audio":
+				return <AudioPanel />;
+			case "cursor":
+				return <CursorPanel />;
+			case "captions":
+				return <CaptionsPanel />;
+			default:
+				return null;
+		}
+	};
+
+	return (
+		<div className="flex flex-col min-h-0 shrink-0 flex-1 max-w-[24rem] overflow-hidden rounded-xl bg-gray-1 border border-gray-4">
+			<div className="flex items-center h-14 border-b border-gray-4 shrink-0">
+				{TABS.map(({ id, icon: Icon, label }) => (
+					<button
+						type="button"
+						key={id}
+						onClick={() => setActiveTab(id)}
+						className={`flex flex-1 justify-center items-center h-full transition-colors ${
+							activeTab === id && !editorState.timeline.selection
+								? "text-gray-12"
+								: "text-gray-10 hover:text-gray-11"
+						}`}
+						title={label}
+					>
+						<div
+							className={`flex justify-center items-center size-9 rounded-lg transition-colors ${
+								activeTab === id && !editorState.timeline.selection
+									? "bg-gray-3"
+									: ""
+							}`}
+						>
+							<Icon className="size-5" />
+						</div>
+					</button>
+				))}
+			</div>
+
+			<div className="flex-1 overflow-y-auto p-4">{renderPanel()}</div>
+		</div>
+	);
+}
