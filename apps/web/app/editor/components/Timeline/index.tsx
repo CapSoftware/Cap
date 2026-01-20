@@ -167,8 +167,9 @@ export function Timeline() {
 				}
 			>
 				<div
-					className="relative flex items-end"
+					className="relative flex items-end cursor-pointer"
 					style={{ height: TIMELINE_HEADER_HEIGHT, marginLeft: TRACK_GUTTER }}
+					onClick={handleUpdatePlayhead}
 				>
 					<TimelineMarkings
 						transform={transform}
