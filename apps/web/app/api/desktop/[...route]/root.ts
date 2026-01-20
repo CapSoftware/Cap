@@ -1,5 +1,7 @@
 import * as crypto from "node:crypto";
 import { db } from "@cap/database";
+import { sendEmail } from "@cap/database/emails/config";
+import { Feedback } from "@cap/database/emails/feedback";
 import {
 	organizationMembers,
 	organizations,
@@ -255,30 +257,22 @@ app.post(
 	),
 	async (c) => {
 		const { feedback, os, version } = c.req.valid("form");
+		const userEmail = c.get("user").email;
 
 		try {
-			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
-			if (!discordWebhookUrl)
-				throw new Error("Discord webhook URL is not configured");
-
-			const response = await fetch(discordWebhookUrl, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					content: [
-						`New feedback from ${c.get("user").email}:`,
-						feedback,
-						os && version && `${os} v${version}`,
-					]
-						.filter(Boolean)
-						.join("\n"),
+			await sendEmail({
+				email: "hello@cap.so",
+				subject: `New Feedback from ${userEmail}`,
+				react: Feedback({
+					userEmail,
+					feedback,
+					os,
+					version,
 				}),
+				cc: userEmail,
+				replyTo: userEmail,
+				fromOverride: "Richie from Cap <richie@send.cap.so>",
 			});
-
-			if (!response.ok)
-				throw new Error(
-					`Failed to send feedback to Discord: ${response.statusText}`,
-				);
 
 			return c.json({
 				success: true,
