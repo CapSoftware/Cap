@@ -132,6 +132,27 @@ export function EditorProvider({
 		}
 	}, [editorState.playing, pause, play]);
 
+	useEffect(() => {
+		if (!editorState.playing) return;
+
+		let animationFrameId: number;
+
+		const updatePlayhead = () => {
+			if (videoRef.current) {
+				const currentTime = videoRef.current.currentTime;
+				setEditorState((state) => ({
+					...state,
+					playbackTime: currentTime,
+				}));
+			}
+			animationFrameId = requestAnimationFrame(updatePlayhead);
+		};
+
+		animationFrameId = requestAnimationFrame(updatePlayhead);
+
+		return () => cancelAnimationFrame(animationFrameId);
+	}, [editorState.playing]);
+
 	const value: EditorContextValue = {
 		video,
 		videoUrl,
