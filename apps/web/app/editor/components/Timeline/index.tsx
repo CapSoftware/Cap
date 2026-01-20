@@ -3,11 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatTime } from "../../utils/time";
 import { useEditorContext } from "../context";
-import {
-	MAX_TIMELINE_MARKINGS,
-	TimelineContextProvider,
-	useTimelineContext,
-} from "./context";
+import { MAX_TIMELINE_MARKINGS, TimelineContextProvider } from "./context";
+import { Playhead } from "./Playhead";
 
 const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
@@ -151,33 +148,6 @@ export function Timeline() {
 		],
 	);
 
-	const playheadPosition = useMemo(() => {
-		if (!timelineBounds?.width) return 0;
-		const time = editorState.playbackTime;
-		const position = (time - transform.position) / secsPerPixel;
-		return Math.max(0, Math.min(position, timelineBounds.width));
-	}, [
-		editorState.playbackTime,
-		transform.position,
-		secsPerPixel,
-		timelineBounds?.width,
-	]);
-
-	const previewPosition = useMemo(() => {
-		if (!timelineBounds?.width || editorState.playing) return null;
-		const time = editorState.previewTime;
-		if (time <= 0) return null;
-		const position = (time - transform.position) / secsPerPixel;
-		if (position < 0 || position > timelineBounds.width) return null;
-		return position;
-	}, [
-		editorState.previewTime,
-		editorState.playing,
-		transform.position,
-		secsPerPixel,
-		timelineBounds?.width,
-	]);
-
 	const segments = project.timeline?.segments ?? [
 		{ start: 0, end: duration, timescale: 1 },
 	];
@@ -208,27 +178,7 @@ export function Timeline() {
 				</div>
 
 				<div className="relative flex-1 min-h-0">
-					{previewPosition !== null && (
-						<div
-							className="absolute top-0 bottom-0 w-px bg-gray-8 pointer-events-none z-10"
-							style={{
-								left: TRACK_GUTTER,
-								transform: `translateX(${previewPosition}px)`,
-							}}
-						>
-							<div className="absolute -top-2 left-1/2 -translate-x-1/2 size-3 rounded-full bg-gray-8" />
-						</div>
-					)}
-
-					<div
-						className="absolute top-0 bottom-0 w-px bg-red-500 pointer-events-none z-20"
-						style={{
-							left: TRACK_GUTTER,
-							transform: `translateX(${playheadPosition}px)`,
-						}}
-					>
-						<div className="absolute -top-2 left-1/2 -translate-x-1/2 size-3 rounded-full bg-red-500" />
-					</div>
+					<Playhead trackGutter={TRACK_GUTTER} />
 
 					<div className="flex items-stretch gap-2 h-full">
 						<div
@@ -385,3 +335,4 @@ function ClipTrack({
 }
 
 export { TimelineContextProvider, useTimelineContext } from "./context";
+export { Playhead } from "./Playhead";
