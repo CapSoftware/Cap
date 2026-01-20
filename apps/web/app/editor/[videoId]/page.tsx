@@ -4,9 +4,36 @@ import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
+import { Editor } from "../components/Editor";
+import type { ProjectConfiguration } from "../types/project-config";
+import { createDefaultConfig } from "../utils/defaults";
 
 interface EditorPageProps {
 	params: Promise<{ videoId: string }>;
+}
+
+async function getProjectConfig(
+	videoId: string,
+	duration: number,
+): Promise<ProjectConfiguration> {
+	try {
+		const response = await fetch(
+			`${process.env.NEXT_PUBLIC_WEB_URL || ""}/api/editor/${videoId}`,
+			{
+				cache: "no-store",
+				headers: {
+					Cookie: (await import("next/headers")).cookies().toString(),
+				},
+			},
+		);
+		if (response.ok) {
+			const data = await response.json();
+			if (data.config) {
+				return data.config as ProjectConfiguration;
+			}
+		}
+	} catch {}
+	return createDefaultConfig(duration);
 }
 
 export default async function EditorPage(props: EditorPageProps) {
@@ -20,8 +47,12 @@ export default async function EditorPage(props: EditorPageProps) {
 
 	const [video] = await db()
 		.select({
+			id: videos.id,
 			ownerId: videos.ownerId,
 			name: videos.name,
+			duration: videos.duration,
+			width: videos.width,
+			height: videos.height,
 		})
 		.from(videos)
 		.where(eq(videos.id, videoId))
@@ -31,12 +62,27 @@ export default async function EditorPage(props: EditorPageProps) {
 		redirect("/dashboard");
 	}
 
+	const videoDuration = video.duration ?? 0;
+	const videoWidth = video.width ?? 1920;
+	const videoHeight = video.height ?? 1080;
+
+	const videoUrl = `/api/playlist?videoId=${video.id}&videoType=mp4`;
+
+	const initialConfig = await getProjectConfig(videoId, videoDuration);
+
+	const videoData = {
+		id: video.id,
+		name: video.name ?? "Untitled",
+		duration: videoDuration,
+		width: videoWidth,
+		height: videoHeight,
+	};
+
 	return (
-		<div className="flex flex-1 items-center justify-center">
-			<div className="text-center space-y-2">
-				<h1 className="text-lg font-semibold text-gray-12">Editor</h1>
-				<p className="text-sm text-gray-10">{video.name}</p>
-			</div>
-		</div>
+		<Editor
+			video={videoData}
+			videoUrl={videoUrl}
+			initialConfig={initialConfig}
+		/>
 	);
 }
