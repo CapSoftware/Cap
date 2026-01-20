@@ -940,6 +940,13 @@ impl AudioPlayback {
                 }
             };
 
+            // Clamp output info for FFmpeg compatibility (max 8 channels)
+            // This must match what AudioPlaybackBuffer will use internally
+            base_output_info = base_output_info.for_ffmpeg_output();
+
+            // Also update the stream config to match the clamped channels
+            config.channels = base_output_info.channels as u16;
+
             let sample_rate = base_output_info.sample_rate;
             let buffer_size = base_output_info.buffer_size;
             let channels = base_output_info.channels;
@@ -1159,8 +1166,13 @@ impl AudioPlayback {
 
         let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
+        // Clamp output info for FFmpeg compatibility (max 8 channels)
+        output_info = output_info.for_ffmpeg_output();
 
-        let config = supported_config.config();
+        let mut config = supported_config.config();
+        // Match stream config channels to clamped output info
+        config.channels = output_info.channels as u16;
+
         let sample_rate = output_info.sample_rate;
 
         let playhead = f64::from(start_frame_number) / f64::from(fps);

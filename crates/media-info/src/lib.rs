@@ -24,7 +24,11 @@ pub enum AudioInfoError {
 }
 
 impl AudioInfo {
-    pub const MAX_AUDIO_CHANNELS: u16 = 16;
+    /// Maximum number of audio channels supported by FFmpeg channel layouts.
+    /// Matches the highest channel count in `channel_layout_raw` (7.1 surround = 8 channels).
+    /// Note: Actual device channel counts may exceed this; we store the real count
+    /// but clamp to this value when creating FFmpeg frames.
+    pub const MAX_AUDIO_CHANNELS: u16 = 8;
 
     pub const fn new(
         sample_format: Sample,
@@ -69,18 +73,16 @@ impl AudioInfo {
             SupportedBufferSize::Unknown => 1024,
         });
 
-        let raw_channels = config.channels();
-        let channels = if Self::channel_layout_raw(raw_channels).is_some() {
-            raw_channels
-        } else {
-            raw_channels.clamp(1, Self::MAX_AUDIO_CHANNELS)
-        };
+        // Store the actual channel count from the device, even if it exceeds
+        // MAX_AUDIO_CHANNELS. This ensures audio data parsing works correctly.
+        // The clamping to supported FFmpeg layouts happens in channel_layout()
+        // and wrap_frame_with_max_channels() when creating output frames.
+        let raw_channels = config.channels().max(1); // At least 1 channel
 
         Self {
             sample_format,
             sample_rate: config.sample_rate().0,
-            // we do this here and only here bc we know it's cpal-related
-            channels: channels.into(),
+            channels: raw_channels.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
         }
@@ -115,7 +117,12 @@ impl AudioInfo {
     }
 
     pub fn channel_layout(&self) -> ChannelLayout {
-        Self::channel_layout_raw(self.channels as u16).unwrap()
+        // Clamp channels to supported range and return appropriate layout.
+        // This prevents panics when audio devices report unusual channel counts
+        // (e.g., 0 channels or more than 8 channels).
+        let clamped_channels = (self.channels as u16).clamp(1, 8);
+        Self::channel_layout_raw(clamped_channels)
+            .unwrap_or(ChannelLayout::STEREO)
     }
 
     pub fn sample_size(&self) -> usize {
@@ -139,10 +146,15 @@ impl AudioInfo {
         packed_data: &[u8],
         max_channels: usize,
     ) -> frame::Audio {
-        let out_channels = self.channels.min(max_channels);
+        // Use actual channel count for parsing input data (at least 1 to avoid div by zero)
+        let input_channels = self.channels.max(1);
+        // Clamp output channels to both max_channels and MAX_AUDIO_CHANNELS for FFmpeg compatibility
+        let out_channels = input_channels
+            .min(max_channels.max(1))
+            .min(Self::MAX_AUDIO_CHANNELS as usize);
 
         let sample_size = self.sample_size();
-        let packed_sample_size = sample_size * self.channels;
+        let packed_sample_size = sample_size * input_channels;
         let samples = packed_data.len() / packed_sample_size;
 
         let mut frame = frame::Audio::new(
@@ -152,12 +164,10 @@ impl AudioInfo {
         );
         frame.set_rate(self.sample_rate);
 
-        if self.channels == 0 {
-            unreachable!()
-        } else if self.channels == 1 || (frame.is_packed() && self.channels <= out_channels) {
+        if input_channels == 1 || (frame.is_packed() && input_channels <= out_channels) {
             // frame is allocated with parameters derived from packed_data, so this is safe
             frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data);
-        } else if frame.is_packed() && self.channels > out_channels {
+        } else if frame.is_packed() && input_channels > out_channels {
             for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
                 let start = chunk_index * sample_size * out_channels;
 
@@ -199,6 +209,12 @@ impl AudioInfo {
         let mut this = *self;
         this.channels = this.channels.min(channels as usize);
         this
+    }
+
+    /// Returns a version of this AudioInfo with channels clamped for FFmpeg compatibility.
+    /// FFmpeg channel layouts only support up to 8 channels (7.1 surround).
+    pub fn for_ffmpeg_output(&self) -> Self {
+        self.with_max_channels(Self::MAX_AUDIO_CHANNELS)
     }
 }
 
@@ -393,6 +409,46 @@ mod tests {
             assert_eq!(frame.planes(), 2);
             assert_eq!(&frame.data(0)[0..2], &[1, 1]);
             assert_eq!(&frame.data(1)[0..2], &[2, 2]);
+        }
+
+        #[test]
+        fn channel_layout_returns_valid_layout_for_supported_counts() {
+            // Test all supported channel counts (1-8)
+            for channels in 1..=8u16 {
+                let info = AudioInfo::new_raw(Sample::F32(Type::Planar), 48000, channels);
+                // Should not panic and should return a valid layout
+                let layout = info.channel_layout();
+                assert!(!layout.is_empty());
+            }
+        }
+
+        #[test]
+        fn channel_layout_handles_zero_channels() {
+            // Zero channels should be clamped to 1 (MONO)
+            let info = AudioInfo::new_raw(Sample::F32(Type::Planar), 48000, 0);
+            let layout = info.channel_layout();
+            assert_eq!(layout, ChannelLayout::MONO);
+        }
+
+        #[test]
+        fn channel_layout_handles_excessive_channels() {
+            // More than 8 channels should be clamped to 8 (7.1 surround)
+            for channels in [9, 10, 16, 32, 64] {
+                let info = AudioInfo::new_raw(Sample::F32(Type::Planar), 48000, channels);
+                let layout = info.channel_layout();
+                assert_eq!(layout, ChannelLayout::_7POINT1);
+            }
+        }
+
+        #[test]
+        fn wrap_frame_handles_zero_channels() {
+            // Zero channels should be treated as mono to avoid division by zero
+            let info = AudioInfo::new_raw(Sample::U8(Type::Packed), 2, 0);
+            let input = &[1, 2, 3, 4];
+            // This should not panic
+            let frame = info.wrap_frame(input);
+            // With effective_channels = 1, all input should be copied as mono
+            assert_eq!(&frame.data(0)[0..input.len()], input);
         }
     }
 }
