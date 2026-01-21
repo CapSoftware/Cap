@@ -10,6 +10,7 @@ interface ClipSegmentProps {
 	index: number;
 	transform: { position: number; zoom: number };
 	secsPerPixel: number;
+	duration: number;
 	isSelected?: boolean;
 	onSelect?: (index: number) => void;
 	onTrimStart?: (index: number, newStart: number) => void;
@@ -23,6 +24,7 @@ export function ClipSegment({
 	index,
 	transform,
 	secsPerPixel,
+	duration,
 	isSelected = false,
 	onSelect,
 	onTrimStart,
@@ -84,7 +86,7 @@ export function ClipSegment({
 				} else {
 					const newEnd = Math.max(
 						originalStart + MIN_SEGMENT_DURATION,
-						originalEnd + deltaTime,
+						Math.min(duration, originalEnd + deltaTime),
 					);
 					onTrimEnd?.(index, newEnd);
 				}
