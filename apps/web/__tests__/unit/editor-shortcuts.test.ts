@@ -13,13 +13,12 @@ interface TimelineSelection {
 	indices: number[];
 }
 
-function isInputElement(tagName: string | null, isContentEditable: boolean): boolean {
+function isInputElement(
+	tagName: string | null,
+	isContentEditable: boolean,
+): boolean {
 	if (!tagName) return false;
-	return (
-		tagName === "INPUT" ||
-		tagName === "TEXTAREA" ||
-		isContentEditable
-	);
+	return tagName === "INPUT" || tagName === "TEXTAREA" || isContentEditable;
 }
 
 function deleteSelectedSegments(
@@ -31,7 +30,9 @@ function deleteSelectedSegments(
 	}
 
 	const indicesToDelete = new Set(selection.indices);
-	const newSegments = segments.filter((_, index) => !indicesToDelete.has(index));
+	const newSegments = segments.filter(
+		(_, index) => !indicesToDelete.has(index),
+	);
 
 	if (newSegments.length === 0) {
 		return { newSegments: null, shouldClearSelection: false };
@@ -111,7 +112,8 @@ function shouldHandleUndoRedo(
 	isShift: boolean,
 ): "undo" | "redo" | null {
 	if (key === "z" && isMod && !isShift) return "undo";
-	if ((key === "z" && isMod && isShift) || (key === "y" && isMod)) return "redo";
+	if ((key === "z" && isMod && isShift) || (key === "y" && isMod))
+		return "redo";
 	return null;
 }
 
@@ -145,33 +147,33 @@ describe("Editor Keyboard Shortcuts", () => {
 
 		describe("Home key", () => {
 			it("seeks to start", () => {
-				expect(computeSeekPosition("Home", currentTime, duration, false, false)).toBe(
-					0,
-				);
+				expect(
+					computeSeekPosition("Home", currentTime, duration, false, false),
+				).toBe(0);
 			});
 		});
 
 		describe("End key", () => {
 			it("seeks to end", () => {
-				expect(computeSeekPosition("End", currentTime, duration, false, false)).toBe(
-					duration,
-				);
+				expect(
+					computeSeekPosition("End", currentTime, duration, false, false),
+				).toBe(duration);
 			});
 		});
 
 		describe("ArrowLeft with modifier", () => {
 			it("seeks to start", () => {
-				expect(computeSeekPosition("ArrowLeft", currentTime, duration, true, false)).toBe(
-					0,
-				);
+				expect(
+					computeSeekPosition("ArrowLeft", currentTime, duration, true, false),
+				).toBe(0);
 			});
 		});
 
 		describe("ArrowRight with modifier", () => {
 			it("seeks to end", () => {
-				expect(computeSeekPosition("ArrowRight", currentTime, duration, true, false)).toBe(
-					duration,
-				);
+				expect(
+					computeSeekPosition("ArrowRight", currentTime, duration, true, false),
+				).toBe(duration);
 			});
 		});
 
@@ -199,12 +201,24 @@ describe("Editor Keyboard Shortcuts", () => {
 			});
 
 			it("clamps to zero at start", () => {
-				const result = computeSeekPosition("ArrowLeft", 0.01, duration, false, false);
+				const result = computeSeekPosition(
+					"ArrowLeft",
+					0.01,
+					duration,
+					false,
+					false,
+				);
 				expect(result).toBeGreaterThanOrEqual(0);
 			});
 
 			it("clamps to zero when skip would go negative", () => {
-				const result = computeSeekPosition("ArrowLeft", 2, duration, false, true);
+				const result = computeSeekPosition(
+					"ArrowLeft",
+					2,
+					duration,
+					false,
+					true,
+				);
 				expect(result).toBe(0);
 			});
 		});
@@ -257,11 +271,15 @@ describe("Editor Keyboard Shortcuts", () => {
 
 		describe("unrecognized keys", () => {
 			it("returns null for space", () => {
-				expect(computeSeekPosition(" ", currentTime, duration, false, false)).toBe(null);
+				expect(
+					computeSeekPosition(" ", currentTime, duration, false, false),
+				).toBe(null);
 			});
 
 			it("returns null for other keys", () => {
-				expect(computeSeekPosition("a", currentTime, duration, false, false)).toBe(null);
+				expect(
+					computeSeekPosition("a", currentTime, duration, false, false),
+				).toBe(null);
 			});
 		});
 	});
@@ -337,9 +355,7 @@ describe("Editor Keyboard Shortcuts", () => {
 		const timescale = 1000;
 
 		it("splits segment at playhead position", () => {
-			const segments: Segment[] = [
-				{ start: 0, end: 10000, timescale },
-			];
+			const segments: Segment[] = [{ start: 0, end: 10000, timescale }];
 			const result = splitAtPlayhead(5, segments);
 			expect(result).toHaveLength(2);
 			expect(result?.[0].start).toBe(0);
@@ -349,25 +365,19 @@ describe("Editor Keyboard Shortcuts", () => {
 		});
 
 		it("returns null when playhead is at start of segment", () => {
-			const segments: Segment[] = [
-				{ start: 0, end: 10000, timescale },
-			];
+			const segments: Segment[] = [{ start: 0, end: 10000, timescale }];
 			const result = splitAtPlayhead(0.000005, segments);
 			expect(result).toBe(null);
 		});
 
 		it("returns null when playhead is at end of segment", () => {
-			const segments: Segment[] = [
-				{ start: 0, end: 10000, timescale },
-			];
+			const segments: Segment[] = [{ start: 0, end: 10000, timescale }];
 			const result = splitAtPlayhead(9.999995, segments);
 			expect(result).toBe(null);
 		});
 
 		it("returns null when playhead is outside any segment", () => {
-			const segments: Segment[] = [
-				{ start: 0, end: 5000, timescale },
-			];
+			const segments: Segment[] = [{ start: 0, end: 5000, timescale }];
 			const result = splitAtPlayhead(10, segments);
 			expect(result).toBe(null);
 		});
@@ -389,9 +399,7 @@ describe("Editor Keyboard Shortcuts", () => {
 		});
 
 		it("handles segment with different timescale", () => {
-			const segments: Segment[] = [
-				{ start: 0, end: 90000, timescale: 90000 },
-			];
+			const segments: Segment[] = [{ start: 0, end: 90000, timescale: 90000 }];
 			const result = splitAtPlayhead(0.5, segments);
 			expect(result).toHaveLength(2);
 			expect(result?.[0].end).toBeCloseTo(45000, 0);
@@ -399,9 +407,7 @@ describe("Editor Keyboard Shortcuts", () => {
 		});
 
 		it("preserves timescale in split segments", () => {
-			const segments: Segment[] = [
-				{ start: 0, end: 10000, timescale: 1000 },
-			];
+			const segments: Segment[] = [{ start: 0, end: 10000, timescale: 1000 }];
 			const result = splitAtPlayhead(5, segments);
 			expect(result?.[0].timescale).toBe(1000);
 			expect(result?.[1].timescale).toBe(1000);
@@ -433,13 +439,17 @@ describe("Editor Keyboard Shortcuts", () => {
 		it("delete key triggers delete when selection exists", () => {
 			const key = "Delete";
 			const hasSelection = true;
-			expect((key === "Delete" || key === "Backspace") && hasSelection).toBe(true);
+			expect((key === "Delete" || key === "Backspace") && hasSelection).toBe(
+				true,
+			);
 		});
 
 		it("backspace key triggers delete when selection exists", () => {
 			const key = "Backspace";
 			const hasSelection = true;
-			expect((key === "Delete" || key === "Backspace") && hasSelection).toBe(true);
+			expect((key === "Delete" || key === "Backspace") && hasSelection).toBe(
+				true,
+			);
 		});
 	});
 

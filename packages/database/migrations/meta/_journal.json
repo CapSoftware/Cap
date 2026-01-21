@@ -71,6 +71,13 @@
 			"when": 1768139432782,
 			"tag": "0009_easy_ulik",
 			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "5",
+			"when": 1768945662784,
+			"tag": "0010_chubby_mephistopheles",
+			"breakpoints": true
 		}
 	]
 }

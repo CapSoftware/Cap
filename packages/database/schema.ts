@@ -777,3 +777,37 @@ export const importedVideos = mysqlTable(
 		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
 	],
 );
+
+export const videoEditorProjects = mysqlTable(
+	"video_editor_projects",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		config: json("config").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		uniqueVideoOwner: uniqueIndex("unique_video_owner").on(
+			table.videoId,
+			table.ownerId,
+		),
+		videoIdIndex: index("video_id_idx").on(table.videoId),
+		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
+	}),
+);
+
+export const videoEditorProjectsRelations = relations(
+	videoEditorProjects,
+	({ one }) => ({
+		video: one(videos, {
+			fields: [videoEditorProjects.videoId],
+			references: [videos.id],
+		}),
+		owner: one(users, {
+			fields: [videoEditorProjects.ownerId],
+			references: [users.id],
+		}),
+	}),
+);
