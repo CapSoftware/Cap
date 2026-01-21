@@ -22,6 +22,42 @@ import {
 } from "../utils/waveform";
 import { useHistory } from "./useHistory";
 
+interface PersistedEditorState {
+	previewTime: number;
+	timeline: {
+		interactMode: "seek" | "split";
+		transform: {
+			position: number;
+			zoom: number;
+		};
+	};
+}
+
+function getEditorStorageKey(videoId: string): string {
+	return `cap-editor-state-${videoId}`;
+}
+
+function loadPersistedState(videoId: string): PersistedEditorState | null {
+	if (typeof window === "undefined") return null;
+	try {
+		const stored = localStorage.getItem(getEditorStorageKey(videoId));
+		if (!stored) return null;
+		return JSON.parse(stored) as PersistedEditorState;
+	} catch {
+		return null;
+	}
+}
+
+function savePersistedState(
+	videoId: string,
+	state: PersistedEditorState,
+): void {
+	if (typeof window === "undefined") return;
+	try {
+		localStorage.setItem(getEditorStorageKey(videoId), JSON.stringify(state));
+	} catch {}
+}
+
 function findSegmentAtTime(
 	segments: TimelineSegment[],
 	time: number,
@@ -106,16 +142,35 @@ export function EditorProvider({
 	initialConfig,
 }: EditorProviderProps) {
 	const videoRef = useRef<HTMLVideoElement>(null);
-	const [editorState, setEditorState] = useState<EditorState>(() => ({
-		...DEFAULT_EDITOR_STATE,
-		timeline: {
-			...DEFAULT_EDITOR_STATE.timeline,
-			transform: {
-				position: 0,
-				zoom: Math.min(video.duration, 30),
+	const [editorState, setEditorState] = useState<EditorState>(() => {
+		const persisted = loadPersistedState(video.id);
+		const defaultZoom = Math.min(video.duration, 30);
+		if (persisted) {
+			return {
+				...DEFAULT_EDITOR_STATE,
+				previewTime: Math.min(persisted.previewTime, video.duration),
+				playbackTime: Math.min(persisted.previewTime, video.duration),
+				timeline: {
+					...DEFAULT_EDITOR_STATE.timeline,
+					interactMode: persisted.timeline.interactMode,
+					transform: {
+						position: persisted.timeline.transform.position,
+						zoom: persisted.timeline.transform.zoom,
+					},
+				},
+			};
+		}
+		return {
+			...DEFAULT_EDITOR_STATE,
+			timeline: {
+				...DEFAULT_EDITOR_STATE.timeline,
+				transform: {
+					position: 0,
+					zoom: defaultZoom,
+				},
 			},
-		},
-	}));
+		};
+	});
 
 	const {
 		state: project,
@@ -131,6 +186,8 @@ export function EditorProvider({
 	} = useHistory(initialConfig ?? createDefaultConfig(video.duration));
 
 	const [waveformData, setWaveformData] = useState<WaveformData | null>(null);
+	const initialTimeRef = useRef(editorState.previewTime);
+	const hasRestoredTimeRef = useRef(false);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -151,6 +208,16 @@ export function EditorProvider({
 	}, [videoUrl]);
 
 	useEffect(() => {
+		if (hasRestoredTimeRef.current) return;
+		if (!videoRef.current) return;
+		const initialTime = initialTimeRef.current;
+		if (initialTime > 0) {
+			videoRef.current.currentTime = initialTime;
+			hasRestoredTimeRef.current = true;
+		}
+	});
+
+	useEffect(() => {
 		const saveTimeout = window.setTimeout(() => {
 			fetch(`/api/editor/${video.id}`, {
 				method: "PUT",
@@ -161,6 +228,25 @@ export function EditorProvider({
 
 		return () => window.clearTimeout(saveTimeout);
 	}, [project, video.id]);
+
+	useEffect(() => {
+		const saveTimeout = window.setTimeout(() => {
+			savePersistedState(video.id, {
+				previewTime: editorState.previewTime,
+				timeline: {
+					interactMode: editorState.timeline.interactMode,
+					transform: editorState.timeline.transform,
+				},
+			});
+		}, 500);
+
+		return () => window.clearTimeout(saveTimeout);
+	}, [
+		video.id,
+		editorState.previewTime,
+		editorState.timeline.interactMode,
+		editorState.timeline.transform,
+	]);
 
 	const play = useCallback(() => {
 		if (!videoRef.current) return;
