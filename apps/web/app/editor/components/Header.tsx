@@ -24,8 +24,10 @@ export function Header({ videoId }: HeaderProps) {
 			});
 
 			if (!response.ok) {
-				throw new Error("Export failed");
+				console.error("Export failed:", response.status, response.statusText);
 			}
+		} catch (error) {
+			console.error("Export request failed:", error);
 		} finally {
 			setIsExporting(false);
 		}
