@@ -67,8 +67,13 @@ export function Timeline() {
 		[timelineBounds, transform.position, secsPerPixel, duration, actions],
 	);
 
-	const handleWheel = useCallback(
-		(e: React.WheelEvent) => {
+	const containerRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		const container = containerRef.current;
+		if (!container) return;
+
+		const handleWheel = (e: WheelEvent) => {
 			e.preventDefault();
 			if (e.ctrlKey || e.metaKey) {
 				const zoomDelta = (e.deltaY * Math.sqrt(transform.zoom)) / 30;
@@ -112,17 +117,19 @@ export function Timeline() {
 					},
 				}));
 			}
-		},
-		[
-			transform,
-			duration,
-			secsPerPixel,
-			timelineBounds,
-			editorState.previewTime,
-			editorState.playbackTime,
-			setEditorState,
-		],
-	);
+		};
+
+		container.addEventListener("wheel", handleWheel, { passive: false });
+		return () => container.removeEventListener("wheel", handleWheel);
+	}, [
+		transform,
+		duration,
+		secsPerPixel,
+		timelineBounds,
+		editorState.previewTime,
+		editorState.playbackTime,
+		setEditorState,
+	]);
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
@@ -155,12 +162,12 @@ export function Timeline() {
 	return (
 		<TimelineContextProvider duration={duration}>
 			<div
+				ref={containerRef}
 				className="relative flex flex-col h-full bg-gray-2 border-t border-gray-4 overflow-hidden"
 				style={{
 					paddingLeft: TIMELINE_PADDING,
 					paddingRight: TIMELINE_PADDING,
 				}}
-				onWheel={handleWheel}
 				onMouseMove={handleMouseMove}
 				onMouseLeave={() =>
 					setEditorState((state) => ({ ...state, previewTime: 0 }))
