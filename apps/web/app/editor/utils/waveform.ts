@@ -10,6 +10,15 @@ export interface WaveformOptions {
 }
 
 const DEFAULT_SAMPLES_PER_SECOND = 100;
+const MAX_WAVEFORM_SAMPLES = 36000;
+
+function getOptimalSampleRate(duration: number): number {
+	const targetSamples = Math.min(
+		duration * DEFAULT_SAMPLES_PER_SECOND,
+		MAX_WAVEFORM_SAMPLES,
+	);
+	return Math.max(10, Math.floor(targetSamples / duration));
+}
 
 export async function generateWaveformFromUrl(
 	url: string,
@@ -40,13 +49,15 @@ export function generateWaveformFromAudioBuffer(
 	audioBuffer: AudioBuffer,
 	options: WaveformOptions = {},
 ): WaveformData {
-	const { samplesPerSecond = DEFAULT_SAMPLES_PER_SECOND, channel = 0 } =
-		options;
+	const duration = audioBuffer.duration;
+	const effectiveSampleRate =
+		options.samplesPerSecond ?? getOptimalSampleRate(duration);
+	const { channel = 0 } = options;
+	const samplesPerSecond = effectiveSampleRate;
 
 	const channelData = audioBuffer.getChannelData(
 		Math.min(channel, audioBuffer.numberOfChannels - 1),
 	);
-	const duration = audioBuffer.duration;
 	const totalSamples = Math.ceil(duration * samplesPerSecond);
 	const samplesPerPeak = Math.floor(channelData.length / totalSamples);
 

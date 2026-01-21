@@ -12,7 +12,9 @@ import {
 import { useEditorContext } from "../context";
 
 export const MAX_TIMELINE_MARKINGS = 20;
-const TIMELINE_MARKING_RESOLUTIONS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
+const TIMELINE_MARKING_RESOLUTIONS = [
+	0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600,
+];
 const SEGMENT_RENDER_PADDING = 2;
 
 interface TimelineBounds {
