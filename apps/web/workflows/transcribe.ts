@@ -197,19 +197,19 @@ async function extractAudio(
 async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
 	"use step";
 
-	const audioCheckResponse = await fetch(audioUrl, {
-		method: "HEAD",
-	});
-	if (!audioCheckResponse.ok) {
+	const audioResponse = await fetch(audioUrl);
+	if (!audioResponse.ok) {
 		throw new Error(
-			`Audio URL not accessible: ${audioCheckResponse.status} ${audioCheckResponse.statusText}`,
+			`Audio URL not accessible: ${audioResponse.status} ${audioResponse.statusText}`,
 		);
 	}
 
+	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+
 	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
-	const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
-		{ url: audioUrl },
+	const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
+		audioBuffer,
 		{
 			model: "nova-3",
 			smart_format: true,
