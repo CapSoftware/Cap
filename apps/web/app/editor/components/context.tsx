@@ -62,6 +62,7 @@ interface EditorContextValue {
 	setEditorState: React.Dispatch<React.SetStateAction<EditorState>>;
 	project: ProjectConfiguration;
 	setProject: (config: ProjectConfiguration) => void;
+	setProjectWithoutHistory: (config: ProjectConfiguration) => void;
 	history: {
 		undo: () => void;
 		redo: () => void;
@@ -116,6 +117,7 @@ export function EditorProvider({
 	const {
 		state: project,
 		set: setProjectInternal,
+		setWithoutHistory: setProjectWithoutHistoryInternal,
 		undo,
 		redo,
 		canUndo,
@@ -271,6 +273,7 @@ export function EditorProvider({
 		setEditorState,
 		project,
 		setProject: setProjectInternal,
+		setProjectWithoutHistory: setProjectWithoutHistoryInternal,
 		history: { undo, redo, canUndo, canRedo },
 		waveformData,
 		videoRef,

@@ -21,6 +21,7 @@ export function Timeline() {
 		actions,
 		project,
 		setProject,
+		setProjectWithoutHistory,
 		waveformData,
 	} = useEditorContext();
 	const duration = video.duration;
@@ -108,12 +109,12 @@ export function Timeline() {
 			const updatedSegments = project.timeline.segments.map((seg, i) =>
 				i === index ? { ...seg, start: newStart } : seg,
 			);
-			setProject({
+			setProjectWithoutHistory({
 				...project,
 				timeline: { ...project.timeline, segments: updatedSegments },
 			});
 		},
-		[project, setProject],
+		[project, setProjectWithoutHistory],
 	);
 
 	const handleTrimEnd = useCallback(
@@ -122,13 +123,17 @@ export function Timeline() {
 			const updatedSegments = project.timeline.segments.map((seg, i) =>
 				i === index ? { ...seg, end: newEnd } : seg,
 			);
-			setProject({
+			setProjectWithoutHistory({
 				...project,
 				timeline: { ...project.timeline, segments: updatedSegments },
 			});
 		},
-		[project, setProject],
+		[project, setProjectWithoutHistory],
 	);
+
+	const handleTrimCommit = useCallback(() => {
+		setProject(project);
+	}, [project, setProject]);
 
 	const containerRef = useRef<HTMLDivElement>(null);
 
@@ -290,6 +295,7 @@ export function Timeline() {
 								onDeselectSegment={handleDeselectSegment}
 								onTrimStart={handleTrimStart}
 								onTrimEnd={handleTrimEnd}
+								onTrimCommit={handleTrimCommit}
 								waveformData={waveformData}
 							/>
 						</div>
@@ -371,6 +377,7 @@ interface ClipTrackProps {
 	onDeselectSegment: () => void;
 	onTrimStart: (index: number, newStart: number) => void;
 	onTrimEnd: (index: number, newEnd: number) => void;
+	onTrimCommit: () => void;
 	waveformData: WaveformData | null;
 }
 
@@ -384,6 +391,7 @@ function ClipTrack({
 	onDeselectSegment,
 	onTrimStart,
 	onTrimEnd,
+	onTrimCommit,
 	waveformData,
 }: ClipTrackProps) {
 	const visibleRange = {
@@ -425,6 +433,7 @@ function ClipTrack({
 						onSelect={onSelectSegment}
 						onTrimStart={onTrimStart}
 						onTrimEnd={onTrimEnd}
+						onTrimCommit={onTrimCommit}
 						waveformData={waveformData}
 					/>
 				);

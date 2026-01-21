@@ -31,6 +31,21 @@ export function useHistory<T>(initialState: T, maxHistory = 50) {
 		[maxHistory],
 	);
 
+	const setWithoutHistory = useCallback((newPresent: T | ((prev: T) => T)) => {
+		setState(({ past, present, future }) => {
+			const resolvedPresent =
+				typeof newPresent === "function"
+					? (newPresent as (prev: T) => T)(present)
+					: newPresent;
+
+			return {
+				past,
+				present: resolvedPresent,
+				future,
+			};
+		});
+	}, []);
+
 	const undo = useCallback(() => {
 		setState(({ past, present, future }) => {
 			if (past.length === 0) return { past, present, future };
@@ -60,5 +75,13 @@ export function useHistory<T>(initialState: T, maxHistory = 50) {
 	const canUndo = state.past.length > 0;
 	const canRedo = state.future.length > 0;
 
-	return { state: state.present, set, undo, redo, canUndo, canRedo };
+	return {
+		state: state.present,
+		set,
+		setWithoutHistory,
+		undo,
+		redo,
+		canUndo,
+		canRedo,
+	};
 }
