@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { formatTime } from "../../utils/time";
+import type { WaveformData } from "../../utils/waveform";
 import { useEditorContext } from "../context";
 import { ClipSegment } from "./ClipSegment";
 import { MAX_TIMELINE_MARKINGS, TimelineContextProvider } from "./context";
@@ -13,8 +14,15 @@ const TIMELINE_HEADER_HEIGHT = 32;
 const TRACK_HEIGHT = 48;
 
 export function Timeline() {
-	const { video, editorState, setEditorState, actions, project, setProject } =
-		useEditorContext();
+	const {
+		video,
+		editorState,
+		setEditorState,
+		actions,
+		project,
+		setProject,
+		waveformData,
+	} = useEditorContext();
 	const duration = video.duration;
 	const transform = editorState.timeline.transform;
 	const selection = editorState.timeline.selection;
@@ -282,6 +290,7 @@ export function Timeline() {
 								onDeselectSegment={handleDeselectSegment}
 								onTrimStart={handleTrimStart}
 								onTrimEnd={handleTrimEnd}
+								waveformData={waveformData}
 							/>
 						</div>
 					</div>
@@ -362,6 +371,7 @@ interface ClipTrackProps {
 	onDeselectSegment: () => void;
 	onTrimStart: (index: number, newStart: number) => void;
 	onTrimEnd: (index: number, newEnd: number) => void;
+	waveformData: WaveformData | null;
 }
 
 function ClipTrack({
@@ -374,6 +384,7 @@ function ClipTrack({
 	onDeselectSegment,
 	onTrimStart,
 	onTrimEnd,
+	waveformData,
 }: ClipTrackProps) {
 	const visibleRange = {
 		start: Math.max(0, transform.position - 2),
@@ -414,6 +425,7 @@ function ClipTrack({
 						onSelect={onSelectSegment}
 						onTrimStart={onTrimStart}
 						onTrimEnd={onTrimEnd}
+						waveformData={waveformData}
 					/>
 				);
 			})}

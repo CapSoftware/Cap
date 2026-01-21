@@ -2,8 +2,10 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { TimelineSegment } from "../../types/project-config";
+import { getPeaksInRange, type WaveformData } from "../../utils/waveform";
 import { useEditorContext } from "../context";
 import { SegmentContextProvider } from "./context";
+import { WaveformCanvas } from "./WaveformCanvas";
 
 interface ClipSegmentProps {
 	segment: TimelineSegment;
@@ -15,9 +17,12 @@ interface ClipSegmentProps {
 	onSelect?: (index: number) => void;
 	onTrimStart?: (index: number, newStart: number) => void;
 	onTrimEnd?: (index: number, newEnd: number) => void;
+	waveformData: WaveformData | null;
 }
 
 const MIN_SEGMENT_DURATION = 0.1;
+
+const SEGMENT_HEIGHT = 40;
 
 export function ClipSegment({
 	segment,
@@ -29,6 +34,7 @@ export function ClipSegment({
 	onSelect,
 	onTrimStart,
 	onTrimEnd,
+	waveformData,
 }: ClipSegmentProps) {
 	const { actions } = useEditorContext();
 	const segmentRef = useRef<HTMLButtonElement>(null);
@@ -109,6 +115,17 @@ export function ClipSegment({
 		return `${segment.timescale}x`;
 	}, [segment.timescale]);
 
+	const segmentPeaks = useMemo(() => {
+		if (!waveformData || width <= 0) return null;
+		const targetSamples = Math.max(1, Math.floor(width / 3));
+		return getPeaksInRange(
+			waveformData,
+			segment.start,
+			segment.end,
+			targetSamples,
+		);
+	}, [waveformData, segment.start, segment.end, width]);
+
 	return (
 		<SegmentContextProvider width={width}>
 			<button
@@ -132,11 +149,24 @@ export function ClipSegment({
 					onMouseDown={(e) => handleTrimMouseDown(e, "start")}
 				/>
 
-				<div className="absolute inset-0 flex items-center justify-center overflow-hidden px-2">
+				<div className="absolute inset-0 overflow-hidden">
+					{segmentPeaks && width > 0 && (
+						<WaveformCanvas
+							peaks={segmentPeaks}
+							width={Math.max(width, 4)}
+							height={SEGMENT_HEIGHT}
+							color="rgba(147, 197, 253, 0.7)"
+							barWidth={2}
+							barGap={1}
+							mirror
+						/>
+					)}
 					{timescaleLabel && (
-						<span className="text-xs text-blue-300 font-medium truncate">
-							{timescaleLabel}
-						</span>
+						<div className="absolute inset-0 flex items-center justify-center">
+							<span className="text-xs text-blue-300 font-medium truncate px-2">
+								{timescaleLabel}
+							</span>
+						</div>
 					)}
 				</div>
 

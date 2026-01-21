@@ -15,6 +15,11 @@ import type {
 	TimelineSegment,
 } from "../types/project-config";
 import { createDefaultConfig } from "../utils/defaults";
+import {
+	generateWaveformFromUrl,
+	normalizePeaks,
+	type WaveformData,
+} from "../utils/waveform";
 import { useHistory } from "./useHistory";
 
 function findSegmentAtTime(
@@ -63,7 +68,7 @@ interface EditorContextValue {
 		canUndo: boolean;
 		canRedo: boolean;
 	};
-	waveformData: number[] | null;
+	waveformData: WaveformData | null;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	actions: {
 		play: () => void;
@@ -117,7 +122,25 @@ export function EditorProvider({
 		canRedo,
 	} = useHistory(initialConfig ?? createDefaultConfig(video.duration));
 
-	const [waveformData] = useState<number[] | null>(null);
+	const [waveformData, setWaveformData] = useState<WaveformData | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		generateWaveformFromUrl(videoUrl)
+			.then((data) => {
+				if (cancelled) return;
+				setWaveformData({
+					...data,
+					peaks: normalizePeaks(data.peaks),
+				});
+			})
+			.catch(() => undefined);
+
+		return () => {
+			cancelled = true;
+		};
+	}, [videoUrl]);
 
 	useEffect(() => {
 		const saveTimeout = window.setTimeout(() => {
