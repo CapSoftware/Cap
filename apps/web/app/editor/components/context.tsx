@@ -68,6 +68,9 @@ interface EditorContextValue {
 		redo: () => void;
 		canUndo: boolean;
 		canRedo: boolean;
+		startBatch: () => void;
+		commitBatch: () => void;
+		cancelBatch: () => void;
 	};
 	waveformData: WaveformData | null;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -122,6 +125,9 @@ export function EditorProvider({
 		redo,
 		canUndo,
 		canRedo,
+		startBatch,
+		commitBatch,
+		cancelBatch,
 	} = useHistory(initialConfig ?? createDefaultConfig(video.duration));
 
 	const [waveformData, setWaveformData] = useState<WaveformData | null>(null);
@@ -274,7 +280,15 @@ export function EditorProvider({
 		project,
 		setProject: setProjectInternal,
 		setProjectWithoutHistory: setProjectWithoutHistoryInternal,
-		history: { undo, redo, canUndo, canRedo },
+		history: {
+			undo,
+			redo,
+			canUndo,
+			canRedo,
+			startBatch,
+			commitBatch,
+			cancelBatch,
+		},
 		waveformData,
 		videoRef,
 		actions: {

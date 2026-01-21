@@ -20,9 +20,9 @@ export function Timeline() {
 		setEditorState,
 		actions,
 		project,
-		setProject,
 		setProjectWithoutHistory,
 		waveformData,
+		history,
 	} = useEditorContext();
 	const duration = video.duration;
 	const transform = editorState.timeline.transform;
@@ -103,6 +103,10 @@ export function Timeline() {
 		}));
 	}, [setEditorState]);
 
+	const handleTrimBegin = useCallback(() => {
+		history.startBatch();
+	}, [history]);
+
 	const handleTrimStart = useCallback(
 		(index: number, newStart: number) => {
 			if (!project.timeline) return;
@@ -132,8 +136,8 @@ export function Timeline() {
 	);
 
 	const handleTrimCommit = useCallback(() => {
-		setProject(project);
-	}, [project, setProject]);
+		history.commitBatch();
+	}, [history]);
 
 	const containerRef = useRef<HTMLDivElement>(null);
 
@@ -293,6 +297,7 @@ export function Timeline() {
 								selectedIndices={selection?.indices ?? []}
 								onSelectSegment={handleSelectSegment}
 								onDeselectSegment={handleDeselectSegment}
+								onTrimBegin={handleTrimBegin}
 								onTrimStart={handleTrimStart}
 								onTrimEnd={handleTrimEnd}
 								onTrimCommit={handleTrimCommit}
@@ -375,6 +380,7 @@ interface ClipTrackProps {
 	selectedIndices: number[];
 	onSelectSegment: (index: number) => void;
 	onDeselectSegment: () => void;
+	onTrimBegin: () => void;
 	onTrimStart: (index: number, newStart: number) => void;
 	onTrimEnd: (index: number, newEnd: number) => void;
 	onTrimCommit: () => void;
@@ -389,6 +395,7 @@ function ClipTrack({
 	selectedIndices,
 	onSelectSegment,
 	onDeselectSegment,
+	onTrimBegin,
 	onTrimStart,
 	onTrimEnd,
 	onTrimCommit,
@@ -431,6 +438,7 @@ function ClipTrack({
 						duration={duration}
 						isSelected={selectedIndices.includes(index)}
 						onSelect={onSelectSegment}
+						onTrimBegin={onTrimBegin}
 						onTrimStart={onTrimStart}
 						onTrimEnd={onTrimEnd}
 						onTrimCommit={onTrimCommit}
