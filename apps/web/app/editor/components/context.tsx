@@ -16,6 +16,7 @@ import type {
 } from "../types/project-config";
 import { createDefaultConfig } from "../utils/defaults";
 import {
+	createEmptyWaveform,
 	generateWaveformFromUrl,
 	normalizePeaks,
 	type WaveformData,
@@ -200,12 +201,15 @@ export function EditorProvider({
 					peaks: normalizePeaks(data.peaks),
 				});
 			})
-			.catch(() => undefined);
+			.catch(() => {
+				if (cancelled) return;
+				setWaveformData(createEmptyWaveform(video.duration));
+			});
 
 		return () => {
 			cancelled = true;
 		};
-	}, [videoUrl]);
+	}, [videoUrl, video.duration]);
 
 	useEffect(() => {
 		if (hasRestoredTimeRef.current) return;
