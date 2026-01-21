@@ -5,7 +5,9 @@ import { formatTime } from "../../utils/time";
 import { useEditorContext } from "../context";
 import { MAX_TIMELINE_MARKINGS, useTimelineContext } from "./context";
 
-const MARKING_RESOLUTIONS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
+const MARKING_RESOLUTIONS = [
+	0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600,
+];
 
 interface TimeRulerProps {
 	height?: number;

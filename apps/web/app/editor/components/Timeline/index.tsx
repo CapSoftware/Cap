@@ -322,7 +322,7 @@ function TimelineMarkings({
 	secsPerPixel,
 	duration,
 }: TimelineMarkingsProps) {
-	const markingResolutions = [0.5, 1, 2.5, 5, 10, 30];
+	const markingResolutions = [0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600];
 	const markingResolution =
 		markingResolutions.find(
 			(r) => transform.zoom / r <= MAX_TIMELINE_MARKINGS,
