@@ -10,9 +10,37 @@ import {
 	useState,
 } from "react";
 import { DEFAULT_EDITOR_STATE, type EditorState } from "../types/editor-state";
-import type { ProjectConfiguration } from "../types/project-config";
+import type {
+	ProjectConfiguration,
+	TimelineSegment,
+} from "../types/project-config";
 import { createDefaultConfig } from "../utils/defaults";
 import { useHistory } from "./useHistory";
+
+function findSegmentAtTime(
+	segments: TimelineSegment[],
+	time: number,
+): TimelineSegment | null {
+	for (const segment of segments) {
+		if (time >= segment.start && time < segment.end) {
+			return segment;
+		}
+	}
+	return null;
+}
+
+function findNextSegment(
+	segments: TimelineSegment[],
+	time: number,
+): TimelineSegment | null {
+	const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
+	for (const segment of sortedSegments) {
+		if (segment.start > time) {
+			return segment;
+		}
+	}
+	return null;
+}
 
 interface VideoData {
 	id: string;
@@ -104,9 +132,30 @@ export function EditorProvider({
 	}, [project, video.id]);
 
 	const play = useCallback(() => {
-		videoRef.current?.play();
+		if (!videoRef.current) return;
+
+		const segments = project.timeline?.segments ?? [
+			{ start: 0, end: video.duration, timescale: 1 },
+		];
+		const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
+		const currentTime = videoRef.current.currentTime;
+
+		const currentSegment = findSegmentAtTime(sortedSegments, currentTime);
+		if (!currentSegment) {
+			const nextSegment = findNextSegment(sortedSegments, currentTime);
+			if (nextSegment) {
+				videoRef.current.currentTime = nextSegment.start;
+			} else {
+				const firstSegment = sortedSegments[0];
+				if (firstSegment) {
+					videoRef.current.currentTime = firstSegment.start;
+				}
+			}
+		}
+
+		videoRef.current.play();
 		setEditorState((state) => ({ ...state, playing: true }));
-	}, []);
+	}, [project.timeline?.segments, video.duration]);
 
 	const pause = useCallback(() => {
 		videoRef.current?.pause();
@@ -135,14 +184,53 @@ export function EditorProvider({
 	useEffect(() => {
 		if (!editorState.playing) return;
 
+		const segments = project.timeline?.segments ?? [
+			{ start: 0, end: video.duration, timescale: 1 },
+		];
+		const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
 		let animationFrameId: number;
 
 		const updatePlayhead = () => {
 			if (videoRef.current) {
 				const currentTime = videoRef.current.currentTime;
+
+				const currentSegment = findSegmentAtTime(sortedSegments, currentTime);
+				const lastSegment = sortedSegments[sortedSegments.length - 1];
+				const endTime = lastSegment?.end ?? video.duration;
+
+				if (currentSegment) {
+					if (currentTime >= currentSegment.end) {
+						const nextSegment = findNextSegment(sortedSegments, currentTime);
+						if (nextSegment) {
+							videoRef.current.currentTime = nextSegment.start;
+						} else {
+							videoRef.current.pause();
+							setEditorState((state) => ({
+								...state,
+								playing: false,
+								playbackTime: endTime,
+							}));
+							return;
+						}
+					}
+				} else {
+					const nextSegment = findNextSegment(sortedSegments, currentTime);
+					if (nextSegment) {
+						videoRef.current.currentTime = nextSegment.start;
+					} else {
+						videoRef.current.pause();
+						setEditorState((state) => ({
+							...state,
+							playing: false,
+							playbackTime: endTime,
+						}));
+						return;
+					}
+				}
+
 				setEditorState((state) => ({
 					...state,
-					playbackTime: currentTime,
+					playbackTime: videoRef.current?.currentTime ?? currentTime,
 				}));
 			}
 			animationFrameId = requestAnimationFrame(updatePlayhead);
@@ -151,7 +239,7 @@ export function EditorProvider({
 		animationFrameId = requestAnimationFrame(updatePlayhead);
 
 		return () => cancelAnimationFrame(animationFrameId);
-	}, [editorState.playing]);
+	}, [editorState.playing, project.timeline?.segments, video.duration]);
 
 	const value: EditorContextValue = {
 		video,
