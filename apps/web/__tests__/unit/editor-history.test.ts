@@ -303,10 +303,7 @@ describe("Editor History (undo/redo)", () => {
 			let state = createHistoryState(initial);
 			state = set(state, {
 				...state.present,
-				segments: [
-					...state.present.segments,
-					{ id: "2", start: 10, end: 20 },
-				],
+				segments: [...state.present.segments, { id: "2", start: 10, end: 20 }],
 			});
 			expect(state.present.segments.length).toBe(2);
 			state = undo(state);
