@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const MARKING_RESOLUTIONS = [0.5, 1, 2.5, 5, 10, 30];
+const MARKING_RESOLUTIONS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
 const MAX_TIMELINE_MARKINGS = 60;
 
 function getMarkingResolution(zoom: number): number {
@@ -46,15 +46,32 @@ function formatTime(seconds: number): string {
 }
 
 describe("TimeRuler marking resolution", () => {
-	describe("short videos (< 30 seconds)", () => {
-		it("uses 0.5s resolution for 10 second video", () => {
-			const resolution = getMarkingResolution(10);
-			expect(resolution).toBe(0.5);
+	describe("very short videos (< 1 second)", () => {
+		it("uses 0.1s resolution for 0.5 second video", () => {
+			const resolution = getMarkingResolution(0.5);
+			expect(resolution).toBe(0.1);
 		});
 
-		it("uses 0.5s resolution for 15 second video", () => {
+		it("uses 0.1s resolution for 0.8 second video", () => {
+			const resolution = getMarkingResolution(0.8);
+			expect(resolution).toBe(0.1);
+		});
+
+		it("uses 0.1s resolution for 2 second zoom (minimum zoom for short videos)", () => {
+			const resolution = getMarkingResolution(2);
+			expect(resolution).toBe(0.1);
+		});
+	});
+
+	describe("short videos (< 30 seconds)", () => {
+		it("uses 0.25s resolution for 10 second video", () => {
+			const resolution = getMarkingResolution(10);
+			expect(resolution).toBe(0.25);
+		});
+
+		it("uses 0.25s resolution for 15 second video", () => {
 			const resolution = getMarkingResolution(15);
-			expect(resolution).toBe(0.5);
+			expect(resolution).toBe(0.25);
 		});
 
 		it("uses 0.5s resolution for 25 second video", () => {
@@ -179,6 +196,18 @@ describe("TimeRuler markings calculation", () => {
 		expect(markings.every((m) => m.time <= 1)).toBe(true);
 	});
 
+	it("handles sub-second video (0.5 seconds) with minimum zoom", () => {
+		const markings = calculateMarkings(0, 2, 0.5, defaultSecsPerPixel);
+		expect(markings.length).toBeGreaterThan(0);
+		expect(markings.every((m) => m.time <= 0.5)).toBe(true);
+	});
+
+	it("generates markings for 0.3 second video", () => {
+		const markings = calculateMarkings(0, 2, 0.3, defaultSecsPerPixel);
+		expect(markings.length).toBeGreaterThan(0);
+		expect(markings.every((m) => m.time <= 0.3)).toBe(true);
+	});
+
 	it("handles edge case of fractional duration", () => {
 		const markings = calculateMarkings(0, 5.5, 5.5, defaultSecsPerPixel);
 		expect(markings.every((m) => m.time <= 5.5)).toBe(true);
@@ -257,6 +286,16 @@ describe("formatTime", () => {
 });
 
 describe("resolution boundaries", () => {
+	it("transitions from 0.1s to 0.25s at correct threshold", () => {
+		expect(getMarkingResolution(6)).toBe(0.1);
+		expect(getMarkingResolution(7)).toBe(0.25);
+	});
+
+	it("transitions from 0.25s to 0.5s at correct threshold", () => {
+		expect(getMarkingResolution(15)).toBe(0.25);
+		expect(getMarkingResolution(16)).toBe(0.5);
+	});
+
 	it("transitions from 0.5s to 1s at correct threshold", () => {
 		expect(getMarkingResolution(30)).toBe(0.5);
 		expect(getMarkingResolution(31)).toBe(1);

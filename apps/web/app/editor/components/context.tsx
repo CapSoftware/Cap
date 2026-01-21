@@ -144,7 +144,7 @@ export function EditorProvider({
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const [editorState, setEditorState] = useState<EditorState>(() => {
 		const persisted = loadPersistedState(video.id);
-		const defaultZoom = Math.min(video.duration, 30);
+		const defaultZoom = Math.max(2, Math.min(video.duration, 30));
 		if (persisted) {
 			return {
 				...DEFAULT_EDITOR_STATE,

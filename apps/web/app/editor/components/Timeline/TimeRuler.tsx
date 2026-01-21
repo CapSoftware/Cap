@@ -2,10 +2,10 @@
 
 import { useMemo } from "react";
 import { formatTime } from "../../utils/time";
-import { MAX_TIMELINE_MARKINGS, useTimelineContext } from "./context";
 import { useEditorContext } from "../context";
+import { MAX_TIMELINE_MARKINGS, useTimelineContext } from "./context";
 
-const MARKING_RESOLUTIONS = [0.5, 1, 2.5, 5, 10, 30];
+const MARKING_RESOLUTIONS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
 
 interface TimeRulerProps {
 	height?: number;
