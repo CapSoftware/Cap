@@ -2,6 +2,16 @@ export interface WaveformData {
 	peaks: Float32Array;
 	duration: number;
 	sampleRate: number;
+	hasAudio: boolean;
+}
+
+export function createEmptyWaveform(duration: number): WaveformData {
+	return {
+		peaks: new Float32Array(0),
+		duration,
+		sampleRate: 0,
+		hasAudio: false,
+	};
 }
 
 export interface WaveformOptions {
@@ -79,6 +89,7 @@ export function generateWaveformFromAudioBuffer(
 		peaks,
 		duration,
 		sampleRate: samplesPerSecond,
+		hasAudio: true,
 	};
 }
 
@@ -122,6 +133,10 @@ export function getPeaksInRange(
 	endTime: number,
 	targetSamples: number,
 ): Float32Array {
+	if (!waveform.hasAudio || waveform.peaks.length === 0) {
+		return new Float32Array(0);
+	}
+
 	const startIndex = Math.floor(startTime * waveform.sampleRate);
 	const endIndex = Math.ceil(endTime * waveform.sampleRate);
 	const sliced = waveform.peaks.slice(

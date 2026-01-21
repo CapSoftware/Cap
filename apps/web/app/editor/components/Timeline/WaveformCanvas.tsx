@@ -27,7 +27,7 @@ export function WaveformCanvas({
 
 	const draw = useCallback(() => {
 		const canvas = canvasRef.current;
-		if (!canvas || peaks.length === 0) return;
+		if (!canvas) return;
 
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
@@ -39,6 +39,13 @@ export function WaveformCanvas({
 
 		ctx.fillStyle = backgroundColor;
 		ctx.fillRect(0, 0, width, height);
+
+		if (peaks.length === 0) {
+			ctx.fillStyle = color;
+			const centerY = height / 2;
+			ctx.fillRect(0, centerY - 0.5, width, 1);
+			return;
+		}
 
 		const totalBarWidth = barWidth + barGap;
 		const barCount = Math.floor(width / totalBarWidth);
