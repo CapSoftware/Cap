@@ -33,7 +33,7 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
@@ -132,7 +132,7 @@ function PolicyDeniedView() {
 const renderPolicyDenied = (videoId: Video.VideoId) =>
 	Effect.succeed(<PolicyDeniedView key={videoId} />);
 
-const renderNoSuchElement = () => Effect.sync(() => notFound());
+const renderNoSuchElement = () => Effect.sync(() => redirect("/dashboard"));
 
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
 	PolicyDenied: () => renderPolicyDenied(videoId),
@@ -153,7 +153,7 @@ export async function generateMetadata(
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
-				onNone: () => notFound(),
+				onNone: () => redirect("/dashboard"),
 				onSome: ([video]) => ({
 					title: `${video.name} | Cap Recording`,
 					description: "Watch this video on Cap",

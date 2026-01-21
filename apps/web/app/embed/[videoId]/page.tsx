@@ -16,7 +16,7 @@ import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -32,7 +32,7 @@ export async function generateMetadata(
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
-				onNone: () => notFound(),
+				onNone: () => redirect("/dashboard"),
 				onSome: ([video]) => ({
 					title: `${video.name} | Cap Recording`,
 					description: "Watch this video on Cap",
@@ -186,7 +186,7 @@ export default async function EmbedVideoPage(
 						</p>
 					</div>,
 				),
-			NoSuchElementException: () => Effect.sync(() => notFound()),
+			NoSuchElementException: () => Effect.sync(() => redirect("/dashboard")),
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
