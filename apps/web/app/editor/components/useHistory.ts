@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 interface HistoryState<T> {
 	past: T[];
@@ -12,6 +12,7 @@ export function useHistory<T>(initialState: T, maxHistory = 50) {
 		present: initialState,
 		future: [],
 	});
+	const batchStartRef = useRef<T | null>(null);
 
 	const set = useCallback(
 		(newPresent: T | ((prev: T) => T)) => {
@@ -72,6 +73,34 @@ export function useHistory<T>(initialState: T, maxHistory = 50) {
 		});
 	}, []);
 
+	const startBatch = useCallback(() => {
+		setState((currentState) => {
+			batchStartRef.current = currentState.present;
+			return currentState;
+		});
+	}, []);
+
+	const commitBatch = useCallback(() => {
+		const batchStart = batchStartRef.current;
+		if (batchStart === null) return;
+
+		batchStartRef.current = null;
+		setState(({ past, present, future }) => {
+			if (batchStart === present) {
+				return { past, present, future };
+			}
+			return {
+				past: [...past.slice(-(maxHistory - 1)), batchStart],
+				present,
+				future: [],
+			};
+		});
+	}, [maxHistory]);
+
+	const cancelBatch = useCallback(() => {
+		batchStartRef.current = null;
+	}, []);
+
 	const canUndo = state.past.length > 0;
 	const canRedo = state.future.length > 0;
 
@@ -83,5 +112,8 @@ export function useHistory<T>(initialState: T, maxHistory = 50) {
 		redo,
 		canUndo,
 		canRedo,
+		startBatch,
+		commitBatch,
+		cancelBatch,
 	};
 }

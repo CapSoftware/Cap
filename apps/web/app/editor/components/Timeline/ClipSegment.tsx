@@ -15,6 +15,7 @@ interface ClipSegmentProps {
 	duration: number;
 	isSelected?: boolean;
 	onSelect?: (index: number) => void;
+	onTrimBegin?: () => void;
 	onTrimStart?: (index: number, newStart: number) => void;
 	onTrimEnd?: (index: number, newEnd: number) => void;
 	onTrimCommit?: () => void;
@@ -33,6 +34,7 @@ export function ClipSegment({
 	duration,
 	isSelected = false,
 	onSelect,
+	onTrimBegin,
 	onTrimStart,
 	onTrimEnd,
 	onTrimCommit,
@@ -72,6 +74,7 @@ export function ClipSegment({
 		(e: React.MouseEvent, edge: "start" | "end") => {
 			e.stopPropagation();
 			e.preventDefault();
+			onTrimBegin?.();
 			setIsDragging(edge);
 
 			const startClientX = e.clientX;
@@ -115,6 +118,7 @@ export function ClipSegment({
 			segment.end,
 			secsPerPixel,
 			index,
+			onTrimBegin,
 			onTrimStart,
 			onTrimEnd,
 			onTrimCommit,

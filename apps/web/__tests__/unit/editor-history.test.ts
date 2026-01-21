@@ -311,6 +311,144 @@ describe("Editor History (undo/redo)", () => {
 		});
 	});
 
+	describe("batch operations", () => {
+		const batchStart: { value: number } | null = null;
+
+		function startBatch<T>(state: HistoryState<T>): {
+			state: HistoryState<T>;
+			batchStart: T;
+		} {
+			return { state, batchStart: state.present };
+		}
+
+		function setWithoutHistory<T>(
+			state: HistoryState<T>,
+			newPresent: T | ((prev: T) => T),
+		): HistoryState<T> {
+			const resolvedPresent =
+				typeof newPresent === "function"
+					? (newPresent as (prev: T) => T)(state.present)
+					: newPresent;
+
+			return {
+				past: state.past,
+				present: resolvedPresent,
+				future: state.future,
+			};
+		}
+
+		function commitBatch<T>(
+			state: HistoryState<T>,
+			batchStart: T | null,
+			maxHistory = 50,
+		): HistoryState<T> {
+			if (batchStart === null) return state;
+			if (batchStart === state.present) return state;
+			return {
+				past: [...state.past.slice(-(maxHistory - 1)), batchStart],
+				present: state.present,
+				future: [],
+			};
+		}
+
+		it("batch creates single history entry for multiple updates", () => {
+			let state = createHistoryState({ value: 1 });
+			const batch = startBatch(state);
+			state = batch.state;
+			const savedBatchStart = batch.batchStart;
+
+			state = setWithoutHistory(state, { value: 2 });
+			state = setWithoutHistory(state, { value: 3 });
+			state = setWithoutHistory(state, { value: 4 });
+
+			expect(state.past.length).toBe(0);
+			expect(state.present).toEqual({ value: 4 });
+
+			state = commitBatch(state, savedBatchStart);
+
+			expect(state.past.length).toBe(1);
+			expect(state.past[0]).toEqual({ value: 1 });
+			expect(state.present).toEqual({ value: 4 });
+		});
+
+		it("undo after batch restores pre-batch state", () => {
+			let state = createHistoryState({ value: 1 });
+			const batch = startBatch(state);
+			const savedBatchStart = batch.batchStart;
+
+			state = setWithoutHistory(state, { value: 5 });
+			state = setWithoutHistory(state, { value: 10 });
+			state = commitBatch(state, savedBatchStart);
+
+			expect(state.present).toEqual({ value: 10 });
+
+			state = undo(state);
+			expect(state.present).toEqual({ value: 1 });
+		});
+
+		it("commit without changes does not add history entry", () => {
+			let state = createHistoryState({ value: 1 });
+			const batch = startBatch(state);
+			const savedBatchStart = batch.batchStart;
+
+			state = commitBatch(state, savedBatchStart);
+
+			expect(state.past.length).toBe(0);
+		});
+
+		it("commit with null batchStart does nothing", () => {
+			let state = createHistoryState({ value: 1 });
+			state = set(state, { value: 2 });
+
+			const beforeCommit = { ...state };
+			state = commitBatch(state, null);
+
+			expect(state.past).toEqual(beforeCommit.past);
+			expect(state.present).toEqual(beforeCommit.present);
+		});
+
+		it("batch can be used for drag operations", () => {
+			let state = createHistoryState({ start: 0, end: 10 });
+			const batch = startBatch(state);
+			const savedBatchStart = batch.batchStart;
+
+			state = setWithoutHistory(state, { start: 1, end: 10 });
+			state = setWithoutHistory(state, { start: 2, end: 10 });
+			state = setWithoutHistory(state, { start: 3, end: 10 });
+			state = setWithoutHistory(state, { start: 4, end: 10 });
+
+			state = commitBatch(state, savedBatchStart);
+
+			expect(state.past.length).toBe(1);
+			expect(state.past[0]).toEqual({ start: 0, end: 10 });
+			expect(state.present).toEqual({ start: 4, end: 10 });
+
+			state = undo(state);
+			expect(state.present).toEqual({ start: 0, end: 10 });
+
+			state = redo(state);
+			expect(state.present).toEqual({ start: 4, end: 10 });
+		});
+
+		it("batch respects maxHistory limit", () => {
+			let state = createHistoryState(0);
+			for (let i = 1; i <= 5; i++) {
+				state = set(state, i);
+			}
+			expect(state.past.length).toBe(5);
+
+			const batch = startBatch(state);
+			const savedBatchStart = batch.batchStart;
+
+			state = setWithoutHistory(state, 100);
+			state = commitBatch(state, savedBatchStart, 5);
+
+			expect(state.past.length).toBe(5);
+			expect(state.past).toEqual([1, 2, 3, 4, 5]);
+			expect(state.present).toBe(100);
+		});
+	});
+
 	describe("edge cases", () => {
 		it("handles rapid undo/redo cycles", () => {
 			let state = createHistoryState(0);
