@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { formatTime } from "../../utils/time";
 import { useEditorContext } from "../context";
+import { ClipSegment } from "./ClipSegment";
 import { MAX_TIMELINE_MARKINGS, TimelineContextProvider } from "./context";
 import { Playhead } from "./Playhead";
 
@@ -12,13 +13,14 @@ const TIMELINE_HEADER_HEIGHT = 32;
 const TRACK_HEIGHT = 48;
 
 export function Timeline() {
-	const { video, editorState, setEditorState, actions, project } =
+	const { video, editorState, setEditorState, actions, project, setProject } =
 		useEditorContext();
 	const duration = video.duration;
 	const transform = editorState.timeline.transform;
+	const selection = editorState.timeline.selection;
 
 	const timelineRef = useRef<HTMLDivElement>(null);
-	const [timelineBounds, setTimelineBounds] = useState<{
+	const timelineBoundsRef = useRef<{
 		width: number;
 		height: number;
 		left: number;
@@ -29,12 +31,12 @@ export function Timeline() {
 		const updateBounds = () => {
 			if (timelineRef.current) {
 				const rect = timelineRef.current.getBoundingClientRect();
-				setTimelineBounds({
+				timelineBoundsRef.current = {
 					width: rect.width,
 					height: rect.height,
 					left: rect.left,
 					top: rect.top,
-				});
+				};
 			}
 		};
 
@@ -52,19 +54,72 @@ export function Timeline() {
 	}, []);
 
 	const secsPerPixel = useMemo(() => {
-		if (!timelineBounds?.width) return 1;
-		return transform.zoom / timelineBounds.width;
-	}, [transform.zoom, timelineBounds?.width]);
+		const bounds = timelineBoundsRef.current;
+		if (!bounds?.width) return 1;
+		return transform.zoom / bounds.width;
+	}, [transform.zoom]);
 
 	const handleUpdatePlayhead = useCallback(
 		(e: React.MouseEvent) => {
-			if (!timelineBounds) return;
-			const offsetX = e.clientX - timelineBounds.left;
+			const bounds = timelineBoundsRef.current;
+			if (!bounds) return;
+			const offsetX = e.clientX - bounds.left;
 			const time = transform.position + secsPerPixel * offsetX;
 			const clampedTime = Math.max(0, Math.min(duration, time));
 			actions.seekTo(clampedTime);
 		},
-		[timelineBounds, transform.position, secsPerPixel, duration, actions],
+		[transform.position, secsPerPixel, duration, actions],
+	);
+
+	const handleSelectSegment = useCallback(
+		(index: number) => {
+			setEditorState((state) => ({
+				...state,
+				timeline: {
+					...state.timeline,
+					selection: { type: "clip", indices: [index] },
+				},
+			}));
+		},
+		[setEditorState],
+	);
+
+	const handleDeselectSegment = useCallback(() => {
+		setEditorState((state) => ({
+			...state,
+			timeline: {
+				...state.timeline,
+				selection: null,
+			},
+		}));
+	}, [setEditorState]);
+
+	const handleTrimStart = useCallback(
+		(index: number, newStart: number) => {
+			if (!project.timeline) return;
+			const updatedSegments = project.timeline.segments.map((seg, i) =>
+				i === index ? { ...seg, start: newStart } : seg,
+			);
+			setProject({
+				...project,
+				timeline: { ...project.timeline, segments: updatedSegments },
+			});
+		},
+		[project, setProject],
+	);
+
+	const handleTrimEnd = useCallback(
+		(index: number, newEnd: number) => {
+			if (!project.timeline) return;
+			const updatedSegments = project.timeline.segments.map((seg, i) =>
+				i === index ? { ...seg, end: newEnd } : seg,
+			);
+			setProject({
+				...project,
+				timeline: { ...project.timeline, segments: updatedSegments },
+			});
+		},
+		[project, setProject],
 	);
 
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -83,7 +138,8 @@ export function Timeline() {
 				);
 
 				const previewTime = editorState.previewTime ?? editorState.playbackTime;
-				const ratio = timelineBounds?.width
+				const bounds = timelineBoundsRef.current;
+				const ratio = bounds?.width
 					? (previewTime - transform.position) / transform.zoom
 					: 0.5;
 				const newPosition = Math.max(
@@ -125,7 +181,6 @@ export function Timeline() {
 		transform,
 		duration,
 		secsPerPixel,
-		timelineBounds,
 		editorState.previewTime,
 		editorState.playbackTime,
 		setEditorState,
@@ -133,9 +188,10 @@ export function Timeline() {
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
-			if (!timelineBounds || editorState.playing) return;
-			const offsetX = e.clientX - timelineBounds.left;
-			if (offsetX < 0 || offsetX > timelineBounds.width) {
+			const bounds = timelineBoundsRef.current;
+			if (!bounds || editorState.playing) return;
+			const offsetX = e.clientX - bounds.left;
+			if (offsetX < 0 || offsetX > bounds.width) {
 				setEditorState((state) => ({ ...state, previewTime: 0 }));
 				return;
 			}
@@ -146,7 +202,6 @@ export function Timeline() {
 			}));
 		},
 		[
-			timelineBounds,
 			transform.position,
 			secsPerPixel,
 			duration,
@@ -222,6 +277,11 @@ export function Timeline() {
 								transform={transform}
 								secsPerPixel={secsPerPixel}
 								duration={duration}
+								selectedIndices={selection?.indices ?? []}
+								onSelectSegment={handleSelectSegment}
+								onDeselectSegment={handleDeselectSegment}
+								onTrimStart={handleTrimStart}
+								onTrimEnd={handleTrimEnd}
 							/>
 						</div>
 					</div>
@@ -297,6 +357,11 @@ interface ClipTrackProps {
 	transform: { position: number; zoom: number };
 	secsPerPixel: number;
 	duration: number;
+	selectedIndices: number[];
+	onSelectSegment: (index: number) => void;
+	onDeselectSegment: () => void;
+	onTrimStart: (index: number, newStart: number) => void;
+	onTrimEnd: (index: number, newEnd: number) => void;
 }
 
 function ClipTrack({
@@ -304,14 +369,31 @@ function ClipTrack({
 	transform,
 	secsPerPixel,
 	duration,
+	selectedIndices,
+	onSelectSegment,
+	onDeselectSegment,
+	onTrimStart,
+	onTrimEnd,
 }: ClipTrackProps) {
 	const visibleRange = {
 		start: Math.max(0, transform.position - 2),
 		end: Math.min(duration, transform.position + transform.zoom + 2),
 	};
 
+	const handleBackgroundClick = useCallback(
+		(e: React.MouseEvent) => {
+			if (e.target === e.currentTarget) {
+				onDeselectSegment();
+			}
+		},
+		[onDeselectSegment],
+	);
+
 	return (
-		<div className="absolute inset-0 flex items-center">
+		<div
+			className="absolute inset-0 flex items-center"
+			onClick={handleBackgroundClick}
+		>
 			{segments.map((segment, index) => {
 				if (
 					segment.end < visibleRange.start ||
@@ -320,22 +402,18 @@ function ClipTrack({
 					return null;
 				}
 
-				const startX = (segment.start - transform.position) / secsPerPixel;
-				const width = (segment.end - segment.start) / secsPerPixel;
-
 				return (
-					<div
+					<ClipSegment
 						key={index}
-						className="absolute h-full rounded-md bg-blue-500/30 border border-blue-500/50"
-						style={{
-							left: `${Math.max(0, startX)}px`,
-							width: `${width}px`,
-						}}
-					>
-						<div className="absolute inset-0 flex items-center justify-center text-xs text-blue-300 truncate px-2">
-							{segment.timescale !== 1 && `${segment.timescale}x`}
-						</div>
-					</div>
+						segment={segment}
+						index={index}
+						transform={transform}
+						secsPerPixel={secsPerPixel}
+						isSelected={selectedIndices.includes(index)}
+						onSelect={onSelectSegment}
+						onTrimStart={onTrimStart}
+						onTrimEnd={onTrimEnd}
+					/>
 				);
 			})}
 		</div>

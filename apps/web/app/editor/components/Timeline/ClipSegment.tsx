@@ -29,7 +29,7 @@ export function ClipSegment({
 	onTrimEnd,
 }: ClipSegmentProps) {
 	const { actions } = useEditorContext();
-	const segmentRef = useRef<HTMLDivElement>(null);
+	const segmentRef = useRef<HTMLButtonElement>(null);
 	const [isDragging, setIsDragging] = useState<"start" | "end" | null>(null);
 
 	const startX = useMemo(
@@ -110,7 +110,7 @@ export function ClipSegment({
 	return (
 		<SegmentContextProvider width={width}>
 			<button
-				ref={segmentRef as React.RefObject<HTMLButtonElement>}
+				ref={segmentRef}
 				type="button"
 				className={`absolute h-full rounded-md transition-colors ${
 					isSelected
