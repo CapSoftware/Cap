@@ -17,6 +17,7 @@ interface ClipSegmentProps {
 	onSelect?: (index: number) => void;
 	onTrimStart?: (index: number, newStart: number) => void;
 	onTrimEnd?: (index: number, newEnd: number) => void;
+	onTrimCommit?: () => void;
 	waveformData: WaveformData | null;
 }
 
@@ -34,6 +35,7 @@ export function ClipSegment({
 	onSelect,
 	onTrimStart,
 	onTrimEnd,
+	onTrimCommit,
 	waveformData,
 }: ClipSegmentProps) {
 	const { actions } = useEditorContext();
@@ -102,12 +104,22 @@ export function ClipSegment({
 				setIsDragging(null);
 				document.removeEventListener("mousemove", handleMouseMove);
 				document.removeEventListener("mouseup", handleMouseUp);
+				onTrimCommit?.();
 			};
 
 			document.addEventListener("mousemove", handleMouseMove);
 			document.addEventListener("mouseup", handleMouseUp);
 		},
-		[segment.start, segment.end, secsPerPixel, index, onTrimStart, onTrimEnd],
+		[
+			segment.start,
+			segment.end,
+			secsPerPixel,
+			index,
+			onTrimStart,
+			onTrimEnd,
+			onTrimCommit,
+			duration,
+		],
 	);
 
 	const timescaleLabel = useMemo(() => {
