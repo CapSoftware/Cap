@@ -256,9 +256,7 @@ describe("Editor Auto-Save", () => {
 			const autoSave = createAutoSave({ debounceMs: 1000, onSave });
 
 			autoSave.schedule({ videoId: "video-1", config: { value: 1 } });
-			await expect(
-				vi.advanceTimersByTimeAsync(1000),
-			).resolves.not.toThrow();
+			await expect(vi.advanceTimersByTimeAsync(1000)).resolves.not.toThrow();
 		});
 	});
 
