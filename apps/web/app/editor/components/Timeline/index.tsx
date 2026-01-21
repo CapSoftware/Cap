@@ -409,6 +409,7 @@ function ClipTrack({
 						index={index}
 						transform={transform}
 						secsPerPixel={secsPerPixel}
+						duration={duration}
 						isSelected={selectedIndices.includes(index)}
 						onSelect={onSelectSegment}
 						onTrimStart={onTrimStart}
