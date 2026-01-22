@@ -4,11 +4,11 @@ export default async function Command() {
   try {
     const action = {
       start_recording: {
-        capture_mode: { screen: "Built-in Retina Display" },
+        capture_mode: { screen: "" },
         camera: null,
         mic_label: null,
         capture_system_audio: true,
-        mode: "Studio"
+        mode: "studio"
       }
     };
     const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;

@@ -4,7 +4,7 @@ export default async function Command() {
   try {
     const action = {
       take_screenshot: {
-        target: { display: { id: 0 } }
+        target: { variant: "display", id: "0" }
       }
     };
     const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;

@@ -46,30 +46,6 @@
       "title": "Take Screenshot",
       "description": "Take a screenshot with Cap",
       "mode": "no-view"
-    },
-    {
-      "name": "list-cameras",
-      "title": "List Cameras",
-      "description": "List available cameras",
-      "mode": "view"
-    },
-    {
-      "name": "list-microphones",
-      "title": "List Microphones",
-      "description": "List available microphones",
-      "mode": "view"
-    },
-    {
-      "name": "list-displays",
-      "title": "List Displays",
-      "description": "List available displays",
-      "mode": "view"
-    },
-    {
-      "name": "list-windows",
-      "title": "List Windows",
-      "description": "List available windows",
-      "mode": "view"
     }
   ],
   "dependencies": {
