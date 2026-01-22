@@ -33,10 +33,10 @@ pub enum DeepLinkAction {
         target: ScreenCaptureTarget,
     },
     SetCamera {
-        camera_id: DeviceOrModelID,
+        camera_id: Option<DeviceOrModelID>,
     },
     SetMicrophone {
-        mic_label: String,
+        mic_label: Option<String>,
     },
     OpenEditor {
         project_path: PathBuf,
@@ -174,11 +174,11 @@ impl DeepLinkAction {
             }
             DeepLinkAction::SetCamera { camera_id } => {
                 let state = app.state::<ArcLock<App>>();
-                crate::set_camera_input(app.clone(), state, Some(camera_id)).await
+                crate::set_camera_input(app.clone(), state, camera_id).await
             }
             DeepLinkAction::SetMicrophone { mic_label } => {
                 let state = app.state::<ArcLock<App>>();
-                crate::set_mic_input(state, Some(mic_label)).await
+                crate::set_mic_input(state, mic_label).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
