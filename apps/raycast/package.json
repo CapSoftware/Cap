@@ -1,0 +1,64 @@
+{
+    "$schema": "https://www.raycast.com/schemas/extension.json",
+    "name": "cap",
+    "title": "Cap",
+    "description": "Control Cap from Raycast",
+    "icon": "command-icon.png",
+    "author": "CapSoftware",
+    "categories": [
+        "Productivity",
+        "Media"
+    ],
+    "license": "MIT",
+    "commands": [
+        {
+            "name": "start-recording",
+            "title": "Start Recording",
+            "description": "Start a new recording in Cap",
+            "mode": "no-view"
+        },
+        {
+            "name": "stop-recording",
+            "title": "Stop Recording",
+            "description": "Stop the current recording",
+            "mode": "no-view"
+        },
+        {
+            "name": "toggle-pause",
+            "title": "Toggle Pause",
+            "description": "Pause or resume the current recording",
+            "mode": "no-view"
+        },
+        {
+            "name": "cycle-microphone",
+            "title": "Cycle Microphone",
+            "description": "Switch to the next available microphone",
+            "mode": "no-view"
+        },
+        {
+            "name": "cycle-camera",
+            "title": "Cycle Camera",
+            "description": "Switch to the next available camera",
+            "mode": "no-view"
+        }
+    ],
+    "dependencies": {
+        "@raycast/api": "^1.69.0",
+        "@raycast/utils": "^1.13.0"
+    },
+    "devDependencies": {
+        "@raycast/eslint-config": "^1.0.6",
+        "@types/node": "20.8.10",
+        "@types/react": "18.2.27",
+        "eslint": "^8.51.0",
+        "prettier": "^3.0.3",
+        "typescript": "^5.2.2"
+    },
+    "scripts": {
+        "build": "ray build -e dist",
+        "dev": "ray develop",
+        "fix-lint": "ray lint --fix",
+        "lint": "ray lint",
+        "publish": "npx @raycast/api@latest publish"
+    }
+}

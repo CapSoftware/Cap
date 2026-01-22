@@ -13,6 +13,7 @@ use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindo
 pub enum CaptureMode {
     Screen(String),
     Window(String),
+    Primary,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,6 +27,17 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePause,
+    CycleMicrophone,
+    CycleCamera,
+    SwitchMicrophone {
+        label: String,
+    },
+    SwitchCamera {
+        id: DeviceOrModelID,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -130,6 +142,10 @@ impl DeepLinkAction {
                         .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
                         .ok_or(format!("No window with name \"{}\"", &name))?,
+                    CaptureMode::Primary => cap_recording::screen_capture::list_displays()
+                        .first()
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                        .ok_or("No displays found".to_string())?,
                 };
 
                 let inputs = StartRecordingInputs {
@@ -145,6 +161,111 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                if let Some(recording) = app
+                    .state::<ArcLock<App>>()
+                    .read()
+                    .await
+                    .current_recording()
+                {
+                   recording.pause().await.map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            DeepLinkAction::ResumeRecording => {
+                if let Some(recording) = app
+                    .state::<ArcLock<App>>()
+                    .read()
+                    .await
+                    .current_recording()
+                {
+                   recording.resume().await.map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            DeepLinkAction::TogglePause => {
+                if let Some(recording) = app
+                    .state::<ArcLock<App>>()
+                    .read()
+                    .await
+                    .current_recording()
+                {
+                    if recording.is_paused().await.map_err(|e| e.to_string())? {
+                        recording.resume().await.map_err(|e| e.to_string())
+                    } else {
+                        recording.pause().await.map_err(|e| e.to_string())
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            DeepLinkAction::SwitchMicrophone { label } => {
+                crate::set_mic_input(app.state(), Some(label)).await
+            }
+            DeepLinkAction::SwitchCamera { id } => {
+                crate::set_camera_input(app.clone(), app.state(), Some(id)).await
+            }
+            DeepLinkAction::CycleMicrophone => {
+                use cap_recording::feeds::microphone::MicrophoneFeed;
+                let mics = MicrophoneFeed::list();
+                let mic_labels: Vec<&String> = mics.keys().collect();
+                
+                if mic_labels.is_empty() {
+                    return Ok(());
+                }
+
+                // If no mic is selected (None), select the first one.
+                // If the last one is selected, cycle to the first one.
+                // Otherwise select the next one.
+                
+                let current_label = app.state::<ArcLock<App>>().read().await.selected_mic_label.clone();
+                
+                let next_label = match current_label {
+                    Some(current) => {
+                         if let Some(pos) = mic_labels.iter().position(|&l| *l == current) {
+                             if pos + 1 < mic_labels.len() {
+                                 Some(mic_labels[pos + 1].clone())
+                             } else {
+                                 Some(mic_labels[0].clone())
+                             }
+                         } else {
+                             Some(mic_labels[0].clone())
+                         }
+                    }
+                    None => Some(mic_labels[0].clone())
+                };
+
+                crate::set_mic_input(app.state(), next_label).await
+            }
+            DeepLinkAction::CycleCamera => {
+                use cap_camera::list_cameras;
+                let cameras: Vec<_> = list_cameras().collect();
+                
+                if cameras.is_empty() {
+                    return Ok(());
+                }
+
+                let current_id = app.state::<ArcLock<App>>().read().await.selected_camera_id.clone();
+
+                let next_id = match current_id {
+                    Some(current) => {
+                         if let Some(pos) = cameras.iter().position(|c| c.device_id() == &current) {
+                             if pos + 1 < cameras.len() {
+                                 Some(cameras[pos + 1].device_id().clone())
+                             } else {
+                                 Some(cameras[0].device_id().clone())
+                             }
+                         } else {
+                             Some(cameras[0].device_id().clone())
+                         }
+                    }
+                    None => Some(cameras[0].device_id().clone())
+                };
+                
+                crate::set_camera_input(app.clone(), app.state(), next_id).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())

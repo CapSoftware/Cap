@@ -27,10 +27,16 @@
 		}
 	},
 	"plugins": {
-		"updater": { "active": false, "pubkey": "" },
+		"updater": {
+			"active": false,
+			"pubkey": ""
+		},
 		"deep-link": {
 			"desktop": {
-				"schemes": ["cap-desktop"]
+				"schemes": [
+					"cap-desktop",
+					"cap"
+				]
 			}
 		}
 	},
@@ -65,7 +71,9 @@
 					"y": 140
 				}
 			},
-			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
+			"frameworks": [
+				"../../../target/native-deps/Spacedrive.framework"
+			]
 		},
 		"windows": {
 			"nsis": {
@@ -81,7 +89,9 @@
 		},
 		"fileAssociations": [
 			{
-				"ext": ["cap"],
+				"ext": [
+					"cap"
+				],
 				"name": "Cap Project",
 				"mimeType": "application/x-cap-project",
 				"role": "Editor"
