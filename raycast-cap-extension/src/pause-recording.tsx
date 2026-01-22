@@ -5,7 +5,7 @@ export default async function Command() {
     const action = { pause_recording: {} };
     const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
     await open(url);
-    await showToast({ style: Toast.Style.Success, title: "Recording paused" });
+    await showToast({ style: Toast.Style.Success, title: "Pause recording requested" });
   } catch (error) {
     await showToast({ style: Toast.Style.Failure, title: "Failed to pause recording", message: String(error) });
   }
