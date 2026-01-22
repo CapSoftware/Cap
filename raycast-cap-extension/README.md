@@ -9,7 +9,6 @@ Control Cap screen recording directly from Raycast.
 - **Pause/Resume**: Pause and resume recordings
 - **Toggle Pause**: Toggle pause state with one command
 - **Take Screenshot**: Capture screenshots with Cap
-- **List Hardware**: View available cameras, microphones, displays, and windows
 
 ## Installation
 
