@@ -12,7 +12,9 @@
 /// (Electron) https://github.com/electron/electron/blob/38512efd25a159ddc64a54c22ef9eb6dd60064ec/shell/browser/native_window_mac.mm#L1454
 ///
 use objc::{msg_send, sel, sel_impl};
+use objc2::exception;
 use rand::{Rng, distributions::Alphanumeric};
+use std::panic::AssertUnwindSafe;
 use tauri::{Emitter, LogicalPosition, Runtime, Window};
 
 pub struct UnsafeWindowHandle(pub *mut std::ffi::c_void);
@@ -39,7 +41,7 @@ pub fn position_window_controls(
     };
 
     let ns_window = ns_window_handle.0 as id;
-    unsafe {
+    let _ = exception::catch(AssertUnwindSafe(|| unsafe {
         let close = ns_window.standardWindowButton_(NSWindowButton::NSWindowCloseButton);
         let minimize = ns_window.standardWindowButton_(NSWindowButton::NSWindowMiniaturizeButton);
         let zoom = ns_window.standardWindowButton_(NSWindowButton::NSWindowZoomButton);
@@ -57,7 +59,7 @@ pub fn position_window_controls(
 
         let window_buttons = vec![close, minimize, zoom];
         let space_between = NSView::frame(minimize).origin.x - NSView::frame(close).origin.x;
-        let vertical_offset = 4.0; // Adjust this value to push buttons down
+        let vertical_offset = 4.0;
 
         for (i, button) in window_buttons.into_iter().enumerate() {
             let mut rect: NSRect = NSView::frame(button);
@@ -65,7 +67,7 @@ pub fn position_window_controls(
             rect.origin.y = ((title_bar_frame_height - button_height) / 2.0) - vertical_offset;
             button.setFrameOrigin(rect.origin);
         }
-    }
+    }));
 }
 
 pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>) {
@@ -75,7 +77,15 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
     use objc::runtime::{Object, Sel};
     use std::ffi::c_void;
 
-    let Ok(ns_win) = window.ns_window() else {
+    let ns_win = match exception::catch(AssertUnwindSafe(|| window.ns_window())) {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(_)) | Err(_) => {
+            tracing::warn!("Failed to get window handle for delegate setup");
+            return;
+        }
+    };
+
+    if ns_win.is_null() {
         tracing::warn!("Failed to get window handle for delegate setup");
         return;
     };
@@ -95,101 +105,153 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         func(ptr);
     }
 
-    unsafe {
+    let result = exception::catch(AssertUnwindSafe(|| unsafe {
         let ns_win_id = ns_win as id;
         let current_delegate: id = ns_win_id.delegate();
 
         extern "C" fn on_window_should_close(this: &Object, _cmd: Sel, sender: id) -> BOOL {
-            unsafe {
+            exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowShouldClose:)];
+                if responds == cocoa::base::NO {
+                    return cocoa::base::YES;
+                }
                 msg_send![super_del, windowShouldClose: sender]
-            }
+            }))
+            .unwrap_or(cocoa::base::YES)
         }
         extern "C" fn on_window_will_close(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowWillClose: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowWillClose:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowWillClose: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_resize<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    position_window_controls(
-                        UnsafeWindowHandle(
-                            state
-                                .window
-                                .ns_window()
-                                .expect("Failed to get handle to NSWindow"),
-                        ),
-                        &state.controls_inset,
-                    );
+                    if let Ok(ns_window) = state.window.ns_window() {
+                        position_window_controls(
+                            UnsafeWindowHandle(ns_window),
+                            &state.controls_inset,
+                        );
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidResize: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowDidResize:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidResize: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_move(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidMove: notification];
-            }
+                let responds: BOOL = msg_send![super_del, respondsToSelector: sel!(windowDidMove:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidMove: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_change_backing_properties(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidChangeBackingProperties: notification];
-            }
+                let responds: BOOL = msg_send![super_del, respondsToSelector: sel!(windowDidChangeBackingProperties:)];
+                if responds != cocoa::base::NO {
+                    let _: () =
+                        msg_send![super_del, windowDidChangeBackingProperties: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_become_key(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidBecomeKey: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowDidBecomeKey:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidBecomeKey: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_resign_key(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidResignKey: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowDidResignKey:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidResignKey: notification];
+                }
+            }));
         }
         extern "C" fn on_dragging_entered(this: &Object, _cmd: Sel, notification: id) -> BOOL {
-            unsafe {
+            exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(draggingEntered:)];
+                if responds == cocoa::base::NO {
+                    return cocoa::base::NO;
+                }
                 msg_send![super_del, draggingEntered: notification]
-            }
+            }))
+            .unwrap_or(cocoa::base::NO)
         }
         extern "C" fn on_prepare_for_drag_operation(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) -> BOOL {
-            unsafe {
+            exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(prepareForDragOperation:)];
+                if responds == cocoa::base::NO {
+                    return cocoa::base::NO;
+                }
                 msg_send![super_del, prepareForDragOperation: notification]
-            }
+            }))
+            .unwrap_or(cocoa::base::NO)
         }
         extern "C" fn on_perform_drag_operation(this: &Object, _cmd: Sel, sender: id) -> BOOL {
-            unsafe {
+            exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(performDragOperation:)];
+                if responds == cocoa::base::NO {
+                    return cocoa::base::NO;
+                }
                 msg_send![super_del, performDragOperation: sender]
-            }
+            }))
+            .unwrap_or(cocoa::base::NO)
         }
         extern "C" fn on_conclude_drag_operation(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, concludeDragOperation: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(concludeDragOperation:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, concludeDragOperation: notification];
+                }
+            }));
         }
         extern "C" fn on_dragging_exited(this: &Object, _cmd: Sel, notification: id) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, draggingExited: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(draggingExited:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, draggingExited: notification];
+                }
+            }));
         }
         extern "C" fn on_window_will_use_full_screen_presentation_options(
             this: &Object,
@@ -197,121 +259,134 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             window: id,
             proposed_options: NSUInteger,
         ) -> NSUInteger {
-            unsafe {
+            exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
+                let responds: BOOL = msg_send![super_del, respondsToSelector: sel!(window:willUseFullScreenPresentationOptions:)];
+                if responds == cocoa::base::NO {
+                    return proposed_options;
+                }
                 msg_send![super_del, window: window willUseFullScreenPresentationOptions: proposed_options]
-            }
+            }))
+            .unwrap_or(proposed_options)
         }
         extern "C" fn on_window_did_enter_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("did-enter-fullscreen", ())
-                        .expect("Failed to emit event");
+                    let _ = state.window.emit("did-enter-fullscreen", ());
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidEnterFullScreen: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowDidEnterFullScreen:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidEnterFullScreen: notification];
+                }
+            }));
         }
         extern "C" fn on_window_will_enter_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("will-enter-fullscreen", ())
-                        .expect("Failed to emit event");
+                    let _ = state.window.emit("will-enter-fullscreen", ());
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowWillEnterFullScreen: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowWillEnterFullScreen:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowWillEnterFullScreen: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_exit_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("did-exit-fullscreen", ())
-                        .expect("Failed to emit event");
-
-                    position_window_controls(
-                        UnsafeWindowHandle(
-                            state
-                                .window
-                                .ns_window()
-                                .expect("Failed to get handle to NSWindow"),
-                        ),
-                        &state.controls_inset,
-                    );
+                    let _ = state.window.emit("did-exit-fullscreen", ());
+                    if let Ok(ns_window) = state.window.ns_window() {
+                        position_window_controls(
+                            UnsafeWindowHandle(ns_window),
+                            &state.controls_inset,
+                        );
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidExitFullScreen: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowDidExitFullScreen:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidExitFullScreen: notification];
+                }
+            }));
         }
         extern "C" fn on_window_will_exit_full_screen<R: Runtime>(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("will-exit-fullscreen", ())
-                        .expect("Failed to emit event");
+                    let _ = state.window.emit("will-exit-fullscreen", ());
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowWillExitFullScreen: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowWillExitFullScreen:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowWillExitFullScreen: notification];
+                }
+            }));
         }
         extern "C" fn on_window_did_fail_to_enter_full_screen(
             this: &Object,
             _cmd: Sel,
             window: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, windowDidFailToEnterFullScreen: window];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(windowDidFailToEnterFullScreen:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, windowDidFailToEnterFullScreen: window];
+                }
+            }));
         }
         extern "C" fn on_effective_appearance_did_change(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![super_del, effectiveAppearanceDidChange: notification];
-            }
+                let responds: BOOL =
+                    msg_send![super_del, respondsToSelector: sel!(effectiveAppearanceDidChange:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, effectiveAppearanceDidChange: notification];
+                }
+            }));
         }
         extern "C" fn on_effective_appearance_did_changed_on_main_thread(
             this: &Object,
             _cmd: Sel,
             notification: id,
         ) {
-            unsafe {
+            let _ = exception::catch(AssertUnwindSafe(|| unsafe {
                 let super_del: id = *this.get_ivar("super_delegate");
-                let _: () = msg_send![
-                    super_del,
-                    effectiveAppearanceDidChangedOnMainThread: notification
-                ];
-            }
+                let responds: BOOL = msg_send![super_del, respondsToSelector: sel!(effectiveAppearanceDidChangedOnMainThread:)];
+                if responds != cocoa::base::NO {
+                    let _: () = msg_send![super_del, effectiveAppearanceDidChangedOnMainThread: notification];
+                }
+            }));
         }
 
         let window_label = window.label().to_string();
@@ -357,5 +432,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             (effectiveAppearanceDidChange:) => on_effective_appearance_did_change as extern "C" fn(&Object, Sel, id),
             (effectiveAppearanceDidChangedOnMainThread:) => on_effective_appearance_did_changed_on_main_thread as extern "C" fn(&Object, Sel, id)
         }))
+    }));
+
+    if result.is_err() {
+        tracing::warn!("Failed to setup macOS window delegate");
     }
 }

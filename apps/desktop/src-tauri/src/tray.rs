@@ -668,9 +668,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
+                    let preferred_display_id = crate::get_preferred_display_for_tray(&app);
                     tokio::spawn(async move {
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
+                            preferred_display_id,
                         }
                         .show(&app)
                         .await;
@@ -679,29 +681,32 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::RecordDisplay) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        crate::open_target_picker(&app, RecordingTargetMode::Display).await;
+                        crate::open_target_picker(&app, RecordingTargetMode::Display, None).await;
                     });
                 }
                 Ok(TrayItem::RecordWindow) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        crate::open_target_picker(&app, RecordingTargetMode::Window).await;
+                        crate::open_target_picker(&app, RecordingTargetMode::Window, None).await;
                     });
                 }
                 Ok(TrayItem::RecordArea) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        crate::open_target_picker(&app, RecordingTargetMode::Area).await;
+                        crate::open_target_picker(&app, RecordingTargetMode::Area, None).await;
                     });
                 }
                 Ok(TrayItem::TakeScreenshot) => {
                     let app = app.clone();
+                    let preferred_display_id = crate::get_preferred_display_for_tray(&app);
                     tokio::spawn(async move {
                         use cap_recording::screen_capture::ScreenCaptureTarget;
                         use scap_targets::Display;
 
-                        let display =
-                            Display::get_containing_cursor().unwrap_or_else(Display::primary);
+                        let display = preferred_display_id
+                            .and_then(|id| Display::from_id(&id))
+                            .or_else(Display::get_containing_cursor)
+                            .unwrap_or_else(Display::primary);
                         let target = ScreenCaptureTarget::Display { id: display.id() };
 
                         match recording::take_screenshot(app.clone(), target).await {

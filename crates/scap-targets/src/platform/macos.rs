@@ -13,13 +13,17 @@ use core_graphics::{
         CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
         CGRect, kCGWindowListOptionIncludingWindow,
     },
+    event::CGEvent,
+    event_source::{CGEventSource, CGEventSourceStateID},
     window::{
         CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
         kCGWindowOwnerName,
     },
 };
+use objc2::exception;
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use std::panic::AssertUnwindSafe;
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -109,7 +113,11 @@ impl DisplayImpl {
     }
 
     pub fn scale(&self) -> Option<f64> {
-        Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
+        let ns_screen = self.as_ns_screen()?;
+        exception::catch(AssertUnwindSafe(|| unsafe {
+            NSScreen::backingScaleFactor(ns_screen)
+        }))
+        .ok()
     }
 
     pub fn refresh_rate(&self) -> f64 {
@@ -131,19 +139,22 @@ impl DisplayImpl {
         use objc::{msg_send, *};
         use std::ffi::CStr;
 
-        unsafe {
-            if let Some(ns_screen) = self.as_ns_screen() {
-                let name: id = msg_send![ns_screen, localizedName];
-                if !name.is_null() {
-                    let name = CStr::from_ptr(NSString::UTF8String(name))
-                        .to_string_lossy()
-                        .to_string();
-                    return Some(name);
-                }
+        let ns_screen = self.as_ns_screen()?;
+        exception::catch(AssertUnwindSafe(|| unsafe {
+            let name: id = msg_send![ns_screen, localizedName];
+            if name.is_null() {
+                return None;
             }
-        }
 
-        None
+            let cstr = NSString::UTF8String(name);
+            if cstr.is_null() {
+                return None;
+            }
+
+            Some(CStr::from_ptr(cstr).to_string_lossy().to_string())
+        }))
+        .ok()
+        .flatten()
     }
 
     fn as_ns_screen(&self) -> Option<*mut objc::runtime::Object> {
@@ -152,7 +163,7 @@ impl DisplayImpl {
         use cocoa::foundation::{NSArray, NSDictionary, NSString};
         use objc::{msg_send, *};
 
-        unsafe {
+        exception::catch(AssertUnwindSafe(|| unsafe {
             let screens = NSScreen::screens(nil);
             let screen_count = NSArray::count(screens);
 
@@ -171,9 +182,10 @@ impl DisplayImpl {
                     return Some(screen);
                 }
             }
-        }
-
-        None
+            None
+        }))
+        .ok()
+        .flatten()
     }
 }
 
@@ -216,18 +228,18 @@ impl DisplayImpl {
 }
 
 fn get_cursor_position() -> Option<LogicalPosition> {
-    let event_source = core_graphics::event_source::CGEventSource::new(
-        core_graphics::event_source::CGEventSourceStateID::Private,
-    )
-    .ok()?;
-
-    let event = core_graphics::event::CGEvent::new(event_source).ok()?;
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let event = CGEvent::new(source).ok()?;
     let location = event.location();
 
     Some(LogicalPosition {
         x: location.x,
         y: location.y,
     })
+}
+
+pub fn get_cursor_position_public() -> Option<LogicalPosition> {
+    get_cursor_position()
 }
 
 #[derive(Clone, Copy)]
@@ -352,28 +364,33 @@ impl WindowImpl {
 
         use objc::rc::autoreleasepool;
 
-        autoreleasepool(|| unsafe {
-            use cocoa::base::id;
-            use cocoa::foundation::NSString;
-            use objc::{class, msg_send, sel, sel_impl};
+        autoreleasepool(|| {
+            exception::catch(AssertUnwindSafe(|| unsafe {
+                use cocoa::base::id;
+                use cocoa::foundation::NSString;
+                use objc::{class, msg_send, sel, sel_impl};
 
-            let app: id = msg_send![
-                class!(NSRunningApplication),
-                runningApplicationWithProcessIdentifier: pid
-            ];
-            let app = (!app.is_null()).then_some(app)?;
+                let app: id = msg_send![
+                    class!(NSRunningApplication),
+                    runningApplicationWithProcessIdentifier: pid
+                ];
+                let app = (!app.is_null()).then_some(app)?;
 
-            let bundle_identifier: id = msg_send![app, bundleIdentifier];
-            let bundle_identifier = (!bundle_identifier.is_null()).then_some(bundle_identifier)?;
+                let bundle_identifier: id = msg_send![app, bundleIdentifier];
+                let bundle_identifier =
+                    (!bundle_identifier.is_null()).then_some(bundle_identifier)?;
 
-            let cstr = NSString::UTF8String(bundle_identifier);
-            let cstr = (!cstr.is_null()).then_some(cstr)?;
+                let cstr = NSString::UTF8String(bundle_identifier);
+                let cstr = (!cstr.is_null()).then_some(cstr)?;
 
-            Some(
-                std::ffi::CStr::from_ptr(cstr)
-                    .to_string_lossy()
-                    .into_owned(),
-            )
+                Some(
+                    std::ffi::CStr::from_ptr(cstr)
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            }))
+            .ok()
+            .flatten()
         })
     }
 
@@ -438,7 +455,7 @@ impl WindowImpl {
 
         let owner_name = self.owner_name()?;
 
-        unsafe {
+        exception::catch(AssertUnwindSafe(|| unsafe {
             let pool = NSAutoreleasePool::new(nil);
 
             let workspace_class = class!(NSWorkspace);
@@ -505,7 +522,9 @@ impl WindowImpl {
 
             pool.drain();
             result
-        }
+        }))
+        .ok()
+        .flatten()
     }
 
     pub async fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Window>> {

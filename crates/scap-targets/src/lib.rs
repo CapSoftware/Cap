@@ -2,12 +2,17 @@ pub mod bounds;
 pub mod platform;
 
 use bounds::*;
+pub use bounds::{
+    LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+};
 pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::str::FromStr;
 
-use crate::bounds::{LogicalPosition, LogicalSize};
+pub fn get_cursor_position() -> Option<LogicalPosition> {
+    platform::get_cursor_position_public()
+}
 
 #[derive(Clone, Copy)]
 pub struct Display(DisplayImpl);

@@ -38,7 +38,6 @@ use std::{
     collections::{HashMap, VecDeque},
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
     time::Duration,
 };
@@ -615,15 +614,7 @@ pub async fn start_recording(
         .set_pending_recording(inputs.mode, inputs.capture_target.clone());
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
-    for (id, win) in app
-        .webview_windows()
-        .iter()
-        .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
-    {
-        if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            win.close().ok();
-        }
-    }
+    let _ = crate::target_select_overlay::close_target_select_overlays(app.clone()).await;
     let _ = ShowCapWindow::InProgressRecording { countdown }
         .show(&app)
         .await;
@@ -1164,6 +1155,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             PostDeletionBehaviour::ReopenRecordingWindow => {
                 let _ = ShowCapWindow::Main {
                     init_target_mode: None,
+                    preferred_display_id: None,
                 }
                 .show(&app)
                 .await;
@@ -1393,6 +1385,11 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
+        #[cfg(target_os = "macos")]
+        if let Some(v) = CapWindowId::Camera.get(&handle) {
+            let _ = v.hide();
+        }
+        #[cfg(not(target_os = "macos"))]
         if let Some(v) = CapWindowId::Camera.get(&handle) {
             let _ = v.close();
         }
@@ -1401,6 +1398,11 @@ async fn handle_recording_end(
         app.selected_mic_label = None;
         app.selected_camera_id = None;
         app.camera_in_use = false;
+        #[cfg(target_os = "macos")]
+        if let Some(win) = CapWindowId::Camera.get(&handle) {
+            let _ = win.hide();
+        }
+        #[cfg(not(target_os = "macos"))]
         if let Some(win) = CapWindowId::Camera.get(&handle) {
             win.close().ok();
         }

@@ -624,6 +624,11 @@ impl Renderer {
         }
 
         info!("Camera feed completed. Closing preview window...");
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window.hide();
+        }
+        #[cfg(not(target_os = "macos"))]
         window.close().ok();
         self.device.destroy();
     }

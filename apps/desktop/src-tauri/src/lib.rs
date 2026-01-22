@@ -144,6 +144,33 @@ impl FinalizingRecordings {
     }
 }
 
+#[derive(Default)]
+pub struct LastActiveDisplay {
+    id: std::sync::RwLock<Option<DisplayId>>,
+    updated_at: std::sync::RwLock<Option<std::time::Instant>>,
+}
+
+impl LastActiveDisplay {
+    const STALE_THRESHOLD: Duration = Duration::from_secs(300);
+
+    pub fn get(&self) -> Option<DisplayId> {
+        let updated_at = *self.updated_at.read().ok()?.as_ref()?;
+        if updated_at.elapsed() > Self::STALE_THRESHOLD {
+            return None;
+        }
+        self.id.read().ok()?.clone()
+    }
+
+    pub fn set(&self, id: DisplayId) {
+        if let Ok(mut guard) = self.id.write() {
+            *guard = Some(id);
+        }
+        if let Ok(mut guard) = self.updated_at.write() {
+            *guard = Some(std::time::Instant::now());
+        }
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
     None,
@@ -899,6 +926,7 @@ pub struct RequestStartRecording {
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenRecordingPicker {
     pub target_mode: Option<RecordingTargetMode>,
+    pub display_id: Option<String>,
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -1592,11 +1620,21 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
 fn close_recordings_overlay_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
-        use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
-            panel.released_when_closed(true);
-            panel.close();
-        }
+        let label = CapWindowId::RecordingsOverlay.label();
+        let app_handle = app.clone();
+        _ = app.run_on_main_thread(move || {
+            let result = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                use tauri_nspanel::ManagerExt;
+                if let Ok(panel) = app_handle.get_webview_panel(&label) {
+                    panel.released_when_closed(true);
+                    panel.close();
+                }
+            }));
+
+            if result.is_err() {
+                tracing::warn!("Failed to close recordings overlay panel");
+            }
+        });
     }
 
     if !cfg!(target_os = "macos")
@@ -1612,10 +1650,20 @@ fn close_recordings_overlay_window(app: AppHandle) {
 fn focus_captures_panel(_app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
-        use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = _app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
-            panel.make_key_window();
-        }
+        let label = CapWindowId::RecordingsOverlay.label();
+        let app_handle = _app.clone();
+        _ = _app.run_on_main_thread(move || {
+            let result = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                use tauri_nspanel::ManagerExt;
+                if let Ok(panel) = app_handle.get_webview_panel(&label) {
+                    panel.make_key_window();
+                }
+            }));
+
+            if result.is_err() {
+                tracing::warn!("Failed to focus recordings overlay panel");
+            }
+        });
     }
 }
 
@@ -2247,7 +2295,10 @@ async fn clear_presets(app: AppHandle) -> Result<(), String> {
 #[specta::specta]
 #[instrument(skip(app))]
 async fn is_camera_window_open(app: AppHandle) -> bool {
-    CapWindowId::Camera.get(&app).is_some()
+    CapWindowId::Camera
+        .get(&app)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -2539,11 +2590,82 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
+pub fn get_preferred_display_for_tray(app: &tauri::AppHandle) -> Option<DisplayId> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(display_id) = crate::platform::frontmost_display_id() {
+            debug!(
+                "get_preferred_display_for_tray: using frontmost window display {:?}",
+                display_id
+            );
+            return Some(display_id);
+        }
+    }
+
+    if let Some(last_active) = app.try_state::<LastActiveDisplay>() {
+        if let Some(display_id) = last_active.get() {
+            debug!(
+                "get_preferred_display_for_tray: using last active display {:?}",
+                display_id
+            );
+            return Some(display_id);
+        }
+    }
+
+    let cursor_display = Display::get_containing_cursor().map(|d| d.id());
+    debug!(
+        "get_preferred_display_for_tray: falling back to cursor display {:?}",
+        cursor_display
+    );
+    cursor_display
+}
+
+pub fn update_last_active_display(app: &tauri::AppHandle, display_id: DisplayId) {
+    if let Some(last_active) = app.try_state::<LastActiveDisplay>() {
+        last_active.set(display_id.clone());
+        debug!("update_last_active_display: set to {:?}", display_id);
+    }
+}
+
+pub fn update_last_active_display_from_window(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) {
+    let window_pos = match window.outer_position() {
+        Ok(pos) => (pos.x as f64, pos.y as f64),
+        Err(_) => return,
+    };
+
+    for display in Display::list() {
+        if let Some(bounds) = display.raw_handle().logical_bounds() {
+            let (x, y, width, height) = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+
+            if window_pos.0 >= x
+                && window_pos.0 < x + width
+                && window_pos.1 >= y
+                && window_pos.1 < y + height
+            {
+                update_last_active_display(app, display.id());
+                return;
+            }
+        }
+    }
+}
+
 pub async fn open_target_picker(
     app: &tauri::AppHandle,
     target_mode: recording_settings::RecordingTargetMode,
+    display_id: Option<String>,
 ) {
     use tauri::Manager;
+
+    let effective_display_id =
+        display_id.or_else(|| get_preferred_display_for_tray(app).map(|id| id.to_string()));
 
     if let Some(window) = CapWindowId::Main.get(app) {
         window.hide().ok();
@@ -2551,14 +2673,13 @@ pub async fn open_target_picker(
 
     let prewarmed = app.state::<target_select_overlay::PrewarmedOverlays>();
     let state = app.state::<target_select_overlay::WindowFocusManager>();
-    let display_id = None;
 
     let _ = target_select_overlay::open_target_select_overlays(
         app.clone(),
         state,
         prewarmed,
         None,
-        display_id.clone(),
+        effective_display_id.clone(),
         Some(target_mode),
     )
     .await;
@@ -2567,7 +2688,7 @@ pub async fn open_target_picker(
 
     let _ = RequestSetTargetMode {
         target_mode: Some(target_mode),
-        display_id,
+        display_id: effective_display_id,
     }
     .emit(app);
 }
@@ -2696,6 +2817,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
+            windows::move_main_window_to_display,
+            windows::get_cursor_display_id,
             editor_delete_project,
             format_project_name,
             recovery::find_incomplete_recordings,
@@ -2786,6 +2909,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 tokio::spawn(async move {
                     ShowCapWindow::Main {
                         init_target_mode: None,
+                        preferred_display_id: None,
                     }
                     .show(&app)
                     .await
@@ -2864,6 +2988,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(target_select_overlay::PrewarmedOverlays::default());
             app.manage(EditorWindowIds::default());
             app.manage(ScreenshotEditorWindowIds::default());
+            app.manage(LastActiveDisplay::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             app.manage(http_client::HttpClient::default());
@@ -2874,27 +2999,24 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             gpu_context::prewarm_gpu();
 
             tokio::spawn({
-                let app = app.clone();
-                async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let prewarmed = app.state::<target_select_overlay::PrewarmedOverlays>();
-                    let _ = target_select_overlay::prewarm_target_select_overlays(
-                        app.clone(),
-                        prewarmed,
-                    )
-                    .await;
-                }
-            });
-
-            tokio::spawn({
                 let camera_feed = camera_feed.clone();
                 let app = app.clone();
                 async move {
                     camera_feed
                         .tell(feeds::camera::OnFeedDisconnect(Box::new({
                             move || {
-                                if let Some(win) = CapWindowId::Camera.get(&app) {
-                                    win.close().ok();
+                                #[cfg(target_os = "macos")]
+                                {
+                                    if let Some(win) = CapWindowId::Camera.get(&app) {
+                                        let _ = win.hide();
+                                    }
+                                }
+
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    if let Some(win) = CapWindowId::Camera.get(&app) {
+                                        win.close().ok();
+                                    }
                                 }
                             }
                         })))
@@ -3007,6 +3129,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
+                            preferred_display_id: None,
                         }
                         .show(&app)
                         .await;
@@ -3044,10 +3167,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             RequestOpenRecordingPicker::listen_any_spawn(&app, async |event, app| {
                 if let Some(target_mode) = event.target_mode {
-                    open_target_picker(&app, target_mode).await;
+                    open_target_picker(&app, target_mode, event.display_id).await;
                 } else {
                     let _ = ShowCapWindow::Main {
                         init_target_mode: None,
+                        preferred_display_id: None,
                     }
                     .show(&app)
                     .await;
@@ -3080,24 +3204,52 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             let app = window.app_handle();
 
             match event {
-                WindowEvent::CloseRequested { .. } => {
+                WindowEvent::CloseRequested { api: _api, .. } => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
                             CapWindowId::Camera => {
                                 tracing::warn!("Camera window CloseRequested event received!");
+                                #[cfg(target_os = "macos")]
+                                {
+                                    _api.prevent_close();
+                                    window.hide().ok();
+                                }
                                 tokio::spawn(cleanup_camera_window(app.clone()));
                             }
                             CapWindowId::Main => {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    _api.prevent_close();
+                                    window.hide().ok();
+                                }
                                 let app = app.clone();
                                 tokio::spawn(async move {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = state.read().await;
-                                    if !app_state.is_recording_active_or_pending()
-                                        && let Some(camera_window) = CapWindowId::Camera.get(&app)
-                                    {
-                                        let _ = camera_window.close();
+                                    if !app_state.is_recording_active_or_pending() {
+                                        #[cfg(target_os = "macos")]
+                                        if let Some(camera_window) = CapWindowId::Camera.get(&app) {
+                                            camera_window.hide().ok();
+                                        }
+                                        #[cfg(not(target_os = "macos"))]
+                                        if let Some(camera_window) = CapWindowId::Camera.get(&app) {
+                                            let _ = camera_window.close();
+                                        }
                                     }
                                 });
+                            }
+                            CapWindowId::TargetSelectOverlay { .. } => {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    _api.prevent_close();
+                                    let app = app.clone();
+                                    tokio::spawn(async move {
+                                        let _ = target_select_overlay::close_target_select_overlays(
+                                            app,
+                                        )
+                                        .await;
+                                    });
+                                }
                             }
                             _ => {}
                         }
@@ -3112,11 +3264,20 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             CapWindowId::Main => {
                                 let app = app.clone();
 
-                                for (id, window) in app.webview_windows() {
+                                for (id, _window) in app.webview_windows() {
                                     if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
                                         CapWindowId::from_str(&id)
                                     {
-                                        let _ = window.close();
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            let _ = _window.hide();
+                                            let _ = _window.set_ignore_cursor_events(true);
+                                        }
+
+                                        #[cfg(not(target_os = "macos"))]
+                                        {
+                                            let _ = _window.close();
+                                        }
                                     }
                                 }
 
@@ -3203,8 +3364,26 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
-                                app.state::<target_select_overlay::WindowFocusManager>()
-                                    .destroy(&display_id, app.global_shortcut());
+                                #[cfg(target_os = "macos")]
+                                {
+                                    let app_for_call = app.clone();
+                                    let app_for_inner = app.clone();
+                                    let _ = app_for_call.run_on_main_thread(move || {
+                                        let _ = objc2::exception::catch(
+                                            std::panic::AssertUnwindSafe(|| {
+                                                app_for_inner
+                                                    .state::<target_select_overlay::WindowFocusManager>()
+                                                    .destroy(&display_id, app_for_inner.global_shortcut());
+                                            }),
+                                        );
+                                    });
+                                }
+
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    app.state::<target_select_overlay::WindowFocusManager>()
+                                        .destroy(&display_id, app.global_shortcut());
+                                }
                             }
                             CapWindowId::Camera => {
                                 tokio::spawn(cleanup_camera_window(app.clone()));
@@ -3288,6 +3467,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     tokio::spawn(async move {
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
+                            preferred_display_id: None,
                         }
                         .show(&handle)
                         .await;
@@ -3320,6 +3500,7 @@ fn reopen_main_window(app: &AppHandle) {
         tokio::spawn(async move {
             let _ = ShowCapWindow::Main {
                 init_target_mode: None,
+                preferred_display_id: None,
             }
             .show(&handle)
             .await;

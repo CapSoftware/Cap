@@ -12,7 +12,11 @@ import {
 	getAllWebviewWindows,
 	WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import {
+	getCurrentWindow,
+	LogicalPosition,
+	LogicalSize,
+} from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -873,6 +877,99 @@ function Page() {
 			}
 		},
 	};
+
+	const activeDisplayId = createMemo(() => {
+		const target = rawOptions.captureTarget;
+		if (target.variant === "display") return target.id;
+		if (target.variant === "area") return target.screen;
+		return null;
+	});
+
+	let didSkipInitialDisplayMove = false;
+
+	createEffect(() => {
+		const displayId = activeDisplayId();
+		if (!didSkipInitialDisplayMove) {
+			didSkipInitialDisplayMove = true;
+			return;
+		}
+
+		if (!displayId) return;
+
+		void (async () => {
+			const currentWindow = getCurrentWindow();
+			if (!(await currentWindow.isVisible())) return;
+
+			const info = await commands.displayInformation(displayId);
+			const bounds = info.logical_bounds;
+			if (!bounds) return;
+
+			const x = bounds.position.x + (bounds.size.width - WINDOW_SIZE.width) / 2;
+			const y =
+				bounds.position.y + (bounds.size.height - WINDOW_SIZE.height) / 2;
+
+			await currentWindow.setPosition(new LogicalPosition(x, y));
+			await currentWindow.show();
+			await currentWindow.setFocus();
+		})().catch((error) => {
+			console.error("Failed to move main window to display:", error);
+		});
+	});
+
+	const [lastCursorDisplayId, setLastCursorDisplayId] = createSignal<
+		string | null
+	>(null);
+
+	onMount(() => {
+		let polling = true;
+
+		const pollCursorDisplay = async () => {
+			if (!polling) return;
+
+			try {
+				const currentWindow = getCurrentWindow();
+				const isVisible = await currentWindow.isVisible();
+				if (!isVisible) {
+					setTimeout(pollCursorDisplay, 500);
+					return;
+				}
+
+				const cursorDisplayId = await commands.getCursorDisplayId();
+				const lastId = lastCursorDisplayId();
+
+				console.log(
+					"[CursorTracking] cursorDisplayId:",
+					cursorDisplayId,
+					"lastId:",
+					lastId,
+				);
+
+				if (cursorDisplayId && cursorDisplayId !== lastId) {
+					setLastCursorDisplayId(cursorDisplayId);
+
+					if (lastId !== null) {
+						console.log(
+							"[CursorTracking] Moving main window to display:",
+							cursorDisplayId,
+						);
+						await commands.moveMainWindowToDisplay(cursorDisplayId);
+					}
+				}
+			} catch (error) {
+				console.error("Failed to poll cursor display:", error);
+			}
+
+			if (polling) {
+				setTimeout(pollCursorDisplay, 500);
+			}
+		};
+
+		pollCursorDisplay();
+
+		onCleanup(() => {
+			polling = false;
+		});
+	});
 
 	const toggleTargetMode = async (mode: "display" | "window" | "area") => {
 		if (isRecording()) return;

@@ -18,6 +18,9 @@ cidre = { workspace = true, default-features = false, features = ["sc"] }
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 cocoa = "0.26.0"
+objc2 = { version = "0.6.2", features = ["exception"] }
+objc2-app-kit = "0.3.1"
+objc2-foundation = "0.3.1"
 objc = "0.2.7"
 tokio = { workspace = true, features = ["sync", "rt"] }
 

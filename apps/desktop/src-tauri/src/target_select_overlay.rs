@@ -78,8 +78,23 @@ pub async fn prewarm_target_select_overlays(
         .await
         {
             Ok(window) => {
-                let _ = window.hide();
-                let _ = window.set_ignore_cursor_events(true);
+                #[cfg(target_os = "macos")]
+                {
+                    let window_for_call = window.clone();
+                    let window_for_inner = window.clone();
+                    _ = window_for_call.run_on_main_thread(move || {
+                        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                            window_for_inner.hide().ok();
+                            window_for_inner.set_ignore_cursor_events(true).ok();
+                        }));
+                    });
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.hide();
+                    let _ = window.set_ignore_cursor_events(true);
+                }
                 prewarmed.store(display_id, window);
             }
             Err(e) => {
@@ -136,10 +151,14 @@ pub async fn open_target_select_overlays(
                 .and_then(|t| t.display())
                 .map(|d| d.id())
         })
+        .or_else(|| {
+            app.try_state::<crate::LastActiveDisplay>()
+                .and_then(|last_active| last_active.get())
+        })
         .or_else(|| Display::get_containing_cursor().map(|d| d.id()))
         .unwrap_or_else(|| Display::primary().id());
 
-    for (id, window) in app.webview_windows() {
+    for (id, _window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay {
             display_id: existing_id,
         }) = CapWindowId::from_str(&id)
@@ -147,17 +166,84 @@ pub async fn open_target_select_overlays(
                 .iter()
                 .any(|display_id| display_id == &existing_id)
         {
-            let _ = window.close();
+            #[cfg(target_os = "macos")]
+            {
+                let window_for_call = _window.clone();
+                _ = _window.run_on_main_thread(move || {
+                    let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                        window_for_call.hide().ok();
+                        window_for_call.set_ignore_cursor_events(true).ok();
+                    }));
+                });
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = _window.close();
+            }
         }
     }
 
     for display_id in &display_ids {
+        tracing::info!("Processing overlay for display {}", display_id);
         let mut used_prewarmed = false;
+        let should_focus = display_id == &focus_display_id;
         if let Some(window) = prewarmed.take(display_id) {
-            let _ = window.set_ignore_cursor_events(false);
-            window.show().ok();
-            if display_id == &focus_display_id {
-                window.set_focus().ok();
+            tracing::info!("Using prewarmed window for display {}", display_id);
+
+            if let Some(display) = Display::from_id(display_id) {
+                if let Some(bounds) = display.raw_handle().logical_bounds() {
+                    let position = bounds.position();
+                    let _ = window
+                        .set_position(tauri::LogicalPosition::new(position.x(), position.y()));
+                }
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let window_for_call = window.clone();
+
+                _ = app.run_on_main_thread(move || {
+                    let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                        window_for_call.set_ignore_cursor_events(false).ok();
+                        window_for_call.show().ok();
+                        if should_focus {
+                            window_for_call.set_focus().ok();
+                        }
+
+                        unsafe {
+                            use objc2::msg_send;
+
+                            let Ok(ns_win) = window_for_call.as_ref().window().ns_window() else {
+                                return;
+                            };
+                            let ns_win = ns_win as *const objc2_app_kit::NSWindow;
+
+                            let _: () = msg_send![ns_win, orderFrontRegardless];
+                            if should_focus {
+                                let _: () = msg_send![ns_win, makeKeyWindow];
+                            }
+                        }
+                    }));
+                });
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = window.set_ignore_cursor_events(false);
+                if display_id == &focus_display_id {
+                    window.set_focus().ok();
+                }
+                window.show().ok();
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                crate::windows::activate_app_and_front(
+                    &window,
+                    should_focus,
+                    "Target select overlay order front",
+                );
             }
 
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -166,15 +252,27 @@ pub async fn open_target_select_overlays(
             if is_visible_after {
                 used_prewarmed = true;
             } else {
-                let _ = window.close();
+                #[cfg(target_os = "macos")]
+                {
+                    let window_for_call = window.clone();
+                    _ = window.run_on_main_thread(move || {
+                        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                            window_for_call.hide().ok();
+                            window_for_call.set_ignore_cursor_events(true).ok();
+                        }));
+                    });
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.close();
+                }
             }
         }
 
         if used_prewarmed {
             continue;
         }
-
-        let should_focus = display_id == &focus_display_id;
 
         if start.elapsed() < Duration::from_secs(1) {
             if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
@@ -184,9 +282,55 @@ pub async fn open_target_select_overlays(
             .show(&app)
             .await
             {
-                window.show().ok();
-                if should_focus {
-                    window.set_focus().ok();
+                #[cfg(target_os = "macos")]
+                {
+                    let window_for_call = window.clone();
+                    let window_for_inner = window.clone();
+                    _ = window_for_call.run_on_main_thread(move || {
+                        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                            window_for_inner.show().ok();
+                            if should_focus {
+                                window_for_inner.set_focus().ok();
+                            }
+                        }));
+                    });
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    if should_focus {
+                        window.set_focus().ok();
+                    }
+                    window.show().ok();
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    let window_for_call = window.clone();
+
+                    _ = app.run_on_main_thread(move || {
+                        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
+                            use objc2::msg_send;
+
+                            let Ok(ns_win) = window_for_call.as_ref().window().ns_window() else {
+                                return;
+                            };
+                            let ns_win = ns_win as *const objc2_app_kit::NSWindow;
+                            let _: () = msg_send![ns_win, orderFrontRegardless];
+                            if should_focus {
+                                let _: () = msg_send![ns_win, makeKeyWindow];
+                            }
+                        }));
+                    });
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::windows::activate_app_and_front(
+                        &window,
+                        should_focus,
+                        "Target select overlay order front",
+                    );
                 }
             }
         } else {
@@ -200,9 +344,35 @@ pub async fn open_target_select_overlays(
                 .show(&app_clone)
                 .await
                 {
-                    window.show().ok();
-                    if should_focus {
-                        window.set_focus().ok();
+                    #[cfg(target_os = "macos")]
+                    {
+                        let window_for_call = window.clone();
+                        let window_for_inner = window.clone();
+                        _ = window_for_call.run_on_main_thread(move || {
+                            let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                                window_for_inner.show().ok();
+                                if should_focus {
+                                    window_for_inner.set_focus().ok();
+                                }
+                            }));
+                        });
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if should_focus {
+                            window.set_focus().ok();
+                        }
+                        window.show().ok();
+                    }
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        crate::windows::activate_app_and_front(
+                            &window,
+                            should_focus,
+                            "Target select overlay order front",
+                        );
                     }
                 }
             });
@@ -270,10 +440,31 @@ pub async fn open_target_select_overlays(
     {
         task.abort();
     } else {
-        app.global_shortcut()
-            .register("Escape")
-            .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
-            .ok();
+        #[cfg(target_os = "macos")]
+        {
+            let app_for_call = app.clone();
+            _ = app.run_on_main_thread(move || {
+                let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                    app_for_call
+                        .global_shortcut()
+                        .register("Escape")
+                        .map_err(|err| {
+                            error!("Error registering global keyboard shortcut for Escape: {err}")
+                        })
+                        .ok();
+                }));
+            });
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            app.global_shortcut()
+                .register("Escape")
+                .map_err(|err| {
+                    error!("Error registering global keyboard shortcut for Escape: {err}")
+                })
+                .ok();
+        }
     }
 
     Ok(())
@@ -349,10 +540,42 @@ pub async fn update_camera_overlay_bounds(
 #[tauri::command]
 #[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut display_ids = Vec::new();
+
     for (id, window) in app.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
-            let _ = window.close();
+        if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id) {
+            #[cfg(target_os = "macos")]
+            {
+                let window_for_call = window.clone();
+                _ = window.run_on_main_thread(move || {
+                    let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                        window_for_call.hide().ok();
+                        window_for_call.set_ignore_cursor_events(true).ok();
+                    }));
+                });
+                display_ids.push(display_id);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = window.close();
+            }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::yield_now().await;
+        let app_for_call = app.clone();
+        _ = app.run_on_main_thread(move || {
+            let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                let focus_manager = app_for_call.state::<WindowFocusManager>();
+                for display_id in display_ids {
+                    focus_manager.destroy(&display_id, app_for_call.global_shortcut());
+                }
+            }));
+        });
     }
 
     Ok(())
@@ -405,12 +628,20 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
             .owner_pid()
             .ok_or("Could not get window owner PID")?;
 
-        if let Some(app) =
-            unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
-        {
-            unsafe {
-                app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-            }
+        let result = unsafe {
+            objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                if let Some(app) =
+                    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                {
+                    app.activateWithOptions(
+                        NSApplicationActivationOptions::ActivateIgnoringOtherApps,
+                    );
+                }
+            }))
+        };
+
+        if result.is_err() {
+            tracing::warn!("Failed to focus window");
         }
     }
 
@@ -501,7 +732,22 @@ impl PrewarmedOverlays {
         let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
         windows.retain(|_, (window, created_at)| {
             if created_at.elapsed() > Duration::from_secs(30) {
-                let _ = window.close();
+                #[cfg(target_os = "macos")]
+                {
+                    let window_for_call = window.clone();
+                    let window_for_inner = window.clone();
+                    _ = window_for_call.run_on_main_thread(move || {
+                        let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                            window_for_inner.hide().ok();
+                            window_for_inner.set_ignore_cursor_events(true).ok();
+                        }));
+                    });
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.close();
+                }
                 false
             } else {
                 true
@@ -538,7 +784,22 @@ impl WindowFocusManager {
 
                     if main_window_was_seen && !main_window_available && !settings_window_available
                     {
-                        window.hide().ok();
+                        #[cfg(target_os = "macos")]
+                        {
+                            let window_for_call = window.clone();
+                            let window_for_inner = window.clone();
+                            _ = window_for_call.run_on_main_thread(move || {
+                                let _ =
+                                    objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                                        window_for_inner.hide().ok();
+                                    }));
+                            });
+                        }
+
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            window.hide().ok();
+                        }
                         break;
                     }
 

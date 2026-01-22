@@ -70,14 +70,33 @@ fn calculate_bottom_center_position(display: &Display) -> Option<(f64, f64)> {
     Some((pos_x, pos_y))
 }
 
+fn set_ignore_cursor_events(window: &WebviewWindow, ignore: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let window_for_call = window.clone();
+        let window_for_inner = window.clone();
+        _ = window_for_call.run_on_main_thread(move || {
+            let _ = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                window_for_inner.set_ignore_cursor_events(ignore).ok();
+            }));
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.set_ignore_cursor_events(ignore).ok();
+    }
+}
+
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
-    window.set_ignore_cursor_events(true).ok();
+    set_ignore_cursor_events(&window, true);
 
     let is_recording_controls = window.label() == RECORDING_CONTROLS_LABEL;
 
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
         let mut current_display_id: Option<DisplayId> = get_display_id_for_cursor();
+        let mut last_ignore: Option<bool> = Some(true);
 
         loop {
             sleep(Duration::from_millis(1000 / 20)).await;
@@ -97,7 +116,10 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             let map = state.0.read().await;
 
             let Some(windows) = map.get(window.label()) else {
-                window.set_ignore_cursor_events(true).ok();
+                if last_ignore != Some(true) {
+                    set_ignore_cursor_events(&window, true);
+                    last_ignore = Some(true);
+                }
                 continue;
             };
 
@@ -106,7 +128,10 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 window.cursor_position(),
                 window.scale_factor(),
             ) else {
-                let _ = window.set_ignore_cursor_events(true);
+                if last_ignore != Some(true) {
+                    set_ignore_cursor_events(&window, true);
+                    last_ignore = Some(true);
+                }
                 continue;
             };
 
@@ -130,7 +155,10 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 }
             }
 
-            window.set_ignore_cursor_events(ignore).ok();
+            if last_ignore != Some(ignore) {
+                set_ignore_cursor_events(&window, ignore);
+                last_ignore = Some(ignore);
+            }
 
             let focused = window.is_focused().unwrap_or(false);
             if !ignore {
@@ -138,7 +166,10 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                     window.set_focus().ok();
                 }
             } else if focused {
-                window.set_ignore_cursor_events(ignore).ok();
+                if last_ignore != Some(true) {
+                    set_ignore_cursor_events(&window, true);
+                    last_ignore = Some(true);
+                }
             }
         }
     });

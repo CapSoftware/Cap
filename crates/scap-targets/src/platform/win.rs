@@ -303,6 +303,14 @@ fn get_cursor_position() -> Option<PhysicalPosition> {
     }
 }
 
+pub fn get_cursor_position_public() -> Option<LogicalPosition> {
+    let physical = get_cursor_position()?;
+    Some(LogicalPosition {
+        x: physical.x(),
+        y: physical.y(),
+    })
+}
+
 #[derive(Clone, Copy)]
 pub struct WindowImpl(HWND);
 

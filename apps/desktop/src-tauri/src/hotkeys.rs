@@ -5,6 +5,7 @@ use crate::{
     windows::ShowCapWindow,
 };
 use global_hotkey::HotKeyState;
+use scap_targets::Display;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
@@ -92,7 +93,11 @@ pub fn init(app: &AppHandle) {
                 }
 
                 if shortcut.key == Code::Escape {
-                    OnEscapePress.emit(app).ok();
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        tokio::task::yield_now().await;
+                        OnEscapePress.emit(&app).ok();
+                    });
                 }
 
                 if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
@@ -176,26 +181,37 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             Ok(())
         }
         HotkeyAction::OpenRecordingPicker => {
-            let _ = RequestOpenRecordingPicker { target_mode: None }.emit(&app);
+            let display_id = Display::get_containing_cursor().map(|d| d.id().to_string());
+            let _ = RequestOpenRecordingPicker {
+                target_mode: None,
+                display_id,
+            }
+            .emit(&app);
             Ok(())
         }
         HotkeyAction::OpenRecordingPickerDisplay => {
+            let display_id = Display::get_containing_cursor().map(|d| d.id().to_string());
             let _ = RequestOpenRecordingPicker {
                 target_mode: Some(RecordingTargetMode::Display),
+                display_id,
             }
             .emit(&app);
             Ok(())
         }
         HotkeyAction::OpenRecordingPickerWindow => {
+            let display_id = Display::get_containing_cursor().map(|d| d.id().to_string());
             let _ = RequestOpenRecordingPicker {
                 target_mode: Some(RecordingTargetMode::Window),
+                display_id,
             }
             .emit(&app);
             Ok(())
         }
         HotkeyAction::OpenRecordingPickerArea => {
+            let display_id = Display::get_containing_cursor().map(|d| d.id().to_string());
             let _ = RequestOpenRecordingPicker {
                 target_mode: Some(RecordingTargetMode::Area),
+                display_id,
             }
             .emit(&app);
             Ok(())
