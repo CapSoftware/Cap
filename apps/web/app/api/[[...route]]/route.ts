@@ -1,5 +1,5 @@
-import { HttpLive } from "@cap/web-backend";
 import { HttpApiScalar } from "@effect/platform";
+import { HttpLive } from "@inflight/web-backend";
 import { Layer } from "effect";
 import { apiToHandler } from "@/lib/server";
 

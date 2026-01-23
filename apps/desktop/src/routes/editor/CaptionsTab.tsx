@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";

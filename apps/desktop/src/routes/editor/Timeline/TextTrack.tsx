@@ -325,7 +325,7 @@ export function TextTrack(props: {
 									},
 								)}
 							>
-								<div class="flex flex-col gap-0.5 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+								<div class="flex flex-col gap-0.5 justify-center items-center text-xs whitespace-nowrap text-white">
 									<span class="opacity-70">Text</span>
 									<div class="flex gap-1 items-center text-md">
 										<span class="max-w-[10rem] truncate">

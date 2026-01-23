@@ -1,6 +1,6 @@
 "use client";
 
-import type { Video } from "@cap/web-domain";
+import type { Video } from "@inflight/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { useEffectQuery, useRpcClient } from "@/lib/EffectRuntime";

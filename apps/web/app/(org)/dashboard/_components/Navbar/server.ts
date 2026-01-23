@@ -1,13 +1,13 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import {
 	organizationMembers,
 	organizations,
 	users,
-} from "@cap/database/schema";
-import type { Organisation } from "@cap/web-domain";
+} from "@inflight/database/schema";
+import type { Organisation } from "@inflight/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createSpace as createSpaceAction } from "@/actions/organization/create-space";

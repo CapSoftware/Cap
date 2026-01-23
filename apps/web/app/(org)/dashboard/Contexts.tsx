@@ -1,6 +1,6 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import Cookies from "js-cookie";
 import { redirect, usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";

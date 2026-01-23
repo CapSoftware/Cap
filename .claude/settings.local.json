@@ -7,7 +7,9 @@
 			"Bash(cargo check:*)",
 			"Bash(cargo fmt:*)",
 			"Bash(pnpm format:*)",
-			"Bash(pnpm exec biome check:*)"
+			"Bash(pnpm exec biome check:*)",
+			"Bash(/opt/homebrew/bin/pnpm format)",
+			"Bash(~/.cargo/bin/cargo check -p scap-targets)"
 		],
 		"deny": [],
 		"ask": []

@@ -1,7 +1,7 @@
-import { Loom } from "@cap/web-domain";
 import { HttpApi, type HttpApiClient } from "@effect/platform";
 import * as Rpc from "@effect/rpc";
 import { WorkflowProxy, WorkflowProxyServer } from "@effect/workflow";
+import { Loom } from "@inflight/web-domain";
 import { Context, Layer, Schema } from "effect";
 
 import { LoomImportVideoLive } from "./Loom/index.ts";

@@ -1,8 +1,8 @@
 "use server";
 
-import { db } from "@cap/database";
-import { organizations } from "@cap/database/schema";
-import type { Organisation } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { organizations } from "@inflight/database/schema";
+import type { Organisation } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 
 export async function getOrganizationSSOData(

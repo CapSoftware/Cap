@@ -93,6 +93,13 @@ impl Capturer {
     pub async fn stop(&self) -> Result<(), arc::R<ns::Error>> {
         self.stream.stop().await
     }
+
+    pub async fn update_content_filter(
+        &self,
+        filter: arc::R<sc::ContentFilter>,
+    ) -> Result<(), arc::R<ns::Error>> {
+        self.stream.update_content_filter(&filter).await
+    }
 }
 
 pub struct VideoFrame {

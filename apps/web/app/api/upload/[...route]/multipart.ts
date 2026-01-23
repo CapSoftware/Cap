@@ -2,9 +2,10 @@ import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
-import { updateIfDefined } from "@cap/database";
-import * as Db from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { zValidator } from "@hono/zod-validator";
+import { updateIfDefined } from "@inflight/database";
+import * as Db from "@inflight/database/schema";
+import { serverEnv } from "@inflight/env";
 import {
 	AwsCredentials,
 	Database,
@@ -13,9 +14,8 @@ import {
 	S3Buckets,
 	VideosPolicy,
 	VideosRepo,
-} from "@cap/web-backend";
-import { Policy, Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
+} from "@inflight/web-backend";
+import { Policy, Video } from "@inflight/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";

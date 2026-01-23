@@ -6,7 +6,7 @@ import {
 	SelectRoot,
 	SelectTrigger,
 	SelectValue,
-} from "@cap/ui";
+} from "@inflight/ui";
 import clsx from "clsx";
 import { MicIcon, MicOffIcon } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";

@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import MuxPlayer from "@mux/mux-player-react";
 import Image from "next/image";
 import Link from "next/link";

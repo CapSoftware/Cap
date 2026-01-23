@@ -1,11 +1,11 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
-import { comments } from "@cap/database/schema";
-import type { ImageUpload } from "@cap/web-domain";
-import { Comment, type Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoId } from "@inflight/database/helpers";
+import { comments } from "@inflight/database/schema";
+import type { ImageUpload } from "@inflight/web-domain";
+import { Comment, type Video } from "@inflight/web-domain";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
 

@@ -2,7 +2,7 @@
 
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import { CommercialGetStarted } from "@/components/CommercialGetStarted";
 import { FeatureCard } from "@/components/pages/_components/FeatureCard";
 import { LogoSection } from "@/components/pages/_components/LogoSection";

@@ -1,4 +1,3 @@
-import { Button } from "@cap/ui";
 import {
 	faDownload,
 	faHandshake,
@@ -7,6 +6,7 @@ import {
 	faUsers,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
 import { useRef } from "react";
 import { EnterpriseArt, type EnterpriseArtRef } from "./EnterpriseArt";
 

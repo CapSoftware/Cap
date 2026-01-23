@@ -1,8 +1,8 @@
 "use client";
 
-import { Button, LogoBadge } from "@cap/ui";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button, LogoBadge } from "@inflight/ui";
 import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import Link from "next/link";

@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import clsx from "clsx";
 import type { MouseEvent } from "react";
 import React from "react";

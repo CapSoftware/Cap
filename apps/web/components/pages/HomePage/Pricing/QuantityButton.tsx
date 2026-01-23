@@ -1,4 +1,4 @@
-import { classNames } from "@cap/utils";
+import { classNames } from "@inflight/utils";
 import type React from "react";
 
 const BaseQuantityButtonClasses =

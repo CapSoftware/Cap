@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
@@ -150,7 +150,7 @@ export default async function DocPage(props: DocProps) {
 													{doc.metadata.tags.split(", ").map((tag) => (
 														<span
 															key={tag}
-															className="px-2 py-1 text-xs text-gray-600 rounded-full bg-gray-1 dark:bg-gray-800 dark:text-gray-8"
+															className="px-2 py-1 text-xs text-gray-600 rounded-full bg-gray-1 dark:bg-gray-800 dark:text-gray-300"
 														>
 															{tag}
 														</span>

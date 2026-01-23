@@ -1,8 +1,8 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { users, videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
-import type { Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { users, videos } from "@inflight/database/schema";
+import type { VideoMetadata } from "@inflight/database/types";
+import type { Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";

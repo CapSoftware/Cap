@@ -1,4 +1,3 @@
-import { Button, Switch } from "@cap/ui";
 import {
 	faBriefcase,
 	faDownload,
@@ -8,6 +7,7 @@ import {
 	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button, Switch } from "@inflight/ui";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
 import { useRef, useState } from "react";

@@ -1,6 +1,6 @@
-import { Button } from "@cap/ui";
 import { faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
 import { useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../../Contexts";
 

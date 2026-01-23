@@ -1,4 +1,4 @@
-import { Policy, Video } from "@cap/web-domain";
+import { Policy, Video } from "@inflight/web-domain";
 import { Array, Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Organisation } from "@cap/web-domain";
+import type { Organisation } from "@inflight/web-domain";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import clsx from "clsx";
 import {

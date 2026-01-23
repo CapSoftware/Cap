@@ -1,5 +1,7 @@
 "use client";
 
+import { faBuilding, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
 	Button,
 	Dialog,
@@ -8,10 +10,8 @@ import {
 	DialogHeader,
 	DialogTitle,
 	DialogTrigger,
-} from "@cap/ui";
-import type { ImageUpload } from "@cap/web-domain";
-import { faBuilding, faPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+} from "@inflight/ui";
+import type { ImageUpload } from "@inflight/web-domain";
 import clsx from "clsx";
 import { useState } from "react";
 import { SignedImageUrl } from "@/components/SignedImageUrl";

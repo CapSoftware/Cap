@@ -1,4 +1,4 @@
-import { CAP_LOGO_URL } from "@cap/utils";
+import { CAP_LOGO_URL } from "@inflight/utils";
 import {
 	Body,
 	Container,

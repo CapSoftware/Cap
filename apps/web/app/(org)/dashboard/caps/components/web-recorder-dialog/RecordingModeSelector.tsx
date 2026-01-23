@@ -6,7 +6,7 @@ import {
 	SelectRoot,
 	SelectTrigger,
 	SelectValue,
-} from "@cap/ui";
+} from "@inflight/ui";
 import {
 	CameraIcon,
 	Globe,

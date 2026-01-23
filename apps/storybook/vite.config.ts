@@ -1,4 +1,4 @@
-import capUIPlugin from "@cap/ui-solid/vite";
+import capUIPlugin from "@inflight/ui-solid/vite";
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 

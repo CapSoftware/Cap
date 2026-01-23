@@ -1,4 +1,4 @@
-import { type Organisation, Policy } from "@cap/web-domain";
+import { type Organisation, Policy } from "@inflight/web-domain";
 import { Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";

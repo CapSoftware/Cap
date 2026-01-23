@@ -1,5 +1,5 @@
 {
-	"name": "@cap/database",
+	"name": "@inflight/database",
 	"private": true,
 	"type": "module",
 	"types": "./index.ts",
@@ -16,8 +16,8 @@
 		"build": "tsdown"
 	},
 	"dependencies": {
-		"@cap/env": "workspace:*",
-		"@cap/web-domain": "workspace:*",
+		"@inflight/env": "workspace:*",
+		"@inflight/web-domain": "workspace:*",
 		"@effect/sql-mysql2": "^0.47.0",
 		"@kubiks/otel-drizzle": "^2.1.0",
 		"@mattrax/mysql-planetscale": "^0.0.3",
@@ -38,8 +38,8 @@
 		"zod": "^3"
 	},
 	"devDependencies": {
-		"@cap/ui": "workspace:*",
-		"@cap/utils": "workspace:*",
+		"@inflight/ui": "workspace:*",
+		"@inflight/utils": "workspace:*",
 		"@types/node": "^20.10.0",
 		"@types/react": "^19.1.13",
 		"@types/react-dom": "19.1.9",

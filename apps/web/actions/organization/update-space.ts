@@ -1,16 +1,16 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
-import { spaceMembers, spaces } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoId } from "@inflight/database/helpers";
+import { spaceMembers, spaces } from "@inflight/database/schema";
+import { S3Buckets } from "@inflight/web-backend";
 import {
 	Space,
 	SpaceMemberId,
 	type SpaceMemberRole,
 	type User,
-} from "@cap/web-domain";
+} from "@inflight/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";

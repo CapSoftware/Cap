@@ -1,11 +1,11 @@
 "use server";
 
-import { db } from "@cap/database";
-import { users, videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
-import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { users, videos } from "@inflight/database/schema";
+import type { VideoMetadata } from "@inflight/database/types";
+import { serverEnv } from "@inflight/env";
+import { provideOptionalAuth, VideosPolicy } from "@inflight/web-backend";
+import { Policy, type Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import * as EffectRuntime from "@/lib/server";

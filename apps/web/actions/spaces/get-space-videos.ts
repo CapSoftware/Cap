@@ -1,9 +1,9 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, spaceVideos } from "@cap/database/schema";
-import type { Space } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { sharedVideos, spaceVideos } from "@inflight/database/schema";
+import type { Space } from "@inflight/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 
 export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {

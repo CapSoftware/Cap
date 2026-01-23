@@ -1,5 +1,3 @@
-import { Videos } from "@cap/web-backend";
-import { HttpAuthMiddleware, Video } from "@cap/web-domain";
 import {
 	HttpApi,
 	HttpApiBuilder,
@@ -7,6 +5,8 @@ import {
 	HttpApiError,
 	HttpApiGroup,
 } from "@effect/platform";
+import { Videos } from "@inflight/web-backend";
+import { HttpAuthMiddleware, Video } from "@inflight/web-domain";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
 

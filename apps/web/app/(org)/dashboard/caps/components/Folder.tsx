@@ -1,7 +1,7 @@
 "use client";
-import type { Folder, Space } from "@cap/web-domain";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { Folder, Space } from "@inflight/web-domain";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import Link from "next/link";

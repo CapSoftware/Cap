@@ -54,12 +54,12 @@ fn main() {
         let path = dirs::home_dir()
             .unwrap()
             .join("Library/Logs")
-            .join("so.cap.desktop");
+            .join("co.inflight.desktop");
 
         #[cfg(not(target_os = "macos"))]
         let path = dirs::data_local_dir()
             .unwrap()
-            .join("so.cap.desktop")
+            .join("co.inflight.desktop")
             .join("logs");
 
         path
@@ -70,7 +70,7 @@ fn main() {
         eprintln!("Failed to create logs directory: {e}");
     });
 
-    let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, "inflight-desktop.log");
     let (non_blocking, _logger_guard) = tracing_appender::non_blocking(file_appender);
 
     let (otel_layer, _tracer) = if cfg!(debug_assertions) {

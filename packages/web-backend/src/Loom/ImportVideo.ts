@@ -1,6 +1,12 @@
-import { DatabaseError, Loom, S3Bucket, S3Error, Video } from "@cap/web-domain";
 import { Headers, HttpClient, HttpClientResponse } from "@effect/platform";
 import { Activity } from "@effect/workflow";
+import {
+	DatabaseError,
+	Loom,
+	S3Bucket,
+	S3Error,
+	Video,
+} from "@inflight/web-domain";
 import { Effect, Option, Schedule, Schema, Stream } from "effect";
 
 import { S3Buckets } from "../S3Buckets/index.ts";

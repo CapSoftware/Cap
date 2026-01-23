@@ -2,21 +2,48 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import {
+	CheckMenuItem,
+	Menu,
+	MenuItem,
+	PredefinedMenuItem,
+} from "@tauri-apps/api/menu";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { type ComponentProps, createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import {
+	type ComponentProps,
+	createEffect,
+	createMemo,
+	createSignal,
+	onCleanup,
+	Show,
+} from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import createPresence from "solid-presence";
-import { GrabHandleIcon, PauseIcon, PlayIcon, RestartIcon, StopIcon, TrashIcon } from "~/icons";
+import {
+	GrabHandleIcon,
+	PauseIcon,
+	PlayIcon,
+	RestartIcon,
+	StopIcon,
+	TrashIcon,
+} from "~/icons";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { createCurrentRecordingQuery, createOptionsQuery } from "~/utils/queries";
+import {
+	createCurrentRecordingQuery,
+	createOptionsQuery,
+} from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
-import type { CameraInfo, CurrentRecording, DeviceOrModelID, RecordingInputKind } from "~/utils/tauri";
+import type {
+	CameraInfo,
+	CurrentRecording,
+	DeviceOrModelID,
+	RecordingInputKind,
+} from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 
 type State =
@@ -46,7 +73,7 @@ export default function () {
 					variant: "countdown",
 					from: window.COUNTDOWN,
 					current: window.COUNTDOWN,
-			  }
+				},
 	);
 	const [start, setStart] = createSignal(Date.now());
 	const [time, setTime] = createSignal(Date.now());
@@ -59,31 +86,46 @@ export default function () {
 	const audioLevel = createAudioInputLevel();
 
 	// New: Input disconnection and failure tracking
-	const [disconnectedInputs, setDisconnectedInputs] = createStore<RecordingInputState>({
-		microphone: false,
-		camera: false,
-	});
-	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(null);
+	const [disconnectedInputs, setDisconnectedInputs] =
+		createStore<RecordingInputState>({
+			microphone: false,
+			camera: false,
+		});
+	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(
+		null,
+	);
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
-	const [interactiveAreaRef, setInteractiveAreaRef] = createSignal<HTMLDivElement | null>(null);
+	const [interactiveAreaRef, setInteractiveAreaRef] =
+		createSignal<HTMLDivElement | null>(null);
 	const interactiveBounds = createElementBounds(interactiveAreaRef);
 	let settingsButtonRef: HTMLButtonElement | undefined;
 
-	const recordingMode = createMemo(() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode);
+	const recordingMode = createMemo(
+		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
+	);
 	const canPauseRecording = createMemo(() => {
 		const mode = recordingMode();
 		const os = ostype();
-		return mode === "studio" || os === "macos" || (os === "windows" && mode === "instant");
+		return (
+			mode === "studio" ||
+			os === "macos" ||
+			(os === "windows" && mode === "instant")
+		);
 	});
 
-	const hasDisconnectedInput = () => disconnectedInputs.microphone || disconnectedInputs.camera;
+	const hasDisconnectedInput = () =>
+		disconnectedInputs.microphone || disconnectedInputs.camera;
 
 	const issueMessages = createMemo(() => {
 		const issues: string[] = [];
-		if (disconnectedInputs.microphone) issues.push("Microphone disconnected. Reconnect it to continue recording.");
-		if (disconnectedInputs.camera) issues.push("Camera disconnected. Reconnect it to continue recording.");
+		if (disconnectedInputs.microphone)
+			issues.push(
+				"Microphone disconnected. Reconnect it to continue recording.",
+			);
+		if (disconnectedInputs.camera)
+			issues.push("Camera disconnected. Reconnect it to continue recording.");
 		const failure = recordingFailure();
 		if (failure) issues.push(failure);
 		return issues;
@@ -98,7 +140,11 @@ export default function () {
 	const hasCameraInput = () => optionsQuery.rawOptions.cameraID != null;
 
 	const [pauseResumes, setPauseResumes] = createStore<
-		[] | [...Array<{ pause: number; resume?: number }>, { pause: number; resume?: number }]
+		| []
+		| [
+				...Array<{ pause: number; resume?: number }>,
+				{ pause: number; resume?: number },
+		  ]
 	>([]);
 
 	// Auto-show issue panel when issues change
@@ -120,7 +166,8 @@ export default function () {
 		switch (payload.variant) {
 			case "Countdown":
 				setState((s) => {
-					if (s.variant === "countdown") return { ...s, current: payload.value };
+					if (s.variant === "countdown")
+						return { ...s, current: payload.value };
 					return s;
 				});
 				break;
@@ -155,7 +202,7 @@ export default function () {
 			setTime(Date.now());
 		},
 		100,
-		setInterval
+		setInterval,
 	);
 
 	// Camera window state
@@ -201,7 +248,7 @@ export default function () {
 			void refreshCameraWindowState();
 		},
 		2000,
-		setInterval
+		setInterval,
 	);
 
 	createEffect(() => {
@@ -228,7 +275,7 @@ export default function () {
 					produce((a) => {
 						if (a.length === 0) return a;
 						a[a.length - 1].resume = Date.now();
-					})
+					}),
 				);
 				setState({ variant: "recording" });
 			} else {
@@ -244,25 +291,31 @@ export default function () {
 		mutationFn: async () => {
 			const shouldRestart = await dialog.confirm(
 				"Are you sure you want to restart the recording? The current recording will be discarded.",
-				{ title: "Confirm Restart", okLabel: "Restart", cancelLabel: "Cancel" }
+				{ title: "Confirm Restart", okLabel: "Restart", cancelLabel: "Cancel" },
 			);
 
 			if (!shouldRestart) return;
 
-			await handleRecordingResult(commands.restartRecording(), undefined);
+			const now = Date.now();
+			setStart(now);
+			setTime(now);
+			setPauseResumes([]);
+			setState({ variant: "countdown", from: window.COUNTDOWN, current: window.COUNTDOWN });
 
-			setState({ variant: "recording" });
-			setTime(Date.now());
+			await handleRecordingResult(commands.restartRecording(), undefined);
 		},
 	}));
 
 	const deleteRecording = createMutation(() => ({
 		mutationFn: async () => {
-			const shouldDelete = await dialog.confirm("Are you sure you want to delete the recording?", {
-				title: "Confirm Delete",
-				okLabel: "Delete",
-				cancelLabel: "Cancel",
-			});
+			const shouldDelete = await dialog.confirm(
+				"Are you sure you want to delete the recording?",
+				{
+					title: "Confirm Delete",
+					okLabel: "Delete",
+					cancelLabel: "Cancel",
+				},
+			);
 
 			if (!shouldDelete) return;
 
@@ -349,7 +402,11 @@ export default function () {
 
 	let aborted = false;
 	createEffect(() => {
-		if (isMaxRecordingLimitEnabled() && adjustedTime() > MAX_RECORDING_FOR_FREE && !aborted) {
+		if (
+			isMaxRecordingLimitEnabled() &&
+			adjustedTime() > MAX_RECORDING_FOR_FREE &&
+			!aborted
+		) {
 			aborted = true;
 			stopRecording.mutate();
 		}
@@ -361,20 +418,27 @@ export default function () {
 	};
 
 	// Countdown presence animation
-	const [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(null);
+	const [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
+		null,
+	);
 	const showCountdown = () => state().variant === "countdown";
 	const countdownPresence = createPresence({
 		show: showCountdown,
 		element: countdownRef,
 	});
-	const countdownState = createMemo<Extract<State, { variant: "countdown" }> | undefined>((prev) => {
+	const countdownState = createMemo<
+		Extract<State, { variant: "countdown" }> | undefined
+	>((prev) => {
 		const s = state();
 		if (s.variant === "countdown") return s;
 		if (prev && countdownPresence.present()) return prev;
 	});
 
 	return (
-		<div ref={setInteractiveAreaRef} class="flex flex-col h-full w-full justify-end gap-2">
+		<div
+			ref={setInteractiveAreaRef}
+			class="flex flex-col h-full w-full justify-end gap-2"
+		>
 			{/* Issue Panel */}
 			<Show when={hasRecordingIssue() && issuePanelVisible()}>
 				<div class="flex w-full flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-4 py-3 text-[12px] leading-snug text-red-11 shadow-lg">
@@ -411,7 +475,10 @@ export default function () {
 					{(state) => (
 						<div
 							ref={setCountdownRef}
-							class={cx("absolute inset-0 z-10 transition-opacity", showCountdown() ? "opacity-100" : "opacity-0")}
+							class={cx(
+								"absolute inset-0 z-10 transition-opacity",
+								showCountdown() ? "opacity-100" : "opacity-0",
+							)}
 						>
 							<Countdown from={state().from} current={state().current} />
 						</div>
@@ -428,7 +495,10 @@ export default function () {
 					>
 						<StopIcon class="size-4" />
 						<span class="font-[500] text-[0.875rem] tabular-nums text-white px-1">
-							<Show when={isMaxRecordingLimitEnabled()} fallback={formatTime(adjustedTime() / 1000)}>
+							<Show
+								when={isMaxRecordingLimitEnabled()}
+								fallback={formatTime(adjustedTime() / 1000)}
+							>
 								{formatTime(remainingRecordingTime() / 1000)}
 							</Show>
 						</span>
@@ -438,7 +508,10 @@ export default function () {
 						{/* Issue Warning Button */}
 						<Show when={hasRecordingIssue()}>
 							<ActionButton
-								class={cx("text-red-10 hover:bg-red-3/40", issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8")}
+								class={cx(
+									"text-red-10 hover:bg-red-3/40",
+									issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8",
+								)}
 								onClick={() => toggleIssuePanel()}
 								title={issueMessages().join(", ")}
 								aria-pressed={issuePanelVisible() ? "true" : "false"}
@@ -452,7 +525,11 @@ export default function () {
 							<ActionButton
 								disabled={togglePause.isPending || hasDisconnectedInput()}
 								onClick={() => togglePause.mutate()}
-								title={state().variant === "paused" ? "Resume recording" : "Pause recording"}
+								title={
+									state().variant === "paused"
+										? "Resume recording"
+										: "Pause recording"
+								}
 							>
 								{state().variant === "paused" ? <PlayIcon /> : <PauseIcon />}
 							</ActionButton>
@@ -495,7 +572,7 @@ function ActionButton(props: ComponentProps<"button">) {
 				"text-white hover:bg-white/5",
 				"h-8 w-8 flex items-center justify-center",
 				"disabled:opacity-50 disabled:cursor-not-allowed",
-				props.class
+				props.class,
 			)}
 			type="button"
 		/>
@@ -517,7 +594,10 @@ function createAudioInputLevel() {
 		const DB_MAX = 0;
 
 		const dbValue = dbs ?? DB_MIN;
-		const normalizedLevel = Math.max(0, Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN)));
+		const normalizedLevel = Math.max(
+			0,
+			Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN)),
+		);
 		setLevel(normalizedLevel);
 	});
 
@@ -543,7 +623,15 @@ function Countdown(props: { from: number; current: number }) {
 				<div class="flex-1 text-[13px] text-gray-11">Recording starting...</div>
 				<div class="relative w-5 h-5 text-red-300">
 					<svg class="absolute inset-0 w-5 h-5 -rotate-90" viewBox="0 0 20 20">
-						<circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.2" />
+						<circle
+							cx="10"
+							cy="10"
+							r="8"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							opacity="0.2"
+						/>
 						<circle
 							cx="10"
 							cy="10"
@@ -559,14 +647,19 @@ function Countdown(props: { from: number; current: number }) {
 							}}
 						/>
 					</svg>
-					<span class="flex absolute inset-0 justify-center items-center text-[11px]">{props.current}</span>
+					<span class="flex absolute inset-0 justify-center items-center text-[11px]">
+						{props.current}
+					</span>
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function cameraMatchesSelection(camera: CameraInfo, selected?: DeviceOrModelID | null) {
+function cameraMatchesSelection(
+	camera: CameraInfo,
+	selected?: DeviceOrModelID | null,
+) {
 	if (!selected) return false;
 	if ("DeviceID" in selected) return selected.DeviceID === camera.device_id;
 	return camera.model_id != null && selected.ModelID === camera.model_id;
@@ -578,7 +671,9 @@ function cameraInfoToId(camera: CameraInfo | null): DeviceOrModelID | null {
 	return { DeviceID: camera.device_id };
 }
 
-function cloneDeviceOrModelId(id: DeviceOrModelID | null): DeviceOrModelID | null {
+function cloneDeviceOrModelId(
+	id: DeviceOrModelID | null,
+): DeviceOrModelID | null {
 	if (!id) return null;
 	if ("DeviceID" in id) return { DeviceID: id.DeviceID };
 	return { ModelID: id.ModelID };

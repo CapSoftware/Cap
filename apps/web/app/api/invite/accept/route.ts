@@ -1,11 +1,11 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoId } from "@inflight/database/helpers";
 import {
 	organizationInvites,
 	organizationMembers,
 	users,
-} from "@cap/database/schema";
+} from "@inflight/database/schema";
 import { and, eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 

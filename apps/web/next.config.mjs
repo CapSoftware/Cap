@@ -13,12 +13,12 @@ const { version } = packageJson;
 const nextConfig = {
 	reactStrictMode: true,
 	transpilePackages: [
-		"@cap/ui",
-		"@cap/utils",
-		"@cap/web-api-contract",
-		"@cap/web-domain",
-		"@cap/env",
-		"@cap/database",
+		"@inflight/ui",
+		"@inflight/utils",
+		"@inflight/web-api-contract",
+		"@inflight/web-domain",
+		"@inflight/env",
+		"@inflight/database",
 		"next-mdx-remote",
 	],
 	eslint: {
@@ -29,12 +29,12 @@ const nextConfig = {
 	},
 	experimental: {
 		optimizePackageImports: [
-			"@cap/ui",
-			"@cap/utils",
-			// "@cap/web-api-contract",
-			// "@cap/web-domain",
-			// "@cap/web-backend",
-			"@cap/database",
+			"@inflight/ui",
+			"@inflight/utils",
+			// "@inflight/web-api-contract",
+			// "@inflight/web-domain",
+			// "@inflight/web-backend",
+			"@inflight/database",
 		],
 	},
 	images: {

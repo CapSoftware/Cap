@@ -1,5 +1,5 @@
 {
-	"name": "@cap/web-backend",
+	"name": "@inflight/web-backend",
 	"private": true,
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
@@ -11,15 +11,15 @@
 		"build": "tsdown"
 	},
 	"dependencies": {
-		"@cap/env": "workspace:*",
+		"@inflight/env": "workspace:*",
 		"@aws-sdk/client-s3": "^3.485.0",
 		"@aws-sdk/cloudfront-signer": "^3.821.0",
 		"@aws-sdk/credential-providers": "^3.908.0",
 		"@aws-sdk/s3-presigned-post": "^3.485.0",
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
-		"@cap/database": "workspace:*",
-		"@cap/utils": "workspace:*",
-		"@cap/web-domain": "workspace:*",
+		"@inflight/database": "workspace:*",
+		"@inflight/utils": "workspace:*",
+		"@inflight/web-domain": "workspace:*",
 		"@effect/cluster": "^0.50.4",
 		"@effect/platform": "^0.92.1",
 		"@effect/rpc": "^0.71.0",

@@ -1,5 +1,5 @@
-import { Button, Input, Label } from "@cap/ui";
-import type { Organisation } from "@cap/web-domain";
+import { Button, Input, Label } from "@inflight/ui";
+import type { Organisation } from "@inflight/web-domain";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";

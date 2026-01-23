@@ -1,4 +1,4 @@
-import { Folder, InternalError } from "@cap/web-domain";
+import { Folder, InternalError } from "@inflight/web-domain";
 import { Effect } from "effect";
 
 import { Folders } from "./index.ts";

@@ -1,5 +1,5 @@
-import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "@cap/env";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { serverEnv } from "@inflight/env";
 import { redirect } from "next/navigation";
 import ReferClient from "./ReferClient";
 

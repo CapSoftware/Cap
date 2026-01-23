@@ -1,5 +1,5 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import {
 	comments,
 	organizationMembers,
@@ -10,24 +10,24 @@ import {
 	users,
 	videos,
 	videoUploads,
-} from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv } from "@cap/env";
-import { Logo } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
+} from "@inflight/database/schema";
+import type { VideoMetadata } from "@inflight/database/types";
+import { buildEnv } from "@inflight/env";
+import { Logo } from "@inflight/ui";
+import { userIsPro } from "@inflight/utils";
 import {
 	Database,
 	ImageUploads,
 	provideOptionalAuth,
 	Videos,
-} from "@cap/web-backend";
-import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
+} from "@inflight/web-backend";
+import { VideosPolicy } from "@inflight/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
 	type Organisation,
 	Policy,
 	type Video,
-} from "@cap/web-domain";
+} from "@inflight/web-domain";
 import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";

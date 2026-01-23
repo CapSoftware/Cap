@@ -1,6 +1,6 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationMembers, organizations } from "@cap/database/schema";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { organizationMembers, organizations } from "@inflight/database/schema";
 import { and, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";

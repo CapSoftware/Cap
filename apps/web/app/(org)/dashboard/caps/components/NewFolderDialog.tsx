@@ -1,5 +1,7 @@
 "use client";
 
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
 	Button,
 	Dialog,
@@ -8,10 +10,8 @@ import {
 	DialogHeader,
 	DialogTitle,
 	Input,
-} from "@cap/ui";
-import type { Folder, Space } from "@cap/web-domain";
-import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+} from "@inflight/ui";
+import type { Folder, Space } from "@inflight/web-domain";
 import { type RiveFile, useRiveFile } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { Option } from "effect";

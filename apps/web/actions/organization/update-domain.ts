@@ -1,10 +1,10 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { organizations } from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
-import type { Organisation } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { organizations } from "@inflight/database/schema";
+import { userIsPro } from "@inflight/utils";
+import type { Organisation } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { addDomain, checkDomainStatus } from "./domain-utils";

@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { Database, S3Buckets, Videos, Workflows } from "@cap/web-backend";
 import { ClusterWorkflowEngine, RunnerAddress } from "@effect/cluster";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@effect/platform-node";
 import { RpcServer } from "@effect/rpc";
 import { WorkflowProxyServer } from "@effect/workflow";
+import { Database, S3Buckets, Videos, Workflows } from "@inflight/web-backend";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config, Effect, Layer, Option } from "effect";

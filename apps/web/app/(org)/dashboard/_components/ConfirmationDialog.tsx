@@ -7,7 +7,7 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-} from "@cap/ui";
+} from "@inflight/ui";
 
 interface ConfirmationDialogProps {
 	open: boolean;

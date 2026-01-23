@@ -1,7 +1,7 @@
-import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "@cap/env";
-import { makeCurrentUserLayer, Spaces } from "@cap/web-backend";
-import { type Folder, Space } from "@cap/web-domain";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { serverEnv } from "@inflight/env";
+import { makeCurrentUserLayer, Spaces } from "@inflight/web-backend";
+import { type Folder, Space } from "@inflight/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
 import FolderCard from "@/app/(org)/dashboard/caps/components/Folder";

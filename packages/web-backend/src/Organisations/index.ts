@@ -1,5 +1,5 @@
-import * as Db from "@cap/database/schema";
-import { CurrentUser, Organisation, Policy } from "@cap/web-domain";
+import * as Db from "@inflight/database/schema";
+import { CurrentUser, Organisation, Policy } from "@inflight/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option } from "effect";
 import { Database } from "../Database";

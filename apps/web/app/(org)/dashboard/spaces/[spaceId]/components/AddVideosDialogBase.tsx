@@ -1,5 +1,8 @@
 "use client";
 
+import { faVideo } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
 	Button,
 	Dialog,
@@ -8,11 +11,8 @@ import {
 	DialogTitle,
 	Input,
 	LoadingSpinner,
-} from "@cap/ui";
-import type { Video } from "@cap/web-domain";
-import { faVideo } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { zodResolver } from "@hookform/resolvers/zod";
+} from "@inflight/ui";
+import type { Video } from "@inflight/web-domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Search } from "lucide-react";

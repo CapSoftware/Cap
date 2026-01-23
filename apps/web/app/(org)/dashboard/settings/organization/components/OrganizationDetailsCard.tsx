@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import { Card, CardDescription, CardHeader, CardTitle } from "@inflight/ui";
 import AccessEmailDomain from "./AccessEmailDomain";
 import { CustomDomain } from "./CustomDomain";
 import { OrganizationIcon } from "./OrganizationIcon";

@@ -10,6 +10,7 @@ use anyhow::{Context, anyhow};
 use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
+use scap_targets;
 use std::{
     sync::{
         Arc,
@@ -234,6 +235,23 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let cancel_token = CancellationToken::new();
         let capturer = Capturer::new(Arc::new(builder.build()?));
 
+        let area_capture_info = self.config.crop_bounds.map(|bounds| {
+            let display_position = display.raw_handle().logical_position();
+            let absolute_bounds = scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(
+                    bounds.position().x() + display_position.x(),
+                    bounds.position().y() + display_position.y(),
+                ),
+                bounds.size(),
+            );
+            AreaCaptureInfo {
+                area_bounds: absolute_bounds,
+                display: display.clone(),
+                shareable_content: self.shareable_content.clone(),
+                base_excluded_windows: self.excluded_windows.clone(),
+            }
+        });
+
         Ok((
             VideoSourceConfig {
                 inner: ChannelVideoSourceConfig::new(self.video_info, video_rx),
@@ -242,6 +260,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 video_frame_counter: video_frame_counter.clone(),
                 cancel_token: cancel_token.clone(),
                 drop_guard: cancel_token.drop_guard(),
+                area_capture_info,
             },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
@@ -331,6 +350,13 @@ impl Capturer {
     }
 }
 
+pub struct AreaCaptureInfo {
+    pub area_bounds: scap_targets::bounds::LogicalBounds,
+    pub display: Display,
+    pub shareable_content: arc::R<sc::ShareableContent>,
+    pub base_excluded_windows: Vec<WindowId>,
+}
+
 pub struct VideoSourceConfig {
     inner: ChannelVideoSourceConfig<VideoFrame>,
     capturer: Capturer,
@@ -338,6 +364,7 @@ pub struct VideoSourceConfig {
     cancel_token: CancellationToken,
     drop_guard: DropGuard,
     video_frame_counter: Arc<AtomicU32>,
+    area_capture_info: Option<AreaCaptureInfo>,
 }
 pub struct VideoSource {
     inner: ChannelVideoSource<VideoFrame>,
@@ -366,6 +393,7 @@ impl output_pipeline::VideoSource for VideoSource {
             cancel_token,
             drop_guard,
             video_frame_counter,
+            area_capture_info,
         } = config;
 
         let monitor_capturer = capturer.clone();
@@ -403,6 +431,8 @@ impl output_pipeline::VideoSource for VideoSource {
                 }
             }
         });
+
+        let _ = area_capture_info;
 
         ChannelVideoSource::setup(inner, video_tx, ctx)
             .await

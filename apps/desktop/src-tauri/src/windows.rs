@@ -310,7 +310,6 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
-                    .center()
                     .transparent(true)
                     .initialization_script(format!(
                         "
@@ -333,7 +332,6 @@ impl ShowCapWindow {
                                 let ns_win =
                                     win.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
 
-                                // Hide all window buttons - using the correct constant names
                                 if let Some(button) = (*ns_win).standardWindowButton(
                                     objc2_app_kit::NSWindowButton::CloseButton,
                                 ) {
@@ -353,10 +351,23 @@ impl ShowCapWindow {
                         })
                         .ok();
 
-                    // Set window level if needed
                     if new_recording_flow {
                         crate::platform::set_window_level(window.as_ref().window(), 50);
                     }
+                }
+
+                if let (Some(monitor), Ok(window_size)) =
+                    (window.current_monitor().ok().flatten(), window.outer_size())
+                {
+                    let monitor_size = monitor.size();
+                    let scale = monitor.scale_factor();
+                    let padding = 20.0;
+                    let x = (monitor_size.width as f64 / scale)
+                        - (window_size.width as f64 / scale)
+                        - padding;
+                    let y = padding;
+                    let _ = window
+                        .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
                 }
 
                 #[cfg(target_os = "macos")]
@@ -456,15 +467,9 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                // Hide main window and target select overlays when settings window opens
                 for (label, window) in app.webview_windows() {
                     if let Ok(id) = CapWindowId::from_str(&label)
-                        && matches!(
-                            id,
-                            CapWindowId::TargetSelectOverlay { .. }
-                                | CapWindowId::Main
-                                | CapWindowId::Camera
-                        )
+                        && matches!(id, CapWindowId::TargetSelectOverlay { .. })
                     {
                         let _ = window.hide();
                     }

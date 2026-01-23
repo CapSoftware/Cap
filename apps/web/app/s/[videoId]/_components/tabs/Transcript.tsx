@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
 import { Check, Copy, Download, Edit3, MessageSquare, X } from "lucide-react";

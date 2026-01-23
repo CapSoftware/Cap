@@ -1,6 +1,6 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import {
 	QueryClient,

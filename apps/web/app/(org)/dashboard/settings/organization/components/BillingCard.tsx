@@ -1,6 +1,12 @@
 "use client";
 
-import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import {
+	Button,
+	Card,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@inflight/ui";
 
 interface BillingCardProps {
 	isOwner: boolean;

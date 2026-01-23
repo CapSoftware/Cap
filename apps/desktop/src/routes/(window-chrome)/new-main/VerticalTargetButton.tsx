@@ -10,7 +10,13 @@ type VerticalTargetButtonProps = {
 } & ComponentProps<"button">;
 
 function VerticalTargetButton(props: VerticalTargetButtonProps) {
-	const [local, rest] = splitProps(props, ["selected", "Component", "name", "disabled", "class"]);
+	const [local, rest] = splitProps(props, [
+		"selected",
+		"Component",
+		"name",
+		"disabled",
+		"class",
+	]);
 
 	return (
 		<button
@@ -24,7 +30,7 @@ function VerticalTargetButton(props: VerticalTargetButtonProps) {
 				"hover:bg-[#1C8AF8]/20",
 				local.selected ? "text-gray-12" : "text-gray-12",
 				local.disabled && "pointer-events-none opacity-60",
-				local.class
+				local.class,
 			)}
 			style={{
 				"box-shadow": "0 1px 1px -0.5px rgba(0, 0, 0, 0.16)",
@@ -35,7 +41,7 @@ function VerticalTargetButton(props: VerticalTargetButtonProps) {
 					class={cx(
 						"absolute inset-0 size-5 pointer-events-none",
 						local.selected ? "text-gray-12" : "text-gray-9",
-						"group-hover:opacity-0"
+						"group-hover:opacity-0",
 					)}
 				/>
 				<RecordFill class="absolute inset-0 size-5 opacity-0 group-hover:opacity-100 text-[#60ADFA] pointer-events-none" />

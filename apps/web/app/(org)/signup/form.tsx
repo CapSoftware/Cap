@@ -1,13 +1,13 @@
 "use client";
 
-import { Button, Input, LogoBadge } from "@cap/ui";
-import { Organisation } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faEnvelope,
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button, Input, LogoBadge } from "@inflight/ui";
+import { Organisation } from "@inflight/web-domain";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";

@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import { useRive } from "@rive-app/react-canvas";
 
 const UpgradeToPro = ({ text = "Upgrade To Cap Pro" }: { text?: string }) => {

@@ -1,5 +1,5 @@
-import * as Db from "@cap/database/schema";
-import type { Organisation, User, Video } from "@cap/web-domain";
+import * as Db from "@inflight/database/schema";
+import type { Organisation, User, Video } from "@inflight/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect } from "effect";
 

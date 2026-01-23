@@ -71,7 +71,7 @@ pub fn set_server_url(url: &str) {
     *API_SERVER_IS_CAP_CLOUD
         .get_or_init(Default::default)
         .write()
-        .unwrap_or_else(PoisonError::into_inner) = Some(url == "https://cap.so");
+        .unwrap_or_else(PoisonError::into_inner) = Some(url == "https://inflight.co");
 }
 
 static API_SERVER_IS_CAP_CLOUD: OnceLock<RwLock<Option<bool>>> = OnceLock::new();

@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@cap/database/auth/session";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import { CustomDomainPage } from "../components/CustomDomainPage";
 import { DownloadPage } from "../components/DownloadPage";
 import { InviteTeamPage } from "../components/InviteTeamPage";

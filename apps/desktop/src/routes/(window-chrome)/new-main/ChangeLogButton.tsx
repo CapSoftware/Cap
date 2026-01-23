@@ -1,6 +1,5 @@
 import { makePersisted } from "@solid-primitives/storage";
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createResource } from "solid-js";
 import { createStore } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
@@ -36,7 +35,6 @@ const ChangelogButton = () => {
 
 	const handleChangelogClick = () => {
 		commands.showWindow({ Settings: { page: "changelog" } });
-		getCurrentWindow().hide();
 		const version = currentVersion();
 		if (version) {
 			setChangelogState({

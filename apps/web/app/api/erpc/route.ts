@@ -1,7 +1,7 @@
-import { RpcAuthMiddlewareLive, RpcsLive } from "@cap/web-backend";
-import { Rpcs } from "@cap/web-domain";
 import { HttpServer } from "@effect/platform";
 import { RpcSerialization, RpcServer } from "@effect/rpc";
+import { RpcAuthMiddlewareLive, RpcsLive } from "@inflight/web-backend";
+import { Rpcs } from "@inflight/web-domain";
 import { Layer } from "effect";
 import { Dependencies } from "@/lib/server";
 

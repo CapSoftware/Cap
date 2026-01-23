@@ -1,13 +1,13 @@
 "use client";
 
-import { buildEnv, NODE_ENV } from "@cap/env";
-import { Button } from "@cap/ui";
 import {
 	faChartSimple,
 	faChevronDown,
 	faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { buildEnv, NODE_ENV } from "@inflight/env";
+import { Button } from "@inflight/ui";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";

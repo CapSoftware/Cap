@@ -1,6 +1,6 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import {
 	Button,
 	Logo,
@@ -11,8 +11,8 @@ import {
 	NavigationMenuList,
 	NavigationMenuTrigger,
 	navigationMenuTriggerStyle,
-} from "@cap/ui";
-import { classNames } from "@cap/utils";
+} from "@inflight/ui";
+import { classNames } from "@inflight/utils";
 import { Clapperboard, Zap } from "lucide-react";
 import { motion } from "motion/react";
 import Image from "next/image";

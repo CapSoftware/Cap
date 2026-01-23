@@ -2043,7 +2043,7 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
         let bundle_id =
             std::env::var("CAP_BUNDLE_ID").unwrap_or_else(|_| "com.apple.Terminal".to_string());
         #[cfg(not(debug_assertions))]
-        let bundle_id = "so.cap.desktop";
+        let bundle_id = "co.inflight.desktop";
 
         Command::new("tccutil")
             .arg("reset")
@@ -2063,7 +2063,7 @@ async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
     let bundle_id = "com.apple.Terminal";
     #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+    let bundle_id = "co.inflight.desktop";
 
     Command::new("tccutil")
         .arg("reset")
@@ -2607,7 +2607,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 } else {
                     (
                         option_env!("VITE_SERVER_URL")
-                            .unwrap_or("https://cap.so")
+                            .unwrap_or("https://inflight.co")
                             .to_string(),
                         true,
                     )

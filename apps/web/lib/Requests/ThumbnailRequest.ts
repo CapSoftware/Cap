@@ -1,5 +1,5 @@
-import type { Video } from "@cap/web-domain";
 import { dataLoader } from "@effect/experimental/RequestResolver";
+import type { Video } from "@inflight/web-domain";
 import { Effect, Request, RequestResolver } from "effect";
 import type { NonEmptyArray } from "effect/Array";
 import { Rpc } from "@/lib/Rpcs";

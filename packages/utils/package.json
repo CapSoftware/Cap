@@ -1,5 +1,5 @@
 {
-	"name": "@cap/utils",
+	"name": "@inflight/utils",
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts"
@@ -20,7 +20,7 @@
 	},
 	"dependencies": {
 		"@aws-sdk/client-s3": "^3.485.0",
-		"@cap/env": "workspace:*",
+		"@inflight/env": "workspace:*",
 		"clsx": "^2.0.0",
 		"dub": "^0.64.0",
 		"stripe": "^14.24.0",

@@ -1,5 +1,5 @@
-import { Avatar } from "@cap/ui";
-import type { ImageUpload } from "@cap/web-domain";
+import { Avatar } from "@inflight/ui";
+import type { ImageUpload } from "@inflight/web-domain";
 
 interface SignedImageUrlProps {
 	image: ImageUpload.ImageUrl | null | undefined;

@@ -1,6 +1,6 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import Link from "next/link";
 import { useState } from "react";
 

@@ -1,5 +1,5 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@cap/ui";
-import type { ImageUpload } from "@cap/web-domain";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@inflight/ui";
+import type { ImageUpload } from "@inflight/web-domain";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 
 interface OrganizationMember {

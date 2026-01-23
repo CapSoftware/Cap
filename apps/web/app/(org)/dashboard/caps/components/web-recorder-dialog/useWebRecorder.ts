@@ -1,6 +1,6 @@
 "use client";
 
-import { Organisation } from "@cap/web-domain";
+import { Organisation } from "@inflight/web-domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { Cause, Exit, Option } from "effect";
 import { useRouter } from "next/navigation";

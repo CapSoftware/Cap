@@ -1,5 +1,5 @@
 {
-	"name": "@cap/discord-bot",
+	"name": "@inflight/discord-bot",
 	"private": true,
 	"scripts": {
 		"deploy": "wrangler deploy",

@@ -17,7 +17,7 @@
 		"types": [
 			"vite/client",
 			"vinxi/client",
-			"@cap/ui-solid/types",
+			"@inflight/ui-solid/types",
 			"vitest/importMeta"
 		],
 

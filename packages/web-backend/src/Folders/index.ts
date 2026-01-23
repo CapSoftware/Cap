@@ -1,4 +1,4 @@
-import * as Db from "@cap/database/schema";
+import * as Db from "@inflight/database/schema";
 import {
 	CurrentUser,
 	type DatabaseError,
@@ -7,7 +7,7 @@ import {
 	Policy,
 	type Space,
 	User,
-} from "@cap/web-domain";
+} from "@inflight/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 

@@ -1,10 +1,10 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoIdLength } from "@cap/database/helpers";
-import { spaceMembers, spaces } from "@cap/database/schema";
-import { Space, User } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoIdLength } from "@inflight/database/helpers";
+import { spaceMembers, spaces } from "@inflight/database/schema";
+import { Space, User } from "@inflight/web-domain";
 import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";

@@ -1,9 +1,9 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, spaceVideos, videos } from "@cap/database/schema";
-import type { Space, Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { sharedVideos, spaceVideos, videos } from "@inflight/database/schema";
+import type { Space, Video } from "@inflight/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 

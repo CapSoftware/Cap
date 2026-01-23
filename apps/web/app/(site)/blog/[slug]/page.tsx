@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import { format, parseISO } from "date-fns";
 import type { Metadata } from "next";
 import Image from "next/image";

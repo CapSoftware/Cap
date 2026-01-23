@@ -1,1 +1,1 @@
-module.exports = require("@cap/ui-solid/tailwind");
+module.exports = require("@inflight/ui-solid/tailwind");

@@ -1,15 +1,15 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoId } from "@inflight/database/helpers";
 import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
 	videos,
-} from "@cap/database/schema";
-import type { Organisation, Video } from "@cap/web-domain";
+} from "@inflight/database/schema";
+import type { Organisation, Video } from "@inflight/web-domain";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 

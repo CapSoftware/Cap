@@ -7,11 +7,18 @@ export default function useRequestPermission() {
 
 	async function requestPermission(type: "camera" | "microphone") {
 		try {
-			if (type === "camera") {
-				await commands.resetCameraPermissions();
-			} else if (type === "microphone") {
-				await commands.resetMicrophonePermissions();
+			const permissions = await commands.doPermissionsCheck(false);
+			const currentStatus =
+				type === "camera" ? permissions.camera : permissions.microphone;
+
+			if (currentStatus === "denied") {
+				if (type === "camera") {
+					await commands.resetCameraPermissions();
+				} else if (type === "microphone") {
+					await commands.resetMicrophonePermissions();
+				}
 			}
+
 			await commands.requestPermission(type);
 			await queryClient.refetchQueries(getPermissions);
 		} catch (error) {

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Organisation } from "@cap/web-domain";
+import type { Organisation } from "@inflight/web-domain";
 import type React from "react";
 import { addVideosToOrganization } from "@/actions/organizations/add-videos";
 import { getOrganizationVideoIds } from "@/actions/organizations/get-organization-videos";

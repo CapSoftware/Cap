@@ -1,4 +1,4 @@
-import { ImageUpload } from "@cap/web-domain";
+import { ImageUpload } from "@inflight/web-domain";
 import { Effect, Option } from "effect";
 
 import { Database, type DbClient } from "../Database";

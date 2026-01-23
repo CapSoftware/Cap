@@ -1,6 +1,6 @@
-import { db } from "@cap/database";
-import { organizations } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { db } from "@inflight/database";
+import { organizations } from "@inflight/database/schema";
+import { buildEnv, serverEnv } from "@inflight/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";

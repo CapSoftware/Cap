@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { createWritableMemo } from "@solid-primitives/memo";
 import {
 	isPermissionGranted,
@@ -298,10 +298,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const isManagedWindowsApp = (window: CaptureWindow) => {
 		const bundle = window.bundle_identifier?.toLowerCase() ?? "";
-		if (bundle.includes("so.cap.desktop")) {
+		if (bundle.includes("co.inflight.desktop")) {
 			return true;
 		}
-		return window.owner_name.toLowerCase().includes("cap");
+		return window.owner_name.toLowerCase().includes("inflight");
 	};
 
 	const isWindowAvailable = (window: CaptureWindow) => {

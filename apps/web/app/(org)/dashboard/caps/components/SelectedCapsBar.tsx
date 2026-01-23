@@ -1,8 +1,8 @@
 "use client";
 
-import { Button } from "@cap/ui";
 import { faFilm, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
@@ -14,7 +14,7 @@ interface SelectedCapsBarProps {
 	isDeleting: boolean;
 }
 
-import type { Video } from "@cap/web-domain";
+import type { Video } from "@inflight/web-domain";
 import { useState } from "react";
 
 export const SelectedCapsBar = ({

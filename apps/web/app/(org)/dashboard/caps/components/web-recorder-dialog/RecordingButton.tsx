@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import type { SVGProps } from "react";
 
 interface RecordingButtonProps {

@@ -1,5 +1,5 @@
 {
-	"name": "@cap/env",
+	"name": "@inflight/env",
 	"private": true,
 	"type": "module",
 	"main": "./index.ts",

@@ -10,15 +10,18 @@ const styles = cva(
 		},
 		variants: {
 			variant: {
-				primary: "bg-gray-12 dark-button-shadow text-gray-1 disabled:bg-gray-6 disabled:text-gray-9",
-				blue: "bg-blue-500 text-white border border-blue-600 shadow-[0_1.50px_0_0_rgba(255,255,255,0.20)_inset] hover:bg-blue-600 disabled:bg-gray-6 disabled:text-gray-9",
-				destructive: "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-900",
+				primary:
+					"bg-gray-12 dark-button-shadow text-gray-1 disabled:bg-gray-6 disabled:text-gray-1",
+				blue: "bg-blue-500 text-white border border-blue-600 shadow-[0_1.50px_0_0_rgba(255,255,255,0.20)_inset] hover:bg-blue-600 disabled:bg-gray-6 disabled:text-gray-1",
+				destructive:
+					"bg-red-500 text-white hover:bg-red-600 disabled:bg-red-900",
 				outline:
 					"border border-gray-4 hover:border-gray-12 hover:bg-gray-12 hover:text-gray-1 text-gray-12 disabled:bg-gray-8",
-				white: "bg-gray-3 border border-gray-5 text-gray-12 hover:bg-gray-4 disabled:bg-gray-8",
+				white:
+					"bg-gray-3 border border-gray-5 text-gray-12 hover:bg-gray-4 disabled:bg-gray-8",
 				ghost: "hover:bg-white/20 text-gray-12 hover:text-white",
-				gray: "bg-gray-5 data-[selected=true]:!bg-gray-9 hover:bg-gray-7 border gray-button-border gray-button-shadow text-gray-12 disabled:bg-gray-8 disabled:text-gray-9",
-				dark: "bg-gray-12 dark-button-border dark-button-shadow hover:bg-gray-11 border text-gray-1 disabled:cursor-not-allowed disabled:text-gray-10 disabled:bg-gray-7 disabled:border-gray-8",
+				gray: "bg-gray-5 data-[selected=true]:!bg-gray-9 hover:bg-gray-7 border gray-button-border gray-button-shadow text-gray-12 disabled:bg-gray-8 disabled:text-gray-1",
+				dark: "bg-gray-12 dark-button-border dark-button-shadow hover:bg-gray-11 border text-gray-1 disabled:cursor-not-allowed disabled:text-gray-1 disabled:bg-gray-7 disabled:border-gray-8",
 				darkgradient:
 					"bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
 				radialblue:
@@ -31,9 +34,17 @@ const styles = cva(
 				lg: "text-[0.875rem] px-[1rem] h-[2.25rem]",
 			},
 		},
-	}
+	},
 );
 
-export function Button(props: VariantProps<typeof styles> & ComponentProps<"button">) {
-	return <button type="button" {...props} class={styles({ ...props, class: props.class })} />;
+export function Button(
+	props: VariantProps<typeof styles> & ComponentProps<"button">,
+) {
+	return (
+		<button
+			type="button"
+			{...props}
+			class={styles({ ...props, class: props.class })}
+		/>
+	);
 }

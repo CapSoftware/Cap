@@ -1,10 +1,10 @@
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
-import { db } from "@cap/database";
-import { decrypt, encrypt } from "@cap/database/crypto";
-import { nanoId } from "@cap/database/helpers";
-import { s3Buckets } from "@cap/database/schema";
-import { S3Bucket } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
+import { db } from "@inflight/database";
+import { decrypt, encrypt } from "@inflight/database/crypto";
+import { nanoId } from "@inflight/database/helpers";
+import { s3Buckets } from "@inflight/database/schema";
+import { S3Bucket } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";

@@ -1,9 +1,12 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { comments as commentsSchema, videos } from "@cap/database/schema";
-import { NODE_ENV } from "@cap/env";
-import { Avatar, Logo } from "@cap/ui";
+import type { userSelectProps } from "@inflight/database/auth/session";
+import type {
+	comments as commentsSchema,
+	videos,
+} from "@inflight/database/schema";
+import { NODE_ENV } from "@inflight/env";
+import { Avatar, Logo } from "@inflight/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
 import {

@@ -1,4 +1,4 @@
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@inflight/env";
 import { Effect } from "effect";
 
 const DEFAULT_DATASOURCE = "analytics_events";

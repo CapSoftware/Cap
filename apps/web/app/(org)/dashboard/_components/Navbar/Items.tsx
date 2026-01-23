@@ -1,5 +1,11 @@
 "use client";
-import { buildEnv } from "@cap/env";
+import {
+	faBuilding,
+	faCircleInfo,
+	faLink,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { buildEnv } from "@inflight/env";
 import {
 	Button,
 	Command,
@@ -16,14 +22,8 @@ import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
-} from "@cap/ui";
-import { classNames } from "@cap/utils";
-import {
-	faBuilding,
-	faCircleInfo,
-	faLink,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+} from "@inflight/ui";
+import { classNames } from "@inflight/utils";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";

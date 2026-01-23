@@ -1,3 +1,5 @@
+import { faGear } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
 	Button,
 	Dialog,
@@ -6,10 +8,8 @@ import {
 	DialogHeader,
 	DialogTitle,
 	Switch,
-} from "@cap/ui";
-import type { Video } from "@cap/web-domain";
-import { faGear } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+} from "@inflight/ui";
+import type { Video } from "@inflight/web-domain";
 import clsx from "clsx";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";

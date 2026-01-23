@@ -1,5 +1,5 @@
-import { LoadingSpinner } from "@cap/ui";
 import type { FontAwesomeIconProps } from "@fortawesome/react-fontawesome";
+import { LoadingSpinner } from "@inflight/ui";
 import type { ReactElement } from "react";
 import React from "react";
 

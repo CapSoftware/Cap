@@ -1,4 +1,4 @@
-import { LoadingSpinner } from "@cap/ui";
+import { LoadingSpinner } from "@inflight/ui";
 import clsx from "clsx";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";

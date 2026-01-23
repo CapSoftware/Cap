@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import Link from "next/link";
 import { type ReactNode, useEffect } from "react";
 import type { ToolPageContent } from "@/components/tools/types";
