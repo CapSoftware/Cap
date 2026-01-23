@@ -413,10 +413,7 @@ pub async fn start_recording(
                         &app,
                         false,
                         None,
-                        Some(format!(
-                            "{target_name} {}",
-                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-                        )),
+                        Some("Screen Recording".to_string()),
                         None,
                         inputs.organization_id.clone(),
                         inputs.workspace_id.clone(),
@@ -474,7 +471,7 @@ pub async fn start_recording(
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
-        pretty_name: format!("{target_name} {date_time}"),
+        pretty_name: "Screen Recording".to_string(),
         inner: match inputs.mode {
             RecordingMode::Studio => {
                 RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
