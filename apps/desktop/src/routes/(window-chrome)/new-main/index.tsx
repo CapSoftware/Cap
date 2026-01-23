@@ -979,7 +979,7 @@ function Page() {
 			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
 			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
-		else setCamera.mutate(null);
+		else if (rawOptions.cameraID === null) setCamera.mutate(null);
 	});
 
 	const license = createLicenseQuery();

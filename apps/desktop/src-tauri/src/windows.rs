@@ -475,15 +475,21 @@ impl ShowCapWindow {
                     }
                 }
 
-                self.window_builder(
-                    app,
-                    format!("/settings/{}", page.clone().unwrap_or_default()),
-                )
-                .resizable(true)
-                .maximized(false)
-                .center()
-                .transparent(true)
-                .build()?
+                let window = self
+                    .window_builder(
+                        app,
+                        format!("/settings/{}", page.clone().unwrap_or_default()),
+                    )
+                    .resizable(true)
+                    .maximized(false)
+                    .center()
+                    .transparent(true)
+                    .build()?;
+
+                #[cfg(target_os = "macos")]
+                crate::platform::set_window_level(window.as_ref().window(), 55);
+
+                window
             }
             Self::Editor { .. } => {
                 if let Some(main) = CapWindowId::Main.get(app) {

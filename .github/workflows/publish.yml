@@ -173,6 +173,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Fix DMG icon positions
+        if: ${{ runner.os == 'macOS' }}
+        working-directory: apps/desktop
+        run: pnpm fix-dmg
+        env:
+          TAURI_ENV_TARGET_TRIPLE: ${{ matrix.settings.target }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
       # - name: Upload unsigned Windows installer
       #   if: ${{ runner.os == 'Windows' }}
       #   id: upload_unsigned_windows_installer
