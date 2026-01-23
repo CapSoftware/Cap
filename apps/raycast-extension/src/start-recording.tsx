@@ -18,14 +18,12 @@ export default function Command() {
         setIsLoading(true);
         try {
             const captureMode =
-                values.captureType === "screen"
-                    ? { screen: values.targetName }
-                    : { window: values.targetName };
+                values.captureType === "screen" ? { screen: values.targetName } : { window: values.targetName };
 
             await deeplink.startRecording({
                 captureMode,
-                camera: values.camera ? { Device: "default" } : null,
-                micLabel: values.microphone ? "default" : null,
+                camera: null,
+                micLabel: null,
                 captureSystemAudio: values.systemAudio,
                 mode: values.mode,
             });

@@ -1,7 +1,3 @@
-/**
- * Utility functions for constructing and triggering Cap deeplinks
- */
-
 export interface CaptureTarget {
     display?: { id: string };
     window?: { id: string };
@@ -12,27 +8,18 @@ export interface DeviceOrModelID {
     ModelID?: string;
 }
 
-/**
- * Builds a Cap deeplink URL from an action object
- */
 export function buildDeeplinkURL(action: Record<string, any>): string {
     const jsonValue = JSON.stringify(action);
     const encodedValue = encodeURIComponent(jsonValue);
     return `cap-desktop://action?value=${encodedValue}`;
 }
 
-/**
- * Opens a Cap deeplink URL
- */
 export async function triggerDeeplink(action: Record<string, any>): Promise<void> {
     const url = buildDeeplinkURL(action);
     const { open } = await import("@raycast/api");
     await open(url);
 }
 
-/**
- * Start recording deeplink
- */
 export async function startRecording(options: {
     captureMode: { screen: string } | { window: string };
     camera?: DeviceOrModelID | null;
@@ -41,95 +28,62 @@ export async function startRecording(options: {
     mode?: "Studio" | "Instant";
 }): Promise<void> {
     const action = {
-        startRecording: {
-            captureMode: options.captureMode,
+        start_recording: {
+            capture_mode: options.captureMode,
             camera: options.camera ?? null,
-            micLabel: options.micLabel ?? null,
-            captureSystemAudio: options.captureSystemAudio ?? false,
+            mic_label: options.micLabel ?? null,
+            capture_system_audio: options.captureSystemAudio ?? false,
             mode: options.mode ?? "Studio",
         },
     };
     await triggerDeeplink(action);
 }
 
-/**
- * Stop recording deeplink
- */
 export async function stopRecording(): Promise<void> {
-    await triggerDeeplink({ stopRecording: {} });
+    await triggerDeeplink({ stop_recording: {} });
 }
 
-/**
- * Pause recording deeplink
- */
 export async function pauseRecording(): Promise<void> {
-    await triggerDeeplink({ pauseRecording: {} });
+    await triggerDeeplink({ pause_recording: {} });
 }
 
-/**
- * Resume recording deeplink
- */
 export async function resumeRecording(): Promise<void> {
-    await triggerDeeplink({ resumeRecording: {} });
+    await triggerDeeplink({ resume_recording: {} });
 }
 
-/**
- * Toggle pause recording deeplink
- */
 export async function togglePauseRecording(): Promise<void> {
-    await triggerDeeplink({ togglePauseRecording: {} });
+    await triggerDeeplink({ toggle_pause_recording: {} });
 }
 
-/**
- * Take screenshot deeplink
- */
 export async function takeScreenshot(captureTarget: CaptureTarget): Promise<void> {
     const action = {
-        takeScreenshot: {
-            captureTarget,
+        take_screenshot: {
+            capture_target: captureTarget,
         },
     };
     await triggerDeeplink(action);
 }
 
-/**
- * Set camera deeplink
- */
 export async function setCamera(id: DeviceOrModelID | null): Promise<void> {
-    await triggerDeeplink({ setCamera: { id } });
+    await triggerDeeplink({ set_camera: { id } });
 }
 
-/**
- * Set microphone deeplink
- */
 export async function setMicrophone(label: string | null): Promise<void> {
-    await triggerDeeplink({ setMicrophone: { label } });
+    await triggerDeeplink({ set_microphone: { label } });
 }
 
-/**
- * List cameras deeplink (output goes to console)
- */
 export async function listCameras(): Promise<void> {
-    await triggerDeeplink({ listCameras: {} });
+    await triggerDeeplink({ list_cameras: {} });
 }
 
-/**
- * List microphones deeplink (output goes to console)
- */
 export async function listMicrophones(): Promise<void> {
-    await triggerDeeplink({ listMicrophones: {} });
+    await triggerDeeplink({ list_microphones: {} });
 }
 
-/**
- * List displays deeplink (output goes to console)
- */
 export async function listDisplays(): Promise<void> {
-    await triggerDeeplink({ listDisplays: {} });
+    await triggerDeeplink({ list_displays: {} });
 }
 
-/**
- * List windows deeplink (output goes to console)
- */
 export async function listWindows(): Promise<void> {
-    await triggerDeeplink({ listWindows: {} });
+    await triggerDeeplink({ list_windows: {} });
 }

@@ -1,4 +1,4 @@
-import { showToast, Toast, open } from "@raycast/api";
+import { showToast, Toast } from "@raycast/api";
 import * as deeplink from "./utils/deeplink";
 
 export default async function Command() {

@@ -186,7 +186,7 @@ impl DeepLinkAction {
                 let cameras = crate::recording::list_cameras();
                 let cameras_json = serde_json::to_string(&cameras)
                     .map_err(|e| format!("Failed to serialize cameras: {}", e))?;
-                eprintln!("Available cameras: {}", cameras_json);
+                tracing::info!("Available cameras: {}", cameras_json);
                 Ok(())
             }
             DeepLinkAction::ListMicrophones => {
@@ -194,7 +194,7 @@ impl DeepLinkAction {
                 let microphones: Vec<String> = MicrophoneFeed::list().keys().cloned().collect();
                 let mics_json = serde_json::to_string(&microphones)
                     .map_err(|e| format!("Failed to serialize microphones: {}", e))?;
-                eprintln!("Available microphones: {}", mics_json);
+                tracing::info!("Available microphones: {}", mics_json);
                 Ok(())
             }
             DeepLinkAction::ListDisplays => {
@@ -210,7 +210,7 @@ impl DeepLinkAction {
                     .collect();
                 let displays_json = serde_json::to_string(&displays_data)
                     .map_err(|e| format!("Failed to serialize displays: {}", e))?;
-                eprintln!("Available displays: {}", displays_json);
+                tracing::info!("Available displays: {}", displays_json);
                 Ok(())
             }
             DeepLinkAction::ListWindows => {
@@ -226,7 +226,7 @@ impl DeepLinkAction {
                     .collect();
                 let windows_json = serde_json::to_string(&windows_data)
                     .map_err(|e| format!("Failed to serialize windows: {}", e))?;
-                eprintln!("Available windows: {}", windows_json);
+                tracing::info!("Available windows: {}", windows_json);
                 Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
