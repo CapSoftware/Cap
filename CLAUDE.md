@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Cap is the open source alternative to Loom. It's a Turborepo monorepo with a Tauri v2 desktop app (Rust + SolidStart) and a Next.js web app.
+Inflight Recorder is a video messaging tool (fork of Cap, the open source Loom alternative). It's a Turborepo monorepo with a Tauri v2 desktop app (Rust + SolidStart) and a Next.js web app.
 
 **Core Applications:**
-- `apps/web` — Next.js 14 (App Router) web application for sharing, management, dashboard
+- `apps/web` — Next.js 15 (App Router) web application for sharing, management, dashboard
 - `apps/desktop` — Tauri v2 desktop app with SolidStart (recording, editing)
 - `apps/cli` — Rust CLI tool
 - `apps/discord-bot` — Discord integration bot
@@ -19,14 +19,19 @@ Cap is the open source alternative to Loom. It's a Turborepo monorepo with a Tau
 - `packages/ui-solid` — SolidJS components for desktop
 - `packages/utils` — Shared utilities and types
 - `packages/env` — Zod-validated environment modules
-- `packages/web-*` — Effect-based web API layers
+- `packages/web-domain` — Shared domain types (Video, User, Organisation, etc.)
+- `packages/web-backend` — Effect-based backend services (Videos, S3Buckets, Users, etc.)
+- `packages/web-api-contract` — ts-rest API contracts for desktop
+- `packages/web-api-contract-effect` — Effect-based HTTP API contracts
 
 **Rust Crates** (`crates/*`):
-- `media*`, `audio`, `video-decode` — Media processing pipeline
 - `recording` — Core recording functionality
+- `media`, `audio`, `video-decode` — Media processing pipeline
 - `rendering`, `rendering-skia` — Video rendering and effects
 - `camera*` — Cross-platform camera handling (AVFoundation, DirectShow, MediaFoundation)
-- `scap-*` — Screen capture implementations
+- `scap-*` — Screen capture implementations (ScreenCaptureKit, Direct3D)
+- `enc-*` — Encoding implementations (FFmpeg, AVFoundation, MediaFoundation, GIF)
+- `export`, `editor`, `project` — Export and editing functionality
 
 ## Key Commands
 
@@ -94,7 +99,7 @@ Do not start additional dev servers unless asked. Assume the developer already h
 Always run: `pnpm db:generate` → `pnpm db:push` → test
 
 ### Desktop Permissions (macOS)
-When running from terminal, grant screen/mic permissions to the terminal app, not the Cap app.
+When running from terminal, grant screen/mic permissions to the terminal app, not the Inflight app.
 
 ## Architecture Patterns
 
@@ -103,8 +108,8 @@ When running from terminal, grant screen/mic permissions to the terminal app, no
 - **Node**: 20+
 - **Rust**: 1.88+
 - **Build**: Turborepo
-- **Frontend (Web)**: React 19 + Next.js 14.2.x (App Router)
-- **Desktop**: Tauri v2, SolidStart
+- **Frontend (Web)**: React 19 + Next.js 15 (App Router)
+- **Desktop**: Tauri v2, SolidStart, Solid.js
 - **Database**: MySQL (PlanetScale) with Drizzle ORM
 - **Storage**: S3-compatible (AWS, Cloudflare R2, MinIO for local)
 - **AI**: Groq (primary) + OpenAI (fallback) — Server Actions only
@@ -113,13 +118,14 @@ When running from terminal, grant screen/mic permissions to the terminal app, no
 ```typescript
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { videos } from "@inflight/database/schema";
 
-export async function updateVideo(data: FormData) {
+export async function updateVideo(videoId: string, title: string) {
   const user = await getCurrentUser();
   if (!user?.id) throw new Error("Unauthorized");
-  return await db().update(videos).set({ ... }).where(eq(videos.id, id));
+  return await db().update(videos).set({ name: title }).where(eq(videos.id, videoId));
 }
 ```
 
@@ -142,6 +148,24 @@ await events.uploadProgress.listen((event) => {
 });
 ```
 
+### Effect System (API Routes)
+API routes use `@effect/platform`'s `HttpApi` pattern. The main handler in `apps/web/app/api/[[...route]]/route.ts`:
+```typescript
+import { HttpApiScalar } from "@effect/platform";
+import { HttpLive } from "@inflight/web-backend";
+import { Layer } from "effect";
+import { apiToHandler } from "@/lib/server";
+
+const handler = apiToHandler(
+  HttpApiScalar.layer({ path: "/api" }).pipe(Layer.provideMerge(HttpLive)),
+);
+export const GET = handler;
+export const POST = handler;
+```
+
+Backend services are in `packages/web-backend/src/` organized by domain (Videos, Users, S3Buckets, etc.).
+Run server effects through `runPromise` from `apps/web/lib/server.ts`.
+
 ### React Query Pattern
 ```typescript
 const { data, isLoading } = useQuery({
@@ -149,27 +173,16 @@ const { data, isLoading } = useQuery({
   queryFn: () => getUserVideos(),
   staleTime: 5 * 60 * 1000,
 });
-
-const mutation = useMutation({
-  mutationFn: updateVideo,
-  onSuccess: (updated) => {
-    queryClient.setQueryData(["video", updated.id], updated);
-  },
-});
 ```
-
-### Effect System
-- API routes use `@effect/platform`'s `HttpApi`/`HttpApiBuilder` pattern
-- Acquire services via `yield*` in `Effect.gen` blocks
-- Run server effects through `EffectRuntime.runPromise` from `@/lib/server`
-- Client uses `useEffectQuery`/`useEffectMutation` from `@/lib/EffectRuntime`
 
 ## Important File Patterns
 
 - `apps/web/actions/**/*.ts` — Server Actions ("use server")
 - `packages/database/schema.ts` — Database schema
-- `apps/web/app/api/*` — API routes (Effect/Hono-based)
-- `packages/web-api-contract-effect` — Shared HTTP contracts for desktop
+- `apps/web/app/api/*` — API routes (Effect-based)
+- `packages/web-backend/src/` — Backend services (Videos, Users, S3Buckets, Folders, etc.)
+- `packages/web-domain/` — Shared domain types
+- `apps/web/lib/server.ts` — Effect runtime and `apiToHandler` utility
 
 ## Conventions
 
