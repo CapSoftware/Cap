@@ -1,8 +1,8 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { notifications, users } from "@cap/database/schema";
-import { Notification as APINotification } from "@cap/web-api-contract";
-import { ImageUploads } from "@cap/web-backend";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { notifications, users } from "@inflight/database/schema";
+import { Notification as APINotification } from "@inflight/web-api-contract";
+import { ImageUploads } from "@inflight/web-backend";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";

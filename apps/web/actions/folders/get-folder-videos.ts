@@ -1,9 +1,9 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, spaceVideos } from "@cap/database/schema";
-import type { Folder, Space, Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { sharedVideos, spaceVideos } from "@inflight/database/schema";
+import type { Folder, Space, Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 
 export async function getFolderVideoIds(

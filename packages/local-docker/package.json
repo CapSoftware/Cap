@@ -1,5 +1,5 @@
 {
-	"name": "@cap/local-docker",
+	"name": "@inflight/local-docker",
 	"version": "0.0.0",
 	"main": "./src/index.tsx",
 	"types": "./src/index.tsx",

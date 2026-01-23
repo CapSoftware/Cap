@@ -1,13 +1,13 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import type { Space } from "@cap/web-domain";
 import {
 	faLayerGroup,
 	faPlus,
 	faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
+import type { Space } from "@inflight/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";

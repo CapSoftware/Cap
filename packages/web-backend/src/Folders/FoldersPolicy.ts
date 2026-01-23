@@ -1,4 +1,4 @@
-import { type Folder, Policy } from "@cap/web-domain";
+import { type Folder, Policy } from "@inflight/web-domain";
 import { Effect } from "effect";
 
 import { Database } from "../Database.ts";

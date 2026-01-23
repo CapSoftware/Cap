@@ -1,7 +1,11 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { makePersisted } from "@solid-primitives/storage";
-import { createMutation, createQuery, keepPreviousData } from "@tanstack/solid-query";
+import {
+	createMutation,
+	createQuery,
+	keepPreviousData,
+} from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { ask, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -39,7 +43,14 @@ import {
 } from "~/utils/tauri";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
-import { Dialog, DialogContent, MenuItem, MenuItemList, PopperContent, topSlideAnimateClasses } from "./ui";
+import {
+	Dialog,
+	DialogContent,
+	MenuItem,
+	MenuItemList,
+	PopperContent,
+	topSlideAnimateClasses,
+} from "./ui";
 
 class SilentError extends Error {}
 
@@ -104,7 +115,15 @@ interface Settings {
 	workspaceId?: string | null;
 }
 export function ExportDialog() {
-	const { dialog, setDialog, editorInstance, setExportState, exportState, meta, refetchMeta } = useEditorContext();
+	const {
+		dialog,
+		setDialog,
+		editorInstance,
+		setExportState,
+		exportState,
+		meta,
+		refetchMeta,
+	} = useEditorContext();
 
 	const projectPath = editorInstance.path;
 
@@ -112,8 +131,13 @@ export function ExportDialog() {
 	const organisations = createOrganizationsQuery();
 
 	const hasTransparentBackground = () => {
-		const backgroundSource = editorInstance.savedProjectConfig.background.source;
-		return backgroundSource.type === "color" && backgroundSource.alpha !== undefined && backgroundSource.alpha < 255;
+		const backgroundSource =
+			editorInstance.savedProjectConfig.background.source;
+		return (
+			backgroundSource.type === "color" &&
+			backgroundSource.alpha !== undefined &&
+			backgroundSource.alpha < 255
+		);
 	};
 
 	const isCancellationError = (error: unknown) =>
@@ -129,19 +153,22 @@ export function ExportDialog() {
 			resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
 			compression: "Minimal",
 		}),
-		{ name: "export_settings" }
+		{ name: "export_settings" },
 	);
 
 	const settings = mergeProps(_settings, () => {
 		const ret: Partial<Settings> = {};
-		if (hasTransparentBackground() && _settings.format === "Mp4") ret.format = "Gif";
+		if (hasTransparentBackground() && _settings.format === "Mp4")
+			ret.format = "Gif";
 		// Ensure GIF is not selected when exportTo is "link"
-		else if (_settings.format === "Gif" && _settings.exportTo === "link") ret.format = "Mp4";
+		else if (_settings.format === "Gif" && _settings.exportTo === "link")
+			ret.format = "Mp4";
 		else if (!["Mp4", "Gif"].includes(_settings.format)) ret.format = "Mp4";
 
 		Object.defineProperty(ret, "organizationId", {
 			get() {
-				if (!_settings.organizationId && organisations().length > 0) return organisations()[0].id;
+				if (!_settings.organizationId && organisations().length > 0)
+					return organisations()[0].id;
 
 				return _settings.organizationId;
 			},
@@ -152,7 +179,9 @@ export function ExportDialog() {
 
 	let cancelCurrentExport: (() => void) | null = null;
 
-	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) => {
+	const exportWithSettings = (
+		onProgress: (progress: FramesRendered) => void,
+	) => {
 		const { promise, cancel } = createExportTask(
 			projectPath,
 			settings.format === "Mp4"
@@ -164,7 +193,7 @@ export function ExportDialog() {
 							y: settings.resolution.height,
 						},
 						compression: settings.compression,
-				  }
+					}
 				: {
 						format: "Gif",
 						fps: settings.fps,
@@ -173,8 +202,8 @@ export function ExportDialog() {
 							y: settings.resolution.height,
 						},
 						quality: null,
-				  },
-			onProgress
+					},
+			onProgress,
 		);
 		cancelCurrentExport = cancel;
 		return promise.finally(() => {
@@ -229,13 +258,13 @@ export function ExportDialog() {
 							fps,
 							resolution_base: resolution,
 							compression,
-					  }
+						}
 					: {
 							format: "Gif" as const,
 							fps,
 							resolution_base: resolution,
 							quality: null,
-					  };
+						};
 			return commands.getExportEstimates(projectPath, exportSettings);
 		},
 	}));
@@ -268,7 +297,9 @@ export function ExportDialog() {
 				setExportState(reconcile({ type: "idle" }));
 				return;
 			}
-			commands.globalMessageDialog(error instanceof Error ? error.message : "Failed to copy recording");
+			commands.globalMessageDialog(
+				error instanceof Error ? error.message : "Failed to copy recording",
+			);
 			setExportState(reconcile({ type: "idle" }));
 		},
 		onSuccess() {
@@ -282,11 +313,14 @@ export function ExportDialog() {
 							() => {
 								dispose();
 							},
-							{ defer: true }
-						)
+							{ defer: true },
+						),
 					);
 				});
-			} else toast.success(`${settings.format === "Gif" ? "GIF" : "Recording"} exported to clipboard`);
+			} else
+				toast.success(
+					`${settings.format === "Gif" ? "GIF" : "Recording"} exported to clipboard`,
+				);
 		},
 	}));
 
@@ -338,7 +372,11 @@ export function ExportDialog() {
 				setExportState({ type: "idle" });
 				return;
 			}
-			commands.globalMessageDialog(error instanceof Error ? error.message : `Failed to export recording: ${error}`);
+			commands.globalMessageDialog(
+				error instanceof Error
+					? error.message
+					: `Failed to export recording: ${error}`,
+			);
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
@@ -350,11 +388,14 @@ export function ExportDialog() {
 							() => {
 								dispose();
 							},
-							{ defer: true }
-						)
+							{ defer: true },
+						),
 					);
 				});
-			} else toast.success(`${settings.format === "Gif" ? "GIF" : "Recording"} exported to file`);
+			} else
+				toast.success(
+					`${settings.format === "Gif" ? "GIF" : "Recording"} exported to file`,
+				);
 		},
 	}));
 
@@ -396,7 +437,7 @@ export function ExportDialog() {
 						if (state.type !== "uploading") return;
 
 						state.progress = Math.round(progress.progress * 100);
-					})
+					}),
 				);
 			});
 
@@ -418,19 +459,22 @@ export function ExportDialog() {
 						"Reupload",
 						uploadChannel,
 						settings.organizationId ?? null,
-						settings.workspaceId ?? null
-				  )
+						settings.workspaceId ?? null,
+					)
 				: await commands.uploadExportedVideo(
 						projectPath,
 						{ Initial: { pre_created_video: null } },
 						uploadChannel,
 						settings.organizationId ?? null,
-						settings.workspaceId ?? null
-				  );
+						settings.workspaceId ?? null,
+					);
 
-			if (result === "NotAuthenticated") throw new Error("You need to sign in to share recordings");
-			else if (result === "PlanCheckFailed") throw new Error("Failed to verify your subscription status");
-			else if (result === "UpgradeRequired") throw new Error("This feature requires an upgraded plan");
+			if (result === "NotAuthenticated")
+				throw new Error("You need to sign in to share recordings");
+			else if (result === "PlanCheckFailed")
+				throw new Error("Failed to verify your subscription status");
+			else if (result === "UpgradeRequired")
+				throw new Error("This feature requires an upgraded plan");
 		},
 		onSuccess: async () => {
 			const d = dialog();
@@ -449,7 +493,9 @@ export function ExportDialog() {
 			}
 			console.error(error);
 			if (!(error instanceof SilentError)) {
-				commands.globalMessageDialog(error instanceof Error ? error.message : "Failed to upload recording");
+				commands.globalMessageDialog(
+					error instanceof Error ? error.message : "Failed to upload recording",
+				);
 			}
 
 			setExportState(reconcile({ type: "idle" }));
@@ -485,7 +531,7 @@ export function ExportDialog() {
 					leftFooterContent={
 						<div
 							class={cx(
-								"flex overflow-hidden z-40 justify-between items-center max-w-full text-xs font-medium transition-all pointer-events-none"
+								"flex overflow-hidden z-40 justify-between items-center max-w-full text-xs font-medium transition-all pointer-events-none",
 							)}
 						>
 							<Suspense>
@@ -495,9 +541,13 @@ export function ExportDialog() {
 											<span class="flex items-center text-gray-12">
 												<IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
 												{(() => {
-													const totalSeconds = Math.round(est().duration_seconds);
+													const totalSeconds = Math.round(
+														est().duration_seconds,
+													);
 													const hours = Math.floor(totalSeconds / 3600);
-													const minutes = Math.floor((totalSeconds % 3600) / 60);
+													const minutes = Math.floor(
+														(totalSeconds % 3600) / 60,
+													);
 													const seconds = totalSeconds % 60;
 
 													if (hours > 0) {
@@ -519,9 +569,13 @@ export function ExportDialog() {
 											<span class="flex items-center text-gray-12">
 												<IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
 												{(() => {
-													const totalSeconds = Math.round(est().estimated_time_seconds);
+													const totalSeconds = Math.round(
+														est().estimated_time_seconds,
+													);
 													const hours = Math.floor(totalSeconds / 3600);
-													const minutes = Math.floor((totalSeconds % 3600) / 60);
+													const minutes = Math.floor(
+														(totalSeconds % 3600) / 60,
+													);
 													const seconds = totalSeconds % 60;
 
 													if (hours > 0) {
@@ -546,7 +600,12 @@ export function ExportDialog() {
 								<div class="flex flex-row justify-between items-center">
 									<h3 class="text-gray-12">Export to</h3>
 									<Suspense>
-										<Show when={settings.exportTo === "link" && organisations().length > 1}>
+										<Show
+											when={
+												settings.exportTo === "link" &&
+												organisations().length > 1
+											}
+										>
 											<div
 												class="text-sm text-gray-12 flex flex-row hover:opacity-60 transition-opacity duration-200"
 												onClick={async () => {
@@ -559,8 +618,8 @@ export function ExportDialog() {
 																		setSettings("organizationId", org.id);
 																	},
 																	checked: settings.organizationId === org.id,
-																})
-															)
+																}),
+															),
 														),
 													});
 													menu.popup();
@@ -568,7 +627,13 @@ export function ExportDialog() {
 											>
 												<span class="opacity-70">Organization:</span>
 												<span class="ml-1 flex flex-row ">
-													{(organisations().find((o) => o.id === settings.organizationId) ?? organisations()[0])?.name}
+													{
+														(
+															organisations().find(
+																(o) => o.id === settings.organizationId,
+															) ?? organisations()[0]
+														)?.name
+													}
 													<IconCapChevronDown />
 												</span>
 											</div>
@@ -584,10 +649,13 @@ export function ExportDialog() {
 														produce((newSettings) => {
 															newSettings.exportTo = option.value;
 															// If switching to link and GIF is selected, change to MP4
-															if (option.value === "link" && settings.format === "Gif") {
+															if (
+																option.value === "link" &&
+																settings.format === "Gif"
+															) {
 																newSettings.format = "Mp4";
 															}
-														})
+														}),
 													);
 												}}
 												data-selected={settings.exportTo === option.value}
@@ -610,35 +678,58 @@ export function ExportDialog() {
 									<For each={FORMAT_OPTIONS}>
 										{(option) => {
 											const disabledReason = () => {
-												if (option.value === "Mp4" && hasTransparentBackground())
+												if (
+													option.value === "Mp4" &&
+													hasTransparentBackground()
+												)
 													return "MP4 format does not support transparent backgrounds";
-												if (option.value === "Gif" && settings.exportTo === "link")
+												if (
+													option.value === "Gif" &&
+													settings.exportTo === "link"
+												)
 													return "Shareable links cannot be made from GIFs";
 											};
 
 											return (
-												<Tooltip content={disabledReason()} disabled={disabledReason() === undefined}>
+												<Tooltip
+													content={disabledReason()}
+													disabled={disabledReason() === undefined}
+												>
 													<Button
 														variant="gray"
 														onClick={() => {
 															setSettings(
 																produce((newSettings) => {
-																	newSettings.format = option.value as ExportFormat;
+																	newSettings.format =
+																		option.value as ExportFormat;
 
 																	if (
 																		option.value === "Gif" &&
-																		!(settings.resolution.value === "720p" || settings.resolution.value === "1080p")
+																		!(
+																			settings.resolution.value === "720p" ||
+																			settings.resolution.value === "1080p"
+																		)
 																	)
 																		newSettings.resolution = {
 																			...RESOLUTION_OPTIONS._720p,
 																		};
 
-																	if (option.value === "Gif" && GIF_FPS_OPTIONS.every((v) => v.value !== settings.fps))
+																	if (
+																		option.value === "Gif" &&
+																		GIF_FPS_OPTIONS.every(
+																			(v) => v.value !== settings.fps,
+																		)
+																	)
 																		newSettings.fps = 15;
 
-																	if (option.value === "Mp4" && FPS_OPTIONS.every((v) => v.value !== settings.fps))
+																	if (
+																		option.value === "Mp4" &&
+																		FPS_OPTIONS.every(
+																			(v) => v.value !== settings.fps,
+																		)
+																	)
 																		newSettings.fps = 30;
-																})
+																}),
 															);
 														}}
 														autofocus={false}
@@ -659,13 +750,16 @@ export function ExportDialog() {
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Frame rate</h3>
 								<KSelect<{ label: string; value: number }>
-									options={settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS}
+									options={
+										settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
+									}
 									optionValue="value"
 									optionTextValue="label"
 									placeholder="Select FPS"
-									value={(settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS).find(
-										(opt) => opt.value === settings.fps
-									)}
+									value={(settings.format === "Gif"
+										? GIF_FPS_OPTIONS
+										: FPS_OPTIONS
+									).find((opt) => opt.value === settings.fps)}
 									onChange={(option) => {
 										if (!option) return;
 										trackEvent("export_fps_changed", {
@@ -675,8 +769,13 @@ export function ExportDialog() {
 									}}
 									disallowEmptySelection
 									itemComponent={(props) => (
-										<MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-											<KSelect.ItemLabel class="flex-1">{props.item.rawValue.label}</KSelect.ItemLabel>
+										<MenuItem<typeof KSelect.Item>
+											as={KSelect.Item}
+											item={props.item}
+										>
+											<KSelect.ItemLabel class="flex-1">
+												{props.item.rawValue.label}
+											</KSelect.ItemLabel>
 										</MenuItem>
 									)}
 								>
@@ -700,7 +799,10 @@ export function ExportDialog() {
 											as={KSelect.Content}
 											class={cx(topSlideAnimateClasses, "z-50")}
 										>
-											<MenuItemList<typeof KSelect.Listbox> class="max-h-32 custom-scroll" as={KSelect.Listbox} />
+											<MenuItemList<typeof KSelect.Listbox>
+												class="max-h-32 custom-scroll"
+												as={KSelect.Listbox}
+											/>
 										</PopperContent>
 									</KSelect.Portal>
 								</KSelect>
@@ -715,7 +817,10 @@ export function ExportDialog() {
 										{(option) => (
 											<Button
 												onClick={() => {
-													setSettings("compression", option.value as ExportCompression);
+													setSettings(
+														"compression",
+														option.value as ExportCompression,
+													);
 												}}
 												variant="gray"
 												data-selected={settings.compression === option.value}
@@ -736,12 +841,18 @@ export function ExportDialog() {
 										each={
 											settings.format === "Gif"
 												? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
-												: [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p, RESOLUTION_OPTIONS._4k]
+												: [
+														RESOLUTION_OPTIONS._720p,
+														RESOLUTION_OPTIONS._1080p,
+														RESOLUTION_OPTIONS._4k,
+													]
 										}
 									>
 										{(option) => (
 											<Button
-												data-selected={settings.resolution.value === option.value}
+												data-selected={
+													settings.resolution.value === option.value
+												}
 												class="flex-1"
 												variant="gray"
 												onClick={() => setSettings("resolution", option)}
@@ -759,9 +870,10 @@ export function ExportDialog() {
 			<Show when={exportState.type !== "idle" && exportState} keyed>
 				{(exportState) => {
 					const [copyPressed, setCopyPressed] = createSignal(false);
-					const [clipboardCopyPressed, setClipboardCopyPressed] = createSignal(false);
+					const [clipboardCopyPressed, setClipboardCopyPressed] =
+						createSignal(false);
 					const [showCompletionScreen, setShowCompletionScreen] = createSignal(
-						exportState.type === "done" && exportState.action === "save"
+						exportState.type === "done" && exportState.action === "save",
 					);
 
 					createEffect(() => {
@@ -786,27 +898,37 @@ export function ExportDialog() {
 							<Dialog.Content class="text-gray-12">
 								<div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
 									<Switch>
-										<Match when={exportState.action === "copy" && exportState} keyed>
+										<Match
+											when={exportState.action === "copy" && exportState}
+											keyed
+										>
 											{(copyState) => (
 												<div class="flex flex-col gap-4 justify-center items-center h-full">
 													<h1 class="text-lg font-medium text-gray-12">
 														{copyState.type === "starting"
 															? "Preparing..."
 															: copyState.type === "rendering"
-															? settings.format === "Gif"
-																? "Rendering GIF..."
-																: "Rendering video..."
-															: copyState.type === "copying"
-															? "Copying to clipboard..."
-															: "Copied to clipboard"}
+																? settings.format === "Gif"
+																	? "Rendering GIF..."
+																	: "Rendering video..."
+																: copyState.type === "copying"
+																	? "Copying to clipboard..."
+																	: "Copied to clipboard"}
 													</h1>
 													<Show
-														when={(copyState.type === "rendering" || copyState.type === "starting") && copyState}
+														when={
+															(copyState.type === "rendering" ||
+																copyState.type === "starting") &&
+															copyState
+														}
 														keyed
 													>
 														{(copyState) => (
 															<>
-																<RenderProgress state={copyState} format={settings.format} />
+																<RenderProgress
+																	state={copyState}
+																	format={settings.format}
+																/>
 																<Button
 																	variant="ghost"
 																	size="sm"
@@ -821,31 +943,44 @@ export function ExportDialog() {
 												</div>
 											)}
 										</Match>
-										<Match when={exportState.action === "save" && exportState} keyed>
+										<Match
+											when={exportState.action === "save" && exportState}
+											keyed
+										>
 											{(saveState) => (
 												<div class="flex flex-col gap-4 justify-center items-center h-full">
 													<Show
-														when={showCompletionScreen() && saveState.type === "done"}
+														when={
+															showCompletionScreen() &&
+															saveState.type === "done"
+														}
 														fallback={
 															<>
 																<h1 class="text-lg font-medium text-gray-12">
 																	{saveState.type === "starting"
 																		? "Preparing..."
 																		: saveState.type === "rendering"
-																		? settings.format === "Gif"
-																			? "Rendering GIF..."
-																			: "Rendering video..."
-																		: saveState.type === "copying"
-																		? "Exporting to file..."
-																		: "Export completed"}
+																			? settings.format === "Gif"
+																				? "Rendering GIF..."
+																				: "Rendering video..."
+																			: saveState.type === "copying"
+																				? "Exporting to file..."
+																				: "Export completed"}
 																</h1>
 																<Show
-																	when={(saveState.type === "rendering" || saveState.type === "starting") && saveState}
+																	when={
+																		(saveState.type === "rendering" ||
+																			saveState.type === "starting") &&
+																		saveState
+																	}
 																	keyed
 																>
 																	{(copyState) => (
 																		<>
-																			<RenderProgress state={copyState} format={settings.format} />
+																			<RenderProgress
+																				state={copyState}
+																				format={settings.format}
+																			/>
 																			<Button
 																				variant="ghost"
 																				size="sm"
@@ -866,9 +1001,15 @@ export function ExportDialog() {
 																	<IconLucideCheck class="text-gray-1 size-5" />
 																</div>
 																<div class="flex flex-col gap-1 items-center">
-																	<h1 class="text-xl font-medium text-gray-12">Export Completed</h1>
+																	<h1 class="text-xl font-medium text-gray-12">
+																		Export Completed
+																	</h1>
 																	<p class="text-sm text-gray-11">
-																		Your {settings.format === "Gif" ? "GIF" : "video"} has successfully been exported
+																		Your{" "}
+																		{settings.format === "Gif"
+																			? "GIF"
+																			: "video"}{" "}
+																		has successfully been exported
 																	</p>
 																</div>
 															</div>
@@ -877,15 +1018,29 @@ export function ExportDialog() {
 												</div>
 											)}
 										</Match>
-										<Match when={exportState.action === "upload" && exportState} keyed>
+										<Match
+											when={exportState.action === "upload" && exportState}
+											keyed
+										>
 											{(uploadState) => (
 												<Switch>
-													<Match when={uploadState.type !== "done" && uploadState} keyed>
+													<Match
+														when={uploadState.type !== "done" && uploadState}
+														keyed
+													>
 														{(uploadState) => (
 															<div class="flex flex-col gap-4 justify-center items-center">
-																<h1 class="text-lg font-medium text-center text-gray-12">Uploading...</h1>
+																<h1 class="text-lg font-medium text-center text-gray-12">
+																	Uploading...
+																</h1>
 																<Switch>
-																	<Match when={uploadState.type === "uploading" && uploadState} keyed>
+																	<Match
+																		when={
+																			uploadState.type === "uploading" &&
+																			uploadState
+																		}
+																		keyed
+																	>
 																		{(uploadState) => (
 																			<ProgressView
 																				amount={uploadState.progress}
@@ -893,10 +1048,19 @@ export function ExportDialog() {
 																			/>
 																		)}
 																	</Match>
-																	<Match when={uploadState.type !== "uploading" && uploadState} keyed>
+																	<Match
+																		when={
+																			uploadState.type !== "uploading" &&
+																			uploadState
+																		}
+																		keyed
+																	>
 																		{(renderState) => (
 																			<>
-																				<RenderProgress state={renderState} format={settings.format} />
+																				<RenderProgress
+																					state={renderState}
+																					format={settings.format}
+																				/>
 																				<Button
 																					variant="ghost"
 																					size="sm"
@@ -915,8 +1079,12 @@ export function ExportDialog() {
 													<Match when={uploadState.type === "done"}>
 														<div class="flex flex-col gap-5 justify-center items-center">
 															<div class="flex flex-col gap-1 items-center">
-																<h1 class="mx-auto text-lg font-medium text-center text-gray-12">Upload Complete</h1>
-																<p class="text-sm text-gray-11">Your recording has been uploaded successfully</p>
+																<h1 class="mx-auto text-lg font-medium text-center text-gray-12">
+																	Upload Complete
+																</h1>
+																<p class="text-sm text-gray-11">
+																	Your recording has been uploaded successfully
+																</p>
 															</div>
 														</div>
 													</Match>
@@ -927,19 +1095,35 @@ export function ExportDialog() {
 								</div>
 							</Dialog.Content>
 							<Show
-								when={exportState.type === "done" && (exportState.action === "save" || exportState.action === "upload")}
+								when={
+									exportState.type === "done" &&
+									(exportState.action === "save" ||
+										exportState.action === "upload")
+								}
 							>
 								<Dialog.Footer>
-									<Show when={exportState.action === "upload" && exportState.type === "done"}>
+									<Show
+										when={
+											exportState.action === "upload" &&
+											exportState.type === "done"
+										}
+									>
 										<div class="relative">
-											<a href={meta().sharing?.link} target="_blank" rel="noreferrer" class="block">
+											<a
+												href={meta().sharing?.link}
+												target="_blank"
+												rel="noreferrer"
+												class="block"
+											>
 												<Button
 													onClick={() => {
 														setCopyPressed(true);
 														setTimeout(() => {
 															setCopyPressed(false);
 														}, 2000);
-														navigator.clipboard.writeText(meta().sharing?.link!);
+														navigator.clipboard.writeText(
+															meta().sharing?.link!,
+														);
 													}}
 													variant="dark"
 													class="flex gap-2 justify-center items-center"
@@ -955,7 +1139,12 @@ export function ExportDialog() {
 										</div>
 									</Show>
 
-									<Show when={exportState.action === "save" && exportState.type === "done"}>
+									<Show
+										when={
+											exportState.action === "save" &&
+											exportState.type === "done"
+										}
+									>
 										<div class="flex gap-4 w-full">
 											<Button
 												variant="dark"
@@ -981,7 +1170,9 @@ export function ExportDialog() {
 															setClipboardCopyPressed(false);
 														}, 2000);
 														await commands.copyVideoToClipboard(path);
-														toast.success(`${settings.format === "Gif" ? "GIF" : "Video"} copied to clipboard`);
+														toast.success(
+															`${settings.format === "Gif" ? "GIF" : "Video"} copied to clipboard`,
+														);
 													}
 												}}
 											>
@@ -1009,14 +1200,16 @@ function RenderProgress(props: { state: RenderState; format?: ExportFormat }) {
 		<ProgressView
 			amount={
 				props.state.type === "rendering"
-					? (props.state.progress.renderedCount / props.state.progress.totalFrames) * 100
+					? (props.state.progress.renderedCount /
+							props.state.progress.totalFrames) *
+						100
 					: 0
 			}
 			label={
 				props.state.type === "rendering"
 					? `Rendering ${props.format === "Gif" ? "GIF" : "video"} (${props.state.progress.renderedCount}/${
 							props.state.progress.totalFrames
-					  } frames)`
+						} frames)`
 					: "Preparing to render..."
 			}
 		/>
@@ -1027,7 +1220,10 @@ function ProgressView(props: { amount: number; label?: string }) {
 	return (
 		<>
 			<div class="w-full bg-gray-3 rounded-full h-2.5">
-				<div class="bg-blue-9 h-2.5 rounded-full" style={{ width: `${props.amount}%` }} />
+				<div
+					class="bg-blue-9 h-2.5 rounded-full"
+					style={{ width: `${props.amount}%` }}
+				/>
 			</div>
 			<p class="text-xs tabular-nums">{props.label}</p>
 		</>

@@ -1,6 +1,6 @@
 "use client";
 
-import { classNames } from "@cap/utils";
+import { classNames } from "@inflight/utils";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import * as React from "react";

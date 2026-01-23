@@ -46,10 +46,10 @@ impl LogicalBounds {
 
         let x = self.position.x().max(other.position.x());
         let y = self.position.y().max(other.position.y());
-        let right = (self.position.x() + self.size.width())
-            .min(other.position.x() + other.size.width());
-        let bottom = (self.position.y() + self.size.height())
-            .min(other.position.y() + other.size.height());
+        let right =
+            (self.position.x() + self.size.width()).min(other.position.x() + other.size.width());
+        let bottom =
+            (self.position.y() + self.size.height()).min(other.position.y() + other.size.height());
 
         Some(LogicalBounds::new(
             LogicalPosition::new(x, y),

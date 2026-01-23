@@ -1,15 +1,15 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoId } from "@inflight/database/helpers";
 import {
 	organizationMembers,
 	organizations,
 	users,
-} from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
-import { ImageUpload, Organisation, type User } from "@cap/web-domain";
+} from "@inflight/database/schema";
+import { S3Buckets } from "@inflight/web-backend";
+import { ImageUpload, Organisation, type User } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";

@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 
 /**
  * Calculate organization seats information

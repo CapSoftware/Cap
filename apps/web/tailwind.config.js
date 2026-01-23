@@ -1,1 +1,1 @@
-module.exports = require("@cap/ui/tailwind")("web");
+module.exports = require("@inflight/ui/tailwind")("web");

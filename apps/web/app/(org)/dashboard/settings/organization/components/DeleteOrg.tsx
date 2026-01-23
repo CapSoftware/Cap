@@ -1,4 +1,10 @@
-import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import {
+	Button,
+	Card,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@inflight/ui";
 import { useState } from "react";
 import { useDashboardContext } from "../../../Contexts";
 import DeleteOrgDialog from "./DeleteOrgDialog";

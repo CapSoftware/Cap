@@ -6,7 +6,7 @@
 	"build": {
 		"beforeDevCommand": "pnpm localdev",
 		"devUrl": "http://localhost:3002",
-		"beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
+		"beforeBuildCommand": "pnpm turbo build --filter @inflight/desktop",
 		"frontendDist": "../.output/public"
 	},
 	"app": {
@@ -85,9 +85,9 @@
 		},
 		"fileAssociations": [
 			{
-				"ext": ["cap"],
-				"name": "Cap Project",
-				"mimeType": "application/x-cap-project",
+				"ext": ["inflight"],
+				"name": "Inflight Project",
+				"mimeType": "application/x-inflight-project",
 				"role": "Editor"
 			}
 		]

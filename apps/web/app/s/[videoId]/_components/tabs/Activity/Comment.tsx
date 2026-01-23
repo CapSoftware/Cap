@@ -1,7 +1,7 @@
-import { Button } from "@cap/ui";
-import type { Comment } from "@cap/web-domain";
 import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
+import type { Comment } from "@inflight/web-domain";
 
 import clsx from "clsx";
 import { motion } from "framer-motion";

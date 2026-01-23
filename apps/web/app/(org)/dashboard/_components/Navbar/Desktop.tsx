@@ -1,5 +1,5 @@
 "use client";
-import { Button, Logo } from "@cap/ui";
+import { Button, Logo } from "@inflight/ui";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";

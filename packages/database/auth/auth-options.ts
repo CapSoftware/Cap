@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@inflight/env";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";

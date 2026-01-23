@@ -1,6 +1,6 @@
-import type { comments as commentsSchema } from "@cap/database/schema";
-import { classNames } from "@cap/utils";
-import type { ImageUpload, Video } from "@cap/web-domain";
+import type { comments as commentsSchema } from "@inflight/database/schema";
+import { classNames } from "@inflight/utils";
+import type { ImageUpload, Video } from "@inflight/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";

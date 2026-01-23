@@ -1,9 +1,9 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import { ImageUpload } from "@cap/web-domain";
 import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
+import { ImageUpload } from "@inflight/web-domain";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";

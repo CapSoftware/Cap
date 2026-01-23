@@ -1,5 +1,5 @@
 {
-	"name": "@cap/infra",
+	"name": "@inflight/infra",
 	"devDependencies": {
 		"sst": "3.17.14"
 	},

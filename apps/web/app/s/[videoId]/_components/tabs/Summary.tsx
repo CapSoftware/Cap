@@ -1,9 +1,9 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { faRectangleList } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
+import type { Video } from "@inflight/web-domain";
 import { useEffect, useState } from "react";
 
 interface Chapter {

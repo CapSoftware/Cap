@@ -1,5 +1,5 @@
-import * as Db from "@cap/database/schema";
-import { CurrentUser, type User } from "@cap/web-domain";
+import * as Db from "@inflight/database/schema";
+import { CurrentUser, type User } from "@inflight/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 

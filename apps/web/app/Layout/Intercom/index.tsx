@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "@cap/env";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { serverEnv } from "@inflight/env";
 import { Suspense } from "react";
 import { Client } from "./Client";
 

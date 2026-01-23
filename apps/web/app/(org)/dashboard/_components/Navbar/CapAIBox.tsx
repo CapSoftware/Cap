@@ -1,4 +1,4 @@
-import { Dialog, DialogTrigger } from "@cap/ui";
+import { Dialog, DialogTrigger } from "@inflight/ui";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { motion } from "framer-motion";

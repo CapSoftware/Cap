@@ -1,15 +1,15 @@
 "use client";
 
+import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
 	Button,
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
-} from "@cap/ui";
-import type { ImageUpload } from "@cap/web-domain";
-import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+} from "@inflight/ui";
+import type { ImageUpload } from "@inflight/web-domain";
 import clsx from "clsx";
 import { ChevronDown } from "lucide-react";
 import { forwardRef, useEffect, useRef, useState } from "react";

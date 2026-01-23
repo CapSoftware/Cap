@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";

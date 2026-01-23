@@ -1,5 +1,5 @@
 {
-	"name": "@cap/web-domain",
+	"name": "@inflight/web-domain",
 	"private": true,
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",

@@ -1,4 +1,4 @@
-import { ProgressCircle } from "@cap/ui-solid";
+import { ProgressCircle } from "@inflight/ui-solid";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ask, save } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";

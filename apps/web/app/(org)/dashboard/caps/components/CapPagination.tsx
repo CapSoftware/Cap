@@ -6,7 +6,7 @@ import {
 	PaginationLink,
 	PaginationNext,
 	PaginationPrevious,
-} from "@cap/ui";
+} from "@inflight/ui";
 
 interface CapPaginationProps {
 	currentPage: number;

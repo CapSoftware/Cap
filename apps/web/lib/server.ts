@@ -1,7 +1,16 @@
 import "server-only";
 
-import { decrypt } from "@cap/database/crypto";
-import { serverEnv } from "@cap/env";
+import {
+	FetchHttpClient,
+	Headers,
+	type HttpApi,
+	HttpApiBuilder,
+	HttpMiddleware,
+	HttpServer,
+} from "@effect/platform";
+import { RpcClient, RpcMiddleware } from "@effect/rpc";
+import { decrypt } from "@inflight/database/crypto";
+import { serverEnv } from "@inflight/env";
 import {
 	AwsCredentials,
 	Database,
@@ -19,17 +28,8 @@ import {
 	VideosPolicy,
 	VideosRepo,
 	Workflows,
-} from "@cap/web-backend";
-import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
-import {
-	FetchHttpClient,
-	Headers,
-	type HttpApi,
-	HttpApiBuilder,
-	HttpMiddleware,
-	HttpServer,
-} from "@effect/platform";
-import { RpcClient, RpcMiddleware } from "@effect/rpc";
+} from "@inflight/web-backend";
+import { type HttpAuthMiddleware, Video } from "@inflight/web-domain";
 import {
 	Cause,
 	Config,

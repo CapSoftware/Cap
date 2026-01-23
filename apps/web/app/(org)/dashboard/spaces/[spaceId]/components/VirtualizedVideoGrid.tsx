@@ -1,4 +1,4 @@
-import type { Video } from "@cap/web-domain";
+import type { Video } from "@inflight/web-domain";
 import { Grid, useGrid } from "@virtual-grid/react";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import type { VideoData } from "./AddVideosDialogBase";

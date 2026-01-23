@@ -1,4 +1,4 @@
-import { Input } from "@cap/ui";
+import { Input } from "@inflight/ui";
 import clsx from "clsx";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 

@@ -1,5 +1,5 @@
 {
-	"name": "@cap/desktop",
+	"name": "@inflight/desktop",
 	"type": "module",
 	"scripts": {
 		"dev": "pnpm -w cap-setup && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- pnpm tauri dev",
@@ -11,10 +11,10 @@
 	},
 	"dependencies": {
 		"@aerofoil/rive-solid-canvas": "^2.1.4",
-		"@cap/database": "workspace:*",
-		"@cap/ui-solid": "workspace:*",
-		"@cap/utils": "workspace:*",
-		"@cap/web-api-contract": "workspace:*",
+		"@inflight/database": "workspace:*",
+		"@inflight/ui-solid": "workspace:*",
+		"@inflight/utils": "workspace:*",
+		"@inflight/web-api-contract": "workspace:*",
 		"@corvu/tooltip": "^0.2.1",
 		"@intercom/messenger-js-sdk": "^0.0.14",
 		"@kobalte/core": "^0.13.7",

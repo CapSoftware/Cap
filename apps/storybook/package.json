@@ -1,5 +1,5 @@
 {
-	"name": "@cap/storybook",
+	"name": "@inflight/storybook",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -7,7 +7,7 @@
 		"build:storybook": "storybook build"
 	},
 	"dependencies": {
-		"@cap/ui-solid": "workspace:*",
+		"@inflight/ui-solid": "workspace:*",
 		"postcss-pseudo-companion-classes": "^0.1.1",
 		"solid-js": "^1.9.3",
 		"zod": "^3"

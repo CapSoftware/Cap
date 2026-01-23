@@ -24,9 +24,9 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
+use futures::{FutureExt, stream};
 #[cfg(target_os = "macos")]
 use scap_targets;
-use futures::{FutureExt, stream};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{

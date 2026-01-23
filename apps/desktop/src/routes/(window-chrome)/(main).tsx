@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
@@ -62,7 +62,8 @@ function Page() {
 	// We do this on focus so the window doesn't get revealed when toggling the setting
 	const navigate = useNavigate();
 	createEventListener(window, "focus", () => {
-		if (generalSettings.data?.enableNewRecordingFlow === true) navigate("/new-main");
+		if (generalSettings.data?.enableNewRecordingFlow === true)
+			navigate("/new-main");
 	});
 
 	const isRecording = () => !!currentRecording.data;
@@ -95,13 +96,15 @@ function Page() {
 		const currentWindow = getCurrentWindow();
 
 		// Check size when app regains focus
-		const unlistenFocus = currentWindow.onFocusChanged(({ payload: focused }) => {
-			if (focused) {
-				const size = getWindowSize();
+		const unlistenFocus = currentWindow.onFocusChanged(
+			({ payload: focused }) => {
+				if (focused) {
+					const size = getWindowSize();
 
-				currentWindow.setSize(new LogicalSize(size.width, size.height));
-			}
-		});
+					currentWindow.setSize(new LogicalSize(size.width, size.height));
+				}
+			},
+		);
 
 		// Listen for resize events
 		const unlistenResize = currentWindow.onResized(() => {
@@ -139,10 +142,12 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen = _screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen = _screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			}
 
 			return screen;
@@ -152,7 +157,8 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
-				win = _windows()?.find((s: any) => s.id === windowId) ?? _windows()?.[0];
+				win =
+					_windows()?.find((s: any) => s.id === windowId) ?? _windows()?.[0];
 			}
 
 			return win;
@@ -162,7 +168,8 @@ function Page() {
 				const { cameraID } = rawOptions;
 				if (!cameraID) return null;
 				if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
-				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID) return c;
+				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
+					return c;
 				return null;
 			}),
 		micName: () => mics.data?.find((name: any) => name === rawOptions.micName),
@@ -171,8 +178,16 @@ function Page() {
 	// if target is window and no windows are available, switch to screen capture
 	createEffect(() => {
 		const screen = _screens()?.[0];
-		if (rawOptions.captureTarget.variant === "window" && !windows.isPending && _windows()?.length === 0 && screen) {
-			setOptions("captureTarget", reconcile({ variant: "display", id: screen.id }));
+		if (
+			rawOptions.captureTarget.variant === "window" &&
+			!windows.isPending &&
+			_windows()?.length === 0 &&
+			screen
+		) {
+			setOptions(
+				"captureTarget",
+				reconcile({ variant: "display", id: screen.id }),
+			);
 		}
 	});
 
@@ -183,17 +198,26 @@ function Page() {
 					switch (rawOptions.captureTarget.variant) {
 						case "display": {
 							const screen = options.screen();
-							if (!screen) throw new Error(`No screen found. Number of available screens: ${_screens()?.length}`);
+							if (!screen)
+								throw new Error(
+									`No screen found. Number of available screens: ${_screens()?.length}`,
+								);
 							return { variant: "display", id: screen.id };
 						}
 						case "window": {
 							const win = options.window();
-							if (!win) throw new Error(`No window found. Number of available windows: ${_windows()?.length}`);
+							if (!win)
+								throw new Error(
+									`No window found. Number of available windows: ${_windows()?.length}`,
+								);
 							return { variant: "window", id: win.id };
 						}
 						case "area": {
 							const screen = options.screen();
-							if (!screen) throw new Error(`No screen found. Number of available screens: ${_screens()?.length}`);
+							if (!screen)
+								throw new Error(
+									`No screen found. Number of available screens: ${_screens()?.length}`,
+								);
 							return {
 								variant: "area",
 								bounds: rawOptions.captureTarget.bounds,
@@ -209,7 +233,7 @@ function Page() {
 						mode: payload.mode,
 						capture_system_audio: rawOptions.captureSystemAudio,
 					}),
-					setOptions
+					setOptions,
 				);
 			} else await commands.stopRecording();
 		},
@@ -232,13 +256,15 @@ function Page() {
 	return (
 		<div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
-				<div dir={ostype() === "windows" ? "rtl" : "rtl"} class="flex gap-1 items-center mx-2">
+				<div
+					dir={ostype() === "windows" ? "rtl" : "rtl"}
+					class="flex gap-1 items-center mx-2"
+				>
 					<Tooltip content={<span>Settings</span>}>
 						<button
 							type="button"
 							onClick={async () => {
 								await commands.showWindow({ Settings: { page: "general" } });
-								getCurrentWindow().hide();
 							}}
 							class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
 						>
@@ -250,7 +276,6 @@ function Page() {
 							type="button"
 							onClick={async () => {
 								await commands.showWindow({ Settings: { page: "recordings" } });
-								getCurrentWindow().hide();
 							}}
 							class="flex justify-center items-center w-5 h-5"
 						>
@@ -292,7 +317,11 @@ function Page() {
 					<a
 						class="*:w-[92px] *:h-auto text-[--text-primary]"
 						target="_blank"
-						href={auth.data ? `${import.meta.env.VITE_SERVER_URL}/dashboard` : import.meta.env.VITE_SERVER_URL}
+						href={
+							auth.data
+								? `${import.meta.env.VITE_SERVER_URL}/dashboard`
+								: import.meta.env.VITE_SERVER_URL
+						}
 					>
 						<IconCapLogoFullDark class="hidden dark:block" />
 						<IconCapLogoFull class="block dark:hidden" />
@@ -309,10 +338,14 @@ function Page() {
 									"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
 									license.data?.type === "pro"
 										? "bg-[--blue-400] text-gray-1 dark:text-white"
-										: "bg-gray-3 cursor-pointer hover:bg-gray-5"
+										: "bg-gray-3 cursor-pointer hover:bg-gray-5",
 								)}
 							>
-								{license.data?.type === "commercial" ? "Commercial" : license.data?.type === "pro" ? "Pro" : "Personal"}
+								{license.data?.type === "commercial"
+									? "Commercial"
+									: license.data?.type === "pro"
+										? "Pro"
+										: "Personal"}
 							</span>
 						</Suspense>
 					</ErrorBoundary>
@@ -322,7 +355,11 @@ function Page() {
 			<div>
 				<AreaSelectButton
 					screen={options.screen()}
-					targetVariant={rawOptions.captureTarget.variant === "window" ? "other" : rawOptions.captureTarget.variant}
+					targetVariant={
+						rawOptions.captureTarget.variant === "window"
+							? "other"
+							: rawOptions.captureTarget.variant
+					}
 					onChange={(area) => {
 						const screen = options.screen();
 						if (!screen) return;
@@ -332,24 +369,29 @@ function Page() {
 								reconcile({
 									variant: "display",
 									id: screen.id,
-								})
+								}),
 							);
 					}}
 				/>
 				<div
 					class={cx(
 						"flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
-						(rawOptions.captureTarget.variant === "display" || rawOptions.captureTarget.variant === "area") &&
-							"ml-[2.4rem]"
+						(rawOptions.captureTarget.variant === "display" ||
+							rawOptions.captureTarget.variant === "area") &&
+							"ml-[2.4rem]",
 					)}
 					style={{
-						"transition-timing-function": "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
+						"transition-timing-function":
+							"cubic-bezier(0.785, 0.135, 0.15, 0.86)",
 					}}
 				>
 					<div
 						class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
 						style={{
-							transform: rawOptions.captureTarget.variant === "window" ? "translateX(100%)" : undefined,
+							transform:
+								rawOptions.captureTarget.variant === "window"
+									? "translateX(100%)"
+									: undefined,
 						}}
 					>
 						<div class="flex-1 bg-gray-2" />
@@ -365,12 +407,18 @@ function Page() {
 								refresh_rate: value.refresh_rate,
 							});
 
-							setOptions("captureTarget", reconcile({ variant: "display", id: value.id }));
+							setOptions(
+								"captureTarget",
+								reconcile({ variant: "display", id: value.id }),
+							);
 						}}
 						value={options.screen() ?? null}
 						placeholder="Display"
 						optionsEmptyText="No screens found"
-						selected={rawOptions.captureTarget.variant === "display" || rawOptions.captureTarget.variant === "area"}
+						selected={
+							rawOptions.captureTarget.variant === "display" ||
+							rawOptions.captureTarget.variant === "area"
+						}
 					/>
 					<TargetSelect<CaptureWindow>
 						options={_windows() ?? []}
@@ -384,13 +432,20 @@ function Page() {
 								refresh_rate: value.refresh_rate,
 							});
 
-							setOptions("captureTarget", reconcile({ variant: "window", id: value.id }));
+							setOptions(
+								"captureTarget",
+								reconcile({ variant: "window", id: value.id }),
+							);
 						}}
 						value={options.window() ?? null}
 						placeholder="Window"
 						optionsEmptyText="No windows found"
 						selected={rawOptions.captureTarget.variant === "window"}
-						getName={(value) => (platform() === "windows" ? value.name : `${value.owner_name} | ${value.name}`)}
+						getName={(value) =>
+							platform() === "windows"
+								? value.name
+								: `${value.owner_name} | ${value.name}`
+						}
 						disabled={_windows()?.length === 0}
 					/>
 				</div>
@@ -408,14 +463,17 @@ function Page() {
 				disabled={mics.isPending}
 				options={_mics() ?? []}
 				// this prevents options.micName() from suspending on initial load
-				value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+				value={
+					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
+				}
 				onChange={(v) => setMicInput.mutate(v)}
 			/>
 			<SystemAudio />
 			<div class="flex items-center space-x-1 w-full">
 				{rawOptions.mode === "instant" && !auth.data ? (
 					<SignInButton>
-						Sign In for <IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
+						Sign In for{" "}
+						<IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
 						Instant Mode
 					</SignInButton>
 				) : (
@@ -426,14 +484,22 @@ function Page() {
 							<>
 								Instant Mode recordings are limited
 								<br /> to 5 mins,{" "}
-								<button class="underline" onClick={() => commands.showWindow("Upgrade")}>
+								<button
+									class="underline"
+									onClick={() => commands.showWindow("Upgrade")}
+								>
 									Upgrade to Pro
 								</button>
 							</>
 						}
 						openDelay={0}
 						closeDelay={0}
-						disabled={!(rawOptions.mode === "instant" && auth.data?.plan?.upgraded === false)}
+						disabled={
+							!(
+								rawOptions.mode === "instant" &&
+								auth.data?.plan?.upgraded === false
+							)
+						}
 					>
 						<Button
 							disabled={toggleRecording.isPending}
@@ -448,17 +514,25 @@ function Page() {
 								<>
 									{rawOptions.mode === "instant" ? (
 										<IconCapInstant
-											class={cx("size-[0.8rem] mr-1.5", toggleRecording.isPending ? "opacity-50" : "opacity-100")}
+											class={cx(
+												"size-[0.8rem] mr-1.5",
+												toggleRecording.isPending
+													? "opacity-50"
+													: "opacity-100",
+											)}
 										/>
 									) : (
 										<IconCapFilmCut
 											class={cx(
 												"size-[0.8rem] mr-2 -mt-[1.5px]",
-												toggleRecording.isPending ? "opacity-50" : "opacity-100"
+												toggleRecording.isPending
+													? "opacity-50"
+													: "opacity-100",
 											)}
 										/>
 									)}
-									{rawOptions.mode === "instant" && auth.data?.plan?.upgraded === false
+									{rawOptions.mode === "instant" &&
+									auth.data?.plan?.upgraded === false
 										? "Start 5 min recording"
 										: "Start recording"}
 								</>
@@ -474,7 +548,10 @@ function Page() {
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+	getCurrentWebviewWindow,
+	WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
@@ -488,7 +565,10 @@ import { WindowChromeHeader } from "./Context";
 import { CameraSelectBase } from "./new-main/CameraSelect";
 import { MicrophoneSelectBase } from "./new-main/MicrophoneSelect";
 import { SystemAudioToggleRoot } from "./new-main/SystemAudio";
-import { RecordingOptionsProvider, useRecordingOptions } from "./OptionsContext";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./OptionsContext";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -507,7 +587,7 @@ function createUpdateCheck() {
 
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Inflight is available, would you like to install it?`,
-			{ title: "Update Inflight", okLabel: "Update", cancelLabel: "Ignore" }
+			{ title: "Update Inflight", okLabel: "Update", cancelLabel: "Ignore" },
 		);
 
 		if (!shouldUpdate) return;
@@ -552,8 +632,9 @@ function AreaSelectButton(props: {
 		});
 	}
 
-	createTauriEventListener(events.setCaptureAreaPending(getCurrentWebviewWindow()), (pending) =>
-		setAreaSelection("pending", pending)
+	createTauriEventListener(
+		events.setCaptureAreaPending(getCurrentWebviewWindow()),
+		(pending) => setAreaSelection("pending", pending),
 	);
 
 	return (
@@ -563,8 +644,8 @@ function AreaSelectButton(props: {
 				props.targetVariant === "area"
 					? "Remove selection"
 					: areaSelection.pending
-					? "Selecting area..."
-					: "Select area"
+						? "Selecting area..."
+						: "Select area"
 			}
 			childClass="flex fixed flex-row items-center w-8 h-8"
 		>
@@ -588,7 +669,7 @@ function AreaSelectButton(props: {
 						{
 							duration: 450,
 							easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-						}
+						},
 					).finished.then(done);
 				}}
 				onExit={(el, done) =>
@@ -611,7 +692,7 @@ function AreaSelectButton(props: {
 							{
 								duration: 500,
 								easing: "ease-in-out",
-							}
+							},
 						)
 						.finished.then(done)
 				}
@@ -628,13 +709,14 @@ function AreaSelectButton(props: {
 								"focus-visible:outline font-[200] text-[0.875rem]",
 								props.targetVariant === "area"
 									? "bg-gray-2 text-blue-9 border border-blue-200"
-									: "bg-gray-2 text-gray-11"
+									: "bg-gray-2 text-gray-11",
 							)}
 						>
 							<IconCapCrop
 								class={cx(
 									"w-[1rem] h-[1rem]",
-									areaSelection.pending && "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+									areaSelection.pending &&
+										"animate-gentle-bounce duration-1000 text-gray-12 mt-1",
 								)}
 							/>
 						</button>
@@ -664,7 +746,7 @@ function CameraSelect(props: {
 function MicrophoneSelect(props: {
 	disabled?: boolean;
 	options: string[];
-	value: string | null;
+	value: string | null | undefined;
 	onChange: (micName: string | null) => void;
 }) {
 	return (
@@ -713,7 +795,8 @@ function TargetSelect<T extends { id: string; name: string }>(props: {
 		return props.options[0];
 	};
 
-	const getName = (value?: T) => (value ? props.getName?.(value) ?? value.name : props.placeholder);
+	const getName = (value?: T) =>
+		value ? (props.getName?.(value) ?? value.name) : props.placeholder;
 
 	return (
 		<button
@@ -729,8 +812,8 @@ function TargetSelect<T extends { id: string; name: string }>(props: {
 								text: getName(o),
 								checked: o === props.value,
 								action: () => props.onChange(o),
-							})
-						)
+							}),
+						),
 					)
 						.then((items) => Menu.new({ items }))
 						.then((m) => {
@@ -751,14 +834,18 @@ function TargetSelect<T extends { id: string; name: string }>(props: {
 	);
 }
 
-function InfoPill(props: ComponentProps<"button"> & { variant: "blue" | "red" | "on" | "off" }) {
+function InfoPill(
+	props: ComponentProps<"button"> & { variant: "blue" | "red" | "on" | "off" },
+) {
 	return (
 		<button
 			{...props}
 			type="button"
 			class={cx(
 				"px-[0.375rem] rounded-full text-[0.75rem]",
-				props.variant === "blue" ? "bg-blue-3 text-blue-9" : "bg-red-3 text-red-9"
+				props.variant === "blue"
+					? "bg-blue-3 text-blue-9"
+					: "bg-red-3 text-red-9",
 			)}
 		/>
 	);
@@ -771,7 +858,7 @@ function ChangelogButton() {
 			lastOpenedVersion: "",
 			changelogClicked: false,
 		}),
-		{ name: "changelogState" }
+		{ name: "changelogState" },
 	);
 
 	const [currentVersion] = createResource(() => getVersion());
@@ -787,12 +874,11 @@ function ChangelogButton() {
 			});
 			if (response.status === 200) return response.body;
 			return null;
-		}
+		},
 	);
 
 	const handleChangelogClick = () => {
 		commands.showWindow({ Settings: { page: "changelog" } });
-		getCurrentWindow().hide();
 		const version = currentVersion();
 		if (version) {
 			setChangelogState({
@@ -806,7 +892,10 @@ function ChangelogButton() {
 	createEffect(() => {
 		if (changelogStatus.state === "ready" && currentVersion()) {
 			const hasUpdate = changelogStatus()?.hasUpdate || false;
-			if (hasUpdate === true && changelogState.lastOpenedVersion !== currentVersion()) {
+			if (
+				hasUpdate === true &&
+				changelogState.lastOpenedVersion !== currentVersion()
+			) {
 				setChangelogState({
 					hasUpdate: true,
 					lastOpenedVersion: currentVersion(),
@@ -818,7 +907,11 @@ function ChangelogButton() {
 
 	return (
 		<Tooltip openDelay={0} content="Changelog">
-			<button type="button" onClick={handleChangelogClick} class="flex relative justify-center items-center w-5 h-5">
+			<button
+				type="button"
+				onClick={handleChangelogClick}
+				class="flex relative justify-center items-center w-5 h-5"
+			>
 				<IconLucideBell class="text-gray-11 size-5 hover:text-gray-12" />
 				{changelogState.hasUpdate && (
 					<div

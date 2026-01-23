@@ -4,19 +4,19 @@ import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
-import { AwsCredentials, S3Buckets } from "@cap/web-backend";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { nanoId } from "@inflight/database/helpers";
+import { s3Buckets, videos, videoUploads } from "@inflight/database/schema";
+import { buildEnv, NODE_ENV, serverEnv } from "@inflight/env";
+import { dub, userIsPro } from "@inflight/utils";
+import { AwsCredentials, S3Buckets } from "@inflight/web-backend";
 import {
 	type Folder,
 	type Organisation,
 	S3Bucket,
 	Video,
-} from "@cap/web-domain";
+} from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";

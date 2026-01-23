@@ -1,6 +1,6 @@
 "use client";
 
-import { LoadingSpinner } from "@cap/ui";
+import { LoadingSpinner } from "@inflight/ui";
 import clsx from "clsx";
 import {
 	Circle,

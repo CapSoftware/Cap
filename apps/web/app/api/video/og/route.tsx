@@ -1,4 +1,4 @@
-import { Video } from "@cap/web-domain";
+import { Video } from "@inflight/web-domain";
 import type { NextRequest } from "next/server";
 import { generateVideoOgImage } from "@/actions/videos/get-og-image";
 

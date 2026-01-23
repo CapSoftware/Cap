@@ -1,4 +1,4 @@
-import type { Video } from "@cap/web-domain";
+import type { Video } from "@inflight/web-domain";
 import { Effect } from "effect";
 import { useEffectQuery } from "../EffectRuntime";
 import { AnalyticsRequest } from "../Requests/AnalyticsRequest";

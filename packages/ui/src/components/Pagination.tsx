@@ -1,4 +1,4 @@
-import { classNames } from "@cap/utils";
+import { classNames } from "@inflight/utils";
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
 import * as React from "react";
 import { type ButtonProps, buttonVariants } from "./Button";

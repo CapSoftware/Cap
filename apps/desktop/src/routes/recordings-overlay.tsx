@@ -1,5 +1,5 @@
-import { Button } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
+import { Button } from "@inflight/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery } from "@tanstack/solid-query";
@@ -451,9 +451,7 @@ function ActionProgressOverlay(props: {
 			class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
 		>
 			<div class="w-[80%] text-center">
-				<h3 class="mb-3 text-sm font-medium text-white">
-					{props.title}
-				</h3>
+				<h3 class="mb-3 text-sm font-medium text-white">{props.title}</h3>
 				<div class="w-full bg-gray-10 rounded-full h-2.5 mb-2">
 					<div
 						class="bg-blue-9 h-2.5 rounded-full transition-all duration-200"

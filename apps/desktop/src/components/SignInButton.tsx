@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 
 import type { ComponentProps } from "solid-js";
 import { createSignInMutation } from "~/utils/auth";

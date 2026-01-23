@@ -1,21 +1,28 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
-import { createEffect, createResource, createSignal, For, onMount, Show, Suspense } from "solid-js";
+import {
+	createEffect,
+	createResource,
+	createSignal,
+	For,
+	onMount,
+	Show,
+	Suspense,
+} from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
-
-import IconCapSettings from "~icons/cap/settings";
 import IconCapHotkeys from "~icons/cap/hotkeys";
-import IconLucideSquarePlay from "~icons/lucide/square-play";
-import IconLucideImage from "~icons/lucide/image";
-import IconLucideUnplug from "~icons/lucide/unplug";
-import IconLucideGift from "~icons/lucide/gift";
-import IconLucideMessageSquarePlus from "~icons/lucide/message-square-plus";
+import IconCapSettings from "~icons/cap/settings";
 import IconLucideBell from "~icons/lucide/bell";
+import IconLucideGift from "~icons/lucide/gift";
+import IconLucideImage from "~icons/lucide/image";
+import IconLucideMessageSquarePlus from "~icons/lucide/message-square-plus";
+import IconLucideSquarePlay from "~icons/lucide/square-play";
+import IconLucideUnplug from "~icons/lucide/unplug";
 
 const TABS = [
 	{ href: "general", name: "General", icon: IconCapSettings },
@@ -31,7 +38,7 @@ export default function Settings(props: RouteSectionProps) {
 		left: string;
 		width: string;
 	}>({ left: "0px", width: "0px" });
-	let tabRefs: HTMLAnchorElement[] = [];
+	const tabRefs: HTMLAnchorElement[] = [];
 
 	const handleAuth = async () => {
 		if (auth.data) {
@@ -46,7 +53,8 @@ export default function Settings(props: RouteSectionProps) {
 
 		if (activeIndex !== -1 && tabRefs[activeIndex]) {
 			const activeTab = tabRefs[activeIndex];
-			const parentRect = activeTab.parentElement?.parentElement?.getBoundingClientRect();
+			const parentRect =
+				activeTab.parentElement?.parentElement?.getBoundingClientRect();
 			const tabRect = activeTab.getBoundingClientRect();
 
 			if (parentRect) {

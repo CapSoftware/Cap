@@ -1,13 +1,13 @@
-import { db } from "@cap/database";
+import { db } from "@inflight/database";
 import {
 	getCurrentUser,
 	type userSelectProps,
-} from "@cap/database/auth/session";
+} from "@inflight/database/auth/session";
 import {
 	organizationInvites,
 	organizations,
 	users,
-} from "@cap/database/schema";
+} from "@inflight/database/schema";
 import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";

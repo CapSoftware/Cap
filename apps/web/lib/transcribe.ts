@@ -1,9 +1,9 @@
-import { db } from "@cap/database";
-import { organizations, s3Buckets, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
+import { db } from "@inflight/database";
+import { organizations, s3Buckets, videos } from "@inflight/database/schema";
+import { serverEnv } from "@inflight/env";
+import { S3Buckets } from "@inflight/web-backend";
+import type { Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";

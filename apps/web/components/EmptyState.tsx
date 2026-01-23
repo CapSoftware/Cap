@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import type { ReactNode } from "react";
 
 interface EmptyStateProps {

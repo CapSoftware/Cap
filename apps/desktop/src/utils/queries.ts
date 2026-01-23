@@ -127,10 +127,10 @@ export const isSystemAudioSupported = queryOptions({
 });
 
 export function createOptionsQuery() {
-	const PERSIST_KEY = "recording-options-query-3";
+	const PERSIST_KEY = "recording-options-query-4";
 	const [_state, _setState] = createStore<{
 		captureTarget: ScreenCaptureTarget;
-		micName: string | null;
+		micName?: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
 		targetMode?: "display" | "window" | "area" | null;
@@ -141,7 +141,6 @@ export function createOptionsQuery() {
 		cameraLabel: string | null;
 	}>({
 		captureTarget: { variant: "display", id: "0" },
-		micName: null,
 		cameraLabel: null,
 		mode: "instant",
 		organizationId: null,

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { db } from "@cap/database";
+import { db } from "@inflight/database";
 import { DrizzleQueryError } from "drizzle-orm";
 import { migrate } from "drizzle-orm/mysql2/migrator";
 

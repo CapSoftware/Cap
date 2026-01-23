@@ -1,4 +1,4 @@
-import capUIPlugin from "@cap/ui-solid/vite";
+import capUIPlugin from "@inflight/ui-solid/vite";
 import { defineConfig } from "@solidjs/start/config";
 import tsconfigPaths from "vite-tsconfig-paths";
 

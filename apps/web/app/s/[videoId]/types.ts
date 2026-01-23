@@ -1,5 +1,5 @@
-import type { videos } from "@cap/database/schema";
-import type { ImageUpload, Organisation, User } from "@cap/web-domain";
+import type { videos } from "@inflight/database/schema";
+import type { ImageUpload, Organisation, User } from "@inflight/web-domain";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 
 export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {

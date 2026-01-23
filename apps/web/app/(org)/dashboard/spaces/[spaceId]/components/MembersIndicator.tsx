@@ -1,5 +1,8 @@
 "use client";
 
+import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
 	Button,
 	Dialog,
@@ -11,11 +14,8 @@ import {
 	Form,
 	FormControl,
 	FormField,
-} from "@cap/ui";
-import { type Space, User } from "@cap/web-domain";
-import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { zodResolver } from "@hookform/resolvers/zod";
+} from "@inflight/ui";
+import { type Space, User } from "@inflight/web-domain";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { useForm } from "react-hook-form";

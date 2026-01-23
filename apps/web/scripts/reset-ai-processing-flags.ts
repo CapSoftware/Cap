@@ -1,6 +1,6 @@
-import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
+import { db } from "@inflight/database";
+import { videos } from "@inflight/database/schema";
+import type { VideoMetadata } from "@inflight/database/types";
 import { sql } from "drizzle-orm";
 
 async function resetStuckAiProcessingFlags() {

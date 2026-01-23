@@ -1,4 +1,4 @@
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@inflight/env";
 import Stripe from "stripe";
 
 const key = () => serverEnv().STRIPE_SECRET_KEY ?? "";

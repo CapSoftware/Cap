@@ -1,10 +1,10 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { s3Buckets, videos } from "@inflight/database/schema";
+import { S3Buckets } from "@inflight/web-backend";
+import type { Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";

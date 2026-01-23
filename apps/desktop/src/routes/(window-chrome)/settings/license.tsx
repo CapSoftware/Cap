@@ -1,6 +1,6 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
-import { Button } from "@cap/ui-solid";
-import type { licenseContract } from "@cap/web-api-contract";
+import { Button } from "@inflight/ui-solid";
+import type { licenseContract } from "@inflight/web-api-contract";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import type { ClientInferResponseBody } from "@ts-rest/core";
 import {

@@ -8,8 +8,8 @@ import {
 	PutBucketPolicyCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
-import { migrateDb } from "@cap/database/migrate";
-import { buildEnv, serverEnv } from "@cap/env";
+import { migrateDb } from "@inflight/database/migrate";
+import { buildEnv, serverEnv } from "@inflight/env";
 
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;

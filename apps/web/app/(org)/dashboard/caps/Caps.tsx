@@ -1,10 +1,10 @@
 "use client";
 
-import type { VideoMetadata } from "@cap/database/types";
-import { Button } from "@cap/ui";
-import type { ImageUpload, Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { VideoMetadata } from "@inflight/database/types";
+import { Button } from "@inflight/ui";
+import type { ImageUpload, Video } from "@inflight/web-domain";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";

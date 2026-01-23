@@ -1,7 +1,7 @@
 // TODO: port this all to Effect
 
 import { timingSafeEqual } from "node:crypto";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@inflight/env";
 
 const ALGORITHM = { name: "AES-GCM", length: 256 };
 const IV_LENGTH = 12;

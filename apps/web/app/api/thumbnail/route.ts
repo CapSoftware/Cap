@@ -1,7 +1,7 @@
-import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { s3Buckets, videos } from "@inflight/database/schema";
+import { S3Buckets } from "@inflight/web-backend";
+import { Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import type { NextRequest } from "next/server";

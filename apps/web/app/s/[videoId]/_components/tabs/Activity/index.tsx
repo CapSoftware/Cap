@@ -1,6 +1,6 @@
 "use client";
 
-import type { Video } from "@cap/web-domain";
+import type { Video } from "@inflight/web-domain";
 import type React from "react";
 import { forwardRef, type JSX, Suspense, useState } from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";

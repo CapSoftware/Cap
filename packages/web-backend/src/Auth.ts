@@ -1,11 +1,11 @@
-import { getServerSession } from "@cap/database/auth/auth-options";
-import * as Db from "@cap/database/schema";
+import { HttpApiError, HttpServerRequest } from "@effect/platform";
+import { getServerSession } from "@inflight/database/auth/auth-options";
+import * as Db from "@inflight/database/schema";
 import {
 	CurrentUser,
 	type DatabaseError,
 	HttpAuthMiddleware,
-} from "@cap/web-domain";
-import { HttpApiError, HttpServerRequest } from "@effect/platform";
+} from "@inflight/web-domain";
 import * as Dz from "drizzle-orm";
 import { type Cause, Effect, Layer, Option, Schema } from "effect";
 

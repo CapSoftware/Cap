@@ -1,6 +1,6 @@
 "use client";
 
-import { LogoBadge } from "@cap/ui";
+import { LogoBadge } from "@inflight/ui";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";

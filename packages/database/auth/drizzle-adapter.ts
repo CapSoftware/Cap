@@ -1,5 +1,5 @@
-import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
-import { type ImageUpload, Organisation, User } from "@cap/web-domain";
+import { STRIPE_AVAILABLE, stripe } from "@inflight/utils";
+import { type ImageUpload, Organisation, User } from "@inflight/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";

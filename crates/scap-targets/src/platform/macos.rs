@@ -583,9 +583,9 @@ impl WindowImpl {
                 continue;
             };
 
-            let is_completely_occluded = visible_regions.iter().any(|visible| {
-                visible.contains_bounds(&clipped_bounds)
-            });
+            let is_completely_occluded = visible_regions
+                .iter()
+                .any(|visible| visible.contains_bounds(&clipped_bounds));
 
             if is_completely_occluded {
                 background_windows.push(window);

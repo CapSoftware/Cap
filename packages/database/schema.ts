@@ -7,7 +7,7 @@ import type {
 	Space,
 	User,
 	Video,
-} from "@cap/web-domain";
+} from "@inflight/web-domain";
 import { sql } from "drizzle-orm";
 import {
 	boolean,

@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@cap/ui";
 import {
 	faBolt,
 	faCamera,
@@ -32,6 +31,7 @@ import {
 	faWandMagicSparkles,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
 import Link from "next/link";
 
 interface Feature {

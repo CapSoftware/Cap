@@ -1,5 +1,8 @@
 "use client";
 
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
 	Button,
 	CardDescription,
@@ -13,11 +16,8 @@ import {
 	FormField,
 	Input,
 	Label,
-} from "@cap/ui";
-import type { ImageUpload } from "@cap/web-domain";
-import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { zodResolver } from "@hookform/resolvers/zod";
+} from "@inflight/ui";
+import type { ImageUpload } from "@inflight/web-domain";
 import { useRouter } from "next/navigation";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";

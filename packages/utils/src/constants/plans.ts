@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 
 export const STRIPE_PLAN_IDS = {
 	development: {

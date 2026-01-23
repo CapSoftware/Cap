@@ -1,5 +1,5 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import {
 	comments,
 	organizations,
@@ -7,11 +7,15 @@ import {
 	users,
 	videos,
 	videoUploads,
-} from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv } from "@cap/env";
-import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
-import { type Organisation, Policy, type Video } from "@cap/web-domain";
+} from "@inflight/database/schema";
+import type { VideoMetadata } from "@inflight/database/types";
+import { buildEnv } from "@inflight/env";
+import {
+	provideOptionalAuth,
+	Videos,
+	VideosPolicy,
+} from "@inflight/web-backend";
+import { type Organisation, Policy, type Video } from "@inflight/web-domain";
 import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";

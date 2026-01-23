@@ -1,8 +1,8 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { authApiKeys } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { authApiKeys } from "@inflight/database/schema";
+import { serverEnv } from "@inflight/env";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { decode } from "next-auth/jwt";

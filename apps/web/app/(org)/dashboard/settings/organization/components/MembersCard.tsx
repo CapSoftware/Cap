@@ -1,6 +1,8 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
+import { faUser } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { buildEnv } from "@inflight/env";
 import {
 	Button,
 	Card,
@@ -13,9 +15,7 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
-} from "@cap/ui";
-import { faUser } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+} from "@inflight/ui";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 import { useState } from "react";

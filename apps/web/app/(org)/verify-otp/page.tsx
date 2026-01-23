@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@cap/database/auth/session";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { VerifyOTPForm } from "./form";

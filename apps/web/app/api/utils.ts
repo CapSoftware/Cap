@@ -1,7 +1,7 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { authApiKeys, users } from "@cap/database/schema";
-import { buildEnv } from "@cap/env";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { authApiKeys, users } from "@inflight/database/schema";
+import { buildEnv } from "@inflight/env";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { cors } from "hono/cors";

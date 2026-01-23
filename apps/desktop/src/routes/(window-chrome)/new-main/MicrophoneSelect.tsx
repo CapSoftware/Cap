@@ -21,7 +21,7 @@ const NO_MICROPHONE = "No Microphone";
 export default function MicrophoneSelect(props: {
 	disabled?: boolean;
 	options: string[];
-	value: string | null;
+	value: string | null | undefined;
 	onChange: (micName: string | null) => void;
 }) {
 	return (
@@ -38,7 +38,7 @@ export default function MicrophoneSelect(props: {
 export function MicrophoneSelectBase(props: {
 	disabled?: boolean;
 	options: string[];
-	value: string | null;
+	value: string | null | undefined;
 	onChange: (micName: string | null) => void;
 	class: string;
 	levelIndicatorClass: string;

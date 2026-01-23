@@ -1,11 +1,11 @@
 "use server";
 
-import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { s3Buckets, videos } from "@inflight/database/schema";
+import type { VideoMetadata } from "@inflight/database/types";
+import { serverEnv } from "@inflight/env";
+import { S3Buckets } from "@inflight/web-backend";
+import type { Video } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";

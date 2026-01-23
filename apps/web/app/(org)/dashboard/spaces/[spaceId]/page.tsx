@@ -1,5 +1,5 @@
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import {
 	comments,
 	folders,
@@ -11,20 +11,20 @@ import {
 	users,
 	videos,
 	videoUploads,
-} from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+} from "@inflight/database/schema";
+import { serverEnv } from "@inflight/env";
 import {
 	Database,
 	ImageUploads,
 	makeCurrentUserLayer,
 	Spaces,
-} from "@cap/web-backend";
+} from "@inflight/web-backend";
 import {
 	type ImageUpload,
 	type Organisation,
 	Space,
 	Video,
-} from "@cap/web-domain";
+} from "@inflight/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";

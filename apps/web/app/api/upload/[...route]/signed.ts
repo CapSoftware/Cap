@@ -3,12 +3,12 @@ import {
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
 import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
-import { db, updateIfDefined } from "@cap/database";
-import * as Db from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import { AwsCredentials, S3Buckets } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
+import { db, updateIfDefined } from "@inflight/database";
+import * as Db from "@inflight/database/schema";
+import { serverEnv } from "@inflight/env";
+import { AwsCredentials, S3Buckets } from "@inflight/web-backend";
+import { Video } from "@inflight/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";

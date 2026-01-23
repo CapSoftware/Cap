@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv } from "@inflight/env";
 import type { PropsWithChildren } from "react";
 import { Intercom } from "../Layout/Intercom";
 import { BlackFridayBanner } from "./BlackFridayBanner";

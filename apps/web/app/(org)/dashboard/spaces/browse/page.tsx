@@ -1,6 +1,5 @@
 "use client";
 
-import { Button, Input } from "@cap/ui";
 import {
 	faEdit,
 	faLayerGroup,
@@ -8,6 +7,7 @@ import {
 	faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button, Input } from "@inflight/ui";
 import { Search } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";

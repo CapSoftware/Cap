@@ -1,13 +1,13 @@
 "use server";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { sendEmail } from "@cap/database/emails/config";
-import { OrganizationInvite } from "@cap/database/emails/organization-invite";
-import { nanoId } from "@cap/database/helpers";
-import { organizationInvites, organizations } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import type { Organisation } from "@cap/web-domain";
+import { db } from "@inflight/database";
+import { getCurrentUser } from "@inflight/database/auth/session";
+import { sendEmail } from "@inflight/database/emails/config";
+import { OrganizationInvite } from "@inflight/database/emails/organization-invite";
+import { nanoId } from "@inflight/database/helpers";
+import { organizationInvites, organizations } from "@inflight/database/schema";
+import { serverEnv } from "@inflight/env";
+import type { Organisation } from "@inflight/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 

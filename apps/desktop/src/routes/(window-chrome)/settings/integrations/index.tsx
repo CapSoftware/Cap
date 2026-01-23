@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { For, onMount } from "solid-js";
 

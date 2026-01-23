@@ -1,5 +1,3 @@
-import { Button } from "@cap/ui";
-import { Organisation } from "@cap/web-domain";
 import {
 	faCheckCircle,
 	faExclamationCircle,
@@ -7,6 +5,8 @@ import {
 	faX,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
+import { Organisation } from "@inflight/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";

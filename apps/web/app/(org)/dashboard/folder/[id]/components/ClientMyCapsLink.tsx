@@ -1,6 +1,6 @@
 "use client";
 
-import type { Space, Video } from "@cap/web-domain";
+import type { Space, Video } from "@inflight/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";

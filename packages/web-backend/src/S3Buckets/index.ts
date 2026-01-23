@@ -1,7 +1,7 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
-import { decrypt } from "@cap/database/crypto";
-import type { S3Bucket, User } from "@cap/web-domain";
+import { decrypt } from "@inflight/database/crypto";
+import type { S3Bucket, User } from "@inflight/web-domain";
 import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";

@@ -1,4 +1,4 @@
-import { InternalError, User } from "@cap/web-domain";
+import { InternalError, User } from "@inflight/web-domain";
 import { Effect, Layer } from "effect";
 
 import { Database } from "../Database";

@@ -1,6 +1,6 @@
 "use client";
 
-import { classNames } from "@cap/utils";
+import { classNames } from "@inflight/utils";
 import * as SwitchPrimitives from "@radix-ui/react-switch";
 import * as React from "react";
 

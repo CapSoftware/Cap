@@ -1,4 +1,4 @@
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";

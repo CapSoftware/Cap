@@ -1,6 +1,6 @@
-import { db } from "@cap/database";
-import { comments, spaceVideos, videos } from "@cap/database/schema";
-import { Tinybird } from "@cap/web-backend";
+import { db } from "@inflight/database";
+import { comments, spaceVideos, videos } from "@inflight/database/schema";
+import { Tinybird } from "@inflight/web-backend";
 import { and, between, eq, inArray } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";

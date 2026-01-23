@@ -1,7 +1,7 @@
-import type { Notification as APINotification } from "@cap/web-api-contract";
-import type { ImageUpload } from "@cap/web-domain";
 import { faComment, faEye, faReply } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { Notification as APINotification } from "@inflight/web-api-contract";
+import type { ImageUpload } from "@inflight/web-domain";
 import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";

@@ -1,21 +1,42 @@
-import { Button } from "@cap/ui-solid";
+import { Button } from "@inflight/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getAllWebviewWindows, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+	getAllWebviewWindows,
+	WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as shell from "@tauri-apps/plugin-shell";
 import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
-import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, onMount, Show, Suspense } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	ErrorBoundary,
+	onCleanup,
+	onMount,
+	Show,
+	Suspense,
+} from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import Tooltip from "~/components/Tooltip";
+import {
+	CloseIcon,
+	CropIcon,
+	DisplayIcon,
+	InflightLogo,
+	NoCameraIcon,
+	SettingsIcon,
+	WindowIcon,
+} from "~/icons";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
@@ -24,6 +45,7 @@ import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
+	getPermissions,
 	listAudioDevices,
 	listDisplaysWithThumbnails,
 	listRecordings,
@@ -57,31 +79,40 @@ import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
-import { RecordingOptionsProvider, useRecordingOptions } from "../OptionsContext";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
+import HorizontalTargetButton from "./HorizontalTargetButton";
 import MicrophoneSelect from "./MicrophoneSelect";
 import SystemAudio from "./SystemAudio";
 import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
-import HorizontalTargetButton from "./HorizontalTargetButton";
 import VerticalTargetButton from "./VerticalTargetButton";
-import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, NoCameraIcon, SettingsIcon, WindowIcon } from "~/icons";
 
 const WINDOW_SIZE = { width: 290, height: 442 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
 		if (!id) return false;
-		return "DeviceID" in id ? id.DeviceID === c.device_id : id.ModelID === c.model_id;
+		return "DeviceID" in id
+			? id.DeviceID === c.device_id
+			: id.ModelID === c.model_id;
 	});
 };
 
-type WindowListItem = Pick<CaptureWindow, "id" | "owner_name" | "name" | "bounds" | "refresh_rate">;
+type WindowListItem = Pick<
+	CaptureWindow,
+	"id" | "owner_name" | "name" | "bounds" | "refresh_rate"
+>;
 
-const createWindowSignature = (list?: readonly WindowListItem[]): string | undefined => {
+const createWindowSignature = (
+	list?: readonly WindowListItem[],
+): string | undefined => {
 	if (!list) return undefined;
 
 	return list
@@ -103,10 +134,14 @@ const createWindowSignature = (list?: readonly WindowListItem[]): string | undef
 
 type DisplayListItem = Pick<CaptureDisplay, "id" | "name" | "refresh_rate">;
 
-const createDisplaySignature = (list?: readonly DisplayListItem[]): string | undefined => {
+const createDisplaySignature = (
+	list?: readonly DisplayListItem[],
+): string | undefined => {
 	if (!list) return undefined;
 
-	return list.map((item) => [item.id, item.name, item.refresh_rate].join(":")).join("|");
+	return list
+		.map((item) => [item.id, item.name, item.refresh_rate].join(":"))
+		.join("|");
 };
 
 type TargetMenuPanelProps =
@@ -152,29 +187,34 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		props.variant === "display"
 			? "Search displays"
 			: props.variant === "window"
-			? "Search windows"
-			: props.variant === "recording"
-			? "Search recordings"
-			: "Search screenshots";
+				? "Search windows"
+				: props.variant === "recording"
+					? "Search recordings"
+					: "Search screenshots";
 	const noResultsMessage =
 		props.variant === "display"
 			? "No matching displays"
 			: props.variant === "window"
-			? "No matching windows"
-			: props.variant === "recording"
-			? "No matching recordings"
-			: "No matching screenshots";
+				? "No matching windows"
+				: props.variant === "recording"
+					? "No matching recordings"
+					: "No matching screenshots";
 
-	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(() => {
-		if (props.variant !== "display") return [];
-		const query = normalizedQuery();
-		const targets = props.targets ?? [];
-		if (!query) return targets;
+	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
+		() => {
+			if (props.variant !== "display") return [];
+			const query = normalizedQuery();
+			const targets = props.targets ?? [];
+			if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+			const matchesQuery = (value?: string | null) =>
+				!!value && value.toLowerCase().includes(query);
 
-		return targets.filter((target) => matchesQuery(target.name) || matchesQuery(target.id));
-	});
+			return targets.filter(
+				(target) => matchesQuery(target.name) || matchesQuery(target.id),
+			);
+		},
+	);
 
 	const filteredWindowTargets = createMemo<CaptureWindowWithThumbnail[]>(() => {
 		if (props.variant !== "window") return [];
@@ -182,10 +222,14 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
 
 		return targets.filter(
-			(target) => matchesQuery(target.name) || matchesQuery(target.owner_name) || matchesQuery(target.id)
+			(target) =>
+				matchesQuery(target.name) ||
+				matchesQuery(target.owner_name) ||
+				matchesQuery(target.id),
 		);
 	});
 
@@ -195,7 +239,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
 
 		return targets.filter((target) => matchesQuery(target.pretty_name));
 	});
@@ -206,7 +251,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
 
 		return targets.filter((target) => matchesQuery(target.pretty_name));
 	});
@@ -246,7 +292,10 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				</div>
 			</div>
 			<div class="pt-4">
-				<div class="px-2 custom-scroll" style="max-height: calc(256px - 100px - 1rem)">
+				<div
+					class="px-2 custom-scroll"
+					style="max-height: calc(256px - 100px - 1rem)"
+				>
 					{props.variant === "display" ? (
 						<TargetMenuGrid
 							variant="display"
@@ -336,7 +385,7 @@ function createUpdateCheck() {
 
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Inflight is available, would you like to install it?`,
-			{ title: "Update Inflight", okLabel: "Update", cancelLabel: "Ignore" }
+			{ title: "Update Inflight", okLabel: "Update", cancelLabel: "Ignore" },
 		);
 
 		if (!shouldUpdate) return;
@@ -392,7 +441,11 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 			const expectedLength = expectedRowBytes * height;
 			const availableLength = strideBytes * height;
 
-			if (strideBytes === 0 || strideBytes < expectedRowBytes || source.length < availableLength) {
+			if (
+				strideBytes === 0 ||
+				strideBytes < expectedRowBytes ||
+				source.length < availableLength
+			) {
 				console.error("Received invalid frame stride", {
 					strideBytes,
 					expectedRowBytes,
@@ -411,11 +464,18 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 				for (let row = 0; row < height; row += 1) {
 					const srcStart = row * strideBytes;
 					const destStart = row * expectedRowBytes;
-					pixels.set(source.subarray(srcStart, srcStart + expectedRowBytes), destStart);
+					pixels.set(
+						source.subarray(srcStart, srcStart + expectedRowBytes),
+						destStart,
+					);
 				}
 			}
 
-			const imageData = new ImageData(new Uint8ClampedArray(pixels), width, height);
+			const imageData = new ImageData(
+				new Uint8ClampedArray(pixels),
+				width,
+				height,
+			);
 			setLatestFrame(imageData);
 
 			const ctx = canvasRef?.getContext("2d");
@@ -459,7 +519,9 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 					when={latestFrame()}
 					fallback={
 						<div class="flex items-center justify-center h-full text-xs text-gray-11">
-							{cameraWsPort ? "Loading camera..." : "Camera preview unavailable"}
+							{cameraWsPort
+								? "Loading camera..."
+								: "Camera preview unavailable"}
 						</div>
 					}
 				>
@@ -475,7 +537,8 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 			<div
 				class="absolute bottom-0 left-0 right-0 h-12 pointer-events-none"
 				style={{
-					background: "linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))",
+					background:
+						"linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))",
 				}}
 			/>
 		</div>
@@ -488,31 +551,13 @@ function Page() {
 	const isRecording = () => !!currentRecording.data;
 	const auth = authStore.createQuery();
 
-	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] = createSignal(false);
-	createEffect(() => {
-		const pickerActive = rawOptions.targetMode != null;
-		const hasHidden = hasHiddenMainWindowForPicker();
-		if (pickerActive && !hasHidden) {
-			setHasHiddenMainWindowForPicker(true);
-			void getCurrentWindow().hide();
-		} else if (!pickerActive && hasHidden) {
-			setHasHiddenMainWindowForPicker(false);
-			const currentWindow = getCurrentWindow();
-			void currentWindow.show();
-			void currentWindow.setFocus();
-		}
-	});
-	onCleanup(() => {
-		if (!hasHiddenMainWindowForPicker()) return;
-		setHasHiddenMainWindowForPicker(false);
-		void getCurrentWindow().show();
-	});
-
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
 	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
-	const activeMenu = createMemo<"display" | "window" | "recording" | "screenshot" | null>(() => {
+	const activeMenu = createMemo<
+		"display" | "window" | "recording" | "screenshot" | null
+	>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
 		if (recordingsMenuOpen()) return "recording";
@@ -537,15 +582,19 @@ function Page() {
 
 	const recordings = useQuery(() => listRecordings);
 
-	const [uploadProgress, setUploadProgress] = createStore<Record<string, number>>({});
-	const [reuploadingPaths, setReuploadingPaths] = createSignal<Set<string>>(new Set());
+	const [uploadProgress, setUploadProgress] = createStore<
+		Record<string, number>
+	>({});
+	const [reuploadingPaths, setReuploadingPaths] = createSignal<Set<string>>(
+		new Set(),
+	);
 
 	createTauriEventListener(events.uploadProgressEvent, (e) => {
 		if (e.uploaded === e.total) {
 			setUploadProgress(
 				produce((s) => {
 					delete s[e.video_id];
-				})
+				}),
 			);
 		} else {
 			const total = Number(e.total);
@@ -559,7 +608,13 @@ function Page() {
 	const handleReupload = async (path: string) => {
 		setReuploadingPaths((prev) => new Set([...prev, path]));
 		try {
-			await commands.uploadExportedVideo(path, "Reupload", new Channel<UploadProgress>(() => {}), null, null);
+			await commands.uploadExportedVideo(
+				path,
+				"Reupload",
+				new Channel<UploadProgress>(() => {}),
+				null,
+				null,
+			);
 		} finally {
 			setReuploadingPaths((prev) => {
 				const next = new Set(prev);
@@ -574,14 +629,18 @@ function Page() {
 		queryOptions<ScreenshotWithPath[]>({
 			queryKey: ["screenshots"],
 			queryFn: async () => {
-				const result = await commands.listScreenshots().catch(() => [] as const);
+				const result = await commands
+					.listScreenshots()
+					.catch(() => [] as const);
 
-				return result.map(([path, meta]) => ({ ...meta, path } as ScreenshotWithPath));
+				return result.map(
+					([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
+				);
 			},
 			refetchInterval: 2000,
 			reconcile: (old, next) => reconcile(next)(old),
 			initialData: [],
-		})
+		}),
 	);
 
 	const screens = useQuery(() => listScreens);
@@ -623,7 +682,9 @@ function Page() {
 		// See list_recordings in apps/desktop/src-tauri/src/lib.rs
 		// b_time.cmp(&a_time) ensures newest first.
 		// So we just need to take the top 20.
-		return data.slice(0, 20).map(([path, meta]) => ({ ...meta, path } as RecordingWithPath));
+		return data
+			.slice(0, 20)
+			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
 	});
 
 	const screenshotsData = createMemo(() => {
@@ -633,9 +694,13 @@ function Page() {
 	});
 
 	const displayMenuLoading = () =>
-		!hasDisplayTargetsData() && (displayTargets.status === "pending" || displayTargets.fetchStatus === "fetching");
+		!hasDisplayTargetsData() &&
+		(displayTargets.status === "pending" ||
+			displayTargets.fetchStatus === "fetching");
 	const windowMenuLoading = () =>
-		!hasWindowTargetsData() && (windowTargets.status === "pending" || windowTargets.fetchStatus === "fetching");
+		!hasWindowTargetsData() &&
+		(windowTargets.status === "pending" ||
+			windowTargets.fetchStatus === "fetching");
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
@@ -648,7 +713,10 @@ function Page() {
 	};
 
 	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
-		setOptions("captureTarget", reconcile({ variant: "display", id: target.id }));
+		setOptions(
+			"captureTarget",
+			reconcile({ variant: "display", id: target.id }),
+		);
 		setOptions("targetMode", "display");
 		commands.openTargetSelectOverlays({ variant: "display", id: target.id });
 		setDisplayMenuOpen(false);
@@ -656,7 +724,10 @@ function Page() {
 	};
 
 	const selectWindowTarget = async (target: CaptureWindowWithThumbnail) => {
-		setOptions("captureTarget", reconcile({ variant: "window", id: target.id }));
+		setOptions(
+			"captureTarget",
+			reconcile({ variant: "window", id: target.id }),
+		);
 		setOptions("targetMode", "window");
 		commands.openTargetSelectOverlays({ variant: "window", id: target.id });
 		setWindowMenuOpen(false);
@@ -690,16 +761,24 @@ function Page() {
 
 		const currentWindow = getCurrentWindow();
 
-		currentWindow.setSize(new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height));
+		currentWindow.setSize(
+			new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+		);
 
-		const unlistenFocus = currentWindow.onFocusChanged(({ payload: focused }) => {
-			if (focused) {
-				currentWindow.setSize(new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height));
-			}
-		});
+		const unlistenFocus = currentWindow.onFocusChanged(
+			({ payload: focused }) => {
+				if (focused) {
+					currentWindow.setSize(
+						new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+					);
+				}
+			},
+		);
 
 		const unlistenResize = currentWindow.onResized(() => {
-			currentWindow.setSize(new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height));
+			currentWindow.setSize(
+				new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+			);
 		});
 
 		commands.updateAuthPlan();
@@ -712,11 +791,18 @@ function Page() {
 
 	const cameras = useQuery(() => listVideoDevices);
 	const mics = useQuery(() => listAudioDevices);
+	const permissions = useQuery(() => getPermissions);
 
-	const windowListSignature = createMemo(() => createWindowSignature(windows.data));
-	const displayListSignature = createMemo(() => createDisplaySignature(screens.data));
-	const [windowThumbnailsSignature, setWindowThumbnailsSignature] = createSignal<string | undefined>();
-	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] = createSignal<string | undefined>();
+	const windowListSignature = createMemo(() =>
+		createWindowSignature(windows.data),
+	);
+	const displayListSignature = createMemo(() =>
+		createDisplaySignature(screens.data),
+	);
+	const [windowThumbnailsSignature, setWindowThumbnailsSignature] =
+		createSignal<string | undefined>();
+	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] =
+		createSignal<string | undefined>();
 
 	createEffect(() => {
 		if (windowTargets.status !== "success") return;
@@ -767,10 +853,12 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen =
+					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen =
+					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			}
 
 			return screen;
@@ -830,7 +918,10 @@ function Page() {
 		if (!screen) return;
 
 		if (target.variant === "window" && windows.data?.length === 0) {
-			setOptions("captureTarget", reconcile({ variant: "display", id: screen.id }));
+			setOptions(
+				"captureTarget",
+				reconcile({ variant: "display", id: screen.id }),
+			);
 		}
 	});
 
@@ -843,9 +934,45 @@ function Page() {
 
 	const setCamera = createCameraMutation();
 
+	const [cameraAutoSelected, setCameraAutoSelected] = createSignal(false);
+	const [micAutoSelected, setMicAutoSelected] = createSignal(false);
+
+	createEffect(() => {
+		if (cameraAutoSelected()) return;
+		if (
+			permissions.data?.camera === "granted" &&
+			rawOptions.cameraID === undefined &&
+			cameras.data &&
+			cameras.data.length > 0
+		) {
+			setCameraAutoSelected(true);
+			const defaultCamera = cameras.data[0];
+			if (defaultCamera.model_id) {
+				setCamera.mutate({ ModelID: defaultCamera.model_id });
+			} else {
+				setCamera.mutate({ DeviceID: defaultCamera.device_id });
+			}
+		}
+	});
+
+	createEffect(() => {
+		if (micAutoSelected()) return;
+		if (
+			permissions.data?.microphone === "granted" &&
+			rawOptions.micName === undefined &&
+			mics.data &&
+			mics.data.length > 0
+		) {
+			setMicAutoSelected(true);
+			setMicInput.mutate(mics.data[0]);
+		}
+	});
+
 	onMount(() => {
 		if (rawOptions.micName) {
-			setMicInput.mutateAsync(rawOptions.micName).catch((error) => console.error("Failed to set mic input:", error));
+			setMicInput
+				.mutateAsync(rawOptions.micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
 		}
 
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
@@ -889,7 +1016,6 @@ function Page() {
 						type="button"
 						onClick={async () => {
 							await commands.showWindow({ Settings: { page: "general" } });
-							getCurrentWindow().hide();
 						}}
 						class="flex items-center justify-center size-6 bg-black/20 hover:bg-black/30 rounded-[8px] backdrop-blur-sm pointer-events-auto"
 					>
@@ -902,7 +1028,9 @@ function Page() {
 					class="flex flex-col gap-4 p-4 bg-neutral-900 rounded-[16px] border border-white/10 backdrop-blur-sm"
 					data-tauri-drag-region
 				>
-					<p class="text-xs text-white/70 leading-none pointer-events-none">Select inputs</p>
+					<p class="text-xs text-white/70 leading-none pointer-events-none">
+						Select inputs
+					</p>
 					<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
 						<CameraSelect
 							disabled={cameras.isPending}
@@ -916,13 +1044,19 @@ function Page() {
 						/>
 						<MicrophoneSelect
 							disabled={mics.isPending}
-							options={mics.isPending ? [] : mics.data ?? []}
-							value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+							options={mics.isPending ? [] : (mics.data ?? [])}
+							value={
+								mics.isPending
+									? rawOptions.micName
+									: (options.micName() ?? null)
+							}
 							onChange={(v) => setMicInput.mutate(v)}
 						/>
 						<SystemAudio />
 					</div>
-					<p class="text-xs text-white/70 leading-none pointer-events-none">Select what to record</p>
+					<p class="text-xs text-white/70 leading-none pointer-events-none">
+						Select what to record
+					</p>
 					<div class="flex flex-row gap-1 w-full">
 						<VerticalTargetButton
 							selected={rawOptions.targetMode === "display"}
@@ -930,8 +1064,11 @@ function Page() {
 							disabled={isRecording()}
 							onClick={() => {
 								if (isRecording()) return;
-								setOptions("targetMode", (v) => (v === "display" ? null : "display"));
-								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								setOptions("targetMode", (v) =>
+									v === "display" ? null : "display",
+								);
+								if (rawOptions.targetMode)
+									commands.openTargetSelectOverlays(null);
 								else commands.closeTargetSelectOverlays();
 							}}
 							name="Display"
@@ -942,8 +1079,11 @@ function Page() {
 							disabled={isRecording()}
 							onClick={() => {
 								if (isRecording()) return;
-								setOptions("targetMode", (v) => (v === "window" ? null : "window"));
-								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								setOptions("targetMode", (v) =>
+									v === "window" ? null : "window",
+								);
+								if (rawOptions.targetMode)
+									commands.openTargetSelectOverlays(null);
 								else commands.closeTargetSelectOverlays();
 							}}
 							name="Window"
@@ -955,7 +1095,8 @@ function Page() {
 							onClick={() => {
 								if (isRecording()) return;
 								setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								if (rawOptions.targetMode)
+									commands.openTargetSelectOverlays(null);
 								else commands.closeTargetSelectOverlays();
 							}}
 							name="Area"
@@ -976,7 +1117,9 @@ function Page() {
 					disabled={isRecording()}
 					onClick={() => {
 						if (isRecording()) return;
-						setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+						setOptions("targetMode", (v) =>
+							v === "display" ? null : "display",
+						);
 						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
 						else commands.closeTargetSelectOverlays();
 					}}
@@ -1104,7 +1247,9 @@ function Page() {
 									variant="recording"
 									targets={recordingsData()}
 									isLoading={recordings.isPending}
-									errorMessage={recordings.error ? "Failed to load recordings" : undefined}
+									errorMessage={
+										recordings.error ? "Failed to load recordings" : undefined
+									}
 									onSelect={async (recording) => {
 										if (recording.mode === "studio") {
 											await commands.showWindow({
@@ -1125,7 +1270,6 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "recordings" },
 										});
-										getCurrentWindow().hide();
 									}}
 									uploadProgress={uploadProgress}
 									reuploadingPaths={reuploadingPaths()}
@@ -1137,7 +1281,9 @@ function Page() {
 									variant="screenshot"
 									targets={screenshotsData()}
 									isLoading={screenshots.isPending}
-									errorMessage={screenshots.error ? "Failed to load screenshots" : undefined}
+									errorMessage={
+										screenshots.error ? "Failed to load screenshots" : undefined
+									}
 									onSelect={async (screenshot) => {
 										await commands.showWindow({
 											ScreenshotEditor: {
@@ -1154,7 +1300,6 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "screenshots" },
 										});
-										getCurrentWindow().hide();
 									}}
 								/>
 							)

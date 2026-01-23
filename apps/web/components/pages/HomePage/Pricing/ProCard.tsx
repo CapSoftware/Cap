@@ -1,4 +1,3 @@
-import { Button, Switch } from "@cap/ui";
 import {
 	faCloud,
 	faCreditCard,
@@ -9,6 +8,7 @@ import {
 	faUsers,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button, Switch } from "@inflight/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";

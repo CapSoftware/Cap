@@ -1,4 +1,4 @@
-import { User } from "@cap/web-domain";
+import { User } from "@inflight/web-domain";
 import { eq, type InferSelectModel } from "drizzle-orm";
 import { getServerSession } from "next-auth";
 import { cache } from "react";

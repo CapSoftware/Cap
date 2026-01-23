@@ -1,7 +1,7 @@
 "use client";
 
-import type { comments as commentsSchema } from "@cap/database/schema";
-import type { ImageUpload, Video } from "@cap/web-domain";
+import type { comments as commentsSchema } from "@inflight/database/schema";
+import type { ImageUpload, Video } from "@inflight/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
 	startTransition,

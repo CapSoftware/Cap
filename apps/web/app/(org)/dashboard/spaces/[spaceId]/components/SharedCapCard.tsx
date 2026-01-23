@@ -1,9 +1,9 @@
 "use client";
 
-import type { VideoMetadata } from "@cap/database/types";
-import type { Video } from "@cap/web-domain";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { VideoMetadata } from "@inflight/database/types";
+import type { Video } from "@inflight/web-domain";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 
 interface SharedCapCardProps {

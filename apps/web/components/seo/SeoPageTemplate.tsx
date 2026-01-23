@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@cap/ui";
 import {
 	faCheck,
 	faExclamation,
@@ -10,6 +9,7 @@ import {
 	faTimes,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button } from "@inflight/ui";
 import MuxPlayer from "@mux/mux-player-react";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";

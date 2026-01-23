@@ -1,5 +1,5 @@
 {
-	"name": "@cap/ui-solid",
+	"name": "@inflight/ui-solid",
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",

@@ -1,4 +1,4 @@
-import { SkeletonPage } from "@cap/ui";
+import { SkeletonPage } from "@inflight/ui";
 import clsx from "clsx";
 
 export const NotificationItemSkeleton = ({

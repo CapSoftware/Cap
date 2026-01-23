@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@inflight/ui";
 import * as MediaParser from "@remotion/media-parser";
 import type { WebCodecsController } from "@remotion/webcodecs";
 import Link from "next/link";

@@ -1,13 +1,13 @@
 "use client";
 
-import { Button, Input, LoadingSpinner } from "@cap/ui";
-import { ImageUpload } from "@cap/web-domain";
 import {
 	faCloudUpload,
 	faSpinner,
 	faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Button, Input, LoadingSpinner } from "@inflight/ui";
+import { ImageUpload } from "@inflight/web-domain";
 import clsx from "clsx";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";

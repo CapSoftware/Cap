@@ -1,9 +1,9 @@
 "use client";
 
-import { LogoSpinner } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { LogoSpinner } from "@inflight/ui";
+import type { Video } from "@inflight/web-domain";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";

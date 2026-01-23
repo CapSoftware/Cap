@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@cap/database/auth/session";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import type { NextRequest } from "next/server";
 
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";

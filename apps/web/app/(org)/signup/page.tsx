@@ -1,6 +1,6 @@
-import { getCurrentUser } from "@cap/database/auth/session";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { getCurrentUser } from "@inflight/database/auth/session";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignupForm } from "./form";
