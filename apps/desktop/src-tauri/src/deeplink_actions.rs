@@ -17,7 +17,7 @@ pub enum CaptureMode {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DeepLinkAction {
+pub enum Action {
     StartRecording {
         capture_mode: CaptureMode,
         camera: Option<DeviceOrModelID>,
@@ -26,6 +26,7 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -41,7 +42,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
         .into_iter()
         .filter(|url| !url.as_str().is_empty())
         .filter_map(|url| {
-            DeepLinkAction::try_from(&url)
+            Action::try_from(&url)
                 .map_err(|e| match e {
                     ActionParseFromUrlError::ParseFailed(msg) => {
                         eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
@@ -49,7 +50,6 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
                     ActionParseFromUrlError::Invalid => {
                         eprintln!("Invalid deep link format \"{}\"", &url)
                     }
-                    // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
                 })
                 .ok()
@@ -76,7 +76,7 @@ pub enum ActionParseFromUrlError {
     NotAction,
 }
 
-impl TryFrom<&Url> for DeepLinkAction {
+impl TryFrom<&Url> for Action {
     type Error = ActionParseFromUrlError;
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
@@ -104,10 +104,10 @@ impl TryFrom<&Url> for DeepLinkAction {
     }
 }
 
-impl DeepLinkAction {
+impl Action {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
-            DeepLinkAction::StartRecording {
+            Action::StartRecording {
                 capture_mode,
                 camera,
                 mic_label,
@@ -143,13 +143,16 @@ impl DeepLinkAction {
                     .await
                     .map(|_| ())
             }
-            DeepLinkAction::StopRecording => {
+            Action::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
-            DeepLinkAction::OpenEditor { project_path } => {
+            Action::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            Action::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
-            DeepLinkAction::OpenSettings { page } => {
+            Action::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
