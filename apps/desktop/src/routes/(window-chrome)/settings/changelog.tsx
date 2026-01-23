@@ -4,9 +4,11 @@ import { ErrorBoundary, For, onMount, Show, Suspense } from "solid-js";
 import { SolidMarkdown } from "solid-markdown";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
+import { useI18n } from "~/i18n";
 import { apiClient } from "~/utils/web-api";
 
 export default function Page() {
+	const { t } = useI18n();
 	console.log("[Changelog] Component mounted");
 
 	const changelog = createQuery(() => {
@@ -71,7 +73,7 @@ export default function Page() {
 												<Show when={i() === 0}>
 													<div class="bg-[--blue-400] text-[--text-primary] px-2 py-1 rounded-md uppercase font-bold">
 														<span style="color: #fff" class="text-xs">
-															New
+															{t("New")}
 														</span>
 													</div>
 												</Show>
@@ -80,7 +82,7 @@ export default function Page() {
 												{entry.title}
 											</h3>
 											<div class="text-[--text-tertiary] text-sm mb-4">
-												Version {entry.version} -{" "}
+												{t("Version {version}", { version: entry.version })} -{" "}
 												{new Date(entry.publishedAt).toLocaleDateString()}
 											</div>
 											<SolidMarkdown

@@ -24,6 +24,7 @@ import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
+import { type Locale, localeOptions, useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
 import {
@@ -41,8 +42,8 @@ import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
 import { SettingItem, ToggleSettingItem } from "./Setting";
 
-const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
-	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
+const getExclusionPrimaryLabel = (entry: WindowExclusion, fallback: string) =>
+	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? fallback;
 
 const getExclusionSecondaryLabel = (entry: WindowExclusion) => {
 	if (entry.ownerName && entry.windowTitle) {
@@ -128,18 +129,19 @@ function AppearanceSection(props: {
 	currentTheme: AppTheme;
 	onThemeChange: (theme: AppTheme) => void;
 }) {
+	const { t } = useI18n();
 	const options = [
 		{
 			id: "system",
-			name: "System",
+			name: t("System"),
 		},
 		{
 			id: "light",
-			name: "Light",
+			name: t("Light"),
 		},
 		{
 			id: "dark",
-			name: "Dark",
+			name: t("Dark"),
 		},
 	] satisfies { id: AppTheme; name: string }[];
 
@@ -152,14 +154,16 @@ function AppearanceSection(props: {
 	return (
 		<div class="flex flex-col gap-4">
 			<div class="flex flex-col border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">General Settings</h2>
+				<h2 class="text-lg font-medium text-gray-12">
+					{t("General Settings")}
+				</h2>
 			</div>
 			<div
 				class="flex justify-start items-center text-gray-12"
 				onContextMenu={(e) => e.preventDefault()}
 			>
 				<div class="flex flex-col gap-3">
-					<p class="text-sm text-gray-12">Appearance</p>
+					<p class="text-sm text-gray-12">{t("Appearance")}</p>
 					<div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
 						<For each={options}>
 							{(theme) => (
@@ -179,7 +183,9 @@ function AppearanceSection(props: {
 													props.currentTheme !== theme.id,
 											},
 										)}
-										aria-label={`Select theme: ${theme.name}`}
+										aria-label={t("Select theme: {theme}", {
+											theme: theme.name,
+										})}
 									>
 										<div class="flex justify-center items-center w-full h-full">
 											<Show when={previews[theme.id]} keyed>
@@ -188,7 +194,9 @@ function AppearanceSection(props: {
 														class="animate-in fade-in duration-300"
 														draggable={false}
 														src={preview}
-														alt={`Preview of ${theme.name} theme`}
+														alt={t("Preview of {theme} theme", {
+															theme: theme.name,
+														})}
 													/>
 												)}
 											</Show>
@@ -213,6 +221,7 @@ function AppearanceSection(props: {
 }
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
+	const { t, locale, setLocale } = useI18n();
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveInitialSettings(props.initialStore),
 	);
@@ -245,6 +254,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
+	const languageOptions = () =>
+		localeOptions.map((option) => ({
+			text: t(option.label),
+			value: option.value,
+		}));
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -351,7 +365,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
-			| number,
+			| number
+			| Locale,
 	>(props: {
 		label: string;
 		description: string;
@@ -403,18 +418,31 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						generalSettingsStore.set({ theme: newTheme });
 					}}
 				/>
+				<SettingGroup title={t("Language")}>
+					<SelectSettingItem
+						label={t("Language")}
+						description={t("Choose the language for the app.")}
+						value={locale()}
+						onChange={(value) => setLocale(value)}
+						options={languageOptions()}
+					/>
+				</SettingGroup>
 
 				{ostype === "macos" && (
-					<SettingGroup title="App">
+					<SettingGroup title={t("App")}>
 						<ToggleSettingItem
-							label="Always show dock icon"
-							description="Show Cap in the dock even when there are no windows available to close."
+							label={t("Always show dock icon")}
+							description={t(
+								"Show Cap in the dock even when there are no windows available to close.",
+							)}
 							value={!settings.hideDockIcon}
 							onChange={(v) => handleChange("hideDockIcon", !v)}
 						/>
 						<ToggleSettingItem
-							label="Enable system notifications"
-							description="Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings."
+							label={t("Enable system notifications")}
+							description={t(
+								"Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
+							)}
 							value={!!settings.enableNotifications}
 							onChange={async (value) => {
 								if (value) {
@@ -445,10 +473,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					</SettingGroup>
 				)}
 
-				<SettingGroup title="Recording">
+				<SettingGroup title={t("Recording")}>
 					<SelectSettingItem
-						label="Instant mode max resolution"
-						description="Choose the maximum resolution for Instant Mode recordings."
+						label={t("Instant mode max resolution")}
+						description={t(
+							"Choose the maximum resolution for Instant Mode recordings.",
+						)}
 						value={settings.instantModeMaxResolution ?? 1920}
 						onChange={(value) =>
 							handleChange("instantModeMaxResolution", value)
@@ -459,98 +489,113 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						}))}
 					/>
 					<SelectSettingItem
-						label="Recording countdown"
-						description="Countdown before recording starts"
+						label={t("Recording countdown")}
+						description={t("Countdown before recording starts")}
 						value={settings.recordingCountdown ?? 0}
 						onChange={(value) => handleChange("recordingCountdown", value)}
 						options={[
-							{ text: "Off", value: 0 },
-							{ text: "3 seconds", value: 3 },
-							{ text: "5 seconds", value: 5 },
-							{ text: "10 seconds", value: 10 },
+							{ text: t("Off"), value: 0 },
+							{ text: t("3 seconds"), value: 3 },
+							{ text: t("5 seconds"), value: 5 },
+							{ text: t("10 seconds"), value: 10 },
 						]}
 					/>
 					<SelectSettingItem
-						label="Main window recording start behaviour"
-						description="The main window recording start behaviour"
+						label={t("Main window recording start behaviour")}
+						description={t("The main window recording start behaviour")}
 						value={settings.mainWindowRecordingStartBehaviour ?? "close"}
 						onChange={(value) =>
 							handleChange("mainWindowRecordingStartBehaviour", value)
 						}
 						options={[
-							{ text: "Close", value: "close" },
-							{ text: "Minimise", value: "minimise" },
+							{ text: t("Close"), value: "close" },
+							{ text: t("Minimise"), value: "minimise" },
 						]}
 					/>
 					<SelectSettingItem
-						label="Studio recording finish behaviour"
-						description="The studio recording finish behaviour"
+						label={t("Studio recording finish behaviour")}
+						description={t("The studio recording finish behaviour")}
 						value={settings.postStudioRecordingBehaviour ?? "openEditor"}
 						onChange={(value) =>
 							handleChange("postStudioRecordingBehaviour", value)
 						}
 						options={[
-							{ text: "Open editor", value: "openEditor" },
+							{ text: t("Open editor"), value: "openEditor" },
 							{
-								text: "Show in overlay",
+								text: t("Show in overlay"),
 								value: "showOverlay",
 							},
 						]}
 					/>
 					<SelectSettingItem
-						label="After deleting recording behaviour"
-						description="Should Cap reopen after deleting an in progress recording?"
+						label={t("After deleting recording behaviour")}
+						description={t(
+							"Should Cap reopen after deleting an in progress recording?",
+						)}
 						value={settings.postDeletionBehaviour ?? "doNothing"}
 						onChange={(value) => handleChange("postDeletionBehaviour", value)}
 						options={[
-							{ text: "Do Nothing", value: "doNothing" },
+							{ text: t("Do Nothing"), value: "doNothing" },
 							{
-								text: "Reopen Recording Window",
+								text: t("Reopen Recording Window"),
 								value: "reopenRecordingWindow",
 							},
 						]}
 					/>
 					<ToggleSettingItem
-						label="Delete instant mode recordings after upload"
-						description="After finishing an instant recording, should Cap will delete it from your device?"
+						label={t("Delete instant mode recordings after upload")}
+						description={t(
+							"After finishing an instant recording, should Cap will delete it from your device?",
+						)}
 						value={settings.deleteInstantRecordingsAfterUpload ?? false}
 						onChange={(v) =>
 							handleChange("deleteInstantRecordingsAfterUpload", v)
 						}
 					/>
 					<ToggleSettingItem
-						label="Crash-recoverable recording"
-						description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
+						label={t("Crash-recoverable recording")}
+						description={t(
+							"Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording.",
+						)}
 						value={settings.crashRecoveryRecording ?? true}
 						onChange={(value) => handleChange("crashRecoveryRecording", value)}
 					/>
 					<div class="flex flex-col gap-1">
 						<SelectSettingItem
-							label="Max capture framerate"
-							description="Maximum framerate for screen capture. Higher values may cause instability on some systems."
+							label={t("Max capture framerate")}
+							description={t(
+								"Maximum framerate for screen capture. Higher values may cause instability on some systems.",
+							)}
 							value={settings.maxFps ?? 60}
 							onChange={(value) => handleChange("maxFps", value)}
 							options={MAX_FPS_OPTIONS.map((option) => ({
-								text: option.label,
+								text:
+									option.value === 60
+										? t("60 FPS (Recommended)")
+										: option.label,
 								value: option.value,
 							}))}
 						/>
 						{(settings.maxFps ?? 60) > 60 && (
 							<p class="text-xs text-amber-500 px-1 pb-2">
-								⚠️ Higher framerates may cause frame drops or increased CPU usage
-								on some systems.
+								⚠️{" "}
+								{t(
+									"Higher framerates may cause frame drops or increased CPU usage on some systems.",
+								)}
 							</p>
 						)}
 					</div>
 				</SettingGroup>
 
 				<SettingGroup
-					title="Cap Pro Settings"
+					title={t("Cap Pro Settings")}
 					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
 				>
 					<ToggleSettingItem
-						label="Automatically open shareable links"
-						description="Whether Cap should automatically open instant recordings in your browser"
+						label={t("Automatically open shareable links")}
+						description={t(
+							"Whether Cap should automatically open instant recordings in your browser",
+						)}
 						value={!settings.disableAutoOpenLinks}
 						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
 					/>
@@ -582,7 +627,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 						if (
 							!(await confirm(
-								`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`,
+								t(
+									"Are you sure you want to change the server URL to '{origin}'? You will need to sign in again.",
+									{ origin },
+								),
 							))
 						)
 							return;
@@ -616,15 +664,18 @@ function ServerURLSetting(props: {
 	value: string;
 	onChange: (v: string) => void;
 }) {
+	const { t } = useI18n();
 	const [value, setValue] = createWritableMemo(() => props.value);
 
 	return (
 		<div class="flex flex-col gap-3">
-			<h3 class="text-sm text-gray-12 w-fit">Self host</h3>
+			<h3 class="text-sm text-gray-12 w-fit">{t("Self host")}</h3>
 			<div class="flex flex-col gap-2 px-4 rounded-xl border border-gray-3 bg-gray-2">
 				<SettingItem
-					label="Cap Server URL"
-					description="This setting should only be changed if you are self hosting your own instance of Cap Web."
+					label={t("Cap Server URL")}
+					description={t(
+						"This setting should only be changed if you are self hosting your own instance of Cap Web.",
+					)}
 				>
 					<div class="flex flex-col gap-2 items-end">
 						<Input
@@ -639,7 +690,7 @@ function ServerURLSetting(props: {
 							disabled={props.value === value()}
 							onClick={() => props.onChange(value())}
 						>
-							Update
+							{t("Update")}
 						</Button>
 					</div>
 				</SettingItem>
@@ -652,6 +703,7 @@ function DefaultProjectNameCard(props: {
 	value: string | null;
 	onChange: (name: string | null) => Promise<void>;
 }) {
+	const { t } = useI18n();
 	const MOMENT_EXAMPLE_TEMPLATE = "{moment:DDDD, MMMM D, YYYY h:mm A}";
 	const macos = type() === "macos";
 	const today = new Date();
@@ -715,7 +767,7 @@ function DefaultProjectNameCard(props: {
 		return (
 			<button
 				type="button"
-				title="Click to copy"
+				title={t("Click to copy")}
 				class="bg-gray-1 hover:bg-gray-5 rounded-md m-0.5 p-0.5 cursor-pointer transition-[color,background-color,transform] ease-out duration-200 active:scale-95"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
@@ -728,9 +780,11 @@ function DefaultProjectNameCard(props: {
 		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 				<div class="flex flex-col gap-1">
-					<p class="text-sm text-gray-12">Default Project Name</p>
+					<p class="text-sm text-gray-12">{t("Default Project Name")}</p>
 					<p class="text-xs text-gray-10">
-						Choose the template to use as the default project and file name.
+						{t(
+							"Choose the template to use as the default project and file name.",
+						)}
 					</p>
 				</div>
 				<div class="flex flex-shrink-0 gap-2">
@@ -749,7 +803,7 @@ function DefaultProjectNameCard(props: {
 							await updatePreview(newTemplate);
 						}}
 					>
-						Reset
+						{t("Reset")}
 					</Button>
 
 					<Button
@@ -761,7 +815,7 @@ function DefaultProjectNameCard(props: {
 							await updatePreview();
 						}}
 					>
-						Save
+						{t("Save")}
 					</Button>
 				</div>
 			</div>
@@ -787,41 +841,44 @@ function DefaultProjectNameCard(props: {
 				<Collapsible class="w-full rounded-lg">
 					<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-none px-0.5 py-1">
 						<IconCapChevronDown class="size-4 ui-group-expanded:rotate-180 transition-transform duration-300 ease-in-out" />
-						<p class="py-0.5 px-1">How to customize?</p>
+						<p class="py-0.5 px-1">{t("How to customize?")}</p>
 					</Collapsible.Trigger>
 
 					<Collapsible.Content class="opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
 						<p class="border-t pt-3">
-							Use placeholders in your template that will be automatically
-							filled in.
+							{t(
+								"Use placeholders in your template that will be automatically filled in.",
+							)}
 						</p>
 
 						<div class="space-y-1">
-							<p class="font-medium text-foreground">Recording Mode</p>
+							<p class="font-medium text-foreground">{t("Recording Mode")}</p>
 							<p>
-								<CodeView>{"{recording_mode}"}</CodeView> → "Studio", "Instant",
-								or "Screenshot"
+								<CodeView>{"{recording_mode}"}</CodeView> → {t("Studio")},{" "}
+								{t("Instant")}, {t("Screenshot")}
 							</p>
 							<p>
-								<CodeView>{"{mode}"}</CodeView> → "studio", "instant", or
+								<CodeView>{"{mode}"}</CodeView> → "studio", "instant",{" "}
 								"screenshot"
 							</p>
 						</div>
 
 						<div class="space-y-1">
-							<p class="font-medium text-foreground">Target</p>
+							<p class="font-medium text-foreground">{t("Target")}</p>
 							<p>
-								<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window", or
-								"Area"
+								<CodeView>{"{target_kind}"}</CodeView> → {t("Display")},{" "}
+								{t("Window")}, {t("Area")}
 							</p>
 							<p>
-								<CodeView>{"{target_name}"}</CodeView> → The name of the monitor
-								or the title of the app depending on the recording mode.
+								<CodeView>{"{target_name}"}</CodeView> →{" "}
+								{t(
+									"The name of the monitor or the title of the app depending on the recording mode.",
+								)}
 							</p>
 						</div>
 
 						<div class="space-y-1">
-							<p class="font-medium text-foreground">Date &amp; Time</p>
+							<p class="font-medium text-foreground">{t("Date & Time")}</p>
 							<p>
 								<CodeView>{"{date}"}</CodeView> → {dateString}
 							</p>
@@ -832,12 +889,12 @@ function DefaultProjectNameCard(props: {
 						</div>
 
 						<div class="space-y-1">
-							<p class="font-medium text-foreground">Custom Formats</p>
+							<p class="font-medium text-foreground">{t("Custom Formats")}</p>
 							<p>
-								You can also use a custom format for time. The placeholders are
-								case-sensitive. For 24-hour time, use{" "}
-								<CodeView>{"{moment:HH:mm}"}</CodeView> or use lower cased{" "}
-								<code>hh</code> for 12-hour format.
+								{t(
+									"You can also use a custom format for time. The placeholders are case-sensitive. For 24-hour time, use {moment} or use lower cased hh for 12-hour format.",
+									{ moment: "{moment:HH:mm}" },
+								)}
 							</p>
 							<p class="flex flex-col items-start pt-1">
 								<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
@@ -861,6 +918,7 @@ function ExcludedWindowsCard(props: {
 	isLoading: boolean;
 	isWindows: boolean;
 }) {
+	const { t } = useI18n();
 	const hasExclusions = () => props.excludedWindows.length > 0;
 	const canAdd = () => !props.isLoading;
 
@@ -921,15 +979,16 @@ function ExcludedWindowsCard(props: {
 		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
 				<div class="flex flex-col gap-1">
-					<p class="text-sm text-gray-12">Excluded Windows</p>
+					<p class="text-sm text-gray-12">{t("Excluded Windows")}</p>
 					<p class="text-xs text-gray-10">
-						Choose which windows Cap hides from your recordings.
+						{t("Choose which windows Cap hides from your recordings.")}
 					</p>
 					<Show when={props.isWindows}>
 						<p class="text-xs text-gray-9">
-							<span class="font-medium text-gray-11">Note:</span> Only Cap
-							related windows can be excluded on Windows due to technical
-							limitations.
+							<span class="font-medium text-gray-11">{t("Note:")}</span>{" "}
+							{t(
+								"Only Cap related windows can be excluded on Windows due to technical limitations.",
+							)}
 						</p>
 					</Show>
 				</div>
@@ -943,7 +1002,7 @@ function ExcludedWindowsCard(props: {
 							void props.onReset();
 						}}
 					>
-						Reset to Default
+						{t("Reset to Default")}
 					</Button>
 					<Button
 						variant="dark"
@@ -953,7 +1012,7 @@ function ExcludedWindowsCard(props: {
 						class="flex items-center gap-2"
 					>
 						<IconLucidePlus class="size-4" />
-						Add
+						{t("Add")}
 					</Button>
 				</div>
 			</div>
@@ -962,7 +1021,7 @@ function ExcludedWindowsCard(props: {
 					when={hasExclusions()}
 					fallback={
 						<p class="text-xs text-gray-10">
-							No windows are currently excluded.
+							{t("No windows are currently excluded.")}
 						</p>
 					}
 				>
@@ -972,7 +1031,7 @@ function ExcludedWindowsCard(props: {
 								<div class="group flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5">
 									<div class="flex flex-col leading-tight">
 										<span class="text-sm text-gray-12">
-											{getExclusionPrimaryLabel(entry)}
+											{getExclusionPrimaryLabel(entry, t("Unknown"))}
 										</span>
 										<Show when={getExclusionSecondaryLabel(entry)}>
 											{(label) => (
@@ -986,7 +1045,7 @@ function ExcludedWindowsCard(props: {
 										type="button"
 										class="flex items-center justify-center rounded-full bg-gray-4/70 text-gray-11 transition-colors hover:bg-gray-5 hover:text-gray-12 size-6"
 										onClick={() => void props.onRemove(index())}
-										aria-label="Remove excluded window"
+										aria-label={t("Remove excluded window")}
 									>
 										<IconLucideX class="size-3" />
 									</button>

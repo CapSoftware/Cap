@@ -23,6 +23,7 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import CapTooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
@@ -44,19 +45,19 @@ type Recording = {
 const Tabs = [
 	{
 		id: "all",
-		label: "Show all",
+		labelKey: "Show all",
 	},
 	{
 		id: "instant",
 		icon: <IconCapInstant class="invert size-3 dark:invert-0" />,
-		label: "Instant",
+		labelKey: "Instant",
 	},
 	{
 		id: "studio",
 		icon: <IconCapFilmCut class="invert size-3 dark:invert-0" />,
-		label: "Studio",
+		labelKey: "Studio",
 	},
-] satisfies { id: string; label: string; icon?: JSX.Element }[];
+] satisfies { id: string; labelKey: string; icon?: JSX.Element }[];
 
 const PAGE_SIZE = 20;
 
@@ -98,6 +99,7 @@ const recordingsQuery = queryOptions<Recording[]>({
 });
 
 export default function Recordings() {
+	const { t } = useI18n();
 	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
 		Tabs[0].id,
 	);
@@ -157,8 +159,12 @@ export default function Recordings() {
 
 	const emptyMessage = createMemo(() => {
 		const tabLabel =
-			activeTab() === "all" ? "recordings" : `${activeTab()} recordings`;
-		const prefix = trimmedSearch() ? "No matching" : "No";
+			activeTab() === "all"
+				? t("recordings")
+				: activeTab() === "instant"
+					? t("instant recordings")
+					: t("studio recordings");
+		const prefix = trimmedSearch() ? t("No matching") : t("No");
 		return `${prefix} ${tabLabel}`;
 	});
 
@@ -187,16 +193,16 @@ export default function Recordings() {
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex flex-col">
-				<h2 class="text-lg font-medium text-gray-12">Recordings</h2>
+				<h2 class="text-lg font-medium text-gray-12">{t("Recordings")}</h2>
 				<p class="text-sm text-gray-10">
-					Manage your recordings and perform actions.
+					{t("Manage your recordings and perform actions.")}
 				</p>
 			</div>
 			<Show
 				when={recordings.data && recordings.data.length > 0}
 				fallback={
 					<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
-						No recordings found
+						{t("No recordings found")}
 					</p>
 				}
 			>
@@ -214,7 +220,7 @@ export default function Recordings() {
 									onClick={() => setActiveTab(tab.id)}
 								>
 									{tab.icon && tab.icon}
-									<p class="text-xs text-gray-12">{tab.label}</p>
+									<p class="text-xs text-gray-12">{t(tab.labelKey)}</p>
 								</div>
 							)}
 						</For>
@@ -232,12 +238,12 @@ export default function Recordings() {
 									setSearch("");
 								}
 							}}
-							placeholder="Search recordings"
+							placeholder={t("Search recordings")}
 							autoCapitalize="off"
 							autocorrect="off"
 							autocomplete="off"
 							spellcheck={false}
-							aria-label="Search recordings"
+							aria-label={t("Search recordings")}
 						/>
 					</div>
 				</div>
@@ -281,7 +287,7 @@ export default function Recordings() {
 									)
 								}
 							>
-								Load more
+								{t("Load more")}
 							</Button>
 						</div>
 					</Show>
@@ -299,10 +305,14 @@ function RecordingItem(props: {
 	onCopyVideoToClipboard: () => void;
 	uploadProgress: number | undefined;
 }) {
+	const { t } = useI18n();
 	const [imageExists, setImageExists] = createSignal(true);
 	const mode = () => props.recording.meta.mode;
-	const firstLetterUpperCase = () =>
-		mode().charAt(0).toUpperCase() + mode().slice(1);
+	const modeLabel = () => {
+		if (mode() === "instant") return t("Instant");
+		if (mode() === "studio") return t("Studio");
+		return mode();
+	};
 
 	const queryClient = useQueryClient();
 	const studioCompleteCheck = () =>
@@ -329,7 +339,7 @@ function RecordingItem(props: {
 				>
 					<img
 						class="object-cover rounded size-12"
-						alt="Recording thumbnail"
+						alt={t("Recording thumbnail")}
 						src={`${convertFileSrc(
 							props.recording.thumbnailPath,
 						)}?t=${Date.now()}`}
@@ -350,7 +360,7 @@ function RecordingItem(props: {
 							) : (
 								<IconCapFilmCut class="invert size-2.5 dark:invert-0" />
 							)}
-							<p>{firstLetterUpperCase()}</p>
+							<p>{modeLabel()}</p>
 						</div>
 
 						<Show when={props.recording.meta.status.status === "InProgress"}>
@@ -360,7 +370,7 @@ function RecordingItem(props: {
 								)}
 							>
 								<IconPhRecordFill class="invert size-2.5 dark:invert-0" />
-								<p>Recording in progress</p>
+								<p>{t("Recording in progress")}</p>
 							</div>
 						</Show>
 
@@ -380,7 +390,7 @@ function RecordingItem(props: {
 									)}
 								>
 									<IconPhWarningBold class="invert size-2.5 dark:invert-0" />
-									<p>Recording failed</p>
+									<p>{t("Recording failed")}</p>
 								</div>
 							</CapTooltip>
 						</Show>
@@ -401,7 +411,7 @@ function RecordingItem(props: {
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
 							<TooltipIconButton
-								tooltipText="Open link"
+								tooltipText={t("Open link")}
 								onClick={() => shell.open(sharing().link)}
 							>
 								<IconCapLink class="size-4" />
@@ -409,14 +419,16 @@ function RecordingItem(props: {
 						)}
 					</Show>
 					<TooltipIconButton
-						tooltipText="Edit"
+						tooltipText={t("Edit")}
 						onClick={async () => {
 							if (
 								props.recording.meta.status.status === "Failed" &&
 								!(await confirm(
-									"The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!",
+									t(
+										"The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!",
+									),
 									{
-										title: "Recording is potentially corrupted",
+										title: t("Recording is potentially corrupted"),
 										kind: "warning",
 									},
 								))
@@ -447,7 +459,7 @@ function RecordingItem(props: {
 									when={props.uploadProgress || reupload.isPending}
 									fallback={
 										<TooltipIconButton
-											tooltipText="Reupload"
+											tooltipText={t("Reupload")}
 											onClick={() => reupload.mutate()}
 										>
 											<IconLucideRotateCcw class="size-4" />
@@ -464,7 +476,7 @@ function RecordingItem(props: {
 								<Show when={props.recording.meta.sharing}>
 									{(sharing) => (
 										<TooltipIconButton
-											tooltipText="Open link"
+											tooltipText={t("Open link")}
 											onClick={() => shell.open(sharing().link)}
 										>
 											<IconCapLink class="size-4" />
@@ -476,15 +488,17 @@ function RecordingItem(props: {
 					}}
 				</Show>
 				<TooltipIconButton
-					tooltipText="Open recording bundle"
+					tooltipText={t("Open recording bundle")}
 					onClick={() => revealItemInDir(`${props.recording.path}/`)}
 				>
 					<IconLucideFolder class="size-4" />
 				</TooltipIconButton>
 				<TooltipIconButton
-					tooltipText="Delete"
+					tooltipText={t("Delete")}
 					onClick={async () => {
-						if (!(await ask("Are you sure you want to delete this recording?")))
+						if (
+							!(await ask(t("Are you sure you want to delete this recording?")))
+						)
 							return;
 						await remove(props.recording.path, { recursive: true });
 

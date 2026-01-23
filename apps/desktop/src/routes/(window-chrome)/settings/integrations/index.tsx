@@ -4,10 +4,12 @@ import { For, onMount } from "solid-js";
 import IconLucideDatabase from "~icons/lucide/database";
 
 import "@total-typescript/ts-reset/filter-boolean";
+import { useI18n } from "~/i18n";
 import { authStore } from "~/store";
 import { commands } from "~/utils/tauri";
 
 export default function AppsTab() {
+	const { t } = useI18n();
 	const navigate = useNavigate();
 	const auth = authStore.createQuery();
 
@@ -19,9 +21,10 @@ export default function AppsTab() {
 
 	const apps = [
 		{
-			name: "S3 Config",
-			description:
+			name: t("S3 Config"),
+			description: t(
 				"Connect your own S3 bucket for complete control over your data storage. All new shareable link uploads will be automatically uploaded to your configured S3 bucket, ensuring you maintain complete ownership and control over your content. Perfect for organizations requiring data sovereignty and custom storage policies.",
+			),
 			icon: IconLucideDatabase,
 			url: "/settings/integrations/s3-config",
 			pro: true,
@@ -43,10 +46,11 @@ export default function AppsTab() {
 	return (
 		<div class="p-4 space-y-4">
 			<div class="flex flex-col pb-4 border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">Integrations</h2>
+				<h2 class="text-lg font-medium text-gray-12">{t("Integrations")}</h2>
 				<p class="text-sm text-gray-10">
-					Configure integrations to extend Cap's functionality and connect with
-					third-party services.
+					{t(
+						"Configure integrations to extend Cap's functionality and connect with third-party services.",
+					)}
 				</p>
 			</div>
 			<For each={apps}>
@@ -62,7 +66,7 @@ export default function AppsTab() {
 								variant="primary"
 								onClick={() => handleAppClick(app)}
 							>
-								{app.pro && !isPro() ? "Upgrade to Pro" : "Configure"}
+								{app.pro && !isPro() ? t("Upgrade to Pro") : t("Configure")}
 							</Button>
 						</div>
 						<p class="text-[13px] text-gray-11">{app.description}</p>

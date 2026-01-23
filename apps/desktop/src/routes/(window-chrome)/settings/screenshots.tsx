@@ -16,6 +16,7 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
+import { useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
@@ -44,6 +45,7 @@ const screenshotsQuery = queryOptions<Screenshot[]>({
 });
 
 export default function Screenshots() {
+	const { t } = useI18n();
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedSearch = createMemo(() => trimmedSearch().toLowerCase());
@@ -80,8 +82,8 @@ export default function Screenshots() {
 	);
 
 	const emptyMessage = createMemo(() => {
-		const prefix = trimmedSearch() ? "No matching" : "No";
-		return `${prefix} screenshots`;
+		const prefix = trimmedSearch() ? t("No matching") : t("No");
+		return `${prefix} ${t("screenshots")}`;
 	});
 
 	const handleScreenshotClick = (screenshot: Screenshot) => {
@@ -116,16 +118,16 @@ export default function Screenshots() {
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex flex-col">
-				<h2 class="text-lg font-medium text-gray-12">Screenshots</h2>
+				<h2 class="text-lg font-medium text-gray-12">{t("Screenshots")}</h2>
 				<p class="text-sm text-gray-10">
-					Manage your screenshots and perform actions.
+					{t("Manage your screenshots and perform actions.")}
 				</p>
 			</div>
 			<Show
 				when={screenshots.data && screenshots.data.length > 0}
 				fallback={
 					<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
-						No screenshots found
+						{t("No screenshots found")}
 					</p>
 				}
 			>
@@ -143,12 +145,12 @@ export default function Screenshots() {
 									setSearch("");
 								}
 							}}
-							placeholder="Search screenshots"
+							placeholder={t("Search screenshots")}
 							autoCapitalize="off"
 							autocorrect="off"
 							autocomplete="off"
 							spellcheck={false}
-							aria-label="Search screenshots"
+							aria-label={t("Search screenshots")}
 						/>
 					</div>
 				</div>
@@ -185,7 +187,7 @@ export default function Screenshots() {
 									)
 								}
 							>
-								Load more
+								{t("Load more")}
 							</Button>
 						</div>
 					</Show>
@@ -202,6 +204,7 @@ function ScreenshotItem(props: {
 	onOpenFolder: () => void;
 	onCopyImageToClipboard: () => void;
 }) {
+	const { t } = useI18n();
 	const [imageExists, setImageExists] = createSignal(true);
 	const queryClient = useQueryClient();
 
@@ -217,7 +220,7 @@ function ScreenshotItem(props: {
 				>
 					<img
 						class="object-cover rounded size-12"
-						alt="Screenshot thumbnail"
+						alt={t("Screenshot thumbnail")}
 						src={convertFileSrc(props.screenshot.path)}
 						onError={() => setImageExists(false)}
 					/>
@@ -228,31 +231,33 @@ function ScreenshotItem(props: {
 			</div>
 			<div class="flex gap-2 items-center">
 				<TooltipIconButton
-					tooltipText="Open folder"
+					tooltipText={t("Open folder")}
 					onClick={props.onOpenFolder}
 				>
 					<IconLucideFolder class="size-4" />
 				</TooltipIconButton>
 
 				<TooltipIconButton
-					tooltipText="Open in editor"
+					tooltipText={t("Open in editor")}
 					onClick={props.onOpenEditor}
 				>
 					<IconLucideEdit class="size-4" />
 				</TooltipIconButton>
 
 				<TooltipIconButton
-					tooltipText="Copy image"
+					tooltipText={t("Copy image")}
 					onClick={props.onCopyImageToClipboard}
 				>
 					<IconLucideCopy class="size-4" />
 				</TooltipIconButton>
 
 				<TooltipIconButton
-					tooltipText="Delete"
+					tooltipText={t("Delete")}
 					onClick={async () => {
 						if (
-							!(await ask("Are you sure you want to delete this screenshot?"))
+							!(await ask(
+								t("Are you sure you want to delete this screenshot?"),
+							))
 						)
 							return;
 						// screenshot.path is the png file. Parent is the .cap folder.

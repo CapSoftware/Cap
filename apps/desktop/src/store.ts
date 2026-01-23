@@ -10,6 +10,10 @@ import type {
 	RecordingSettingsStore,
 } from "~/utils/tauri";
 
+type UiSettingsStore = {
+	language?: "en" | "zh-CN";
+};
+
 let _store: Promise<Store> | undefined;
 const store = () => {
 	if (!_store) {
@@ -62,3 +66,4 @@ export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
 export const recordingSettingsStore =
 	declareStore<RecordingSettingsStore>("recording_settings");
+export const uiSettingsStore = declareStore<UiSettingsStore>("ui_settings");
