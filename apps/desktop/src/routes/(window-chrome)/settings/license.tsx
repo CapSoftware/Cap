@@ -10,6 +10,7 @@ import {
 	Suspense,
 	Switch,
 } from "solid-js";
+import { useI18n } from "~/i18n";
 import { generalSettingsStore } from "~/store";
 import { createLicenseQuery } from "~/utils/queries";
 import { createRive } from "~/utils/rive";
@@ -19,6 +20,7 @@ import PricingRive from "../../../assets/rive/pricing.riv";
 import { Input } from "../../editor/ui";
 
 export default function Page() {
+	const { t } = useI18n();
 	const license = createLicenseQuery();
 	const queryClient = useQueryClient();
 
@@ -30,13 +32,13 @@ export default function Page() {
 						<div class="flex flex-col items-center p-6 mx-auto space-y-3 w-full max-w-md text-white rounded-3xl border bg-gray-2 border-gray-3">
 							<div class="flex flex-col gap-2 items-center">
 								<h3 class="text-2xl font-medium text-gray-12">
-									Cap Pro License
+									{t("Cap Pro License")}
 								</h3>
 							</div>
 							<p class="text-center text-gray-11">
-								Your account is upgraded to{" "}
-								<span class="font-semibold text-blue-500">Cap Pro</span> and
-								already includes a commercial license.
+								{t("Your account is upgraded to")}{" "}
+								<span class="font-semibold text-blue-500">Cap Pro</span>{" "}
+								{t("and already includes a commercial license.")}
 							</p>
 						</div>
 					</div>
@@ -48,12 +50,12 @@ export default function Page() {
 								<div class="flex flex-col gap-2 items-center mb-4 text-center">
 									<span class="text-2xl text-green-400 fa fa-briefcase" />
 									<h3 class="text-2xl font-medium text-gray-12">
-										Commercial License
+										{t("Commercial License")}
 									</h3>
 								</div>
 								<div>
 									<label class="block mb-2 text-sm text-gray-12">
-										License Key
+										{t("License Key")}
 									</label>
 									<pre class="overflow-x-auto p-3 font-mono text-xs rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
 										{license().licenseKey}
@@ -62,7 +64,7 @@ export default function Page() {
 								<Show when={license().expiryDate}>
 									{(expiry) => (
 										<div class="space-y-1">
-											<label class="text-sm text-gray-12">Expires</label>
+											<label class="text-sm text-gray-12">{t("Expires")}</label>
 											<p class="text-gray-10">
 												{new Date(expiry()).toLocaleDateString()}
 											</p>
@@ -80,7 +82,7 @@ export default function Page() {
 											queryClient.refetchQueries({ queryKey: ["bruh"] });
 										}}
 									>
-										Deactivate License
+										{t("Deactivate License")}
 									</Button>
 								</div>
 							</div>
@@ -108,6 +110,7 @@ function LicenseKeyActivate(props: {
 			<Show when={store()}>
 				{(generalSettings) => {
 					const [licenseKey, setLicenseKey] = createSignal("");
+					const { t } = useI18n();
 
 					const activateLicenseKey = createMutation(() => ({
 						mutationFn: async (vars: { licenseKey: string }) => {
@@ -137,9 +140,11 @@ function LicenseKeyActivate(props: {
 					return (
 						<div class="p-6 mx-auto w-full rounded-xl border text-gray-12 bg-gray-2 border-gray-3">
 							<div class="space-y-3">
-								<h3 class="mb-2 text-xl text-center">Have a license key?</h3>
+								<h3 class="mb-2 text-xl text-center">
+									{t("Have a license key?")}
+								</h3>
 								<Input
-									placeholder="License key"
+									placeholder={t("License key")}
 									value={licenseKey()}
 									onInput={(e) => setLicenseKey(e.currentTarget.value)}
 									class="w-full bg-gray-3 border-gray-4"
@@ -155,8 +160,8 @@ function LicenseKeyActivate(props: {
 										}
 									>
 										{activateLicenseKey.isPending
-											? "Activating..."
-											: "Activate License"}
+											? t("Activating...")
+											: t("Activate License")}
 									</Button>
 								</div>
 								<Show when={activateLicenseKey.isError}>
@@ -175,6 +180,7 @@ function LicenseKeyActivate(props: {
 
 type CommercialLicenseType = "yearly" | "lifetime";
 function CommercialLicensePurchase() {
+	const { t } = useI18n();
 	const queryClient = useQueryClient();
 
 	const [_type, _setType] = createSignal<CommercialLicenseType>("yearly");
@@ -231,10 +237,10 @@ function CommercialLicensePurchase() {
 						<Commercial class="w-[200px]" />
 						<div class="space-y-1 text-center">
 							<h3 class="text-2xl font-medium tracking-tight leading-5">
-								Commercial License
+								{t("Commercial License")}
 							</h3>
 							<p class="mt-2 text-sm text-[--text-tertiary]">
-								For commercial use
+								{t("For commercial use")}
 							</p>
 						</div>
 						<div class="flex flex-col justify-center items-center mt-5">
@@ -243,7 +249,9 @@ function CommercialLicensePurchase() {
 								<span class="text-gray-11 text-[16px]">.00 /</span>
 							</h3>
 							<p class="text-[16px] font-medium text-gray-11">
-								{isCommercialAnnual() ? "billed annually" : "one-time payment"}
+								{isCommercialAnnual()
+									? t("billed annually")
+									: t("one-time payment")}
 							</p>
 						</div>
 						<div
@@ -251,7 +259,8 @@ function CommercialLicensePurchase() {
 							class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer w-fit bg-gray-5 hover:border-gray-400"
 						>
 							<p class="text-xs text-gray-12">
-								Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
+								{t("Switch to")}{" "}
+								{isCommercialAnnual() ? t("lifetime") : t("yearly")}:{" "}
 								<span class="font-medium">
 									{isCommercialAnnual() ? "$58" : "$29"}
 								</span>
@@ -265,8 +274,8 @@ function CommercialLicensePurchase() {
 							size="lg"
 						>
 							{openCommercialCheckout.isPending
-								? "Loading..."
-								: "Purchase License"}
+								? t("Loading...")
+								: t("Purchase License")}
 						</Button>
 					</div>
 
@@ -274,10 +283,10 @@ function CommercialLicensePurchase() {
 					<div class="flex flex-col gap-4 justify-center items-center p-5 rounded-t-none rounded-b-xl border border-t-0 md:border-t md:border-l-0 md:rounded-bl-none md:rounded-tr-xl md:rounded-br-xl md:w-1/2 border-gray-3">
 						<ul class="flex flex-col gap-2 list-none">
 							{[
-								"Commercial Use of Cap Recorder + Editor",
-								"Community Support",
-								"Local-only features",
-								"Perpetual license option",
+								t("Commercial Use of Cap Recorder + Editor"),
+								t("Community Support"),
+								t("Local-only features"),
+								t("Perpetual license option"),
 							].map((feature) => (
 								<li class="flex justify-start items-center">
 									<div class="flex justify-center items-center p-0 m-0 w-6 h-6">

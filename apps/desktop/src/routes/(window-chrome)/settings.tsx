@@ -8,12 +8,14 @@ import { createResource, For, onMount, Show, Suspense } from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
+import { useI18n } from "~/i18n";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 
 const WINDOW_SIZE = { width: 700, height: 540 } as const;
 
 export default function Settings(props: RouteSectionProps) {
+	const { t } = useI18n();
 	const auth = authStore.createQuery();
 	const [version] = createResource(() => getVersion());
 
@@ -40,47 +42,47 @@ export default function Settings(props: RouteSectionProps) {
 						each={[
 							{
 								href: "general",
-								name: "General",
+								name: t("General"),
 								icon: IconCapSettings,
 							},
 							{
 								href: "hotkeys",
-								name: "Shortcuts",
+								name: t("Shortcuts"),
 								icon: IconCapHotkeys,
 							},
 							{
 								href: "recordings",
-								name: "Recordings",
+								name: t("Recordings"),
 								icon: IconLucideSquarePlay,
 							},
 							{
 								href: "screenshots",
-								name: "Screenshots",
+								name: t("Screenshots"),
 								icon: IconLucideImage,
 							},
 							{
 								href: "integrations",
-								name: "Integrations",
+								name: t("Integrations"),
 								icon: IconLucideUnplug,
 							},
 							{
 								href: "license",
-								name: "License",
+								name: t("License"),
 								icon: IconLucideGift,
 							},
 							{
 								href: "experimental",
-								name: "Experimental",
+								name: t("Experimental"),
 								icon: IconCapSettings,
 							},
 							{
 								href: "feedback",
-								name: "Feedback",
+								name: t("Feedback"),
 								icon: IconLucideMessageSquarePlus,
 							},
 							{
 								href: "changelog",
-								name: "Changelog",
+								name: t("Changelog"),
 								icon: IconLucideBell,
 							},
 						].filter(Boolean)}
@@ -109,7 +111,7 @@ export default function Settings(props: RouteSectionProps) {
 									class="text-gray-11 hover:text-gray-12 underline transition-colors"
 									onClick={() => shell.open("https://cap.so/download/versions")}
 								>
-									View previous versions
+									{t("View previous versions")}
 								</button>
 							</div>
 						)}
@@ -120,10 +122,10 @@ export default function Settings(props: RouteSectionProps) {
 							variant={auth.data ? "gray" : "dark"}
 							class="w-full"
 						>
-							Sign Out
+							{t("Sign Out")}
 						</Button>
 					) : (
-						<SignInButton>Sign In</SignInButton>
+						<SignInButton>{t("Sign In")}</SignInButton>
 					)}
 				</div>
 			</div>

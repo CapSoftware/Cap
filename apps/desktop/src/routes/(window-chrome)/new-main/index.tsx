@@ -33,6 +33,7 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import { useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import { authStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
@@ -174,31 +175,32 @@ type SharedTargetMenuProps = {
 };
 
 function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
+	const { t } = useI18n();
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
 	const placeholder =
 		props.variant === "display"
-			? "Search displays"
+			? t("Search displays")
 			: props.variant === "window"
-				? "Search windows"
+				? t("Search windows")
 				: props.variant === "recording"
-					? "Search recordings"
-					: "Search screenshots";
+					? t("Search recordings")
+					: t("Search screenshots");
 	const noResultsMessage =
 		props.variant === "display"
-			? "No matching displays"
+			? t("No matching displays")
 			: props.variant === "window"
-				? "No matching windows"
+				? t("No matching windows")
 				: props.variant === "recording"
-					? "No matching recordings"
-					: "No matching screenshots";
+					? t("No matching recordings")
+					: t("No matching screenshots");
 
 	const handleImport = async () => {
 		const result = await dialog.open({
 			filters: [
 				{
-					name: "Video Files",
+					name: t("Video Files"),
 					extensions: ["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
 				},
 			],
@@ -213,8 +215,10 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 			} catch (e) {
 				console.error("Failed to import video:", e);
 				await dialog.message(
-					`Failed to import video: ${e instanceof Error ? e.message : String(e)}`,
-					{ title: "Import Error", kind: "error" },
+					t("Failed to import video: {error}", {
+						error: e instanceof Error ? e.message : String(e),
+					}),
+					{ title: t("Import Error"), kind: "error" },
 				);
 			}
 		}
@@ -287,7 +291,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
-					<span class="font-medium text-gray-12">Back</span>
+					<span class="font-medium text-gray-12">{t("Back")}</span>
 				</div>
 				<div class="flex gap-2 flex-1 min-w-0">
 					<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
@@ -319,7 +323,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							onClick={handleImport}
 						>
 							<IconLucideImport class="size-3.5" />
-							<span>Import</span>
+							<span>{t("Import")}</span>
 						</Button>
 					</Show>
 				</div>
@@ -392,7 +396,9 @@ export default function () {
 }
 
 let hasChecked = false;
-function createUpdateCheck() {
+function createUpdateCheck(
+	t: (key: string, vars?: Record<string, string>) => string,
+) {
 	if (import.meta.env.DEV) return;
 
 	const navigate = useNavigate();
@@ -410,8 +416,10 @@ function createUpdateCheck() {
 		} catch (e) {
 			console.error("Failed to check for updates:", e);
 			await dialog.message(
-				"Unable to check for updates. Please download the latest version manually from cap.so/download. Your data will not be lost.\n\nIf this issue persists, please contact support.",
-				{ title: "Update Error", kind: "error" },
+				t(
+					"Unable to check for updates. Please download the latest version manually from cap.so/download. Your data will not be lost.\n\nIf this issue persists, please contact support.",
+				),
+				{ title: t("Update Error"), kind: "error" },
 			);
 			return;
 		}
@@ -421,8 +429,15 @@ function createUpdateCheck() {
 		let shouldUpdate: boolean | undefined;
 		try {
 			shouldUpdate = await dialog.confirm(
-				`Version ${update.version} of Cap is available, would you like to install it?`,
-				{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+				t(
+					"Version {version} of Cap is available, would you like to install it?",
+					{ version: update.version },
+				),
+				{
+					title: t("Update Cap"),
+					okLabel: t("Update"),
+					cancelLabel: t("Ignore"),
+				},
 			);
 		} catch (e) {
 			console.error("Failed to show update dialog:", e);
@@ -435,6 +450,7 @@ function createUpdateCheck() {
 }
 
 function Page() {
+	const { t } = useI18n();
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const isRecording = () => !!currentRecording.data;
@@ -640,12 +656,12 @@ function Page() {
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
-		return "Unable to load displays. Try using the Display button.";
+		return t("Unable to load displays. Try using the Display button.");
 	};
 
 	const windowErrorMessage = () => {
 		if (!windowTargets.error) return undefined;
-		return "Unable to load windows. Try using the Window button.";
+		return t("Unable to load windows. Try using the Window button.");
 	};
 
 	const selectDisplayTarget = async (target: CaptureDisplayWithThumbnail) => {
@@ -693,7 +709,7 @@ function Page() {
 		setModeInfoMenuOpen(false);
 	});
 
-	createUpdateCheck();
+	createUpdateCheck(t);
 
 	onMount(async () => {
 		const { __CAP__ } = window as typeof window & {
@@ -975,7 +991,7 @@ function Page() {
 							Component={IconMdiMonitor}
 							disabled={isRecording()}
 							onClick={() => toggleTargetMode("display")}
-							name="Display"
+							name={t("Display")}
 							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
 						/>
 						<TargetDropdownButton
@@ -999,7 +1015,7 @@ function Page() {
 								});
 							}}
 							aria-haspopup="menu"
-							aria-label="Choose display"
+							aria-label={t("Choose display")}
 						/>
 					</div>
 					<div
@@ -1014,7 +1030,7 @@ function Page() {
 							Component={IconLucideAppWindowMac}
 							disabled={isRecording()}
 							onClick={() => toggleTargetMode("window")}
-							name="Window"
+							name={t("Window")}
 							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
 						/>
 						<TargetDropdownButton
@@ -1038,7 +1054,7 @@ function Page() {
 								});
 							}}
 							aria-haspopup="menu"
-							aria-label="Choose window"
+							aria-label={t("Choose window")}
 						/>
 					</div>
 					<TargetTypeButton
@@ -1046,7 +1062,7 @@ function Page() {
 						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
 						disabled={isRecording()}
 						onClick={() => toggleTargetMode("area")}
-						name="Area"
+						name={t("Area")}
 					/>
 				</div>
 				<BaseControls />
@@ -1086,7 +1102,7 @@ function Page() {
 					data-tauri-drag-region
 				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
-						<Tooltip content={<span>Settings</span>}>
+						<Tooltip content={<span>{t("Settings")}</span>}>
 							<button
 								type="button"
 								onClick={async () => {
@@ -1098,7 +1114,7 @@ function Page() {
 								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Screenshots</span>}>
+						<Tooltip content={<span>{t("Screenshots")}</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -1117,7 +1133,7 @@ function Page() {
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Recordings</span>}>
+						<Tooltip content={<span>{t("Recordings")}</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -1185,10 +1201,10 @@ function Page() {
 									)}
 								>
 									{license.data?.type === "commercial"
-										? "Commercial"
+										? t("Commercial")
 										: license.data?.type === "pro"
-											? "Pro"
-											: "Personal"}
+											? t("Pro")
+											: t("Personal")}
 								</span>
 							</Suspense>
 						</ErrorBoundary>
@@ -1208,7 +1224,7 @@ function Page() {
 				<Show when={signIn.isPending}>
 					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
 						<div class="flex flex-col gap-4 justify-center items-center">
-							<span>Signing In...</span>
+							<span>{t("Signing In...")}</span>
 
 							<Button
 								onClick={() => {
@@ -1218,7 +1234,7 @@ function Page() {
 								variant="gray"
 								class="w-full"
 							>
-								Cancel Sign In
+								{t("Cancel Sign In")}
 							</Button>
 						</div>
 					</div>
@@ -1258,7 +1274,9 @@ function Page() {
 									targets={recordingsData()}
 									isLoading={recordings.isPending}
 									errorMessage={
-										recordings.error ? "Failed to load recordings" : undefined
+										recordings.error
+											? t("Failed to load recordings")
+											: undefined
 									}
 									onSelect={async (recording) => {
 										if (recording.mode === "studio") {
@@ -1308,7 +1326,9 @@ function Page() {
 									targets={screenshotsData()}
 									isLoading={screenshots.isPending}
 									errorMessage={
-										screenshots.error ? "Failed to load screenshots" : undefined
+										screenshots.error
+											? t("Failed to load screenshots")
+											: undefined
 									}
 									onSelect={async (screenshot) => {
 										await commands.showWindow({

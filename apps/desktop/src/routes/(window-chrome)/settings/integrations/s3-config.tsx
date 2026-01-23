@@ -3,6 +3,7 @@ import { createEventBus } from "@solid-primitives/event-bus";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { useMutation } from "@tanstack/solid-query";
 import { createResource, Suspense } from "solid-js";
+import { useI18n } from "~/i18n";
 import { Input } from "~/routes/editor/ui";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
@@ -26,6 +27,7 @@ const DEFAULT_CONFIG = {
 };
 
 export default function S3ConfigPage() {
+	const { t } = useI18n();
 	const [_s3Config, { refetch }] = createResource(async () => {
 		const response = await apiClient.desktop.getS3Config({
 			headers: await protectedHeaders(),
@@ -50,7 +52,9 @@ export default function S3ConfigPage() {
 		},
 		onSuccess: async () => {
 			await refetch();
-			await commands.globalMessageDialog("S3 configuration saved successfully");
+			await commands.globalMessageDialog(
+				t("S3 configuration saved successfully"),
+			);
 		},
 	}));
 
@@ -67,7 +71,7 @@ export default function S3ConfigPage() {
 		onSuccess: async () => {
 			await refetch();
 			await commands.globalMessageDialog(
-				"S3 configuration deleted successfully",
+				t("S3 configuration deleted successfully"),
 			);
 		},
 	}));
@@ -88,7 +92,9 @@ export default function S3ConfigPage() {
 
 				if (response.status !== 200)
 					throw new Error(
-						`S3 connection test failed. Check your config and network connection.`,
+						t(
+							"S3 connection test failed. Check your config and network connection.",
+						),
 					);
 
 				return response;
@@ -98,7 +104,9 @@ export default function S3ConfigPage() {
 				if (error instanceof Error) {
 					if (error.name === "AbortError")
 						throw new Error(
-							"Connection test timed out after 5 seconds. Please check your endpoint URL and network connection.",
+							t(
+								"Connection test timed out after 5 seconds. Please check your endpoint URL and network connection.",
+							),
 						);
 				}
 
@@ -107,7 +115,7 @@ export default function S3ConfigPage() {
 		},
 		onSuccess: async () => {
 			await commands.globalMessageDialog(
-				"S3 configuration test successful! Connection is working.",
+				t("S3 configuration test successful! Connection is working."),
 			);
 		},
 	}));
@@ -168,23 +176,24 @@ export default function S3ConfigPage() {
 								<div class="p-4 space-y-4 animate-in fade-in">
 									<div class="pb-4 border-b border-gray-3">
 										<p class="text-sm text-gray-11">
-											It should take under 10 minutes to set up and connect your
-											storage bucket to Cap. View the{" "}
+											{t(
+												"It should take under 10 minutes to set up and connect your storage bucket to Cap. View the",
+											)}{" "}
 											<a
 												href="https://cap.so/docs/s3-config"
 												target="_blank"
 												class="underline text-gray-12"
 												rel="noopener"
 											>
-												Storage Config Guide
+												{t("Storage Config Guide")}
 											</a>{" "}
-											to get started.
+											{t("to get started.")}
 										</p>
 									</div>
 
 									<div class="space-y-2">
 										<label class="text-[13px] text-gray-12">
-											Storage Provider
+											{t("Storage Provider")}
 										</label>
 										<div class="relative">
 											<select
@@ -201,7 +210,9 @@ export default function S3ConfigPage() {
 												<option value="cloudflare">Cloudflare R2</option>
 												<option value="supabase">Supabase</option>
 												<option value="minio">MinIO</option>
-												<option value="other">Other S3-Compatible</option>
+												<option value="other">
+													{t("Other S3-Compatible")}
+												</option>
 											</select>
 											<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
 												<svg
@@ -221,24 +232,24 @@ export default function S3ConfigPage() {
 									</div>
 
 									{renderInput(
-										"Access Key ID",
+										t("Access Key ID"),
 										"accessKeyId",
 										"PL31OADSQNK",
 										"password",
 									)}
 									{renderInput(
-										"Secret Access Key",
+										t("Secret Access Key"),
 										"secretAccessKey",
 										"PL31OADSQNK",
 										"password",
 									)}
 									{renderInput(
-										"Endpoint",
+										t("Endpoint"),
 										"endpoint",
 										"https://s3.amazonaws.com",
 									)}
-									{renderInput("Bucket Name", "bucketName", "my-bucket")}
-									{renderInput("Region", "region", "us-east-1")}
+									{renderInput(t("Bucket Name"), "bucketName", "my-bucket")}
+									{renderInput(t("Region"), "region", "us-east-1")}
 								</div>
 							);
 						})()}
@@ -261,11 +272,11 @@ export default function S3ConfigPage() {
 								variant="destructive"
 								onClick={() => deleteConfig.mutate()}
 							>
-								{deleteConfig.isPending ? "Removing..." : "Remove Config"}
+								{deleteConfig.isPending ? t("Removing...") : t("Remove Config")}
 							</Button>
 						)}
 						<Button variant="gray" onClick={() => events.emit("test")}>
-							{testConfig.isPending ? "Testing..." : "Test Connection"}
+							{testConfig.isPending ? t("Testing...") : t("Test Connection")}
 						</Button>
 					</div>
 					<Button
@@ -273,7 +284,7 @@ export default function S3ConfigPage() {
 						variant="primary"
 						onClick={() => events.emit("save")}
 					>
-						{saveConfig.isPending ? "Saving..." : "Save"}
+						{saveConfig.isPending ? t("Saving...") : t("Save")}
 					</Button>
 				</fieldset>
 			</div>

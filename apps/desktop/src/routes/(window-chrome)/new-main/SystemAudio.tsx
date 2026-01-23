@@ -1,7 +1,7 @@
 import { createQuery } from "@tanstack/solid-query";
 import type { Component, ComponentProps, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
-
+import { useI18n } from "~/i18n";
 import {
 	createCurrentRecordingQuery,
 	isSystemAudioSupported,
@@ -31,6 +31,7 @@ export function SystemAudioToggleRoot(
 		icon: JSX.Element;
 	},
 ) {
+	const { t } = useI18n();
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const systemAudioSupported = createQuery(() => isSystemAudioSupported);
@@ -39,7 +40,7 @@ export function SystemAudioToggleRoot(
 		!!currentRecording.data || systemAudioSupported.data === false;
 	const tooltipMessage = () => {
 		if (systemAudioSupported.data === false) {
-			return "System audio capture requires macOS 13.0 or later";
+			return t("System audio capture requires macOS 13.0 or later");
 		}
 		return undefined;
 	};
@@ -58,14 +59,14 @@ export function SystemAudioToggleRoot(
 			{props.icon}
 			<p class="flex-1 text-sm text-left truncate">
 				{rawOptions.captureSystemAudio
-					? "Record System Audio"
-					: "No System Audio"}
+					? t("Record System Audio")
+					: t("No System Audio")}
 			</p>
 			<Dynamic
 				component={props.PillComponent}
 				variant={rawOptions.captureSystemAudio ? "blue" : "red"}
 			>
-				{rawOptions.captureSystemAudio ? "On" : "Off"}
+				{rawOptions.captureSystemAudio ? t("On") : t("Off")}
 			</Dynamic>
 		</button>
 	);

@@ -7,6 +7,7 @@ import {
 	createSignal,
 	Show,
 } from "solid-js";
+import { useI18n } from "~/i18n";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCurrentRecordingQuery } from "~/utils/queries";
@@ -48,6 +49,7 @@ export function MicrophoneSelectBase(props: {
 	>;
 	permissions?: OSPermissionsCheck;
 }) {
+	const { t } = useI18n();
 	const DB_SCALE = 40;
 
 	const currentRecording = createCurrentRecordingQuery();
@@ -103,7 +105,7 @@ export function MicrophoneSelectBase(props: {
 
 					Promise.all([
 						CheckMenuItem.new({
-							text: NO_MICROPHONE,
+							text: t(NO_MICROPHONE),
 							checked: props.value === null,
 							action: () => handleMicrophoneChange(null),
 						}),
@@ -135,7 +137,7 @@ export function MicrophoneSelectBase(props: {
 				</Show>
 				<IconCapMicrophone class={props.iconClass} />
 				<p class="flex-1 text-sm text-left truncate">
-					{props.value ?? NO_MICROPHONE}
+					{props.value ?? t(NO_MICROPHONE)}
 				</p>
 				<TargetSelectInfoPill
 					PillComponent={props.PillComponent}

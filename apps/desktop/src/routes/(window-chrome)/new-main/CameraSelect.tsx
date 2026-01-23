@@ -6,6 +6,7 @@ import {
 	createEffect,
 	createSignal,
 } from "solid-js";
+import { useI18n } from "~/i18n";
 import { trackEvent } from "~/utils/analytics";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 import {
@@ -48,6 +49,7 @@ export function CameraSelectBase(props: {
 	iconClass: string;
 	permissions?: OSPermissionsCheck;
 }) {
+	const { t } = useI18n();
 	const currentRecording = createCurrentRecordingQuery();
 	const requestPermission = useRequestPermission();
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
@@ -116,7 +118,7 @@ export function CameraSelectBase(props: {
 
 					Promise.all([
 						CheckMenuItem.new({
-							text: NO_CAMERA,
+							text: t(NO_CAMERA),
 							checked: props.value === null,
 							action: () => onChange(null),
 						}),
@@ -138,7 +140,7 @@ export function CameraSelectBase(props: {
 			>
 				<IconCapCamera class={props.iconClass} />
 				<p class="flex-1 text-sm text-left truncate">
-					{props.value?.display_name ?? NO_CAMERA}
+					{props.value?.display_name ?? t(NO_CAMERA)}
 				</p>
 				<div class="flex items-center gap-1">
 					{showHiddenIndicator() && (
@@ -147,7 +149,7 @@ export function CameraSelectBase(props: {
 							onClick={openCameraWindow}
 							onPointerDown={(e) => e.stopPropagation()}
 							class="flex items-center justify-center px-2 py-1 rounded-full bg-gray-6 text-gray-11 hover:bg-gray-7 transition-colors"
-							title="Show camera preview"
+							title={t("Show camera preview")}
 						>
 							<IconLucideEyeOff class="size-3.5" />
 						</button>

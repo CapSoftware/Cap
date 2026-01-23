@@ -1,5 +1,6 @@
 import type { Component, ComponentProps } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { useI18n } from "~/i18n";
 
 export default function TargetSelectInfoPill<T>(props: {
 	value: T | null;
@@ -10,6 +11,7 @@ export default function TargetSelectInfoPill<T>(props: {
 		ComponentProps<"button"> & { variant: "blue" | "red" }
 	>;
 }) {
+	const { t } = useI18n();
 	return (
 		<Dynamic
 			component={props.PillComponent}
@@ -29,10 +31,10 @@ export default function TargetSelectInfoPill<T>(props: {
 			}}
 		>
 			{!props.permissionGranted
-				? "Request Permission"
+				? t("Request Permission")
 				: props.value !== null
-					? "On"
-					: "Off"}
+					? t("On")
+					: t("Off")}
 		</Dynamic>
 	);
 }

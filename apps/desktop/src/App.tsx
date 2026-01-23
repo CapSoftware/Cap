@@ -13,6 +13,7 @@ import "unfonts.css";
 import "./styles/theme.css";
 
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
+import { I18nProvider } from "./i18n";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
@@ -89,9 +90,11 @@ const queryClient = new QueryClient({
 export default function App() {
 	return (
 		<QueryClientProvider client={queryClient}>
-			<Suspense>
-				<Inner />
-			</Suspense>
+			<I18nProvider>
+				<Suspense>
+					<Inner />
+				</Suspense>
+			</I18nProvider>
 		</QueryClientProvider>
 	);
 }
