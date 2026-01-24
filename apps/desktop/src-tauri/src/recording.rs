@@ -8,6 +8,8 @@ use cap_project::{
     StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta,
     ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
+#[cfg(target_os = "macos")]
+use cap_recording::SendableShareableContent;
 use cap_recording::feeds::camera::CameraFeedLock;
 #[cfg(target_os = "macos")]
 use cap_recording::sources::screen_capture::SourceError;
@@ -47,7 +49,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
-use crate::camera::{CameraPreviewManager, CameraPreviewShape};
+use crate::camera::{CameraPreviewManager, CameraPreviewShape, CameraPreviewState};
 #[cfg(target_os = "macos")]
 use crate::general_settings;
 use crate::permissions;
@@ -93,39 +95,20 @@ pub enum InProgressRecording {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone)]
-struct SendableShareableContent(cidre::arc::R<cidre::sc::ShareableContent>);
-
-#[cfg(target_os = "macos")]
-impl SendableShareableContent {
-    fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
-        self.0.clone()
-    }
-}
-
-#[cfg(target_os = "macos")]
-unsafe impl Send for SendableShareableContent {}
-
-#[cfg(target_os = "macos")]
-unsafe impl Sync for SendableShareableContent {}
-
-#[cfg(target_os = "macos")]
 async fn acquire_shareable_content_for_target(
     capture_target: &ScreenCaptureTarget,
 ) -> anyhow::Result<SendableShareableContent> {
     let mut refreshed = false;
 
     loop {
-        let shareable_content = SendableShareableContent(
+        let shareable_content = SendableShareableContent::from(
             crate::platform::get_shareable_content()
                 .await
                 .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
                 .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
         );
 
-        if !shareable_content_missing_target_display(capture_target, shareable_content.retained())
-            .await
-        {
+        if !shareable_content_missing_target_display(capture_target, &shareable_content) {
             return Ok(shareable_content);
         }
 
@@ -141,15 +124,14 @@ async fn acquire_shareable_content_for_target(
 }
 
 #[cfg(target_os = "macos")]
-async fn shareable_content_missing_target_display(
+fn shareable_content_missing_target_display(
     capture_target: &ScreenCaptureTarget,
-    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    shareable_content: &SendableShareableContent,
 ) -> bool {
     match capture_target.display() {
         Some(display) => display
             .raw_handle()
-            .as_sc(shareable_content)
-            .await
+            .as_sc(shareable_content.retained())
             .is_none(),
         None => false,
     }
@@ -473,6 +455,35 @@ pub async fn start_recording(
         return Err("Recording already in progress".to_string());
     }
 
+    let mut inputs = inputs;
+    if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+        inputs.capture_system_audio = false;
+
+        {
+            let app_state = state_mtx.read().await;
+            let current_mirrored = app_state
+                .camera_preview
+                .get_state()
+                .map(|s| s.mirrored)
+                .unwrap_or(false);
+
+            let camera_state = CameraPreviewState {
+                size: 400.0,
+                shape: CameraPreviewShape::Full,
+                mirrored: current_mirrored,
+            };
+
+            if let Err(err) = app_state.camera_preview.set_state(camera_state) {
+                error!("Failed to set camera preview state for camera-only mode: {err}");
+            }
+        }
+
+        ShowCapWindow::Camera { centered: true }
+            .show(&app)
+            .await
+            .map_err(|err| format!("Failed to show centered camera window: {err}"))?;
+    }
+
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
 
@@ -711,8 +722,10 @@ pub async fn start_recording(
             state.camera_in_use = camera_feed.is_some();
 
             #[cfg(target_os = "macos")]
-            let mut shareable_content =
-                acquire_shareable_content_for_target(&inputs.capture_target).await?;
+            let mut shareable_content = match inputs.capture_target {
+                ScreenCaptureTarget::CameraOnly => None,
+                _ => Some(acquire_shareable_content_for_target(&inputs.capture_target).await?),
+            };
 
             let common = InProgressRecordingCommon {
                 target_name: project_name,
@@ -780,7 +793,7 @@ pub async fn start_recording(
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
-                                    shareable_content.retained(),
+                                    shareable_content.clone(),
                                 )
                                 .await
                                 .map_err(|e| {
@@ -816,6 +829,10 @@ pub async fn start_recording(
                                 builder = builder.with_excluded_windows(excluded_windows.clone());
                             }
 
+                            if let Some(camera_feed) = camera_feed.clone() {
+                                builder = builder.with_camera_feed(camera_feed);
+                            }
+
                             if let Some(mic_feed) = mic_feed.clone() {
                                 builder = builder.with_mic_feed(mic_feed);
                             }
@@ -823,7 +840,7 @@ pub async fn start_recording(
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
-                                    shareable_content.retained(),
+                                    shareable_content.clone(),
                                 )
                                 .await
                                 .map_err(|e| {
@@ -862,8 +879,9 @@ pub async fn start_recording(
                     }
                     #[cfg(target_os = "macos")]
                     Err(err) if is_shareable_content_error(&err) => {
-                        shareable_content =
-                            acquire_shareable_content_for_target(&inputs.capture_target).await?;
+                        shareable_content = Some(
+                            acquire_shareable_content_for_target(&inputs.capture_target).await?,
+                        );
                         continue;
                     }
                     Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {

@@ -273,7 +273,7 @@ impl CapWindowId {
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
-            Self::Main => (330.0, 345.0),
+            Self::Main => (330.0, 408.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (700.0, 540.0),
@@ -308,7 +308,9 @@ pub enum ShowCapWindow {
     CaptureArea {
         screen_id: DisplayId,
     },
-    Camera,
+    Camera {
+        centered: bool,
+    },
     InProgressRecording {
         countdown: Option<u32>,
     },
@@ -369,7 +371,7 @@ impl ShowCapWindow {
             match self {
                 Self::Main { .. } => {
                     let cursor_monitor = CursorMonitorInfo::get();
-                    let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 345.0);
+                    let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 408.0);
                     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                     if let Some(camera_window) = CapWindowId::Camera.get(app) {
@@ -382,18 +384,31 @@ impl ShowCapWindow {
                             .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
                     }
                 }
-                Self::Camera => {
-                    const WINDOW_SIZE: f64 = 230.0 * 2.0;
+                Self::Camera { centered } => {
                     let camera_monitor = CapWindowId::Main
                         .get(app)
                         .map(|w| CursorMonitorInfo::from_window(&w))
                         .unwrap_or_else(CursorMonitorInfo::get);
-                    let camera_pos_x =
-                        camera_monitor.x + camera_monitor.width - WINDOW_SIZE - 100.0;
-                    let camera_pos_y =
-                        camera_monitor.y + camera_monitor.height - WINDOW_SIZE - 100.0;
-                    let _ = window
-                        .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+
+                    if *centered {
+                        const CENTERED_WINDOW_SIZE: f64 = 400.0;
+                        let aspect_ratio = 16.0 / 9.0;
+                        let toolbar_height = 56.0;
+                        let window_width = CENTERED_WINDOW_SIZE * aspect_ratio;
+                        let window_height = CENTERED_WINDOW_SIZE + toolbar_height;
+                        let (camera_pos_x, camera_pos_y) =
+                            camera_monitor.center_position(window_width, window_height);
+                        let _ = window
+                            .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+                    } else {
+                        const WINDOW_SIZE: f64 = 230.0 * 2.0;
+                        let camera_pos_x =
+                            camera_monitor.x + camera_monitor.width - WINDOW_SIZE - 100.0;
+                        let camera_pos_y =
+                            camera_monitor.y + camera_monitor.height - WINDOW_SIZE - 100.0;
+                        let _ = window
+                            .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+                    }
                 }
                 _ => {}
             }
@@ -484,7 +499,7 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 345.0);
+                let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 408.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(target_os = "macos")]
@@ -527,7 +542,14 @@ impl ShowCapWindow {
                     Some(RecordingTargetMode::Display) => "&targetMode=display",
                     Some(RecordingTargetMode::Window) => "&targetMode=window",
                     Some(RecordingTargetMode::Area) => "&targetMode=area",
+                    Some(RecordingTargetMode::Camera) => "&targetMode=camera",
                     None => "",
+                };
+
+                let camera_ws_port = {
+                    let state = app.state::<ArcLock<App>>();
+                    let state = state.read().await;
+                    state.camera_ws_port
                 };
 
                 let mut window_builder = self
@@ -544,7 +566,11 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .visible(false);
+                    .visible(false)
+                    .initialization_script(format!(
+                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {};",
+                        camera_ws_port
+                    ));
 
                 #[cfg(target_os = "macos")]
                 {
@@ -779,8 +805,9 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::Camera => {
-                const WINDOW_SIZE: f64 = 230.0 * 2.0;
+            Self::Camera { centered } => {
+                const DEFAULT_WINDOW_SIZE: f64 = 230.0 * 2.0;
+                const CENTERED_WINDOW_SIZE: f64 = 400.0;
 
                 let enable_native_camera_preview = GeneralSettingsStore::get(app)
                     .ok()
@@ -812,8 +839,9 @@ impl ShowCapWindow {
                             "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {};
+			                window.__CAP__.cameraOnlyMode = {};
 		                ",
-                            state.camera_ws_port
+                            state.camera_ws_port, centered
                         ))
                         .transparent(true)
                         .visible(false);
@@ -824,12 +852,24 @@ impl ShowCapWindow {
                         .get(app)
                         .map(|w| CursorMonitorInfo::from_window(&w))
                         .unwrap_or(cursor_monitor);
-                    let camera_pos_x =
-                        camera_monitor.x + camera_monitor.width - WINDOW_SIZE - 100.0;
-                    let camera_pos_y =
-                        camera_monitor.y + camera_monitor.height - WINDOW_SIZE - 100.0;
-                    let _ = window
-                        .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+
+                    if *centered {
+                        let aspect_ratio = 16.0 / 9.0;
+                        let toolbar_height = 56.0;
+                        let window_width = CENTERED_WINDOW_SIZE * aspect_ratio;
+                        let window_height = CENTERED_WINDOW_SIZE + toolbar_height;
+                        let (camera_pos_x, camera_pos_y) =
+                            camera_monitor.center_position(window_width, window_height);
+                        let _ = window
+                            .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+                    } else {
+                        let camera_pos_x =
+                            camera_monitor.x + camera_monitor.width - DEFAULT_WINDOW_SIZE - 100.0;
+                        let camera_pos_y =
+                            camera_monitor.y + camera_monitor.height - DEFAULT_WINDOW_SIZE - 100.0;
+                        let _ = window
+                            .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+                    }
 
                     if let Some(id) = state.selected_camera_id.clone()
                         && !state.camera_in_use
@@ -1219,7 +1259,7 @@ impl ShowCapWindow {
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera => CapWindowId::Camera,
+            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
