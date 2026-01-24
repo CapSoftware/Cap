@@ -527,6 +527,7 @@ impl ShowCapWindow {
                     Some(RecordingTargetMode::Display) => "&targetMode=display",
                     Some(RecordingTargetMode::Window) => "&targetMode=window",
                     Some(RecordingTargetMode::Area) => "&targetMode=area",
+                    Some(RecordingTargetMode::Camera) => "&targetMode=camera",
                     None => "",
                 };
 

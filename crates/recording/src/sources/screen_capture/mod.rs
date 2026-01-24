@@ -62,6 +62,7 @@ pub enum ScreenCaptureTarget {
         screen: DisplayId,
         bounds: LogicalBounds,
     },
+    CameraOnly,
 }
 
 impl ScreenCaptureTarget {
@@ -70,6 +71,7 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
+            Self::CameraOnly => None,
         }
     }
 
@@ -168,6 +170,7 @@ impl ScreenCaptureTarget {
                     )));
                 }
             }
+            Self::CameraOnly => None,
         }
     }
 
@@ -185,6 +188,7 @@ impl ScreenCaptureTarget {
                     size.height() * scale,
                 ))
             }
+            Self::CameraOnly => None,
         }
     }
 
@@ -193,6 +197,7 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id).and_then(|d| d.name()),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
+            Self::CameraOnly => Some("Camera".to_string()),
         }
     }
 
@@ -201,7 +206,12 @@ impl ScreenCaptureTarget {
             ScreenCaptureTarget::Display { .. } => "Display",
             ScreenCaptureTarget::Window { .. } => "Window",
             ScreenCaptureTarget::Area { .. } => "Area",
+            ScreenCaptureTarget::CameraOnly => "Camera",
         }
+    }
+
+    pub fn is_camera_only(&self) -> bool {
+        matches!(self, Self::CameraOnly)
     }
 }
 

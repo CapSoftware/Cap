@@ -473,6 +473,14 @@ pub async fn start_recording(
         return Err("Recording already in progress".to_string());
     }
 
+    if inputs.capture_target.is_camera_only() {
+        let state = state_mtx.read().await;
+        if state.selected_camera_id.is_none() {
+            return Err("Camera-only mode requires a camera to be selected".to_string());
+        }
+        return Err("Camera-only recording is coming soon! For now, please select a display, window, or area to record along with your camera.".to_string());
+    }
+
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
 

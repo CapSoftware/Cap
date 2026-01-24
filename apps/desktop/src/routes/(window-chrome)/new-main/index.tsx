@@ -82,6 +82,7 @@ import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
 import ModeInfoPanel from "./ModeInfoPanel";
+import MoreOptionsPanel from "./MoreOptionsPanel";
 import SystemAudio from "./SystemAudio";
 import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
@@ -442,6 +443,9 @@ function Page() {
 
 	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] =
 		createSignal(false);
+	const [hasHiddenCameraForCameraMode, setHasHiddenCameraForCameraMode] =
+		createSignal(false);
+
 	createEffect(() => {
 		const pickerActive = rawOptions.targetMode != null;
 		const hasHidden = hasHiddenMainWindowForPicker();
@@ -455,10 +459,45 @@ function Page() {
 			void currentWindow.setFocus();
 		}
 	});
+
+	createEffect(() => {
+		const isCameraMode = rawOptions.targetMode === "camera";
+		const hasHiddenCamera = hasHiddenCameraForCameraMode();
+
+		if (isCameraMode && !hasHiddenCamera) {
+			setHasHiddenCameraForCameraMode(true);
+			void (async () => {
+				const cameraWindow = await WebviewWindow.getByLabel("camera");
+				if (cameraWindow) {
+					await cameraWindow.hide();
+				}
+			})();
+		} else if (!isCameraMode && hasHiddenCamera) {
+			setHasHiddenCameraForCameraMode(false);
+			void (async () => {
+				const cameraWindow = await WebviewWindow.getByLabel("camera");
+				if (cameraWindow) {
+					await cameraWindow.show();
+				}
+			})();
+		}
+	});
+
 	onCleanup(() => {
 		if (!hasHiddenMainWindowForPicker()) return;
 		setHasHiddenMainWindowForPicker(false);
 		void getCurrentWindow().show();
+	});
+
+	onCleanup(() => {
+		if (!hasHiddenCameraForCameraMode()) return;
+		setHasHiddenCameraForCameraMode(false);
+		void (async () => {
+			const cameraWindow = await WebviewWindow.getByLabel("camera");
+			if (cameraWindow) {
+				await cameraWindow.show();
+			}
+		})();
 	});
 
 	const handleMouseEnter = () => {
@@ -470,14 +509,16 @@ function Page() {
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
 	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
 	const [modeInfoMenuOpen, setModeInfoMenuOpen] = createSignal(false);
+	const [moreMenuOpen, setMoreMenuOpen] = createSignal(false);
 	const activeMenu = createMemo<
-		"display" | "window" | "recording" | "screenshot" | "modeInfo" | null
+		"display" | "window" | "recording" | "screenshot" | "modeInfo" | "more" | null
 	>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
 		if (recordingsMenuOpen()) return "recording";
 		if (screenshotsMenuOpen()) return "screenshot";
 		if (modeInfoMenuOpen()) return "modeInfo";
+		if (moreMenuOpen()) return "more";
 		return null;
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
@@ -691,6 +732,7 @@ function Page() {
 		setRecordingsMenuOpen(false);
 		setScreenshotsMenuOpen(false);
 		setModeInfoMenuOpen(false);
+		setMoreMenuOpen(false);
 	});
 
 	createUpdateCheck();
@@ -962,10 +1004,10 @@ function Page() {
 			exitToClass="scale-95"
 		>
 			<div class="flex flex-col gap-2 w-full">
-				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
+				<div class="flex flex-row gap-1.5 items-stretch w-full text-xs text-gray-11">
 					<div
 						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+							"flex min-w-0 flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
 							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
 								"ring-blue-9",
 						)}
@@ -1004,7 +1046,7 @@ function Page() {
 					</div>
 					<div
 						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+							"flex min-w-0 flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
 							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
 								"ring-blue-9",
 						)}
@@ -1047,7 +1089,27 @@ function Page() {
 						disabled={isRecording()}
 						onClick={() => toggleTargetMode("area")}
 						name="Area"
+						class="flex-shrink-0"
 					/>
+					<button
+						type="button"
+						disabled={isRecording()}
+						onClick={() => {
+							setMoreMenuOpen(true);
+							setDisplayMenuOpen(false);
+							setWindowMenuOpen(false);
+							setRecordingsMenuOpen(false);
+							setScreenshotsMenuOpen(false);
+						}}
+						class={cx(
+							"flex-shrink-0 flex items-center justify-center px-1 py-2 bg-gray-3 rounded-lg text-[9px] font-medium text-gray-11 hover:bg-gray-5 transition-colors",
+							moreMenuOpen() && "bg-gray-5 ring-1 ring-blue-9",
+							isRecording() && "opacity-50 cursor-not-allowed",
+						)}
+						style={{ "writing-mode": "vertical-rl" }}
+					>
+						+1
+					</button>
 				</div>
 				<BaseControls />
 			</div>
@@ -1327,6 +1389,18 @@ function Page() {
 										});
 										getCurrentWindow().hide();
 									}}
+								/>
+							) : variant === "more" ? (
+								<MoreOptionsPanel
+									onBack={() => {
+										setMoreMenuOpen(false);
+									}}
+									onCameraOnly={async () => {
+										setMoreMenuOpen(false);
+										setOptions("targetMode", "camera");
+										await commands.openTargetSelectOverlays(null, null, "camera");
+									}}
+									disabled={isRecording()}
 								/>
 							) : (
 								<ModeInfoPanel

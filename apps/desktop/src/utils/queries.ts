@@ -153,7 +153,7 @@ export function createOptionsQuery() {
 		micName: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
-		targetMode?: "display" | "window" | "area" | null;
+		targetMode?: "display" | "window" | "area" | "camera" | null;
 		cameraID?: DeviceOrModelID | null;
 		organizationId?: string | null;
 		/** @deprecated */

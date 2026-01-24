@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
+import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -42,6 +43,7 @@ import {
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
+import { WebSocketCameraPreview } from "~/components/WebSocketCameraPreview";
 import { authStore, generalSettingsStore } from "~/store";
 import { createDevicesQuery } from "~/utils/devices";
 import {
@@ -114,7 +116,7 @@ function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
-		targetMode: "display" | "window" | "area";
+		targetMode: "display" | "window" | "area" | "camera";
 	}>();
 	const [options, setOptions] = useOptions();
 
@@ -881,7 +883,61 @@ function Inner() {
 					);
 				}}
 			</Match>
+			<Match when={options.targetMode === "camera"}>
+				<CameraModeOverlay />
+			</Match>
 		</Switch>
+	);
+}
+
+function CameraModeOverlay() {
+	const [options, setOptions] = useOptions();
+	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
+
+	const [mirrored, setMirrored] = makePersisted(createSignal(false), {
+		name: "cameraOnlyMirrored",
+	});
+
+	return (
+		<div class="relative w-screen h-screen flex flex-col items-center justify-center">
+			<div class="absolute inset-0 bg-black/80 -z-10" />
+
+			<div class="flex flex-col items-center gap-6 max-w-[600px] w-full px-4">
+				<div class="relative w-full aspect-video rounded-2xl overflow-hidden bg-gray-900 shadow-2xl">
+					<WebSocketCameraPreview
+						mirrored={mirrored()}
+						containerClass="w-full h-full"
+						class="w-full h-full object-cover"
+					/>
+
+					<button
+						type="button"
+						onClick={() => setMirrored(!mirrored())}
+						class="absolute bottom-4 right-4 p-2 rounded-lg bg-black/50 text-white hover:bg-black/70 transition-colors"
+						title={mirrored() ? "Unmirror" : "Mirror"}
+					>
+						<IconCapArrows class="size-5" />
+					</button>
+				</div>
+
+				<Show when={toggleModeSelect()}>
+					<div
+						class="absolute inset-0 z-10"
+						onClick={() => setToggleModeSelect(false)}
+					/>
+					<ModeSelect
+						standalone
+						onClose={() => setToggleModeSelect(false)}
+					/>
+				</Show>
+
+				<RecordingControls
+					setToggleModeSelect={setToggleModeSelect}
+					target={{ variant: "cameraOnly" }}
+				/>
+				<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
+			</div>
+		</div>
 	);
 }
 
@@ -931,25 +987,30 @@ function RecordingControls(props: {
 		return mics().find((name) => name === rawOptions.micName) ?? null;
 	});
 
-	const menuModes = async () =>
-		await Menu.new({
-			items: [
-				await CheckMenuItem.new({
-					text: "Studio Mode",
-					action: () => {
-						setOptions("mode", "studio");
-						commands.setRecordingMode("studio");
-					},
-					checked: rawOptions.mode === "studio",
-				}),
-				await CheckMenuItem.new({
-					text: "Instant Mode",
-					action: () => {
-						setOptions("mode", "instant");
-						commands.setRecordingMode("instant");
-					},
-					checked: rawOptions.mode === "instant",
-				}),
+	const isCameraOnly = () => props.target.variant === "cameraOnly";
+
+	const menuModes = async () => {
+		const items = [
+			await CheckMenuItem.new({
+				text: "Studio Mode",
+				action: () => {
+					setOptions("mode", "studio");
+					commands.setRecordingMode("studio");
+				},
+				checked: rawOptions.mode === "studio",
+			}),
+			await CheckMenuItem.new({
+				text: "Instant Mode",
+				action: () => {
+					setOptions("mode", "instant");
+					commands.setRecordingMode("instant");
+				},
+				checked: rawOptions.mode === "instant",
+			}),
+		];
+
+		if (!isCameraOnly()) {
+			items.push(
 				await CheckMenuItem.new({
 					text: "Screenshot Mode",
 					action: () => {
@@ -958,8 +1019,11 @@ function RecordingControls(props: {
 					},
 					checked: rawOptions.mode === "screenshot",
 				}),
-			],
-		});
+			);
+		}
+
+		return await Menu.new({ items });
+	};
 
 	const countdownItems = async () => [
 		await CheckMenuItem.new({
@@ -1053,7 +1117,7 @@ function RecordingControls(props: {
 
 								props.onRecordingStart?.();
 
-								if (rawOptions.mode === "screenshot") {
+								if (rawOptions.mode === "screenshot" && props.target.variant !== "cameraOnly") {
 									try {
 										const path = await invoke<string>("take_screenshot", {
 											target: props.target,
@@ -1071,7 +1135,7 @@ function RecordingControls(props: {
 								commands.startRecording({
 									capture_target: props.target,
 									mode: rawOptions.mode,
-									capture_system_audio: rawOptions.captureSystemAudio,
+									capture_system_audio: props.target.variant === "cameraOnly" ? false : rawOptions.captureSystemAudio,
 								});
 							}}
 						>
@@ -1127,27 +1191,40 @@ function RecordingControls(props: {
 				</div>
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>
 					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
-						<div class="grid grid-cols-2 gap-2 w-full">
-							<CameraSelect
-								disabled={devices.isPending}
-								options={cameras()}
-								value={selectedCamera() ?? null}
-								onChange={(camera) => {
-									if (!camera) setCamera.mutate(null);
-									else if (camera.model_id)
-										setCamera.mutate({ ModelID: camera.model_id });
-									else setCamera.mutate({ DeviceID: camera.device_id });
-								}}
-								permissions={permissions()}
-							/>
-							<MicrophoneSelect
-								disabled={devices.isPending}
-								options={mics()}
-								value={selectedMicName()}
-								onChange={(value) => setMicInput.mutate(value)}
-								permissions={permissions()}
-							/>
-						</div>
+						<Show
+							when={!isCameraOnly()}
+							fallback={
+								<MicrophoneSelect
+									disabled={devices.isPending}
+									options={mics()}
+									value={selectedMicName()}
+									onChange={(value) => setMicInput.mutate(value)}
+									permissions={permissions()}
+								/>
+							}
+						>
+							<div class="grid grid-cols-2 gap-2 w-full">
+								<CameraSelect
+									disabled={devices.isPending}
+									options={cameras()}
+									value={selectedCamera() ?? null}
+									onChange={(camera) => {
+										if (!camera) setCamera.mutate(null);
+										else if (camera.model_id)
+											setCamera.mutate({ ModelID: camera.model_id });
+										else setCamera.mutate({ DeviceID: camera.device_id });
+									}}
+									permissions={permissions()}
+								/>
+								<MicrophoneSelect
+									disabled={devices.isPending}
+									options={mics()}
+									value={selectedMicName()}
+									onChange={(value) => setMicInput.mutate(value)}
+									permissions={permissions()}
+								/>
+							</div>
+						</Show>
 					</div>
 				</Show>
 			</div>
