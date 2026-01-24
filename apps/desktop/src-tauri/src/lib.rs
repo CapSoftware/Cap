@@ -624,7 +624,13 @@ pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String>
     }
 
     let (current_label, mic_list) = {
+    let current_label = {
         let app = state.read().await;
+        app.selected_mic_label.clone()
+    };
+
+    let mut mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
+    mic_list.sort_unstable();
         let mut mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
         mic_list.sort_unstable();
         (app.selected_mic_label.clone(), mic_list)
