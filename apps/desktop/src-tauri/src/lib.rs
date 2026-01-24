@@ -592,6 +592,13 @@ async fn set_camera_input(
 #[specta::specta]
 #[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let app = state.read().await;
+    let Some(recording) = app.current_recording() else {
+        return Err("No active recording".to_string());
+    };
+
+    recording.pause().await.map_err(|e| e.to_string())
+}
     let mut app = state.write().await;
     if let Some(recording) = app.current_recording_mut() {
         recording.pause().await.map_err(|e| e.to_string())?;
