@@ -661,7 +661,10 @@ pub async fn cycle_camera_input(
     };
 
     let next_id = next_camera.map(|c| DeviceOrModelID::DeviceID(c.device_id().to_string()));
-
+    let next_id = next_camera.map(|c| match c.model_id() {
+        Some(model_id) => DeviceOrModelID::ModelID(model_id.to_string()),
+        None => DeviceOrModelID::DeviceID(c.device_id().to_string()),
+    });
     set_camera_input(app_handle, state, next_id).await
 }
 
