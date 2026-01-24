@@ -635,7 +635,9 @@ pub async fn cycle_camera_input(
     if !permissions::do_permissions_check(false).camera.permitted() {
         return Err("Camera permission denied".to_string());
     }
-        return Ok(());
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return Err("Camera permission denied".to_string());
+    }
     }
 
     let current_id = {
