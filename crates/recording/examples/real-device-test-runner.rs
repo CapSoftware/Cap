@@ -1373,7 +1373,9 @@ async fn execute_recording(
     };
 
     #[cfg(target_os = "macos")]
-    let shareable_content = cidre::sc::ShareableContent::current().await?;
+    let shareable_content = cap_recording::SendableShareableContent::from(
+        cidre::sc::ShareableContent::current().await?,
+    );
 
     let mut builder = studio_recording::Actor::builder(
         recording_dir.clone(),
@@ -1396,7 +1398,7 @@ async fn execute_recording(
     let handle = builder
         .build(
             #[cfg(target_os = "macos")]
-            shareable_content,
+            Some(shareable_content),
         )
         .await?;
 

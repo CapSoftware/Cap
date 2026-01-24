@@ -9,7 +9,6 @@ mod macos {
     use scap_targets::Display;
     use std::time::Duration;
 
-    use futures::executor::block_on;
     use scap_screencapturekit::{Capturer, StreamCfgBuilder};
 
     #[tokio::main]
@@ -29,8 +28,10 @@ mod macos {
             .with_height(display.physical_size().unwrap().height() as usize)
             .build();
 
+        let content = sc::ShareableContent::current().await.unwrap();
         let capturer = Capturer::builder(
-            block_on(display.as_content_filter(sc::ShareableContent::current().await.unwrap()))
+            display
+                .as_content_filter(content)
                 .expect("Failed to get display as content filter"),
             config,
         )
