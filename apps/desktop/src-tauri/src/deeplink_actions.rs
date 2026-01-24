@@ -196,10 +196,20 @@ impl DeepLinkAction {
                 crate::resume_recording(state).await
             }
             DeepLinkAction::SetMicrophone { label } => {
+                let permissions = crate::permissions::do_permissions_check(false);
+                if !permissions.microphone.permitted() {
+                    return Err("Microphone permission denied".to_string());
+                }
+
                 let state = app.state::<ArcLock<App>>();
                 crate::set_mic_input(state, label).await
             }
             DeepLinkAction::SetCamera { id } => {
+                let permissions = crate::permissions::do_permissions_check(false);
+                if !permissions.camera.permitted() {
+                    return Err("Camera permission denied".to_string());
+                }
+
                 let state = app.state::<ArcLock<App>>();
                 crate::set_camera_input(app.clone(), state, id).await
             }
