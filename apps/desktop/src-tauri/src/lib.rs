@@ -596,7 +596,12 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
     if let Some(recording) = app.current_recording_mut() {
         recording.pause().await.map_err(|e| e.to_string())?;
     }
-    Ok(())
+    if let Some(recording) = app.current_recording_mut() {
+        recording.pause().await.map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("No active recording".to_string())
+    }
 }
 
 #[tauri::command]
