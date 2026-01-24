@@ -188,6 +188,8 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
             DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
                 let state = app.state::<ArcLock<App>>();
                 crate::recording::pause_recording(app.clone(), state).await
             }
