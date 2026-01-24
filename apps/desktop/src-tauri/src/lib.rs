@@ -614,6 +614,8 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
         Err("No active recording".to_string())
     }
 }
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(state))]
 pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String> {
     if !permissions::do_permissions_check(false)
