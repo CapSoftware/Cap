@@ -59,10 +59,33 @@ pub struct RecordingBaseInputs {
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
     pub camera_feed: Option<Arc<CameraFeedLock>>,
     #[cfg(target_os = "macos")]
-    pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    pub shareable_content: Option<SendableShareableContent>,
     #[cfg(target_os = "macos")]
     pub excluded_windows: Vec<scap_targets::WindowId>,
 }
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+pub struct SendableShareableContent(cidre::arc::R<cidre::sc::ShareableContent>);
+
+#[cfg(target_os = "macos")]
+impl SendableShareableContent {
+    pub fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
+        self.0.clone()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl From<cidre::arc::R<cidre::sc::ShareableContent>> for SendableShareableContent {
+    fn from(value: cidre::arc::R<cidre::sc::ShareableContent>) -> Self {
+        Self(value)
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for SendableShareableContent {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for SendableShareableContent {}
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

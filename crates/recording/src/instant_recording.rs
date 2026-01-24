@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use crate::SendableShareableContent;
 use crate::{
     RecordingBaseInputs,
     capture_pipeline::{
@@ -273,6 +275,7 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    camera_feed: Option<Arc<crate::feeds::camera::CameraFeedLock>>,
     max_output_size: Option<u32>,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
@@ -285,6 +288,7 @@ impl ActorBuilder {
             capture_target,
             system_audio: false,
             mic_feed: None,
+            camera_feed: None,
             max_output_size: None,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
@@ -301,6 +305,14 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_camera_feed(
+        mut self,
+        camera_feed: Arc<crate::feeds::camera::CameraFeedLock>,
+    ) -> Self {
+        self.camera_feed = Some(camera_feed);
+        self
+    }
+
     pub fn with_max_output_size(mut self, max_output_size: u32) -> Self {
         self.max_output_size = Some(max_output_size);
         self
@@ -314,7 +326,7 @@ impl ActorBuilder {
 
     pub async fn build(
         self,
-        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+        #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
         spawn_instant_recording_actor(
             self.output_path,
@@ -322,7 +334,7 @@ impl ActorBuilder {
                 capture_target: self.capture_target,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
-                camera_feed: None,
+                camera_feed: self.camera_feed,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
@@ -343,7 +355,6 @@ pub async fn spawn_instant_recording_actor(
     ensure_dir(&recording_dir)?;
 
     let timestamps = Timestamps::now();
-    let start_time = timestamps.system_time();
 
     trace!("creating recording actor");
 
@@ -352,41 +363,95 @@ pub async fn spawn_instant_recording_actor(
     #[cfg(windows)]
     cap_mediafoundation_utils::thread_init();
 
-    #[cfg(windows)]
-    let d3d_device = crate::capture_pipeline::create_d3d_device()?;
+    let (pipeline, video_info) = match inputs.capture_target {
+        ScreenCaptureTarget::CameraOnly => {
+            let camera_feed = inputs
+                .camera_feed
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Camera feed missing for camera-only recording"))?;
 
-    let (display, crop_bounds) =
-        target_to_display_and_crop(&inputs.capture_target).context("target_display_crop")?;
+            let output_path = content_dir.join("output.mp4");
 
-    let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
-        display,
-        crop_bounds,
-        true,
-        30,
-        start_time,
-        inputs.capture_system_audio,
-        #[cfg(windows)]
-        d3d_device,
-        #[cfg(target_os = "macos")]
-        inputs.shareable_content.retained(),
-        #[cfg(target_os = "macos")]
-        inputs.excluded_windows,
-    )
-    .await
-    .context("screen capture init")?;
+            let mut builder = OutputPipeline::builder(output_path.clone())
+                .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
+                .with_timestamps(timestamps);
 
-    debug!("screen capture: {screen_source:#?}");
+            if let Some(mic_feed) = inputs.mic_feed.clone() {
+                builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
+            }
 
-    let pipeline = create_pipeline(
-        content_dir.join("output.mp4"),
-        screen_source.clone(),
-        inputs.mic_feed.clone(),
-        max_output_size,
-        timestamps,
-    )
-    .await?;
+            #[cfg(target_os = "macos")]
+            let pipeline = builder
+                .build::<output_pipeline::AVFoundationCameraMuxer>(
+                    output_pipeline::AVFoundationCameraMuxerConfig::default(),
+                )
+                .await
+                .context("camera-only pipeline setup")?;
 
-    let video_info = pipeline.video_info;
+            #[cfg(windows)]
+            let pipeline = builder
+                .build::<output_pipeline::WindowsCameraMuxer>(
+                    output_pipeline::WindowsCameraMuxerConfig {
+                        encoder_preferences: crate::capture_pipeline::EncoderPreferences::default(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .context("camera-only pipeline setup")?;
+
+            let video_info = camera_feed.video_info().clone();
+            (
+                Pipeline {
+                    output: pipeline,
+                    video_info,
+                },
+                video_info,
+            )
+        }
+        _ => {
+            #[cfg(windows)]
+            let d3d_device = crate::capture_pipeline::create_d3d_device()?;
+
+            let (display, crop_bounds) = target_to_display_and_crop(&inputs.capture_target)
+                .context("target_display_crop")?;
+
+            let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+                display,
+                crop_bounds,
+                true,
+                30,
+                timestamps.system_time(),
+                inputs.capture_system_audio,
+                #[cfg(windows)]
+                d3d_device,
+                #[cfg(target_os = "macos")]
+                inputs
+                    .shareable_content
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Missing shareable content"))?,
+                #[cfg(target_os = "macos")]
+                inputs.excluded_windows,
+            )
+            .await
+            .context("screen capture init")?;
+
+            debug!("screen capture: {screen_source:#?}");
+
+            let pipeline = create_pipeline(
+                content_dir.join("output.mp4"),
+                screen_source.clone(),
+                inputs.mic_feed.clone(),
+                max_output_size,
+                timestamps,
+            )
+            .await?;
+
+            let video_info = pipeline.video_info;
+
+            (pipeline, video_info)
+        }
+    };
+
     let segment_start_time = current_time_f64();
 
     trace!("spawning recording actor");
