@@ -7,7 +7,7 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
-mod _actions;
+mod deeplink_actions;
 mod editor_window;
 mod export;
 mod fake_window;
@@ -84,7 +84,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
-use tauri_plugin_deep_link::Ext;
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -2776,7 +2776,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             trace!("Single instance invoked with args {args:?}");
 
-            // This is also handled as a  on some platforms (eg macOS), see _actions
+            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions.
             let Some(cap_file) = args
                 .iter()
                 .find(|arg| arg.ends_with(".cap"))
@@ -3070,7 +3070,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             let app_handle = app.clone();
             app.deep_link().on_open_url(move |event| {
-                _actions::handle(&app_handle, event.urls());
+                deeplink_actions::handle(&app_handle, event.urls());
             });
 
             Ok(())
