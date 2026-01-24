@@ -588,6 +588,99 @@ async fn set_camera_input(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut app = state.write().await;
+    if let Some(recording) = app.current_recording_mut() {
+        recording.pause().await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut app = state.write().await;
+    if let Some(recording) = app.current_recording_mut() {
+        recording.resume().await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String> {
+    let (current_label, mic_list) = {
+        let app = state.read().await;
+        let mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
+        (app.selected_mic_label.clone(), mic_list)
+    };
+
+    if mic_list.is_empty() {
+        return Ok(());
+    }
+
+    let next_label = match current_label {
+        Some(label) => {
+            let index = mic_list.iter().position(|l| l == &label);
+            match index {
+                Some(i) => mic_list.get((i + 1) % mic_list.len()).cloned(),
+                None => mic_list.first().cloned(),
+            }
+        }
+        None => mic_list.first().cloned(),
+    };
+
+    set_mic_input(state, next_label).await
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app_handle, state))]
+pub async fn cycle_camera_input(
+    app_handle: AppHandle,
+    state: MutableState<'_, App>
+) -> Result<(), String> {
+    let (current_id, camera_list) = {
+        let app = state.read().await;
+        let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
+        (app.selected_camera_id.clone(), camera_list)
+    };
+    
+    if camera_list.is_empty() {
+        return Ok(());
+    }
+
+    let next_id = match current_id {
+        Some(id) => {
+            let current_dev_id = match id {
+                DeviceOrModelID::DeviceID(d) => Some(d),
+                DeviceOrModelID::ModelID(_) => None, 
+            };
+            
+            let index = if let Some(dev_id) = current_dev_id {
+                camera_list.iter().position(|c| c.device_id() == dev_id)
+            } else {
+                None
+            };
+
+            match index { 
+                Some(i) => camera_list.get((i + 1) % camera_list.len()),
+                None => camera_list.first(),
+            }
+        }
+        None => camera_list.first(),
+    };
+
+    let next_id = next_id.map(|c| DeviceOrModelID::DeviceID(c.device_id().to_string()));
+
+    set_camera_input(app_handle, state, next_id).await
+}
+
 fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<StreamError>) {
     tokio::spawn(async move {
         let state = app_handle.state::<ArcLock<App>>();

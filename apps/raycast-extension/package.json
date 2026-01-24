@@ -1,0 +1,71 @@
+{
+    "$schema": "https://www.raycast.com/schemas/extension.json",
+    "name": "cap-control",
+    "title": "Cap Control",
+    "description": "Control Cap desktop app",
+    "icon": "command-icon.png",
+    "author": "CapSoftware",
+    "categories": [
+        "Productivity",
+        "Media"
+    ],
+    "license": "MIT",
+    "commands": [
+        {
+            "name": "start-recording",
+            "title": "Start Recording",
+            "description": "Start a new recording",
+            "mode": "no-view"
+        },
+        {
+            "name": "stop-recording",
+            "title": "Stop Recording",
+            "description": "Stop current recording",
+            "mode": "no-view"
+        },
+        {
+            "name": "pause-recording",
+            "title": "Pause Recording",
+            "description": "Pause current recording",
+            "mode": "no-view"
+        },
+        {
+            "name": "resume-recording",
+            "title": "Resume Recording",
+            "description": "Resume current recording",
+            "mode": "no-view"
+        },
+        {
+            "name": "switch-camera",
+            "title": "Switch Camera",
+            "description": "Cycle through available cameras",
+            "mode": "no-view"
+        },
+        {
+            "name": "switch-microphone",
+            "title": "Switch Microphone",
+            "description": "Cycle through available microphones",
+            "mode": "no-view"
+        }
+    ],
+    "dependencies": {
+        "@raycast/api": "^1.69.0",
+        "@raycast/utils": "^1.13.0"
+    },
+    "devDependencies": {
+        "@raycast/eslint-config": "^1.0.6",
+        "@types/node": "20.8.10",
+        "@types/react": "18.2.27",
+        "eslint": "^8.51.0",
+        "prettier": "^3.0.3",
+        "typescript": "^5.2.2"
+    },
+    "scripts": {
+        "build": "ray build -e dist",
+        "dev": "ray develop",
+        "fix-lint": "ray lint --fix",
+        "lint": "ray lint",
+        "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
+        "publish": "npx @raycast/api@latest publish"
+    }
+}
