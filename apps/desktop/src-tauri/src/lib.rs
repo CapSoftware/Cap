@@ -670,7 +670,7 @@ pub async fn cycle_camera_input(
     let current_index = match current_id {
         Some(id) => camera_list.iter().position(|c| match &id {
             DeviceOrModelID::DeviceID(dev_id) => c.device_id() == dev_id,
-            DeviceOrModelID::ModelID(mod_id) => c.model_id().map(|m| &m == mod_id).unwrap_or(false),
+            DeviceOrModelID::ModelID(mod_id) => c.model_id().is_some_and(|m| m == mod_id),
         }),
         None => None,
     };
