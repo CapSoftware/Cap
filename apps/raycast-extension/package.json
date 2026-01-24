@@ -1,6 +1,8 @@
 {
     "$schema": "https://www.raycast.com/schemas/extension.json",
     "name": "cap-control",
+    "version": "0.0.0",
+    "private": true,
     "title": "Cap Control",
     "description": "Control Cap desktop app",
     "icon": "command-icon.png",
