@@ -194,6 +194,8 @@ impl DeepLinkAction {
                 crate::recording::pause_recording(app.clone(), state).await
             }
             DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
                 let state = app.state::<ArcLock<App>>();
                 crate::recording::resume_recording(app.clone(), state).await
             }
