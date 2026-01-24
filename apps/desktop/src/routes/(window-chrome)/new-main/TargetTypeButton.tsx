@@ -24,7 +24,7 @@ function TargetTypeButton(props: TargetTypeButtonProps) {
 			disabled={local.disabled}
 			aria-pressed={local.selected ? "true" : "false"}
 			class={cx(
-				"flex flex-1 flex-col items-center justify-end gap-1 rounded-lg border border-gray-5 bg-gray-3 py-2.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1",
+				"flex flex-1 flex-col items-center justify-end gap-1 rounded-lg border border-gray-5 bg-gray-3 py-2 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1",
 				local.selected ? "text-gray-12" : "text-gray-12 hover:bg-gray-4",
 				local.disabled && "pointer-events-none opacity-60",
 				local.class,

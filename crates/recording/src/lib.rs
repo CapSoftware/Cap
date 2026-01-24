@@ -73,7 +73,7 @@ pub struct SendableShareableContent(
 #[cfg(target_os = "macos")]
 impl SendableShareableContent {
     pub fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
-        self.0.lock().unwrap().clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

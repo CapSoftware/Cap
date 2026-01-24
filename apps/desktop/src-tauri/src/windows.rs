@@ -273,7 +273,7 @@ impl CapWindowId {
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
-            Self::Main => (330.0, 408.0),
+            Self::Main => (330.0, 395.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (700.0, 540.0),
@@ -371,7 +371,7 @@ impl ShowCapWindow {
             match self {
                 Self::Main { .. } => {
                     let cursor_monitor = CursorMonitorInfo::get();
-                    let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 408.0);
+                    let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 395.0);
                     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                     if let Some(camera_window) = CapWindowId::Camera.get(app) {
@@ -499,7 +499,7 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 408.0);
+                let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 395.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(target_os = "macos")]

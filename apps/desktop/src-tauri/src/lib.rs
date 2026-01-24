@@ -754,32 +754,43 @@ async fn cleanup_camera_window(app: AppHandle) {
 
 async fn cleanup_camera_after_overlay_close(app: AppHandle) {
     let state = app.state::<ArcLock<App>>();
+
+    let camera_feed = {
+        let mut app_state = state.write().await;
+
+        if app_state.camera_cleanup_done {
+            return;
+        }
+
+        if app_state.is_recording_active_or_pending() {
+            return;
+        }
+
+        let has_camera_window = CapWindowId::Camera.get(&app).is_some();
+        if has_camera_window {
+            return;
+        }
+
+        let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
+            label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+        });
+        if has_visible_target_overlay {
+            return;
+        }
+
+        app_state.camera_cleanup_done = true;
+
+        if !app_state.camera_in_use {
+            return;
+        }
+
+        app_state.camera_feed.clone()
+    };
+
+    let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
+
     let mut app_state = state.write().await;
-
-    if app_state.camera_cleanup_done {
-        return;
-    }
-
-    if app_state.is_recording_active_or_pending() {
-        return;
-    }
-
-    let has_camera_window = CapWindowId::Camera.get(&app).is_some();
-    if has_camera_window {
-        return;
-    }
-
-    let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
-        label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
-    });
-    if has_visible_target_overlay {
-        return;
-    }
-
-    if app_state.camera_in_use {
-        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-        app_state.camera_in_use = false;
-    }
+    app_state.camera_in_use = false;
 }
 
 fn spawn_microphone_watcher(app_handle: AppHandle) {

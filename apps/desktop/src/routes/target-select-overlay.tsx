@@ -1004,6 +1004,10 @@ function CameraPreviewInline() {
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) return;
 
+			const MAX_FRAME_DIMENSION = 8192;
+			const MAX_STRIDE_BYTES = MAX_FRAME_DIMENSION * 4 * 2;
+			const MAX_FRAME_SIZE = MAX_FRAME_DIMENSION * MAX_FRAME_DIMENSION * 4;
+
 			const metadataOffset = clamped.length - 24;
 			const meta = new DataView(buffer, metadataOffset, 24);
 			const strideBytes = meta.getUint32(0, true);
@@ -1012,14 +1016,30 @@ function CameraPreviewInline() {
 
 			if (!width || !height || strideBytes === 0) return;
 
+			if (
+				width > MAX_FRAME_DIMENSION ||
+				height > MAX_FRAME_DIMENSION ||
+				strideBytes > MAX_STRIDE_BYTES
+			)
+				return;
+
 			const source = clamped.subarray(0, metadataOffset);
 			const expectedRowBytes = width * 4;
 			const availableLength = strideBytes * height;
+
+			if (
+				expectedRowBytes > MAX_STRIDE_BYTES ||
+				availableLength > MAX_FRAME_SIZE
+			)
+				return;
 
 			if (strideBytes < expectedRowBytes || source.length < availableLength)
 				return;
 
 			const expectedLength = expectedRowBytes * height;
+
+			if (expectedLength > MAX_FRAME_SIZE) return;
+
 			let pixels: Uint8ClampedArray;
 
 			if (strideBytes === expectedRowBytes) {
