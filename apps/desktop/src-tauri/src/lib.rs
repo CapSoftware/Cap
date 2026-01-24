@@ -591,7 +591,29 @@ async fn set_camera_input(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(state))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let app = state.read().await;
+    let Some(recording) = app.current_recording() else {
+        return Err("No active recording".to_string());
+    };
+
+    recording.pause().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let app = state.read().await;
+    let Some(recording) = app.current_recording() else {
+        return Err("No active recording".to_string());
+    };
+
+    recording.resume().await.map_err(|e| e.to_string())
+}
     let app = state.read().await;
     let Some(recording) = app.current_recording() else {
         return Err("No active recording".to_string());
