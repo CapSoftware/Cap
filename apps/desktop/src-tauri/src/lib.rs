@@ -605,13 +605,15 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut app = state.write().await;
     if let Some(recording) = app.current_recording_mut() {
+pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut app = state.write().await;
+    if let Some(recording) = app.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("No active recording".to_string())
     }
-    Ok(())
 }
-
-#[tauri::command]
-#[specta::specta]
 #[instrument(skip(state))]
 pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String> {
     if !permissions::do_permissions_check(false)
