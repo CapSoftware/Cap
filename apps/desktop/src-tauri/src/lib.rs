@@ -592,6 +592,7 @@ async fn set_camera_input(
 #[specta::specta]
 #[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut app = state.write().await;
     if let Some(recording) = app.current_recording_mut() {
         recording.pause().await.map_err(|e| e.to_string())?;
         Ok(())
@@ -606,6 +607,7 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut app = state.write().await;
     if let Some(recording) = app.current_recording_mut() {
+        recording.resume().await.map_err(|e| e.to_string())?;
         Ok(())
     } else {
         Err("No active recording".to_string())
@@ -622,7 +624,6 @@ pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String>
         return Ok(());
     }
 
-    let (current_label, mic_list) = {
     let current_label = {
         let app = state.read().await;
         app.selected_mic_label.clone()
@@ -630,10 +631,6 @@ pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String>
 
     let mut mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
     mic_list.sort_unstable();
-        let mut mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
-        mic_list.sort_unstable();
-        (app.selected_mic_label.clone(), mic_list)
-    };
 
     if mic_list.is_empty() {
         return Ok(());
@@ -664,16 +661,12 @@ pub async fn cycle_camera_input(
         return Ok(());
     }
 
-    let (current_id, camera_list) = {
     let current_id = {
         let app = state.read().await;
         app.selected_camera_id.clone()
     };
 
     let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
-        let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
-        (app.selected_camera_id.clone(), camera_list)
-    };
 
     if camera_list.is_empty() {
         return Ok(());
