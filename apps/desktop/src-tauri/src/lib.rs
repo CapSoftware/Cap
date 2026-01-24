@@ -633,6 +633,8 @@ pub async fn cycle_camera_input(
     state: MutableState<'_, App>,
 ) -> Result<(), String> {
     if !permissions::do_permissions_check(false).camera.permitted() {
+        return Err("Camera permission denied".to_string());
+    }
         return Ok(());
     }
 
