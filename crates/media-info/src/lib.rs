@@ -121,8 +121,7 @@ impl AudioInfo {
         // This prevents panics when audio devices report unusual channel counts
         // (e.g., 0 channels or more than 8 channels).
         let clamped_channels = (self.channels as u16).clamp(1, 8);
-        Self::channel_layout_raw(clamped_channels)
-            .unwrap_or(ChannelLayout::STEREO)
+        Self::channel_layout_raw(clamped_channels).unwrap_or(ChannelLayout::STEREO)
     }
 
     pub fn sample_size(&self) -> usize {
