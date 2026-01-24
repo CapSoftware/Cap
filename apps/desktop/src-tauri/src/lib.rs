@@ -614,6 +614,13 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 #[specta::specta]
 #[instrument(skip(state))]
 pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String> {
+    if !permissions::do_permissions_check(false)
+        .microphone
+        .permitted()
+    {
+        return Ok(());
+    }
+
     let (current_label, mic_list) = {
         let app = state.read().await;
         let mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
@@ -643,40 +650,36 @@ pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String>
 #[instrument(skip(app_handle, state))]
 pub async fn cycle_camera_input(
     app_handle: AppHandle,
-    state: MutableState<'_, App>
+    state: MutableState<'_, App>,
 ) -> Result<(), String> {
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return Ok(());
+    }
+
     let (current_id, camera_list) = {
         let app = state.read().await;
         let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
         (app.selected_camera_id.clone(), camera_list)
     };
-    
+
     if camera_list.is_empty() {
         return Ok(());
     }
 
-    let next_id = match current_id {
-        Some(id) => {
-            let current_dev_id = match id {
-                DeviceOrModelID::DeviceID(d) => Some(d),
-                DeviceOrModelID::ModelID(_) => None, 
-            };
-            
-            let index = if let Some(dev_id) = current_dev_id {
-                camera_list.iter().position(|c| c.device_id() == dev_id)
-            } else {
-                None
-            };
+    let current_index = match current_id {
+        Some(id) => camera_list.iter().position(|c| match &id {
+            DeviceOrModelID::DeviceID(dev_id) => c.device_id() == dev_id,
+            DeviceOrModelID::ModelID(mod_id) => c.model_id().map(|m| &m == mod_id).unwrap_or(false),
+        }),
+        None => None,
+    };
 
-            match index { 
-                Some(i) => camera_list.get((i + 1) % camera_list.len()),
-                None => camera_list.first(),
-            }
-        }
+    let next_camera = match current_index {
+        Some(i) => camera_list.get((i + 1) % camera_list.len()),
         None => camera_list.first(),
     };
 
-    let next_id = next_id.map(|c| DeviceOrModelID::DeviceID(c.device_id().to_string()));
+    let next_id = next_camera.map(|c| DeviceOrModelID::DeviceID(c.device_id().to_string()));
 
     set_camera_input(app_handle, state, next_id).await
 }

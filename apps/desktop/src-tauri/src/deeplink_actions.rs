@@ -155,23 +155,28 @@ impl DeepLinkAction {
                     .map(|_| ())
             }
             DeepLinkAction::StartDefaultRecording => {
-                 let displays = cap_recording::screen_capture::list_displays();
-                 if let Some((display, _)) = displays.first() {
+                let permissions = crate::permissions::do_permissions_check(false);
+                if !permissions.screen_recording.permitted() {
+                    return Err("Screen recording permission denied".to_string());
+                }
+
+                let displays = cap_recording::screen_capture::list_displays();
+                if let Some((display, _)) = displays.first() {
                     let state = app.state::<ArcLock<App>>();
-                    
+
                     let inputs = StartRecordingInputs {
                         mode: RecordingMode::Instant,
                         capture_target: ScreenCaptureTarget::Display { id: display.id },
-                        capture_system_audio: false, 
+                        capture_system_audio: false,
                         organization_id: None,
                     };
 
                     crate::recording::start_recording(app.clone(), state, inputs)
                         .await
                         .map(|_| ())
-                 } else {
-                     Err("No displays found".to_string())
-                 }
+                } else {
+                    Err("No displays found".to_string())
+                }
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
