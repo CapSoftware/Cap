@@ -593,15 +593,10 @@ async fn set_camera_input(
 #[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut app = state.write().await;
-    if let Some(recording) = app.current_recording_mut() {
-        recording.pause().await.map_err(|e| e.to_string())?;
-    }
-    if let Some(recording) = app.current_recording_mut() {
-        recording.pause().await.map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err("No active recording".to_string())
-    }
+    let recording = app
+        .current_recording_mut()
+        .ok_or_else(|| "No active recording".to_string())?;
+    recording.pause().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
