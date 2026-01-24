@@ -591,9 +591,6 @@ async fn set_camera_input(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(state))]
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let app = state.read().await;
     let Some(recording) = app.current_recording() else {
