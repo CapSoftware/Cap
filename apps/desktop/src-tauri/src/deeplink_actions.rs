@@ -189,11 +189,11 @@ impl DeepLinkAction {
             }
             DeepLinkAction::PauseRecording => {
                 let state = app.state::<ArcLock<App>>();
-                crate::pause_recording(state).await
+                crate::recording::pause_recording(app.clone(), state).await
             }
             DeepLinkAction::ResumeRecording => {
                 let state = app.state::<ArcLock<App>>();
-                crate::resume_recording(state).await
+                crate::recording::resume_recording(app.clone(), state).await
             }
             DeepLinkAction::SetMicrophone { label } => {
                 let permissions = crate::permissions::do_permissions_check(false);
