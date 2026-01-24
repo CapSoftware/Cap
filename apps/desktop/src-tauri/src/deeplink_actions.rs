@@ -193,6 +193,11 @@ impl DeepLinkAction {
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
             }
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
             DeepLinkAction::SetMicrophone { label } => {
                 let permissions = crate::permissions::do_permissions_check(false);
                 if !permissions.microphone.permitted() {
