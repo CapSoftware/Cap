@@ -66,26 +66,23 @@ pub struct RecordingBaseInputs {
 
 #[cfg(target_os = "macos")]
 #[derive(Clone)]
-pub struct SendableShareableContent(cidre::arc::R<cidre::sc::ShareableContent>);
+pub struct SendableShareableContent(
+    Arc<std::sync::Mutex<cidre::arc::R<cidre::sc::ShareableContent>>>,
+);
 
 #[cfg(target_os = "macos")]
 impl SendableShareableContent {
     pub fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
-        self.0.clone()
+        self.0.lock().unwrap().clone()
     }
 }
 
 #[cfg(target_os = "macos")]
 impl From<cidre::arc::R<cidre::sc::ShareableContent>> for SendableShareableContent {
     fn from(value: cidre::arc::R<cidre::sc::ShareableContent>) -> Self {
-        Self(value)
+        Self(Arc::new(std::sync::Mutex::new(value)))
     }
 }
-
-#[cfg(target_os = "macos")]
-unsafe impl Send for SendableShareableContent {}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for SendableShareableContent {}
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

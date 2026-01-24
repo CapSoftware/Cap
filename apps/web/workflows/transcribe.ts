@@ -257,14 +257,20 @@ async function cleanupTempAudio(
 ): Promise<void> {
 	"use step";
 
+	const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
+
 	try {
 		const [bucket] = await S3Buckets.getBucketAccess(
 			Option.fromNullable(bucketId),
 		).pipe(runPromise);
 
-		const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
 		await bucket.deleteObject(audioKey).pipe(runPromise);
-	} catch {}
+	} catch (error) {
+		console.error(
+			`[transcribe] Failed to cleanup temp audio file: ${audioKey}`,
+			error,
+		);
+	}
 }
 
 async function queueAiGeneration(

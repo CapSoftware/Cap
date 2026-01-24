@@ -920,18 +920,84 @@ function Inner() {
 	);
 }
 
+const WS_INITIAL_BACKOFF_MS = 1000;
+const WS_MAX_BACKOFF_MS = 30000;
+const WS_MAX_RETRIES = 10;
+const WS_JITTER_FACTOR = 0.3;
+
+function calculateBackoffWithJitter(
+	retryCount: number,
+	initialMs: number,
+	maxMs: number,
+	jitterFactor: number,
+): number {
+	const exponentialBackoff = Math.min(initialMs * 2 ** retryCount, maxMs);
+	const jitterRange = exponentialBackoff * jitterFactor;
+	const jitter = Math.random() * jitterRange * 2 - jitterRange;
+	return Math.max(initialMs, Math.floor(exponentialBackoff + jitter));
+}
+
 function CameraPreviewInline() {
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
+	const [connectionFailed, setConnectionFailed] = createSignal(false);
 	let canvasRef: HTMLCanvasElement | undefined;
 	let ws: WebSocket | undefined;
+	let retryCount = 0;
+	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
+	let isCleanedUp = false;
 
 	const cameraWsPort = (window as any).__CAP__?.cameraWsPort;
+
+	const scheduleReconnect = () => {
+		if (isCleanedUp) return;
+
+		if (retryCount >= WS_MAX_RETRIES) {
+			setConnectionFailed(true);
+			return;
+		}
+
+		const backoffMs = calculateBackoffWithJitter(
+			retryCount,
+			WS_INITIAL_BACKOFF_MS,
+			WS_MAX_BACKOFF_MS,
+			WS_JITTER_FACTOR,
+		);
+
+		reconnectTimeoutId = setTimeout(() => {
+			if (isCleanedUp) return;
+			retryCount += 1;
+			ws = createSocket();
+		}, backoffMs);
+	};
+
+	const resetBackoff = () => {
+		retryCount = 0;
+		setConnectionFailed(false);
+		if (reconnectTimeoutId !== undefined) {
+			clearTimeout(reconnectTimeoutId);
+			reconnectTimeoutId = undefined;
+		}
+	};
 
 	const createSocket = () => {
 		if (!cameraWsPort) return undefined;
 
 		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
 		socket.binaryType = "arraybuffer";
+
+		socket.onopen = () => {
+			resetBackoff();
+		};
+
+		socket.onclose = () => {
+			if (!isCleanedUp) {
+				scheduleReconnect();
+			}
+		};
+
+		socket.onerror = () => {
+			socket.close();
+		};
 
 		socket.onmessage = (event) => {
 			const buffer = event.data as ArrayBuffer;
@@ -978,15 +1044,11 @@ function CameraPreviewInline() {
 
 	ws = createSocket();
 
-	const reconnectInterval = setInterval(() => {
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			if (ws) ws.close();
-			ws = createSocket();
-		}
-	}, 2000);
-
 	onCleanup(() => {
-		clearInterval(reconnectInterval);
+		isCleanedUp = true;
+		if (reconnectTimeoutId !== undefined) {
+			clearTimeout(reconnectTimeoutId);
+		}
 		ws?.close();
 	});
 
@@ -1000,13 +1062,37 @@ function CameraPreviewInline() {
 		ctx?.putImageData(image, 0, 0);
 	});
 
+	const handleRetryConnection = () => {
+		resetBackoff();
+		if (ws) {
+			ws.close();
+		}
+		ws = createSocket();
+	};
+
 	return (
 		<div class="flex items-center justify-center w-full h-full bg-black">
 			<Show
-				when={frame()}
-				fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+				when={!connectionFailed()}
+				fallback={
+					<div class="flex flex-col items-center gap-2 text-center px-4">
+						<div class="text-sm text-red-400">Camera connection failed</div>
+						<button
+							type="button"
+							onClick={handleRetryConnection}
+							class="text-xs text-blue-400 hover:text-blue-300 underline"
+						>
+							Try again
+						</button>
+					</div>
+				}
 			>
-				<canvas ref={canvasRef} class="w-full h-full object-contain" />
+				<Show
+					when={frame()}
+					fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+				>
+					<canvas ref={canvasRef} class="w-full h-full object-contain" />
+				</Show>
 			</Show>
 		</div>
 	);

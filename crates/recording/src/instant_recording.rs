@@ -365,10 +365,14 @@ pub async fn spawn_instant_recording_actor(
 
     let (pipeline, video_info) = match inputs.capture_target {
         ScreenCaptureTarget::CameraOnly => {
-            let camera_feed = inputs
-                .camera_feed
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("Camera feed missing for camera-only recording"))?;
+            let camera_feed = inputs.camera_feed.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Camera-only recording requires a camera, but no camera is currently available. \
+                    Please select a camera in the recording settings before starting. \
+                    If you have already selected a camera, it may have been disconnected or \
+                    failed to initialize. Try reconnecting your camera or selecting a different one."
+                )
+            })?;
 
             let output_path = content_dir.join("output.mp4");
 

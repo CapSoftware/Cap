@@ -985,10 +985,14 @@ async fn create_segment_pipeline(
     );
 
     let (screen, system_audio, cursor_display) = if camera_only {
-        let camera_feed = base_inputs
-            .camera_feed
-            .clone()
-            .ok_or_else(|| anyhow!("Camera feed missing for camera-only recording"))?;
+        let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+            anyhow!(
+                "Camera-only recording requires a camera, but no camera is currently available. \
+                Please select a camera in the recording settings before starting. \
+                If you have already selected a camera, it may have been disconnected or \
+                failed to initialize. Try reconnecting your camera or selecting a different one."
+            )
+        })?;
 
         #[cfg(target_os = "macos")]
         let screen = OutputPipeline::builder(screen_output_path.clone())
