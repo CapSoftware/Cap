@@ -660,7 +660,12 @@ pub async fn cycle_camera_input(
     }
 
     let (current_id, camera_list) = {
+    let current_id = {
         let app = state.read().await;
+        app.selected_camera_id.clone()
+    };
+
+    let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
         let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
         (app.selected_camera_id.clone(), camera_list)
     };
