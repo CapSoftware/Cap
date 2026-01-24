@@ -25,12 +25,13 @@ export default function CameraSelect(props: {
 	value: CameraInfo | null;
 	onChange: (camera: CameraInfo | null) => void;
 	permissions?: OSPermissionsCheck;
+	hidePreviewButton?: boolean;
 }) {
 	return (
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 			iconClass="text-gray-10 size-4"
 		/>
 	);
@@ -47,6 +48,7 @@ export function CameraSelectBase(props: {
 	class: string;
 	iconClass: string;
 	permissions?: OSPermissionsCheck;
+	hidePreviewButton?: boolean;
 }) {
 	const currentRecording = createCurrentRecordingQuery();
 	const requestPermission = useRequestPermission();
@@ -101,7 +103,10 @@ export function CameraSelectBase(props: {
 	};
 
 	const showHiddenIndicator = () =>
-		props.value !== null && permissionGranted() && !cameraWindowOpen();
+		props.value !== null &&
+		permissionGranted() &&
+		!cameraWindowOpen() &&
+		!props.hidePreviewButton;
 
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">

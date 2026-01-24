@@ -71,6 +71,7 @@ import IconLucideImage from "~icons/lucide/image";
 import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
+import IconLucideVideo from "~icons/lucide/video";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
@@ -88,7 +89,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 
-const WINDOW_SIZE = { width: 330, height: 345 } as const;
+const WINDOW_SIZE = { width: 330, height: 408 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -870,15 +871,30 @@ function Page() {
 						screen: screen.id,
 					};
 				}
+				case "cameraOnly":
+					return rawOptions.captureTarget as ScreenCaptureTarget;
 			}
 		},
 	};
 
-	const toggleTargetMode = async (mode: "display" | "window" | "area") => {
+	const toggleTargetMode = async (
+		mode: "display" | "window" | "area" | "camera",
+	) => {
 		if (isRecording()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		if (nextMode) {
-			await commands.openTargetSelectOverlays(null, null, nextMode);
+			if (nextMode === "camera") {
+				setOptions(
+					"captureTarget",
+					reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
+				);
+				setOptions("captureSystemAudio", false);
+			}
+			await commands.openTargetSelectOverlays(
+				null,
+				null,
+				nextMode as RecordingTargetMode,
+			);
 			setOptions("targetMode", nextMode);
 		} else {
 			setOptions("targetMode", nextMode);
@@ -962,92 +978,113 @@ function Page() {
 			exitToClass="scale-95"
 		>
 			<div class="flex flex-col gap-2 w-full">
-				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
-								"ring-blue-9",
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "display"}
-							Component={IconMdiMonitor}
-							disabled={isRecording()}
-							onClick={() => toggleTargetMode("display")}
-							name="Display"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
+				<div class="flex flex-col gap-2 w-full text-xs text-gray-11">
+					<div class="flex flex-row gap-2 items-stretch w-full">
+						<div
 							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								displayMenuOpen() && "bg-gray-5",
+								"flex flex-1 overflow-hidden rounded-lg border border-gray-5 bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+								(rawOptions.targetMode === "display" || displayMenuOpen()) &&
+									"ring-blue-9",
 							)}
-							ref={displayTriggerRef}
+						>
+							<TargetTypeButton
+								selected={rawOptions.targetMode === "display"}
+								Component={IconMdiMonitor}
+								disabled={isRecording()}
+								onClick={() => {
+									toggleTargetMode("display");
+								}}
+								name="Display"
+								class="flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
+							/>
+							<TargetDropdownButton
+								class={cx(
+									"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+									displayMenuOpen() && "bg-gray-5",
+								)}
+								ref={displayTriggerRef}
+								disabled={isRecording()}
+								expanded={displayMenuOpen()}
+								onClick={() => {
+									setDisplayMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setWindowMenuOpen(false);
+											setHasOpenedDisplayMenu(true);
+											screens.refetch();
+											displayTargets.refetch();
+										}
+										return next;
+									});
+								}}
+								aria-haspopup="menu"
+								aria-label="Choose display"
+							/>
+						</div>
+						<div
+							class={cx(
+								"flex flex-1 overflow-hidden rounded-lg border border-gray-5 bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+								(rawOptions.targetMode === "window" || windowMenuOpen()) &&
+									"ring-blue-9",
+							)}
+						>
+							<TargetTypeButton
+								selected={rawOptions.targetMode === "window"}
+								Component={IconLucideAppWindowMac}
+								disabled={isRecording()}
+								onClick={() => {
+									toggleTargetMode("window");
+								}}
+								name="Window"
+								class="flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
+							/>
+							<TargetDropdownButton
+								class={cx(
+									"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+									windowMenuOpen() && "bg-gray-5",
+								)}
+								ref={windowTriggerRef}
+								disabled={isRecording()}
+								expanded={windowMenuOpen()}
+								onClick={() => {
+									setWindowMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setDisplayMenuOpen(false);
+											setHasOpenedWindowMenu(true);
+											windows.refetch();
+											windowTargets.refetch();
+										}
+										return next;
+									});
+								}}
+								aria-haspopup="menu"
+								aria-label="Choose window"
+							/>
+						</div>
+					</div>
+					<div class="flex flex-row gap-2 items-stretch w-full">
+						<TargetTypeButton
+							selected={rawOptions.targetMode === "area"}
+							Component={IconMaterialSymbolsScreenshotFrame2Rounded}
 							disabled={isRecording()}
-							expanded={displayMenuOpen()}
 							onClick={() => {
-								setDisplayMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setWindowMenuOpen(false);
-										setHasOpenedDisplayMenu(true);
-										screens.refetch();
-										displayTargets.refetch();
-									}
-									return next;
-								});
+								toggleTargetMode("area");
 							}}
-							aria-haspopup="menu"
-							aria-label="Choose display"
+							name="Area"
+							class="flex-1"
+						/>
+						<TargetTypeButton
+							selected={rawOptions.targetMode === "camera"}
+							Component={IconLucideVideo}
+							disabled={isRecording()}
+							onClick={() => {
+								toggleTargetMode("camera");
+							}}
+							name="Camera Only"
+							class="flex-1"
 						/>
 					</div>
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
-								"ring-blue-9",
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "window"}
-							Component={IconLucideAppWindowMac}
-							disabled={isRecording()}
-							onClick={() => toggleTargetMode("window")}
-							name="Window"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
-							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								windowMenuOpen() && "bg-gray-5",
-							)}
-							ref={windowTriggerRef}
-							disabled={isRecording()}
-							expanded={windowMenuOpen()}
-							onClick={() => {
-								setWindowMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setDisplayMenuOpen(false);
-										setHasOpenedWindowMenu(true);
-										windows.refetch();
-										windowTargets.refetch();
-									}
-									return next;
-								});
-							}}
-							aria-haspopup="menu"
-							aria-label="Choose window"
-						/>
-					</div>
-					<TargetTypeButton
-						selected={rawOptions.targetMode === "area"}
-						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-						disabled={isRecording()}
-						onClick={() => toggleTargetMode("area")}
-						name="Area"
-					/>
 				</div>
 				<BaseControls />
 			</div>
@@ -1178,7 +1215,7 @@ function Page() {
 										}
 									}}
 									class={cx(
-										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
+										"text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5",
 										license.data?.type === "pro"
 											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
 											: "bg-gray-3 cursor-pointer hover:bg-gray-5",

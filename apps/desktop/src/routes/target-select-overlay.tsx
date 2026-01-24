@@ -114,7 +114,7 @@ function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
-		targetMode: "display" | "window" | "area";
+		targetMode: "display" | "window" | "area" | "camera";
 	}>();
 	const [options, setOptions] = useOptions();
 
@@ -203,33 +203,48 @@ function Inner() {
 		}
 	});
 
-	createEffect((prevMode: "display" | "window" | "area" | null | undefined) => {
-		const mode = options.targetMode ?? null;
-		if (prevMode === "area" && mode !== "area") {
-			const target = pendingAreaTarget();
-			if (target) {
-				setOptions(
-					"captureTarget",
-					reconcile({
-						variant: "area",
-						screen: target.screen,
-						bounds: {
-							position: {
-								x: target.bounds.position.x,
-								y: target.bounds.position.y,
+	createEffect(
+		(prevMode: "display" | "window" | "area" | "camera" | null | undefined) => {
+			const mode = options.targetMode ?? null;
+			if (prevMode === "area" && mode !== "area") {
+				const target = pendingAreaTarget();
+				if (target) {
+					setOptions(
+						"captureTarget",
+						reconcile({
+							variant: "area",
+							screen: target.screen,
+							bounds: {
+								position: {
+									x: target.bounds.position.x,
+									y: target.bounds.position.y,
+								},
+								size: {
+									width: target.bounds.size.width,
+									height: target.bounds.size.height,
+								},
 							},
-							size: {
-								width: target.bounds.size.width,
-								height: target.bounds.size.height,
-							},
-						},
-					}),
-				);
+						}),
+					);
+				}
+				setPendingAreaTarget(null);
+				setInitialAreaBounds(undefined);
 			}
-			setPendingAreaTarget(null);
-			setInitialAreaBounds(undefined);
+			return mode;
+		},
+	);
+
+	createEffect(() => {
+		if (options.targetMode === "camera") {
+			setOptions(
+				"captureTarget",
+				reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
+			);
+			setOptions("captureSystemAudio", false);
+			WebviewWindow.getByLabel("camera").then((win) => {
+				if (win) win.close();
+			});
 		}
-		return mode;
 	});
 
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
@@ -254,6 +269,26 @@ function Inner() {
 
 	return (
 		<Switch>
+			<Match when={options.targetMode === "camera"}>
+				<div class="relative w-screen h-screen flex flex-col items-center justify-center bg-black/70">
+					<div class="absolute inset-0 bg-black/60 -z-10" />
+					<div class="flex flex-col items-center text-white mb-4">
+						<span class="mb-2 text-3xl font-semibold">Camera Only</span>
+						<span class="text-xs text-gray-11">
+							Record using only your camera and microphone
+						</span>
+					</div>
+					<div class="w-full max-w-[480px] px-6 mb-4">
+						<div class="w-full aspect-video rounded-2xl border border-gray-6 bg-black overflow-hidden">
+							<CameraPreviewInline />
+						</div>
+					</div>
+					<RecordingControls
+						target={{ variant: "cameraOnly" } as ScreenCaptureTarget}
+						showBackground
+					/>
+				</div>
+			</Match>
 			<Match when={options.targetMode === "display" && params.displayId}>
 				{(displayId) => (
 					<div
@@ -885,6 +920,98 @@ function Inner() {
 	);
 }
 
+function CameraPreviewInline() {
+	const [frame, setFrame] = createSignal<ImageData | null>(null);
+	let canvasRef: HTMLCanvasElement | undefined;
+	let ws: WebSocket | undefined;
+
+	const cameraWsPort = (window as any).__CAP__?.cameraWsPort;
+
+	const createSocket = () => {
+		if (!cameraWsPort) return undefined;
+
+		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
+		socket.binaryType = "arraybuffer";
+
+		socket.onmessage = (event) => {
+			const buffer = event.data as ArrayBuffer;
+			const clamped = new Uint8ClampedArray(buffer);
+			if (clamped.length < 24) return;
+
+			const metadataOffset = clamped.length - 24;
+			const meta = new DataView(buffer, metadataOffset, 24);
+			const strideBytes = meta.getUint32(0, true);
+			const height = meta.getUint32(4, true);
+			const width = meta.getUint32(8, true);
+
+			if (!width || !height || strideBytes === 0) return;
+
+			const source = clamped.subarray(0, metadataOffset);
+			const expectedRowBytes = width * 4;
+			const availableLength = strideBytes * height;
+
+			if (strideBytes < expectedRowBytes || source.length < availableLength)
+				return;
+
+			const expectedLength = expectedRowBytes * height;
+			let pixels: Uint8ClampedArray;
+
+			if (strideBytes === expectedRowBytes) {
+				pixels = source.subarray(0, expectedLength);
+			} else {
+				pixels = new Uint8ClampedArray(expectedLength);
+				for (let row = 0; row < height; row += 1) {
+					const srcStart = row * strideBytes;
+					const destStart = row * expectedRowBytes;
+					pixels.set(
+						source.subarray(srcStart, srcStart + expectedRowBytes),
+						destStart,
+					);
+				}
+			}
+
+			setFrame(new ImageData(new Uint8ClampedArray(pixels), width, height));
+		};
+
+		return socket;
+	};
+
+	ws = createSocket();
+
+	const reconnectInterval = setInterval(() => {
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			if (ws) ws.close();
+			ws = createSocket();
+		}
+	}, 2000);
+
+	onCleanup(() => {
+		clearInterval(reconnectInterval);
+		ws?.close();
+	});
+
+	createEffect(() => {
+		const image = frame();
+		const canvas = canvasRef;
+		if (!image || !canvas) return;
+		canvas.width = image.width;
+		canvas.height = image.height;
+		const ctx = canvas.getContext("2d");
+		ctx?.putImageData(image, 0, 0);
+	});
+
+	return (
+		<div class="flex items-center justify-center w-full h-full bg-black">
+			<Show
+				when={frame()}
+				fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+			>
+				<canvas ref={canvasRef} class="w-full h-full object-contain" />
+			</Show>
+		</div>
+	);
+}
+
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
@@ -908,7 +1035,7 @@ function RecordingControls(props: {
 	}));
 	const setCamera = createCameraMutation();
 
-	onMount(() => {
+	onMount(async () => {
 		if (rawOptions.micName) {
 			setMicInput
 				.mutateAsync(rawOptions.micName)
@@ -916,9 +1043,14 @@ function RecordingControls(props: {
 		}
 
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+			await setCamera.mutateAsync({ ModelID: rawOptions.cameraID.ModelID });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
+			await setCamera.mutateAsync({ DeviceID: rawOptions.cameraID.DeviceID });
+
+		if (props.target.variant === "cameraOnly") {
+			const win = await WebviewWindow.getByLabel("camera");
+			if (win) win.close();
+		}
 	});
 
 	const selectedCamera = createMemo(() => {
@@ -1139,6 +1271,7 @@ function RecordingControls(props: {
 									else setCamera.mutate({ DeviceID: camera.device_id });
 								}}
 								permissions={permissions()}
+								hidePreviewButton={props.target.variant === "cameraOnly"}
 							/>
 							<MicrophoneSelect
 								disabled={devices.isPending}
