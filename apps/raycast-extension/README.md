@@ -14,6 +14,7 @@ Control the Cap desktop app from Raycast.
 ## Installation
 
 1. `cd apps/raycast-extension`
-2. `npm install`
+2. `pnpm install`
+3. `pnpm build`
 3. `npm run build`
 4. Import into Raycast via "Import Extension".
