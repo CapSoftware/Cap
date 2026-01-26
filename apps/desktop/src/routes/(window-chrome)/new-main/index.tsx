@@ -327,7 +327,7 @@ function MicrophoneListItem(props: {
 				{(details) => (
 					<span
 						class={cx(
-							"text-[11px] pl-7",
+							"relative text-[11px] pl-7",
 							props.isSelected ? "text-white/70" : "text-gray-10",
 						)}
 					>
