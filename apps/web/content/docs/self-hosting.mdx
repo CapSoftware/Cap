@@ -36,6 +36,10 @@ docker compose up -d
 
 That's it! Cap will be available at `http://localhost:3000`.
 
+<Warning title="Security Notice for Production Deployments">
+The default `docker-compose.yml` includes placeholder secrets for quick local testing. **If you're deploying to a public server or production environment**, you must change these values. See the [Production Checklist](#production-checklist) below.
+</Warning>
+
 Login links will appear in the logs since email isn't configured:
 ```bash
 docker compose logs cap-web
@@ -133,12 +137,30 @@ GOOGLE_CLIENT_SECRET=your-secret
 
 ## Production Checklist
 
-> **Important:** The default configuration uses placeholder passwords suitable for local testing only. For production, you must set secure values via environment variables.
+<Warning title="Critical: Change Default Secrets Before Going Public">
+The default `docker-compose.yml` contains **hardcoded placeholder secrets** that are visible in the public repository. Anyone who knows you're using Cap with defaults could potentially:
 
-For production deployments:
+- **Forge authentication sessions** (via `NEXTAUTH_SECRET`)
+- **Decrypt sensitive database fields** (via `DATABASE_ENCRYPTION_KEY`)
+- **Spoof webhook requests** (via `MEDIA_SERVER_WEBHOOK_SECRET`)
+
+This is fine for local development or testing on a private network, but **you must generate unique secrets before exposing Cap to the internet**.
+</Warning>
+
+**Generate secure secrets:**
+```bash
+openssl rand -hex 32
+```
+
+Run this command three times to generate values for:
+- `NEXTAUTH_SECRET`
+- `DATABASE_ENCRYPTION_KEY`
+- `MEDIA_SERVER_WEBHOOK_SECRET`
+
+**Full production checklist:**
 
 - [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
-- [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET` (use `openssl rand -hex 32`)
+- [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`
 - [ ] Set `CAP_URL` to your public URL
 - [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
 - [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL
