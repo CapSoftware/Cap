@@ -60,9 +60,15 @@ export default function () {
 		);
 	});
 
-	const requestPermission = (permission: OSPermission) => {
-		commands.requestPermission(permission);
-		setInitialCheck(false);
+	const requestPermission = async (permission: OSPermission) => {
+		const currentWindow = getCurrentWindow();
+		await currentWindow.hide();
+		try {
+			await commands.requestPermission(permission);
+		} finally {
+			await currentWindow.show();
+			setInitialCheck(false);
+		}
 	};
 
 	const openSettings = (permission: OSPermission) => {

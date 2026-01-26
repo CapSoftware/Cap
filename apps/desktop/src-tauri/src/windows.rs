@@ -487,7 +487,7 @@ impl ShowCapWindow {
                     .build()?;
 
                 #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(window.as_ref().window(), 55);
+                crate::platform::set_window_level(window.as_ref().window(), 65);
 
                 window
             }

@@ -585,12 +585,18 @@ function createUpdateCheck() {
 		const update = await updater.check();
 		if (!update) return;
 
+		const currentWindow = getCurrentWindow();
+		await currentWindow.hide();
+
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Inflight is available, would you like to install it?`,
 			{ title: "Update Inflight", okLabel: "Update", cancelLabel: "Ignore" },
 		);
 
-		if (!shouldUpdate) return;
+		if (!shouldUpdate) {
+			await currentWindow.show();
+			return;
+		}
 		navigate("/update");
 	});
 }

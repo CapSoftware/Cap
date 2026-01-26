@@ -19,37 +19,45 @@ const APPLICATIONS_Y = 330;
 const OFF_SCREEN = 10000;
 
 async function sleep(ms) {
-	return new Promise(resolve => setTimeout(resolve, ms));
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function findDmgFiles(targetDir) {
 	const possiblePaths = [
 		path.join(targetDir, "release", "bundle", "dmg"),
-		path.join(targetDir, `${process.env.TAURI_ENV_TARGET_TRIPLE || ""}`, "release", "bundle", "dmg"),
+		path.join(
+			targetDir,
+			`${process.env.TAURI_ENV_TARGET_TRIPLE || ""}`,
+			"release",
+			"bundle",
+			"dmg",
+		),
 	];
 
 	for (const bundleDir of possiblePaths) {
 		try {
 			const files = await fs.readdir(bundleDir);
-			const dmgFiles = files.filter(f => f.endsWith(".dmg") && !f.endsWith(".original.dmg"));
+			const dmgFiles = files.filter(
+				(f) => f.endsWith(".dmg") && !f.endsWith(".original.dmg"),
+			);
 			if (dmgFiles.length > 0) {
 				return { bundleDir, dmgFiles };
 			}
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 
 	throw new Error(`No DMG files found in: ${possiblePaths.join(", ")}`);
 }
 
 async function mountDmg(dmgPath) {
-	const { stdout } = await exec(`hdiutil attach "${dmgPath}" -readwrite -noverify -noautoopen`);
+	const { stdout } = await exec(
+		`hdiutil attach "${dmgPath}" -readwrite -noverify -noautoopen`,
+	);
 	const lines = stdout.trim().split("\n");
 	const lastLine = lines[lines.length - 1];
 	const parts = lastLine.split("\t");
 	const mountPoint = parts[parts.length - 1].trim();
-	const deviceLine = lines.find(l => l.includes("/dev/disk"));
+	const deviceLine = lines.find((l) => l.includes("/dev/disk"));
 	const device = deviceLine?.split("\t")[0]?.trim();
 	return { mountPoint, device };
 }
@@ -60,7 +68,7 @@ async function unmountDmg(device) {
 
 async function getAppName(mountPoint) {
 	const files = await fs.readdir(mountPoint);
-	const appFile = files.find(f => f.endsWith(".app"));
+	const appFile = files.find((f) => f.endsWith(".app"));
 	return appFile || "Inflight.app";
 }
 
@@ -98,7 +106,9 @@ async function convertToReadWrite(dmgPath) {
 }
 
 async function convertToCompressed(rwDmgPath, finalDmgPath) {
-	await exec(`hdiutil convert "${rwDmgPath}" -format UDZO -o "${finalDmgPath}"`);
+	await exec(
+		`hdiutil convert "${rwDmgPath}" -format UDZO -o "${finalDmgPath}"`,
+	);
 }
 
 async function signDmg(dmgPath) {
@@ -159,7 +169,7 @@ async function main() {
 	}
 }
 
-main().catch(err => {
+main().catch((err) => {
 	console.error("Failed to fix DMG:", err);
 	process.exit(1);
 });

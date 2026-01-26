@@ -383,12 +383,18 @@ function createUpdateCheck() {
 		const update = await updater.check();
 		if (!update) return;
 
+		const currentWindow = getCurrentWindow();
+		await currentWindow.hide();
+
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Inflight is available, would you like to install it?`,
 			{ title: "Update Inflight", okLabel: "Update", cancelLabel: "Ignore" },
 		);
 
-		if (!shouldUpdate) return;
+		if (!shouldUpdate) {
+			await currentWindow.show();
+			return;
+		}
 		navigate("/update");
 	});
 }
@@ -566,6 +572,7 @@ function Page() {
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
 	const [hasOpenedWindowMenu, setHasOpenedWindowMenu] = createSignal(false);
+	const [isOverlayLoading, setIsOverlayLoading] = createSignal(false);
 
 	let displayTriggerRef: HTMLButtonElement | undefined;
 	let windowTriggerRef: HTMLButtonElement | undefined;
@@ -903,12 +910,20 @@ function Page() {
 		},
 	};
 
-	const toggleTargetMode = (mode: "display" | "window" | "area") => {
-		if (isRecording()) return;
+	const handleTargetModeClick = async (mode: "display" | "window" | "area") => {
+		if (isRecording() || isOverlayLoading()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		setOptions("targetMode", nextMode);
-		if (nextMode) commands.openTargetSelectOverlays(null);
-		else commands.closeTargetSelectOverlays();
+		if (nextMode) {
+			setIsOverlayLoading(true);
+			try {
+				await commands.openTargetSelectOverlays(null);
+			} finally {
+				setIsOverlayLoading(false);
+			}
+		} else {
+			commands.closeTargetSelectOverlays();
+		}
 	};
 
 	createEffect(() => {
@@ -1061,44 +1076,22 @@ function Page() {
 						<VerticalTargetButton
 							selected={rawOptions.targetMode === "display"}
 							Component={DisplayIcon}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) =>
-									v === "display" ? null : "display",
-								);
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
+							disabled={isRecording() || isOverlayLoading()}
+							onClick={() => handleTargetModeClick("display")}
 							name="Display"
 						/>
 						<VerticalTargetButton
 							selected={rawOptions.targetMode === "window"}
 							Component={WindowIcon}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) =>
-									v === "window" ? null : "window",
-								);
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
+							disabled={isRecording() || isOverlayLoading()}
+							onClick={() => handleTargetModeClick("window")}
 							name="Window"
 						/>
 						<VerticalTargetButton
 							selected={rawOptions.targetMode === "area"}
 							Component={CropIcon}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
+							disabled={isRecording() || isOverlayLoading()}
+							onClick={() => handleTargetModeClick("area")}
 							name="Area"
 						/>
 					</div>
@@ -1114,39 +1107,22 @@ function Page() {
 				<HorizontalTargetButton
 					selected={rawOptions.targetMode === "display"}
 					Component={DisplayIcon}
-					disabled={isRecording()}
-					onClick={() => {
-						if (isRecording()) return;
-						setOptions("targetMode", (v) =>
-							v === "display" ? null : "display",
-						);
-						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-						else commands.closeTargetSelectOverlays();
-					}}
+					disabled={isRecording() || isOverlayLoading()}
+					onClick={() => handleTargetModeClick("display")}
 					name="Display"
 				/>
 				<HorizontalTargetButton
 					selected={rawOptions.targetMode === "window"}
 					Component={WindowIcon}
-					disabled={isRecording()}
-					onClick={() => {
-						if (isRecording()) return;
-						setOptions("targetMode", (v) => (v === "window" ? null : "window"));
-						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-						else commands.closeTargetSelectOverlays();
-					}}
+					disabled={isRecording() || isOverlayLoading()}
+					onClick={() => handleTargetModeClick("window")}
 					name="Window"
 				/>
 				<HorizontalTargetButton
 					selected={rawOptions.targetMode === "area"}
 					Component={CropIcon}
-					disabled={isRecording()}
-					onClick={() => {
-						if (isRecording()) return;
-						setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-						else commands.closeTargetSelectOverlays();
-					}}
+					disabled={isRecording() || isOverlayLoading()}
+					onClick={() => handleTargetModeClick("area")}
 					name="Area"
 				/>
 			</div>

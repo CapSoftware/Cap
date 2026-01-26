@@ -300,7 +300,11 @@ export default function () {
 			setStart(now);
 			setTime(now);
 			setPauseResumes([]);
-			setState({ variant: "countdown", from: window.COUNTDOWN, current: window.COUNTDOWN });
+			setState({
+				variant: "countdown",
+				from: window.COUNTDOWN,
+				current: window.COUNTDOWN,
+			});
 
 			await handleRecordingResult(commands.restartRecording(), undefined);
 		},

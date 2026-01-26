@@ -69,6 +69,7 @@ import {
 } from "./(window-chrome)/OptionsContext";
 
 const MIN_SIZE = { width: 150, height: 150 };
+const SIGN_IN_TIMEOUT_MS = 10000;
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -851,8 +852,13 @@ function RecordingControls(props: {
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
+	const [isSigningIn, setIsSigningIn] = createSignal(false);
 
-	// const generalSetings = generalSettingsStore.createQuery();
+	createEffect(() => {
+		if (auth.data && isSigningIn()) {
+			setIsSigningIn(false);
+		}
+	});
 
 	const workspaces = createMemo(() => auth.data?.workspaces ?? []);
 	const selectedWorkspace = createMemo(() => {
@@ -990,18 +996,30 @@ function RecordingControls(props: {
 				<div
 					data-inactive={rawOptions.mode === "instant" && !auth.data}
 					class="flex overflow-hidden flex-row h-10 rounded-[12px] bg-blue-9 group border border-white/15"
-					onClick={() => {
+					onClick={async () => {
+						if (isSigningIn()) return;
+
 						if (!auth.data) {
+							setIsSigningIn(true);
 							emit("start-sign-in");
+							setTimeout(() => setIsSigningIn(false), SIGN_IN_TIMEOUT_MS);
 							return;
 						}
 
-						commands.startRecording({
+						const result = await commands.startRecording({
 							capture_target: props.target,
 							mode: rawOptions.mode,
 							capture_system_audio: rawOptions.captureSystemAudio,
 							workspace_id: rawOptions.workspaceId,
 						});
+
+						if (result === "InvalidAuthentication") {
+							await authStore.set(undefined);
+							await auth.refetch();
+							setIsSigningIn(true);
+							emit("start-sign-in");
+							setTimeout(() => setIsSigningIn(false), SIGN_IN_TIMEOUT_MS);
+						}
 					}}
 				>
 					<div class="flex items-center gap-1 py-1 px-3 transition-colors hover:bg-blue-10 cursor-pointer">
