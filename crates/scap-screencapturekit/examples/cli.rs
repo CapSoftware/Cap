@@ -44,11 +44,11 @@ mod macos {
         .build()
         .expect("Failed to build capturer");
 
-        block_on(capturer.start()).expect("Failed to start capturing");
+        capturer.start().await.expect("Failed to start capturing");
 
         std::thread::sleep(Duration::from_secs(3));
 
-        block_on(capturer.stop()).expect("Failed to stop capturing");
+        capturer.stop().await.expect("Failed to stop capturing");
 
         std::thread::sleep(Duration::from_secs(1));
     }

@@ -894,7 +894,7 @@ mod tests {
         assert_eq!(health.consecutive_empty_iterations, 0);
         assert_eq!(health.consecutive_errors, 0);
         assert_eq!(health.total_frames_decoded, 0);
-        assert!(!health.needs_recreation());
+        assert!(!health.needs_recreation(0, 100));
     }
 
     #[test]
@@ -903,12 +903,12 @@ mod tests {
         health.consecutive_empty_iterations = 3;
         health.consecutive_errors = 5;
 
-        health.record_success(10);
+        health.record_success(10, 9);
 
         assert_eq!(health.consecutive_empty_iterations, 0);
         assert_eq!(health.consecutive_errors, 0);
         assert_eq!(health.total_frames_decoded, 10);
-        assert!(!health.needs_recreation());
+        assert!(!health.needs_recreation(10, 100));
     }
 
     #[test]
@@ -917,7 +917,7 @@ mod tests {
         for _ in 0..DecoderHealth::MAX_CONSECUTIVE_EMPTY {
             health.record_empty_iteration();
         }
-        assert!(health.needs_recreation());
+        assert!(health.needs_recreation(50, 100));
     }
 
     #[test]
@@ -926,7 +926,7 @@ mod tests {
         for _ in 0..DecoderHealth::MAX_CONSECUTIVE_ERRORS {
             health.record_error();
         }
-        assert!(health.needs_recreation());
+        assert!(health.needs_recreation(50, 100));
     }
 
     #[test]
@@ -939,7 +939,7 @@ mod tests {
 
         assert_eq!(health.consecutive_empty_iterations, 0);
         assert_eq!(health.consecutive_errors, 0);
-        assert!(!health.needs_recreation());
+        assert!(!health.needs_recreation(0, 100));
     }
 
     #[test]
@@ -948,6 +948,6 @@ mod tests {
         for _ in 0..(DecoderHealth::MAX_CONSECUTIVE_EMPTY - 1) {
             health.record_empty_iteration();
         }
-        assert!(!health.needs_recreation());
+        assert!(!health.needs_recreation(50, 100));
     }
 }

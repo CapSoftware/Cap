@@ -403,7 +403,7 @@ pub async fn spawn_instant_recording_actor(
                 .await
                 .context("camera-only pipeline setup")?;
 
-            let video_info = camera_feed.video_info().clone();
+            let video_info = *camera_feed.video_info();
             (
                 Pipeline {
                     output: pipeline,

@@ -380,9 +380,7 @@ impl<'a> Iterator for FramesIter<'a> {
                 Err(e) => return Some(Err(e)),
             }
 
-            let Some((stream, packet)) = self.packets.next() else {
-                return None;
-            };
+            let (stream, packet) = self.packets.next()?;
 
             if stream.index() != self.stream_index {
                 continue;

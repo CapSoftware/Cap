@@ -1195,9 +1195,7 @@ async fn create_segment_pipeline(
                     None
                 };
 
-                let cursor_display = cursor_display
-                    .clone()
-                    .ok_or(CreateSegmentPipelineError::NoDisplay)?;
+                let cursor_display = cursor_display.ok_or(CreateSegmentPipelineError::NoDisplay)?;
 
                 let cursor = spawn_cursor_recorder(
                     cursor_crop_bounds,

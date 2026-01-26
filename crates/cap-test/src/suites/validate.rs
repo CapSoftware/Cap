@@ -191,26 +191,24 @@ async fn validate_cap_project(
                                 fps = parse_frame_rate(rate);
                             }
                         }
-                        if let Some(ref dur) = stream.duration {
-                            if let Ok(d) = dur.parse::<f64>() {
-                                total_duration += d;
-                            }
+                        if let Some(ref dur) = stream.duration
+                            && let Ok(d) = dur.parse::<f64>()
+                        {
+                            total_duration += d;
                         }
-                        if let Some(ref frames) = stream.nb_frames {
-                            if let Ok(f) = frames.parse::<u64>() {
-                                total_frames += f;
-                            }
+                        if let Some(ref frames) = stream.nb_frames
+                            && let Ok(f) = frames.parse::<u64>()
+                        {
+                            total_frames += f;
                         }
                     }
                 }
-                if total_duration == 0.0 {
-                    if let Some(ref format) = probe.format {
-                        if let Some(ref dur) = format.duration {
-                            if let Ok(d) = dur.parse::<f64>() {
-                                total_duration += d;
-                            }
-                        }
-                    }
+                if total_duration == 0.0
+                    && let Some(ref format) = probe.format
+                    && let Some(ref dur) = format.duration
+                    && let Ok(d) = dur.parse::<f64>()
+                {
+                    total_duration += d;
                 }
             }
             Err(e) => {
@@ -349,7 +347,7 @@ async fn validate_video_file(
                     .nb_frames
                     .as_ref()
                     .and_then(|f| f.parse::<u64>().ok())
-                    .unwrap_or_else(|| (duration * fps) as u64);
+                    .unwrap_or((duration * fps) as u64);
 
                 video_start_time = stream
                     .start_time

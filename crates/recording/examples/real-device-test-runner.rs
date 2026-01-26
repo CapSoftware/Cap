@@ -721,54 +721,51 @@ fn validate_segment_timing(meta: &RecordingMeta) -> SegmentTimingValidation {
 
     if let StudioRecordingMeta::MultipleSegments { inner } = studio_meta.as_ref() {
         for (idx, segment) in inner.segments.iter().enumerate() {
-            if let Some(start_time) = segment.display.start_time {
-                if start_time.abs() > START_TIME_THRESHOLD {
-                    result.all_valid = false;
-                    result.issues.push(SegmentTimingIssue {
-                        segment_index: idx,
-                        stream_type: "display".to_string(),
-                        start_time,
-                    });
-                }
+            if let Some(start_time) = segment.display.start_time
+                && start_time.abs() > START_TIME_THRESHOLD
+            {
+                result.all_valid = false;
+                result.issues.push(SegmentTimingIssue {
+                    segment_index: idx,
+                    stream_type: "display".to_string(),
+                    start_time,
+                });
             }
 
-            if let Some(ref mic) = segment.mic {
-                if let Some(start_time) = mic.start_time {
-                    if start_time.abs() > START_TIME_THRESHOLD {
-                        result.all_valid = false;
-                        result.issues.push(SegmentTimingIssue {
-                            segment_index: idx,
-                            stream_type: "mic".to_string(),
-                            start_time,
-                        });
-                    }
-                }
+            if let Some(ref mic) = segment.mic
+                && let Some(start_time) = mic.start_time
+                && start_time.abs() > START_TIME_THRESHOLD
+            {
+                result.all_valid = false;
+                result.issues.push(SegmentTimingIssue {
+                    segment_index: idx,
+                    stream_type: "mic".to_string(),
+                    start_time,
+                });
             }
 
-            if let Some(ref camera) = segment.camera {
-                if let Some(start_time) = camera.start_time {
-                    if start_time.abs() > START_TIME_THRESHOLD {
-                        result.all_valid = false;
-                        result.issues.push(SegmentTimingIssue {
-                            segment_index: idx,
-                            stream_type: "camera".to_string(),
-                            start_time,
-                        });
-                    }
-                }
+            if let Some(ref camera) = segment.camera
+                && let Some(start_time) = camera.start_time
+                && start_time.abs() > START_TIME_THRESHOLD
+            {
+                result.all_valid = false;
+                result.issues.push(SegmentTimingIssue {
+                    segment_index: idx,
+                    stream_type: "camera".to_string(),
+                    start_time,
+                });
             }
 
-            if let Some(ref system_audio) = segment.system_audio {
-                if let Some(start_time) = system_audio.start_time {
-                    if start_time.abs() > START_TIME_THRESHOLD {
-                        result.all_valid = false;
-                        result.issues.push(SegmentTimingIssue {
-                            segment_index: idx,
-                            stream_type: "system_audio".to_string(),
-                            start_time,
-                        });
-                    }
-                }
+            if let Some(ref system_audio) = segment.system_audio
+                && let Some(start_time) = system_audio.start_time
+                && start_time.abs() > START_TIME_THRESHOLD
+            {
+                result.all_valid = false;
+                result.issues.push(SegmentTimingIssue {
+                    segment_index: idx,
+                    stream_type: "system_audio".to_string(),
+                    start_time,
+                });
             }
         }
     }
@@ -866,11 +863,11 @@ fn analyze_frame_rate_for_file(
 
     let mut ictx = ffmpeg::format::input(path)?;
     for (stream, packet) in ictx.packets() {
-        if stream.index() == stream_index {
-            if let Some(pts) = packet.pts() {
-                let timestamp_secs = pts as f64 * time_base_secs;
-                frame_timestamps.push(timestamp_secs);
-            }
+        if stream.index() == stream_index
+            && let Some(pts) = packet.pts()
+        {
+            let timestamp_secs = pts as f64 * time_base_secs;
+            frame_timestamps.push(timestamp_secs);
         }
     }
 
@@ -1090,12 +1087,12 @@ fn analyze_audio_stream(
     let mut ictx = ffmpeg::format::input(path)?;
 
     for (stream, packet) in ictx.packets() {
-        if stream.index() == stream_index {
-            if let (Some(pts), Some(duration)) = (packet.pts(), Some(packet.duration())) {
-                let start_secs = pts as f64 * time_base_secs;
-                let dur_secs = duration as f64 * time_base_secs;
-                packet_timestamps.push((start_secs, dur_secs));
-            }
+        if stream.index() == stream_index
+            && let Some(pts) = packet.pts()
+        {
+            let start_secs = pts as f64 * time_base_secs;
+            let dur_secs = packet.duration() as f64 * time_base_secs;
+            packet_timestamps.push((start_secs, dur_secs));
         }
     }
 
@@ -1678,10 +1675,10 @@ async fn main() -> anyhow::Result<()> {
 
     let include_camera = !cli.no_camera && !devices.cameras.is_empty();
 
-    if cli.output_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&cli.output_dir) {
-            tracing::warn!("Failed to clean output directory: {}", e);
-        }
+    if cli.output_dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&cli.output_dir)
+    {
+        tracing::warn!("Failed to clean output directory: {}", e);
     }
     std::fs::create_dir_all(&cli.output_dir)?;
 

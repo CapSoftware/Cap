@@ -164,8 +164,8 @@ async fn run_sync_test(fps: u32, duration_secs: u64) -> Result<SyncTestMetrics> 
         drifts.push(drift);
 
         let elapsed = frame_start.elapsed();
-        if elapsed < frame_interval {
-            tokio::time::sleep(frame_interval - elapsed).await;
+        if let Some(remaining) = frame_interval.checked_sub(elapsed) {
+            tokio::time::sleep(remaining).await;
         }
     }
 

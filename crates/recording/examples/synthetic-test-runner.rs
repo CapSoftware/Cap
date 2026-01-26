@@ -135,10 +135,10 @@ async fn main() {
     let mut failed = 0;
     let mut results = Vec::new();
 
-    if cli.output_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&cli.output_dir) {
-            tracing::warn!("Failed to clean output directory before tests: {}", e);
-        }
+    if cli.output_dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&cli.output_dir)
+    {
+        tracing::warn!("Failed to clean output directory before tests: {}", e);
     }
 
     let start = Instant::now();
@@ -204,10 +204,10 @@ async fn main() {
         println!("\nReport saved to: {}", report_path.display());
     }
 
-    if !cli.keep_outputs {
-        if let Err(e) = std::fs::remove_dir_all(&cli.output_dir) {
-            tracing::warn!("Failed to clean up output directory: {}", e);
-        }
+    if !cli.keep_outputs
+        && let Err(e) = std::fs::remove_dir_all(&cli.output_dir)
+    {
+        tracing::warn!("Failed to clean up output directory: {}", e);
     }
 
     std::process::exit(if failed > 0 { 1 } else { 0 });

@@ -665,7 +665,7 @@ fn duration_to_timescale_value(duration: Duration, timescale: i32) -> i64 {
 
 fn timescale_value_to_duration(value: i64, timescale: i32) -> Duration {
     let scale = timescale.max(1) as u128;
-    let v = u128::try_from(value.max(0) as u64).unwrap_or(0);
+    let v = u128::from(value.max(0) as u64);
     let nanos = (v.saturating_mul(1_000_000_000u128) / scale).min(u64::MAX as u128) as u64;
     Duration::from_nanos(nanos)
 }
