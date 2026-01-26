@@ -2657,6 +2657,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::delete_recording,
             recording::take_screenshot,
             recording::list_cameras,
+            recording::get_camera_formats,
+            recording::get_microphone_info,
             recording::list_capture_windows,
             recording::list_capture_displays,
             recording::list_displays_with_thumbnails,

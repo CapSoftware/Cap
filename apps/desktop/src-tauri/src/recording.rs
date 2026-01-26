@@ -291,6 +291,104 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     cap_camera::list_cameras().collect()
 }
 
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraFormatInfo {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraWithFormats {
+    pub device_id: String,
+    pub display_name: String,
+    pub model_id: Option<String>,
+    pub formats: Vec<CameraFormatInfo>,
+    pub best_format: Option<CameraFormatInfo>,
+}
+
+fn get_best_format(formats: &[CameraFormatInfo]) -> Option<CameraFormatInfo> {
+    formats
+        .iter()
+        .filter(|f| f.frame_rate >= 24.0 && f.frame_rate <= 60.0)
+        .max_by(|a, b| {
+            let res_a = a.width * a.height;
+            let res_b = b.width * b.height;
+            res_a.cmp(&res_b)
+        })
+        .or_else(|| {
+            formats.iter().max_by(|a, b| {
+                let res_a = a.width * a.height;
+                let res_b = b.width * b.height;
+                res_a.cmp(&res_b)
+            })
+        })
+        .cloned()
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_camera_formats(device_id: String) -> Option<CameraWithFormats> {
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return None;
+    }
+
+    cap_camera::list_cameras()
+        .find(|c| c.device_id() == device_id)
+        .map(|camera| {
+            let formats: Vec<CameraFormatInfo> = camera
+                .formats()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| CameraFormatInfo {
+                    width: f.width(),
+                    height: f.height(),
+                    frame_rate: f.frame_rate(),
+                })
+                .collect();
+
+            let best_format = get_best_format(&formats);
+
+            CameraWithFormats {
+                device_id: camera.device_id().to_string(),
+                display_name: camera.display_name().to_string(),
+                model_id: camera.model_id().map(|m| m.to_string()),
+                formats,
+                best_format,
+            }
+        })
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneInfo {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_microphone_info(name: String) -> Option<MicrophoneInfo> {
+    if !permissions::do_permissions_check(false)
+        .microphone
+        .permitted()
+    {
+        return None;
+    }
+
+    microphone::MicrophoneFeed::list()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .map(|(name, (_device, config))| MicrophoneInfo {
+            name,
+            sample_rate: config.sample_rate().0,
+            channels: config.channels(),
+        })
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
