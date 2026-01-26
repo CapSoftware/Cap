@@ -58,8 +58,9 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
-import CameraSelect from "./(window-chrome)/new-main/CameraSelect";
-import MicrophoneSelect from "./(window-chrome)/new-main/MicrophoneSelect";
+import { CameraSelectBase } from "./(window-chrome)/new-main/CameraSelect";
+import InfoPill from "./(window-chrome)/new-main/InfoPill";
+import { MicrophoneSelectBase } from "./(window-chrome)/new-main/MicrophoneSelect";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
@@ -1366,7 +1367,7 @@ function RecordingControls(props: {
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>
 					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
 						<div class="grid grid-cols-2 gap-2 w-full">
-							<CameraSelect
+							<CameraSelectBase
 								disabled={devices.isPending}
 								options={cameras()}
 								value={selectedCamera() ?? null}
@@ -1378,13 +1379,20 @@ function RecordingControls(props: {
 								}}
 								permissions={permissions()}
 								hidePreviewButton={props.target.variant === "cameraOnly"}
+								PillComponent={InfoPill}
+								class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+								iconClass="text-gray-10 size-4"
 							/>
-							<MicrophoneSelect
+							<MicrophoneSelectBase
 								disabled={devices.isPending}
 								options={mics()}
 								value={selectedMicName()}
 								onChange={(value) => setMicInput.mutate(value)}
 								permissions={permissions()}
+								PillComponent={InfoPill}
+								class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+								levelIndicatorClass="bg-blue-7"
+								iconClass="text-gray-10 size-4"
 							/>
 						</div>
 					</div>

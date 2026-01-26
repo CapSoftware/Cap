@@ -23,15 +23,87 @@ export default function MicrophoneSelect(props: {
 	value: string | null;
 	onChange: (micName: string | null) => void;
 	permissions?: OSPermissionsCheck;
+	onOpen?: () => void;
 }) {
+	const DB_SCALE = 40;
+	const currentRecording = createCurrentRecordingQuery();
+	const requestPermission = useRequestPermission();
+
+	const [dbs, setDbs] = createSignal<number | undefined>();
+	const [isInitialized, setIsInitialized] = createSignal(false);
+
+	const permissionGranted = () =>
+		props.permissions?.microphone === "granted" ||
+		props.permissions?.microphone === "notNeeded";
+
+	const handleMicrophoneChange = async (name: string | null) => {
+		if (!props.options) return;
+		props.onChange(name);
+		if (!name) setDbs();
+
+		trackEvent("microphone_selected", {
+			microphone_name: name ?? null,
+			enabled: !!name,
+		});
+	};
+
+	createTauriEventListener(events.audioInputLevelChange, (d) => {
+		if (!props.value) setDbs();
+		else setDbs(d);
+	});
+
+	const audioLevel = () =>
+		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
+
+	createEffect(() => {
+		if (!props.value || !permissionGranted() || isInitialized()) return;
+
+		setIsInitialized(true);
+		void handleMicrophoneChange(props.value);
+	});
+
 	return (
-		<MicrophoneSelectBase
-			{...props}
-			class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
-			levelIndicatorClass="bg-blue-7"
-			iconClass="text-gray-10 size-4"
-			PillComponent={InfoPill}
-		/>
+		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+			<button
+				type="button"
+				disabled={!!currentRecording.data || props.disabled}
+				class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+				onClick={() => {
+					if (!permissionGranted()) {
+						requestPermission("microphone", props.permissions?.microphone);
+						return;
+					}
+					props.onOpen?.();
+				}}
+			>
+				<Show when={props.value !== null && dbs()}>
+					{(_) => (
+						<div
+							class="opacity-50 left-0 inset-y-0 absolute transition-[right] duration-100 -z-10 bg-blue-7"
+							style={{ right: `${audioLevel() * 100}%` }}
+						/>
+					)}
+				</Show>
+				<IconCapMicrophone class="text-gray-10 size-4" />
+				<p class="flex-1 text-sm text-left truncate">
+					{props.value ?? NO_MICROPHONE}
+				</p>
+				<TargetSelectInfoPill
+					PillComponent={InfoPill}
+					value={props.value}
+					permissionGranted={permissionGranted()}
+					requestPermission={() =>
+						requestPermission("microphone", props.permissions?.microphone)
+					}
+					onClick={(e) => {
+						if (props.value !== null) {
+							e.stopPropagation();
+							props.onChange(null);
+						}
+					}}
+				/>
+			</button>
+		</div>
 	);
 }
 
