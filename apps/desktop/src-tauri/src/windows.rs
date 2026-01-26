@@ -262,6 +262,7 @@ impl CapWindowId {
             }
             Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
+            | Self::Main
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay
@@ -480,6 +481,10 @@ impl ShowCapWindow {
                 let title = CapWindowId::Main.title();
                 let should_protect = should_protect_window(app, &title);
 
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                    .ok();
+
                 let window = self
                     .window_builder(app, "/")
                     .resizable(false)
@@ -489,6 +494,8 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
+                    .transparent(true)
+                    .visible(false)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -503,10 +510,46 @@ impl ShowCapWindow {
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(window.as_ref().window(), 50);
-
-                #[cfg(target_os = "macos")]
                 {
+                    app.run_on_main_thread({
+                        let window = window.clone();
+                        let app = app.clone();
+                        move || {
+                            use tauri::ActivationPolicy;
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::panel_delegate;
+                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+
+                            const MAIN_PANEL_LEVEL: i32 = 100;
+
+                            let delegate = panel_delegate!(MainPanelDelegate {
+                                window_did_become_key,
+                                window_did_resign_key
+                            });
+
+                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
+
+                            let panel = window.to_panel().unwrap();
+
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            );
+
+                            panel.set_delegate(delegate);
+
+                            panel.set_level(MAIN_PANEL_LEVEL);
+
+                            panel.order_front_regardless();
+                            panel.show();
+
+                            crate::platform::apply_squircle_corners(&window, 16.0);
+
+                            app.set_activation_policy(ActivationPolicy::Regular).ok();
+                        }
+                    })
+                    .ok();
+
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         let prewarmer =
@@ -517,6 +560,11 @@ impl ShowCapWindow {
                     if let Err(error) = (RequestScreenCapturePrewarm { force: false }).emit(app) {
                         warn!(%error, "Failed to emit ScreenCaptureKit prewarm event");
                     }
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.show().ok();
                 }
 
                 window
