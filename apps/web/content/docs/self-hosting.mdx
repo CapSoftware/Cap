@@ -8,9 +8,6 @@ image: "/docs/self-hosting.webp"
 Cap Web is our web application for uploading and sharing Caps - it's what runs right here on [cap.so](https://cap.so).
 You can upload videos to it from the dashboard or from Cap Desktop.
 
-This guide describes our two supported deployment methods, how to connect Cap Desktop,
-and how to configure email login links.
-
 <div style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
   <iframe
     src="https://cap.so/embed/k310v2vf41d6ffp"
@@ -27,49 +24,170 @@ and how to configure email login links.
   ></iframe>
 </div>
 
-## Deployment Methods
+## Quick Start (One Command)
 
-### Deploying with Railway
+The fastest way to self-host Cap is with Docker Compose. This single command will start everything you need:
 
-One-click deployment via Railway is the easiest way to deploy Cap Web.
-The button below will take you to the Cap Web Railway template,
-which will deploy the Cap Web Docker image, a MySQL database,
-and [MinIO](https://min.io) for storing videos.
+```bash
+git clone https://github.com/CapSoftware/Cap.git
+cd Cap
+docker compose up -d
+```
+
+That's it! Cap will be available at `http://localhost:3000`.
+
+Login links will appear in the logs since email isn't configured:
+```bash
+docker compose logs cap-web
+```
+
+## Deployment Options
+
+### Option 1: Docker Compose (Recommended)
+
+Best for VPS, home servers, or any Docker-capable host.
+
+**What's included:**
+- Cap Web application
+- Media server (FFmpeg processing)
+- MySQL database
+- MinIO (S3-compatible storage)
+
+**Steps:**
+1. Clone the repository
+2. Run `docker compose up -d`
+3. Access Cap at `http://localhost:3000`
+
+**Custom configuration:**
+
+Create a `.env` file to customize your deployment:
+
+```bash
+# Public URL (required for production)
+CAP_URL=https://cap.yourdomain.com
+
+# S3 public URL (for video playback)
+S3_PUBLIC_URL=https://s3.yourdomain.com
+
+# Optional: Custom ports
+CAP_PORT=3000
+MINIO_PORT=9000
+
+# Optional: Custom passwords (auto-generated if not set)
+MYSQL_PASSWORD=your-secure-password
+MINIO_ROOT_PASSWORD=your-minio-password
+```
+
+### Option 2: Railway (One-Click)
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
 
-Once deployed, login email links will be available in Railway’s Deploy Logs.
+Railway provides a fully managed deployment with automatic SSL and scaling.
+Login credentials appear in Railway's Deploy Logs after deployment.
 
-### Custom Deployment with Docker
+### Option 3: Coolify
 
-The [Cap Web Docker image](https://github.com/CapSoftware/Cap/pkgs/container/cap-web)
-allows you to deploy Cap Web anywhere you like.
-You will need to connect your own MySQL database and S3-compatible storage.
-Refer to the [Docker Compose template](https://github.com/CapSoftware/Cap/blob/main/docker-compose.template.yml)
-for an example setup, including necessary environment variables.
+For Coolify users, use `docker-compose.coolify.yml` which includes environment variable placeholders:
+
+1. Create a new Docker Compose project in Coolify
+2. Point to the Cap repository
+3. Set compose file to `docker-compose.coolify.yml`
+4. Configure environment variables in Coolify's UI
+5. Deploy
 
 ## Connecting Cap Desktop
 
-Copy the URL of your Cap Web deployment, and set the 'Cap Server URL'
-in Cap Desktop's settings page to this URL.
-Uploads from Cap Desktop will now be sent to your Cap Web deployment.
+1. Open Cap Desktop settings
+2. Set 'Cap Server URL' to your deployment URL (e.g., `https://cap.yourdomain.com`)
+3. Uploads will now go to your self-hosted instance
 
-## Email Login Links
+## Email Configuration
 
-If the `RESEND_API_KEY` and `RESEND_FROM_DOMAIN` environment variables are not set,
-login links will be written to the server logs.
-To send login links via email, you'll need to configure [Resend](https://resend.com):
+By default, login links are printed to the server logs. To send emails:
 
 1. Create an account at [Resend](https://resend.com)
-2. Connect a domain and set it as `RESEND_FROM_DOMAIN`
-3. Generate an API key and set it as `RESEND_API_KEY`
+2. Add these environment variables:
+   ```bash
+   RESEND_API_KEY=re_xxxxx
+   RESEND_FROM_DOMAIN=yourdomain.com
+   ```
 
-## Other Configuration
+## Optional Features
 
-See [`env/server.ts`](https://github.com/CapSoftware/Cap/blob/main/packages/env/server.ts) for a description of all environment variables you can configure.
+### AI Features
+
+For video transcription and AI summaries:
+
+```bash
+DEEPGRAM_API_KEY=your-key    # Transcription
+GROQ_API_KEY=your-key        # AI summaries (preferred)
+OPENAI_API_KEY=your-key      # AI summaries (fallback)
+```
+
+### Google OAuth
+
+```bash
+GOOGLE_CLIENT_ID=your-client-id
+GOOGLE_CLIENT_SECRET=your-secret
+```
+
+## Production Checklist
+
+> **Important:** The default configuration uses placeholder passwords suitable for local testing only. For production, you must set secure values via environment variables.
+
+For production deployments:
+
+- [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
+- [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET` (use `openssl rand -hex 32`)
+- [ ] Set `CAP_URL` to your public URL
+- [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
+- [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL
+- [ ] Set up email with Resend
+- [ ] Configure backups for MySQL and MinIO volumes
+
+## Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Cap Desktop   │────▶│    Cap Web      │
+└─────────────────┘     │   (port 3000)   │
+                        └────────┬────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+             ┌──────────┐ ┌──────────┐ ┌──────────┐
+             │  MySQL   │ │  MinIO   │ │  Media   │
+             │ (3306)   │ │ (9000)   │ │  Server  │
+             └──────────┘ └──────────┘ └──────────┘
+```
+
+## Environment Variables Reference
+
+See [`packages/env/server.ts`](https://github.com/CapSoftware/Cap/blob/main/packages/env/server.ts) for all available options.
+
+## Troubleshooting
+
+**Can't access Cap after starting:**
+```bash
+docker compose logs cap-web
+```
+
+**Database migration issues:**
+```bash
+docker compose down -v  # Warning: deletes data
+docker compose up -d
+```
+
+**Reset everything:**
+```bash
+docker compose down -v
+docker compose up -d
+```
 
 ## Support
 
-If you encounter a problem with the Docker image or think this documentation is lacking,
-please [open an issue](https://github.com/CapSoftware/Cap/issues/new).
-We do not offer support services for self-hosted deployments.
+If you encounter issues with self-hosting:
+- [Open a GitHub issue](https://github.com/CapSoftware/Cap/issues/new)
+- Check existing issues for solutions
+
+We do not offer direct support for self-hosted deployments.

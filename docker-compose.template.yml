@@ -51,12 +51,20 @@ services:
 
   cap-media-server:
     container_name: cap-media-server
-    image: ghcr.io/capsoftware/cap-media-server:latest
+    build:
+      context: ./apps/media-server
+      dockerfile: Dockerfile.standalone
     restart: unless-stopped
     environment:
       PORT: 3456
     ports:
       - "3456:3456"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3456/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # Local S3 Strorage
   minio:
