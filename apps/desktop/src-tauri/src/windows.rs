@@ -826,6 +826,15 @@ impl ShowCapWindow {
                         }
                     }
 
+                    // CRITICAL: Camera window fullscreen visibility on macOS
+                    // Setting activation policy to Accessory BEFORE building the window is essential
+                    // for the camera to appear above fullscreen apps on macOS Tahoe 26+.
+                    // This was discovered through extensive testing - the order matters!
+                    // Reference: https://stackoverflow.com/questions/79153578
+                    #[cfg(target_os = "macos")]
+                    app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                        .ok();
+
                     let mut window_builder = self
                         .window_builder(app, "/camera")
                         .maximized(false)
@@ -887,6 +896,66 @@ impl ShowCapWindow {
                         state.camera_in_use = true;
                     }
 
+                    #[cfg(target_os = "macos")]
+                    {
+                        app.run_on_main_thread({
+                            let window = window.clone();
+                            let app = app.clone();
+                            move || {
+                                use tauri::ActivationPolicy;
+                                use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                                use tauri_nspanel::panel_delegate;
+                                use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+
+                                #[link(name = "CoreGraphics", kind = "framework")]
+                                unsafe extern "C" {
+                                    fn CGWindowLevelForKey(key: i32) -> i32;
+                                }
+
+                                #[allow(non_upper_case_globals)]
+                                const kCGMaximumWindowLevelKey: i32 = 10;
+
+                                let delegate = panel_delegate!(CameraPanelDelegate {
+                                    window_did_become_key,
+                                    window_did_resign_key
+                                });
+
+                                delegate.set_listener(Box::new(|_delegate_name: String| {}));
+
+                                let panel = window.to_panel().unwrap();
+
+                                // CRITICAL: Collection behavior for fullscreen visibility on macOS Tahoe 26+
+                                // - CanJoinAllSpaces: Window appears on all spaces/desktops
+                                // - FullScreenPrimary: Window can appear ON TOP of fullscreen apps
+                                //
+                                // DO NOT USE these flags (they break fullscreen on Tahoe 26):
+                                // - Stationary: Interferes with fullscreen overlay behavior
+                                // - FullScreenAuxiliary: Does NOT work above fullscreen apps on Tahoe 26
+                                //
+                                // This exact combination was found through extensive testing.
+                                // Changing these flags will likely break camera visibility on fullscreen!
+                                panel.set_collection_behaviour(
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                                );
+
+                                panel.set_delegate(delegate);
+
+                                // Use maximum possible window level to ensure we're above everything
+                                let max_level =
+                                    unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                                panel.set_level(max_level);
+
+                                panel.order_front_regardless();
+                                panel.show();
+
+                                // Restore activation policy so the dock icon reappears
+                                app.set_activation_policy(ActivationPolicy::Regular).ok();
+                            }
+                        })
+                        .ok();
+                    }
+
                     if enable_native_camera_preview {
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
@@ -897,28 +966,12 @@ impl ShowCapWindow {
                             error!(
                                 "Error initializing camera preview, falling back to WebSocket preview: {err}"
                             );
-                            window.show().ok();
                         }
-                    } else {
-                        window.show().ok();
                     }
 
-                    #[cfg(target_os = "macos")]
+                    #[cfg(not(target_os = "macos"))]
                     {
-                        crate::platform::set_window_level(window.as_ref().window(), 60);
-
-                        _ = window.run_on_main_thread({
-                            let window = window.as_ref().window();
-                            move || unsafe {
-                                let Ok(win) = window.ns_window() else {
-                                    return;
-                                };
-                                let win = win as *const objc2_app_kit::NSWindow;
-                                (*win).setCollectionBehavior(
-                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                                );
-                            }
-                        });
+                        window.show().ok();
                     }
 
                     window
