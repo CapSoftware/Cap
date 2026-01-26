@@ -63,7 +63,9 @@ impl RecordStart {
             .with_custom_cursor(false)
             .build(
                 #[cfg(target_os = "macos")]
-                cidre::sc::ShareableContent::current().await.unwrap(),
+                Some(cap_recording::SendableShareableContent::from(
+                    cidre::sc::ShareableContent::current().await.unwrap(),
+                )),
             )
             .await
             .map_err(|e| e.to_string())?;

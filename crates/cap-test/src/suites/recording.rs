@@ -88,7 +88,8 @@ impl RecordingTestRunner {
         #[cfg(target_os = "macos")]
         let shareable_content = cidre::sc::ShareableContent::current()
             .await
-            .context("Failed to get shareable content - check screen recording permissions")?;
+            .context("Failed to get shareable content - check screen recording permissions")
+            .map(cap_recording::SendableShareableContent::from)?;
 
         let (error_tx, _error_rx) = flume::bounded::<StreamError>(16);
 
@@ -162,7 +163,7 @@ impl RecordingTestRunner {
         let handle = builder
             .build(
                 #[cfg(target_os = "macos")]
-                shareable_content,
+                Some(shareable_content),
             )
             .await
             .context("Failed to start recording")?;

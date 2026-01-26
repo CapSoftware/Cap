@@ -574,7 +574,7 @@ async fn set_camera_input(
                 return Err(e);
             }
 
-            ShowCapWindow::Camera
+            ShowCapWindow::Camera { centered: false }
                 .show(&app_handle)
                 .await
                 .map_err(|err| error!("Failed to show camera preview window: {err}"))
@@ -768,9 +768,56 @@ async fn cleanup_camera_window(app: AppHandle) {
     app_state.camera_preview.on_window_close();
 
     if !app_state.is_recording_active_or_pending() {
-        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-        app_state.camera_in_use = false;
+        let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
+            label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+        });
+
+        if !has_visible_target_overlay {
+            let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+            app_state.camera_in_use = false;
+        }
     }
+}
+
+async fn cleanup_camera_after_overlay_close(app: AppHandle) {
+    let state = app.state::<ArcLock<App>>();
+
+    let camera_feed = {
+        let mut app_state = state.write().await;
+
+        if app_state.camera_cleanup_done {
+            return;
+        }
+
+        if app_state.is_recording_active_or_pending() {
+            return;
+        }
+
+        let has_camera_window = CapWindowId::Camera.get(&app).is_some();
+        if has_camera_window {
+            return;
+        }
+
+        let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
+            label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+        });
+        if has_visible_target_overlay {
+            return;
+        }
+
+        app_state.camera_cleanup_done = true;
+
+        if !app_state.camera_in_use {
+            return;
+        }
+
+        app_state.camera_feed.clone()
+    };
+
+    let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
+
+    let mut app_state = state.write().await;
+    app_state.camera_in_use = false;
 }
 
 fn spawn_microphone_watcher(app_handle: AppHandle) {
@@ -996,6 +1043,7 @@ enum CurrentRecordingTarget {
         screen: DisplayId,
         bounds: LogicalBounds,
     },
+    Camera,
 }
 
 #[derive(Serialize, Type)]
@@ -1047,6 +1095,7 @@ async fn get_current_recording(
             screen: screen.clone(),
             bounds: *bounds,
         },
+        ScreenCaptureTarget::CameraOnly => CurrentRecordingTarget::Camera,
     };
 
     Ok(JsonValue::new(&Some(CurrentRecording {
@@ -3384,6 +3433,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     app.state::<target_select_overlay::WindowFocusManager>()
                                         .destroy(&display_id, app.global_shortcut());
                                 }
+                                tokio::spawn(cleanup_camera_after_overlay_close(app.clone()));
                             }
                             CapWindowId::Camera => {
                                 tokio::spawn(cleanup_camera_window(app.clone()));

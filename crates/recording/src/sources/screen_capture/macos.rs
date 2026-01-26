@@ -206,11 +206,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     continue;
                 };
 
-                if let Some(sc_window) = window
-                    .raw_handle()
-                    .as_sc(self.shareable_content.clone())
-                    .await
-                {
+                if let Some(sc_window) = window.raw_handle().as_sc(self.shareable_content.clone()) {
                     collected.push(sc_window);
                 }
             }
@@ -224,7 +220,6 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 self.shareable_content.clone(),
                 excluded_sc_windows,
             )
-            .await
             .ok_or(SourceError::AsContentFilter)?;
 
         debug!("SCK content filter: {:?}", content_filter);

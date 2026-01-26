@@ -56,7 +56,9 @@ async fn run_recording_benchmark(
     let handle = builder
         .build(
             #[cfg(target_os = "macos")]
-            cidre::sc::ShareableContent::current().await?,
+            Some(cap_recording::SendableShareableContent::from(
+                cidre::sc::ShareableContent::current().await?,
+            )),
         )
         .await?;
 
@@ -117,7 +119,9 @@ async fn run_pause_resume_benchmark(duration_secs: u64) -> Result<(), Box<dyn st
     )
     .build(
         #[cfg(target_os = "macos")]
-        cidre::sc::ShareableContent::current().await?,
+        Some(cap_recording::SendableShareableContent::from(
+            cidre::sc::ShareableContent::current().await?,
+        )),
     )
     .await?;
 
@@ -175,7 +179,9 @@ async fn stress_test_recording(
         )
         .build(
             #[cfg(target_os = "macos")]
-            cidre::sc::ShareableContent::current().await?,
+            Some(cap_recording::SendableShareableContent::from(
+                cidre::sc::ShareableContent::current().await?,
+            )),
         )
         .await?;
         start_times.push(start.elapsed());

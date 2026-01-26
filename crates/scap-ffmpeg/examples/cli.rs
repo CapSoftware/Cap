@@ -49,7 +49,6 @@ pub async fn main() {
         use std::time::Duration;
 
         use cidre::sc;
-        use futures::executor::block_on;
         use scap_screencapturekit::*;
         use scap_targets::Display;
 
@@ -61,12 +60,9 @@ pub async fn main() {
             .with_height(display.physical_size().unwrap().height() as usize)
             .build();
 
+        let content = sc::ShareableContent::current().await.unwrap();
         let capturer = Capturer::builder(
-            display
-                .raw_handle()
-                .as_content_filter(sc::ShareableContent::current().await.unwrap())
-                .await
-                .unwrap(),
+            display.raw_handle().as_content_filter(content).unwrap(),
             config,
         )
         .with_output_sample_buf_cb(|frame| {

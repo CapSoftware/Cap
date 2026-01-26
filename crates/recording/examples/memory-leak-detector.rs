@@ -251,7 +251,9 @@ async fn run_memory_test(
     let handle = builder
         .build(
             #[cfg(target_os = "macos")]
-            cidre::sc::ShareableContent::current().await?,
+            Some(cap_recording::SendableShareableContent::from(
+                cidre::sc::ShareableContent::current().await?,
+            )),
         )
         .await?;
 
