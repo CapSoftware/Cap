@@ -82,7 +82,7 @@ interface WarningProps {
 
 function Warning(props: WarningProps) {
 	return (
-		<div className="px-4 py-3 border-2 border-red-300 bg-red-50 rounded-lg text-sm mb-8 dark:bg-red-950 dark:border-red-800">
+		<div className="not-prose px-4 py-3 border-2 border-red-300 bg-red-50 rounded-lg text-sm mb-8 dark:bg-red-950 dark:border-red-800">
 			<div className="flex items-center gap-2 font-semibold text-red-700 dark:text-red-400 mb-2">
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -98,7 +98,7 @@ function Warning(props: WarningProps) {
 				</svg>
 				{props.title || "Warning"}
 			</div>
-			<div className="text-red-700 dark:text-red-300 [&>p]:m-0 [&>ul]:m-0 [&>ul]:mt-2">
+			<div className="text-red-700 dark:text-red-300 [&>p]:m-0 [&>ul]:m-0 [&>ul]:mt-2 [&_strong]:font-semibold [&_code]:bg-red-100 [&_code]:dark:bg-red-900 [&_code]:px-1 [&_code]:rounded [&_a]:underline">
 				{props.children}
 			</div>
 		</div>
