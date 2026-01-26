@@ -27,6 +27,14 @@ export default function (
 	});
 	onCleanup(() => unlisten?.());
 
+	const handleClose = () => {
+		if (currentWindow.label === "main") {
+			currentWindow.hide();
+		} else {
+			currentWindow.close();
+		}
+	};
+
 	return (
 		<div
 			class={cx(
@@ -79,7 +87,7 @@ export default function (
 				</ControlButton>
 			</Show>
 			<ControlButton
-				onClick={titlebarState.closable ? currentWindow.close : undefined}
+				onClick={titlebarState.closable ? handleClose : undefined}
 				disabled={!titlebarState.closable}
 				class={cx(
 					"max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-1",
