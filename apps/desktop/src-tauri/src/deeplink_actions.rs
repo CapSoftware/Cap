@@ -28,13 +28,13 @@ pub enum DeepLinkAction {
     StopRecording,
     PauseRecording,
     ResumeRecording,
+    TogglePauseRecording,
     SwitchCamera {
         camera: DeviceOrModelID,
     },
     SwitchMicrophone {
         mic_label: String,
     },
-    ToggleSystemAudio,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -161,6 +161,9 @@ impl DeepLinkAction {
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
             DeepLinkAction::SwitchCamera { camera } => {
                 let state = app.state::<ArcLock<App>>();
                 crate::set_camera_input(app.clone(), state, Some(camera)).await
@@ -168,9 +171,6 @@ impl DeepLinkAction {
             DeepLinkAction::SwitchMicrophone { mic_label } => {
                 let state = app.state::<ArcLock<App>>();
                 crate::set_mic_input(state, Some(mic_label)).await
-            }
-            DeepLinkAction::ToggleSystemAudio => {
-                crate::recording::toggle_system_audio(app.clone(), app.state()).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
