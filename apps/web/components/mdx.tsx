@@ -98,7 +98,7 @@ function Warning(props: WarningProps) {
 				</svg>
 				{props.title || "Warning"}
 			</div>
-			<div className="text-red-700 dark:text-red-300 [&>p]:m-0 [&>ul]:m-0 [&>ul]:mt-2 [&_strong]:font-semibold [&_code]:bg-red-100 [&_code]:dark:bg-red-900 [&_code]:px-1 [&_code]:rounded [&_a]:underline">
+			<div className="text-red-700 dark:text-red-300 [&_p]:m-0 [&_ul]:m-0 [&_ul]:mt-2 [&_strong]:font-semibold [&_code]:bg-red-100 [&_code]:dark:bg-red-900 [&_code]:px-1 [&_code]:rounded [&_a]:underline">
 				{props.children}
 			</div>
 		</div>
