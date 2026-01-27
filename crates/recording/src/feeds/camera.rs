@@ -704,6 +704,9 @@ impl Message<RemoveInput> for CameraFeed {
             let _ = attached.done_tx.send(());
         }
 
+        self.senders.clear();
+        self.native_senders.clear();
+
         for cb in &self.on_disconnect {
             (cb)();
         }
