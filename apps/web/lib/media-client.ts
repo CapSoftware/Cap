@@ -142,3 +142,39 @@ export async function extractAudioViaMediaServer(
 	const arrayBuffer = await response.arrayBuffer();
 	return Buffer.from(arrayBuffer);
 }
+
+export async function convertAudioToMp3ViaMediaServer(
+	audioUrl: string,
+): Promise<Buffer> {
+	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+	if (!mediaServerUrl) {
+		throw new Error("MEDIA_SERVER_URL is not configured");
+	}
+
+	const response = await fetchWithRetry(`${mediaServerUrl}/audio/convert`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			audioUrl,
+			outputFormat: "mp3",
+			bitrate: "128k",
+		}),
+	});
+
+	if (!response.ok) {
+		let errorData: MediaServerError;
+		try {
+			errorData = (await response.json()) as MediaServerError;
+		} catch {
+			throw new Error(
+				`Audio conversion failed: ${response.status} ${response.statusText}`,
+			);
+		}
+		throw new Error(
+			errorData.details || errorData.error || "Audio conversion failed",
+		);
+	}
+
+	const arrayBuffer = await response.arrayBuffer();
+	return Buffer.from(arrayBuffer);
+}

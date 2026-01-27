@@ -19,6 +19,12 @@ const extractSchema = z.object({
 	stream: z.boolean().optional().default(true),
 });
 
+const convertSchema = z.object({
+	audioUrl: z.string().url(),
+	outputFormat: z.literal("mp3").optional().default("mp3"),
+	bitrate: z.string().optional().default("128k"),
+});
+
 function isBusyError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("Server is busy");
 }
@@ -165,6 +171,75 @@ audio.post("/extract", async (c) => {
 		return c.json(
 			{
 				error: "Failed to extract audio",
+				code: "FFMPEG_ERROR",
+				details: err instanceof Error ? err.message : String(err),
+			},
+			500,
+		);
+	}
+});
+
+audio.post("/convert", async (c) => {
+	const body = await c.req.json();
+	const result = convertSchema.safeParse(body);
+
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	const { audioUrl, bitrate } = result.data;
+
+	try {
+		const { stream, cleanup } = extractAudioStream(audioUrl, {
+			bitrate,
+			timeoutMs: 15 * 60 * 1000,
+		});
+
+		c.req.raw.signal.addEventListener("abort", () => {
+			cleanup();
+		});
+
+		return new Response(stream, {
+			headers: {
+				"Content-Type": "audio/mpeg",
+				"Transfer-Encoding": "chunked",
+			},
+		});
+	} catch (err) {
+		console.error("[audio/convert] Error:", err);
+
+		if (isBusyError(err)) {
+			return c.json(
+				{
+					error: "Server is busy",
+					code: "SERVER_BUSY",
+					details: "Too many concurrent requests, please retry later",
+				},
+				503,
+			);
+		}
+
+		if (isTimeoutError(err)) {
+			return c.json(
+				{
+					error: "Request timed out",
+					code: "TIMEOUT",
+					details: err instanceof Error ? err.message : String(err),
+				},
+				504,
+			);
+		}
+
+		return c.json(
+			{
+				error: "Failed to convert audio",
 				code: "FFMPEG_ERROR",
 				details: err instanceof Error ? err.message : String(err),
 			},
