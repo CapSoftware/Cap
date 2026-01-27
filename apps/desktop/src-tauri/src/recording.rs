@@ -730,7 +730,7 @@ pub async fn start_recording(
         .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
     {
         if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            win.close().ok();
+            win.hide().ok();
         }
     }
     let _ = ShowCapWindow::InProgressRecording { countdown }
@@ -1272,7 +1272,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .unwrap_or_default();
 
         if let Some(window) = CapWindowId::RecordingControls.get(&app) {
-            let _ = window.close();
+            let _ = window.hide();
         }
 
         match settings.post_deletion_behaviour {
@@ -1503,23 +1503,20 @@ async fn handle_recording_end(
     let _ = app.recording_logging_handle.reload(None);
 
     if let Some(window) = CapWindowId::RecordingControls.get(&handle) {
-        let _ = window.close();
+        let _ = window.hide();
     }
 
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
         if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.close();
+            let _ = v.hide();
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
         app.camera_in_use = false;
-        if let Some(win) = CapWindowId::Camera.get(&handle) {
-            win.close().ok();
-        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
