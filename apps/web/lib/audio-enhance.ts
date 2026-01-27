@@ -12,7 +12,14 @@ export const ENHANCED_AUDIO_EXTENSION = "mp3";
 export const ENHANCED_AUDIO_CONTENT_TYPE = "audio/mpeg";
 
 export function isAudioEnhancementConfigured(): boolean {
-	return !!serverEnv().REPLICATE_API_TOKEN && isMediaServerConfigured();
+	const hasReplicateToken = !!serverEnv().REPLICATE_API_TOKEN;
+	const hasMediaServer = isMediaServerConfigured();
+
+	console.log(
+		`[audio-enhance] Config check: REPLICATE_API_TOKEN=${hasReplicateToken}, MEDIA_SERVER_URL=${hasMediaServer}`,
+	);
+
+	return hasReplicateToken && hasMediaServer;
 }
 
 export async function enhanceAudioFromUrl(audioUrl: string): Promise<Buffer> {

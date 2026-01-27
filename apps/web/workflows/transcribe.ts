@@ -129,6 +129,10 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 
 	const isOwnerPro = userIsPro(result.owner);
 
+	console.log(
+		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}`,
+	);
+
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "PROCESSING" })

@@ -85,8 +85,11 @@ export function HLSVideoPlayer({
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 
-	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(false);
+	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
+		enhancedAudioStatus === "COMPLETE",
+	);
 	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
+	const originalVolumeRef = useRef<number>(1);
 
 	const syncEnhancedAudio = useCallback(() => {
 		if (!enhancedAudioRef.current || !videoRef.current) return;
@@ -123,7 +126,15 @@ export function HLSVideoPlayer({
 		};
 
 		const handleVolumeChange = () => {
-			audio.volume = video.volume;
+			if (enhancedAudioEnabled) {
+				if (video.volume > 0) {
+					audio.volume = video.volume;
+					originalVolumeRef.current = video.volume;
+					video.volume = 0;
+				}
+			} else {
+				originalVolumeRef.current = video.volume;
+			}
 		};
 
 		video.addEventListener("play", handlePlay);
@@ -147,14 +158,17 @@ export function HLSVideoPlayer({
 		if (!video || !audio) return;
 
 		if (enhancedAudioEnabled) {
-			video.muted = true;
-			audio.volume = video.volume;
+			if (video.volume > 0) {
+				originalVolumeRef.current = video.volume;
+			}
+			audio.volume = originalVolumeRef.current;
+			video.volume = 0;
 			syncEnhancedAudio();
 			if (!video.paused) {
 				audio.play().catch(() => {});
 			}
 		} else {
-			video.muted = false;
+			video.volume = originalVolumeRef.current;
 			audio.pause();
 		}
 	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef]);
