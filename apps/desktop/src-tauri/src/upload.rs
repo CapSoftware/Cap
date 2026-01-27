@@ -1179,5 +1179,9 @@ pub async fn upload_instant_recording(
         }
     }
 
+    if let Err(e) = api::trigger_ai_processing(app, &video_upload_info.id).await {
+        error!("Failed to trigger AI processing: {e}");
+    }
+
     Ok(())
 }

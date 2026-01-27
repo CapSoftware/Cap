@@ -1659,6 +1659,11 @@ async fn upload_exported_video(
                 .set_text(uploaded_video.link.clone());
 
             NotificationType::ShareableLinkCopied.send(&app);
+
+            if let Err(e) = api::trigger_ai_processing(&app, &uploaded_video.id).await {
+                error!("Failed to trigger AI processing: {e}");
+            }
+
             Ok(UploadResult::Success(uploaded_video.link))
         }
         Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
@@ -3074,6 +3079,10 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                             .await
                                             .set_text(uploaded_video.link.clone());
                                         NotificationType::ShareableLinkCopied.send(&app);
+
+                                        if let Err(e) = api::trigger_ai_processing(&app, &uploaded_video.id).await {
+                                            error!("Failed to trigger AI processing: {e}");
+                                        }
                                     }
                             });
                         }

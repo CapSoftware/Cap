@@ -221,6 +221,7 @@ pub enum ShowCapWindow {
     Camera,
     InProgressRecording {
         countdown: Option<u32>,
+        display_id: Option<DisplayId>,
     },
     Upgrade,
     ModeSelect,
@@ -744,12 +745,31 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording { countdown } => {
+            Self::InProgressRecording {
+                countdown,
+                display_id,
+            } => {
                 let width = 208.0;
                 let height = 48.0;
 
                 let title = CapWindowId::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
+
+                let (pos_x, pos_y) = if let Some(display_id) = display_id
+                    && let Some(display) = scap_targets::Display::from_id(display_id)
+                    && let Some(size) = display.logical_size()
+                {
+                    let position = display.raw_handle().logical_position();
+                    (
+                        position.x() + (size.width() - width) / 2.0,
+                        position.y() + size.height() - height - 120.0,
+                    )
+                } else {
+                    (
+                        ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
+                        (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
+                    )
+                };
 
                 let window = self
                     .window_builder(app, "/in-progress-recording")
@@ -762,10 +782,7 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .inner_size(width, height)
-                    .position(
-                        ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
-                        (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
-                    )
+                    .position(pos_x, pos_y)
                     .skip_taskbar(true)
                     .initialization_script(format!(
                         "window.COUNTDOWN = {};",

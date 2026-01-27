@@ -523,6 +523,7 @@ pub async fn start_recording(
         .set_pending_recording(inputs.mode, inputs.capture_target.clone());
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
+    let display_id = inputs.capture_target.display().map(|d| d.id());
     for (id, win) in app
         .webview_windows()
         .iter()
@@ -532,9 +533,12 @@ pub async fn start_recording(
             win.close().ok();
         }
     }
-    let _ = ShowCapWindow::InProgressRecording { countdown }
-        .show(&app)
-        .await;
+    let _ = ShowCapWindow::InProgressRecording {
+        countdown,
+        display_id,
+    }
+    .show(&app)
+    .await;
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         let _ = general_settings
