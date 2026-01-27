@@ -2234,12 +2234,14 @@ interface MediaPlayerVolumeProps
 	extends React.ComponentProps<typeof SliderPrimitive.Root> {
 	asChild?: boolean;
 	expandable?: boolean;
+	enhancedAudioEnabled?: boolean;
 }
 
 function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 	const {
 		asChild,
 		expandable = false,
+		enhancedAudioEnabled = false,
 		className,
 		disabled,
 		...volumeProps
@@ -2258,6 +2260,8 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 	const volumeTriggerId = React.useId();
 
 	const isDisabled = disabled || context.disabled;
+
+	const displayMuted = enhancedAudioEnabled ? false : mediaMuted;
 
 	const onMute = React.useCallback(() => {
 		dispatch({
@@ -2299,7 +2303,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 		[dispatch, store],
 	);
 
-	const effectiveVolume = mediaMuted ? 0 : mediaVolume;
+	const effectiveVolume = displayMuted ? 0 : mediaVolume;
 
 	return (
 		<div
@@ -2318,17 +2322,17 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 					id={volumeTriggerId}
 					type="button"
 					aria-controls={`${context.mediaId} ${sliderId}`}
-					aria-label={mediaMuted ? "Unmute" : "Mute"}
-					aria-pressed={mediaMuted}
+					aria-label={displayMuted ? "Unmute" : "Mute"}
+					aria-pressed={displayMuted}
 					data-slot="media-player-volume-trigger"
-					data-state={mediaMuted ? "on" : "off"}
+					data-state={displayMuted ? "on" : "off"}
 					variant="ghost"
 					size="icon"
 					className="size-8"
 					disabled={isDisabled}
 					onClick={onMute}
 				>
-					{mediaVolumeLevel === "off" || mediaMuted ? (
+					{mediaVolumeLevel === "off" || displayMuted ? (
 						<VolumeXIcon />
 					) : mediaVolumeLevel === "high" ? (
 						<Volume2Icon />

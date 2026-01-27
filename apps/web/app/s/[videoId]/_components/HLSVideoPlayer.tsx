@@ -89,7 +89,6 @@ export function HLSVideoPlayer({
 		enhancedAudioStatus === "COMPLETE",
 	);
 	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
-	const originalVolumeRef = useRef<number>(1);
 
 	const syncEnhancedAudio = useCallback(() => {
 		if (!enhancedAudioRef.current || !videoRef.current) return;
@@ -127,13 +126,10 @@ export function HLSVideoPlayer({
 
 		const handleVolumeChange = () => {
 			if (enhancedAudioEnabled) {
-				if (video.volume > 0) {
-					audio.volume = video.volume;
-					originalVolumeRef.current = video.volume;
-					video.volume = 0;
+				audio.volume = video.volume;
+				if (!video.muted) {
+					video.muted = true;
 				}
-			} else {
-				originalVolumeRef.current = video.volume;
 			}
 		};
 
@@ -158,17 +154,14 @@ export function HLSVideoPlayer({
 		if (!video || !audio) return;
 
 		if (enhancedAudioEnabled) {
-			if (video.volume > 0) {
-				originalVolumeRef.current = video.volume;
-			}
-			audio.volume = originalVolumeRef.current;
-			video.volume = 0;
+			video.muted = true;
+			audio.volume = video.volume;
 			syncEnhancedAudio();
 			if (!video.paused) {
 				audio.play().catch(() => {});
 			}
 		} else {
-			video.volume = originalVolumeRef.current;
+			video.muted = false;
 			audio.pause();
 		}
 	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef]);
@@ -553,7 +546,10 @@ export function HLSVideoPlayer({
 						<MediaPlayerPlay />
 						<MediaPlayerSeekBackward />
 						<MediaPlayerSeekForward />
-						<MediaPlayerVolume expandable />
+						<MediaPlayerVolume
+							expandable
+							enhancedAudioEnabled={enhancedAudioEnabled}
+						/>
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
