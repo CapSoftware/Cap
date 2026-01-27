@@ -939,6 +939,7 @@ function calculateBackoffWithJitter(
 }
 
 function CameraPreviewInline() {
+	const { rawOptions } = useRecordingOptions();
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
 	const [connectionFailed, setConnectionFailed] = createSignal(false);
 	let canvasRef: HTMLCanvasElement | undefined;
@@ -948,6 +949,7 @@ function CameraPreviewInline() {
 	let isCleanedUp = false;
 
 	const cameraWsPort = (window as any).__CAP__?.cameraWsPort;
+	const hasCameraSelected = () => rawOptions.cameraID !== null;
 
 	const scheduleReconnect = () => {
 		if (isCleanedUp) return;
@@ -1063,7 +1065,21 @@ function CameraPreviewInline() {
 		return socket;
 	};
 
-	ws = createSocket();
+	createEffect(() => {
+		if (hasCameraSelected()) {
+			if (!ws || ws.readyState === WebSocket.CLOSED) {
+				resetBackoff();
+				ws = createSocket();
+			}
+		} else {
+			if (ws) {
+				ws.close();
+				ws = undefined;
+			}
+			setFrame(null);
+			setConnectionFailed(false);
+		}
+	});
 
 	onCleanup(() => {
 		isCleanedUp = true;
@@ -1094,25 +1110,35 @@ function CameraPreviewInline() {
 	return (
 		<div class="flex items-center justify-center w-full h-full bg-black">
 			<Show
-				when={!connectionFailed()}
+				when={hasCameraSelected()}
 				fallback={
 					<div class="flex flex-col items-center gap-2 text-center px-4">
-						<div class="text-sm text-red-400">Camera connection failed</div>
-						<button
-							type="button"
-							onClick={handleRetryConnection}
-							class="text-xs text-blue-400 hover:text-blue-300 underline"
-						>
-							Try again
-						</button>
+						<IconCapCamera class="size-8 text-gray-9 mb-2" />
+						<div class="text-sm text-gray-11">Please select a camera</div>
 					</div>
 				}
 			>
 				<Show
-					when={frame()}
-					fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+					when={!connectionFailed()}
+					fallback={
+						<div class="flex flex-col items-center gap-2 text-center px-4">
+							<div class="text-sm text-red-400">Camera connection failed</div>
+							<button
+								type="button"
+								onClick={handleRetryConnection}
+								class="text-xs text-blue-400 hover:text-blue-300 underline"
+							>
+								Try again
+							</button>
+						</div>
+					}
 				>
-					<canvas ref={canvasRef} class="w-full h-full object-contain" />
+					<Show
+						when={frame()}
+						fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
+					>
+						<canvas ref={canvasRef} class="w-full h-full object-contain" />
+					</Show>
 				</Show>
 			</Show>
 		</div>
@@ -1149,12 +1175,19 @@ function RecordingControls(props: {
 				.catch((error) => console.error("Failed to set mic input:", error));
 		}
 
+		const isCameraOnly = props.target.variant === "cameraOnly";
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({ ModelID: rawOptions.cameraID.ModelID });
+			await setCamera.mutateAsync({
+				model: { ModelID: rawOptions.cameraID.ModelID },
+				skipCameraWindow: isCameraOnly,
+			});
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({ DeviceID: rawOptions.cameraID.DeviceID });
+			await setCamera.mutateAsync({
+				model: { DeviceID: rawOptions.cameraID.DeviceID },
+				skipCameraWindow: isCameraOnly,
+			});
 
-		if (props.target.variant === "cameraOnly") {
+		if (isCameraOnly) {
 			const win = await WebviewWindow.getByLabel("camera");
 			if (win) win.close();
 		}
@@ -1372,10 +1405,18 @@ function RecordingControls(props: {
 								options={cameras()}
 								value={selectedCamera() ?? null}
 								onChange={(camera) => {
-									if (!camera) setCamera.mutate(null);
+									const isCameraOnly = props.target.variant === "cameraOnly";
+									if (!camera) setCamera.mutate({ model: null });
 									else if (camera.model_id)
-										setCamera.mutate({ ModelID: camera.model_id });
-									else setCamera.mutate({ DeviceID: camera.device_id });
+										setCamera.mutate({
+											model: { ModelID: camera.model_id },
+											skipCameraWindow: isCameraOnly,
+										});
+									else
+										setCamera.mutate({
+											model: { DeviceID: camera.device_id },
+											skipCameraWindow: isCameraOnly,
+										});
 								}}
 								permissions={permissions()}
 								hidePreviewButton={props.target.variant === "cameraOnly"}
