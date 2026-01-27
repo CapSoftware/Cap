@@ -1709,25 +1709,27 @@ impl ShowCapWindow {
             })
             .unwrap_or(None);
 
-        let is_dark = match theme {
-            Some(tauri::Theme::Dark) => true,
-            Some(tauri::Theme::Light) => false,
-            None | Some(_) => is_system_dark_mode(),
-        };
-
-        let bg_color = if is_dark { "#141414" } else { "#ffffff" };
-        let init_script = format!(
-            r#"(function(){{var s=document.createElement('style');s.textContent='html:not([data-transparent-window]),html:not([data-transparent-window]) body{{background-color:{bg}}}';document.documentElement.appendChild(s);}})();"#,
-            bg = bg_color
-        );
-
         let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
             .title(id.title())
             .visible(false)
             .accept_first_mouse(true)
             .shadow(true)
-            .theme(theme)
-            .initialization_script(&init_script);
+            .theme(theme);
+
+        if !id.is_transparent() {
+            let is_dark = match theme {
+                Some(tauri::Theme::Dark) => true,
+                Some(tauri::Theme::Light) => false,
+                None | Some(_) => is_system_dark_mode(),
+            };
+
+            let bg_color = if is_dark { "#141414" } else { "#ffffff" };
+            let init_script = format!(
+                r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg}}}';document.documentElement.appendChild(s);}})();"#,
+                bg = bg_color
+            );
+            builder = builder.initialization_script(&init_script);
+        }
 
         if let Some(min) = id.min_size() {
             builder = builder
