@@ -1066,16 +1066,29 @@ function CameraPreviewInline() {
 	};
 
 	createEffect(() => {
+		if (reconnectTimeoutId !== undefined) {
+			clearTimeout(reconnectTimeoutId);
+			reconnectTimeoutId = undefined;
+		}
+
 		if (hasCameraSelected()) {
-			if (!ws || ws.readyState === WebSocket.CLOSED) {
+			if (
+				!ws ||
+				ws.readyState === WebSocket.CLOSED ||
+				ws.readyState === WebSocket.CLOSING
+			) {
 				resetBackoff();
 				ws = createSocket();
 			}
 		} else {
-			if (ws) {
+			if (
+				ws &&
+				ws.readyState !== WebSocket.CLOSING &&
+				ws.readyState !== WebSocket.CLOSED
+			) {
 				ws.close();
-				ws = undefined;
 			}
+			ws = undefined;
 			setFrame(null);
 			setConnectionFailed(false);
 		}
