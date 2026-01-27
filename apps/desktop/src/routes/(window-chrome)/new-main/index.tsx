@@ -1190,6 +1190,10 @@ function Page() {
 	createUpdateCheck();
 
 	onMount(async () => {
+		if (document.activeElement instanceof HTMLElement) {
+			document.activeElement.blur();
+		}
+
 		const { __CAP__ } = window as typeof window & {
 			__CAP__?: { initialTargetMode?: RecordingTargetMode | null };
 		};
