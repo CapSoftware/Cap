@@ -646,7 +646,10 @@ pub async fn start_recording(
 
                 if let ScreenCaptureTarget::Area { bounds, screen } = &inputs.capture_target {
                     if let Some(display) = scap_targets::Display::from_id(screen) {
+                        #[cfg(target_os = "macos")]
                         let display_position = display.raw_handle().logical_position();
+                        #[cfg(windows)]
+                        let display_position = display.raw_handle().physical_position().unwrap();
                         let absolute_bounds = scap_targets::bounds::LogicalBounds::new(
                             scap_targets::bounds::LogicalPosition::new(
                                 bounds.position().x() + display_position.x(),

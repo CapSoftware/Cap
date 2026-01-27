@@ -354,6 +354,9 @@ pub async fn trigger_ai_processing(
         return Ok(());
     }
 
-    trace!("AI processing triggered successfully for recording {}", recording_id);
-    Ok(()
-)}
+    trace!(
+        "AI processing triggered successfully for recording {}",
+        recording_id
+    );
+    Ok(())
+}

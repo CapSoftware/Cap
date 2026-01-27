@@ -4,11 +4,35 @@ use std::ops::Deref;
 
 use reqwest::StatusCode;
 
+fn user_agent() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        concat!("InFlightRecorder/", env!("CARGO_PKG_VERSION"), " (macOS)")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        concat!("InFlightRecorder/", env!("CARGO_PKG_VERSION"), " (Windows)")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        concat!("InFlightRecorder/", env!("CARGO_PKG_VERSION"), " (Linux)")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        concat!("InFlightRecorder/", env!("CARGO_PKG_VERSION"), " (Unknown)")
+    }
+}
+
 pub struct HttpClient(reqwest::Client);
 
 impl Default for HttpClient {
     fn default() -> Self {
-        Self(reqwest::Client::new())
+        Self(
+            reqwest::Client::builder()
+                .user_agent(user_agent())
+                .build()
+                .expect("Failed to build HTTP client"),
+        )
     }
 }
 
@@ -26,6 +50,7 @@ impl Default for RetryableHttpClient {
     fn default() -> Self {
         Self(
             reqwest::Client::builder()
+                .user_agent(user_agent())
                 .retry(
                     reqwest::retry::always()
                         .classify_fn(|req_rep| {

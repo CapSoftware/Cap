@@ -50,3 +50,10 @@ tauri.windows.conf.json
 # Cursor
 .cursor
 .env*.local
+
+# Secrets and credentials
+*.pem
+*.key
+**/credentials*.json
+**/secrets.json
+**/*.secrets

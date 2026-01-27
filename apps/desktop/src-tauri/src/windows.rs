@@ -759,7 +759,10 @@ impl ShowCapWindow {
                     && let Some(display) = scap_targets::Display::from_id(display_id)
                     && let Some(size) = display.logical_size()
                 {
+                    #[cfg(target_os = "macos")]
                     let position = display.raw_handle().logical_position();
+                    #[cfg(windows)]
+                    let position = display.raw_handle().physical_position().unwrap();
                     (
                         position.x() + (size.width() - width) / 2.0,
                         position.y() + size.height() - height - 120.0,
