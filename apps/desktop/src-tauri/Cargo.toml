@@ -1,6 +1,6 @@
 [package]
 name = "Inflight"
-version = "0.4.19"
+version = "0.4.20"
 description = "The screen recorder for designers"
 authors = ["you"]
 edition = "2024"
