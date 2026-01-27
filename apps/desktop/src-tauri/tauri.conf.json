@@ -1,91 +1,114 @@
 {
-	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Cap - Development",
-	"identifier": "so.cap.desktop.dev",
-	"mainBinaryName": "Cap - Development",
-	"build": {
-		"beforeDevCommand": "pnpm localdev",
-		"devUrl": "http://localhost:3002",
-		"beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
-		"frontendDist": "../.output/public"
-	},
-	"app": {
-		"macOSPrivateApi": true,
-		"security": {
-			"csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
-			"assetProtocol": {
-				"enable": true,
-				"scope": [
-					"$APPDATA/**",
-					"**/*.jpg",
-					"**/*.webp",
-					"$RESOURCE/**",
-					"**/*.riv",
-					"$HOME/**"
-				]
-			}
-		}
-	},
-	"plugins": {
-		"updater": { "active": false, "pubkey": "" },
-		"deep-link": {
-			"desktop": {
-				"schemes": ["cap-desktop"]
-			}
-		}
-	},
-	"bundle": {
-		"active": true,
-		"createUpdaterArtifacts": true,
-		"targets": "all",
-		"icon": [
-			"icons/32x32.png",
-			"icons/128x128.png",
-			"icons/128x128@2x.png",
-			"icons/macos/icon.icns",
-			"icons/icon.ico"
-		],
-		"resources": {
-			"assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
-			"assets/backgrounds/blue/*": "assets/backgrounds/blue/",
-			"assets/backgrounds/dark/*": "assets/backgrounds/dark/",
-			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
-			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
-			"../src/assets/rive/*.riv": "assets/rive/"
-		},
-		"macOS": {
-			"dmg": {
-				"background": "assets/dmg-background.png",
-				"appPosition": {
-					"x": 180,
-					"y": 140
-				},
-				"applicationFolderPosition": {
-					"x": 480,
-					"y": 140
-				}
-			},
-			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
-		},
-		"windows": {
-			"nsis": {
-				"headerImage": "assets/nsis-header.bmp",
-				"sidebarImage": "assets/nsis-sidebar.bmp",
-				"installerIcon": "icons/icon.ico"
-			},
-			"wix": {
-				"upgradeCode": "79f4309d-ca23-54df-b6f9-826a1d783676",
-				"bannerPath": "assets/wix-banner.bmp",
-				"dialogImagePath": "assets/wix-dialog.bmp"
-			}
-		},
-		"fileAssociations": [
-			{
-				"ext": ["cap"],
-				"name": "Cap Project",
-				"mimeType": "application/x-cap-project",
-				"role": "Editor"
-			}
-		]
-	}
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm dev:ui",
+    "devPath": "http://localhost:3001",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Cap",
+    "version": "../package.json"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "window": {
+        "all": false,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true
+      },
+      "fs": {
+        "all": true,
+        "scope": ["$HOME/**", "$RESOURCE/**"]
+      },
+      "path": {
+        "all": true
+      },
+      "os": {
+        "all": true
+      },
+      "dialog": {
+        "all": true
+      },
+      "notification": {
+        "all": true
+      },
+      "globalShortcut": {
+        "all": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "DeveloperTool",
+      "copyright": "",
+      "deb": {
+        "depends": []
+      },
+      "externalBin": [],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.cap.desktop",
+      "longDescription": "",
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": "",
+        "frameworks": [],
+        "providerShortName": null,
+        "signingIdentity": null
+      },
+      "resources": [],
+      "shortDescription": "",
+      "targets": "all",
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": ""
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 600,
+        "resizable": true,
+        "title": "Cap",
+        "width": 800
+      }
+    ],
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    },
+    "protocols": [
+      {
+        "name": "cap-auth",
+        "schemes": ["cap-auth"]
+      },
+      {
+        "name": "cap-deeplink",
+        "schemes": ["cap"]
+      }
+    ]
+  }
 }
