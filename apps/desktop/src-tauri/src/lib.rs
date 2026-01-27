@@ -180,6 +180,8 @@ pub enum RecordingState {
 pub struct App {
     #[deprecated = "can be removed when native camera preview is ready"]
     camera_ws_port: u16,
+    #[deprecated = "can be removed when native camera preview is ready"]
+    camera_ws_sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
     camera_preview: CameraPreviewManager,
     handle: AppHandle,
     recording_state: RecordingState,
@@ -194,6 +196,7 @@ pub struct App {
     server_url: String,
     logs_dir: PathBuf,
     disconnected_inputs: HashSet<RecordingInputKind>,
+    was_camera_only_recording: bool,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -495,6 +498,7 @@ async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
+    skip_camera_window: Option<bool>,
 ) -> Result<(), String> {
     let operation_lock = app_handle.state::<CameraWindowOperationLock>();
     let _operation_guard = operation_lock.lock().await;
@@ -535,12 +539,19 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            {
+            let camera_ws_sender = {
                 let app = &mut *state.write().await;
                 app.selected_camera_id = Some(id.clone());
                 app.camera_in_use = true;
                 app.camera_cleanup_done = false;
-            }
+                #[allow(deprecated)]
+                app.camera_ws_sender.clone()
+            };
+
+            #[allow(deprecated)]
+            let _ = camera_feed
+                .ask(feeds::camera::AddSender(camera_ws_sender))
+                .await;
 
             let mut attempts = 0;
             let init_result: Result<(), String> = loop {
@@ -582,12 +593,14 @@ async fn set_camera_input(
                 return Err(e);
             }
 
-            let show_result = ShowCapWindow::Camera { centered: false }
-                .show(&app_handle)
-                .await;
-            show_result
-                .map_err(|err| error!("Failed to show camera preview window: {err}"))
-                .ok();
+            if !skip_camera_window.unwrap_or(false) {
+                let show_result = ShowCapWindow::Camera { centered: false }
+                    .show(&app_handle)
+                    .await;
+                show_result
+                    .map_err(|err| error!("Failed to show camera preview window: {err}"))
+                    .ok();
+            }
         }
     }
 
@@ -794,6 +807,17 @@ async fn cleanup_camera_window(app: AppHandle, session_id: u64) {
         let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
             label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
         });
+
+        let is_camera_only_mode = recording_settings::RecordingSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .and_then(|s| s.target)
+            .is_some_and(|t| matches!(t, ScreenCaptureTarget::CameraOnly));
+
+        if is_camera_only_mode {
+            tracing::info!("Camera cleanup: preserving camera feed for camera-only mode");
+            return;
+        }
 
         if !has_visible_target_overlay {
             let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
@@ -2880,6 +2904,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
+    let camera_ws_sender = camera_tx.clone();
 
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
     let mic_meter_sender = mic_samples_tx.clone();
@@ -3081,6 +3106,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 app.manage(Arc::new(RwLock::new(App {
                     camera_ws_port,
+                    camera_ws_sender,
                     handle: app.clone(),
                     camera_preview,
                     recording_state: RecordingState::None,
@@ -3095,6 +3121,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     server_url,
                     logs_dir: logs_dir.clone(),
                     disconnected_inputs: HashSet::new(),
+                    was_camera_only_recording: false,
                 })));
 
                 app.manage(camera_session_id_handle);
@@ -3153,7 +3180,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     .unwrap_or_default();
 
                 let _ = set_mic_input(app.state(), settings.mic_name).await;
-                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
+                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id, None).await;
 
                 let _ = start_recording(app.clone(), app.state(), {
                     recording::StartRecordingInputs {
