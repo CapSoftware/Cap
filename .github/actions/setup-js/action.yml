@@ -12,13 +12,9 @@ runs:
     - name: Setup node
       uses: actions/setup-node@v3
       with:
-        node-version: 24
+        node-version: 20
         cache: pnpm
 
     - name: Install frontend dependencies
       shell: bash
       run: pnpm install
-
-    - name: Rebuild native modules
-      shell: bash
-      run: pnpm rebuild

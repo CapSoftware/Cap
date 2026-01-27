@@ -7,8 +7,7 @@
 		"preparescript": "node scripts/prepare.js",
 		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3002",
 		"build": "vinxi build",
-		"tauri": "tauri",
-		"fix-dmg": "node scripts/fix-dmg-positions.js"
+		"tauri": "tauri"
 	},
 	"dependencies": {
 		"@aerofoil/rive-solid-canvas": "^2.1.4",
@@ -72,7 +71,6 @@
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
-		"ds-store": "^0.1.6",
 		"@fontsource/geist-sans": "^5.0.3",
 		"@iconify/json": "^2.2.239",
 		"@tauri-apps/cli": ">=2.1.0",
