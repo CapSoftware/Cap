@@ -18,3 +18,7 @@ runs:
     - name: Install frontend dependencies
       shell: bash
       run: pnpm install
+
+    - name: Rebuild native modules
+      shell: bash
+      run: pnpm rebuild
