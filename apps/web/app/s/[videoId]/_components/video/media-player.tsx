@@ -2874,6 +2874,104 @@ function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
 	);
 }
 
+interface EnhancedAudioSyncProps {
+	enhancedAudioRef: React.RefObject<HTMLAudioElement | null>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
+	enhancedAudioEnabled: boolean;
+}
+
+function EnhancedAudioSync({
+	enhancedAudioRef,
+	videoRef,
+	enhancedAudioEnabled,
+}: EnhancedAudioSyncProps) {
+	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
+	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
+
+	const syncEnhancedAudio = React.useCallback(() => {
+		if (!enhancedAudioRef.current || !videoRef.current) return;
+		enhancedAudioRef.current.currentTime = videoRef.current.currentTime;
+		enhancedAudioRef.current.playbackRate = videoRef.current.playbackRate;
+	}, [enhancedAudioRef, videoRef]);
+
+	React.useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const handlePlay = () => {
+			if (enhancedAudioEnabled && !mediaMuted) {
+				syncEnhancedAudio();
+				audio.play().catch(() => {});
+			}
+		};
+
+		const handlePause = () => {
+			audio.pause();
+		};
+
+		const handleSeeked = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+			}
+		};
+
+		const handleRateChange = () => {
+			if (enhancedAudioEnabled) {
+				audio.playbackRate = video.playbackRate;
+			}
+		};
+
+		video.addEventListener("play", handlePlay);
+		video.addEventListener("pause", handlePause);
+		video.addEventListener("seeked", handleSeeked);
+		video.addEventListener("ratechange", handleRateChange);
+
+		return () => {
+			video.removeEventListener("play", handlePlay);
+			video.removeEventListener("pause", handlePause);
+			video.removeEventListener("seeked", handleSeeked);
+			video.removeEventListener("ratechange", handleRateChange);
+		};
+	}, [
+		enhancedAudioEnabled,
+		mediaMuted,
+		syncEnhancedAudio,
+		videoRef,
+		enhancedAudioRef,
+	]);
+
+	React.useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		if (enhancedAudioEnabled) {
+			video.muted = true;
+			audio.volume = mediaMuted ? 0 : mediaVolume;
+			syncEnhancedAudio();
+			if (!video.paused && !mediaMuted) {
+				audio.play().catch(() => {});
+			}
+			if (mediaMuted) {
+				audio.pause();
+			}
+		} else {
+			video.muted = mediaMuted;
+			audio.pause();
+		}
+	}, [
+		enhancedAudioEnabled,
+		mediaVolume,
+		mediaMuted,
+		syncEnhancedAudio,
+		videoRef,
+		enhancedAudioRef,
+	]);
+
+	return null;
+}
+
 interface MediaPlayerDownloadProps
 	extends React.ComponentProps<typeof Button> {}
 
@@ -3264,6 +3362,7 @@ export {
 	MediaPlayerSettings,
 	MediaPlayerPortal,
 	MediaPlayerTooltip,
+	EnhancedAudioSync,
 	MediaPlayerRoot as Root,
 	MediaPlayerVideo as Video,
 	MediaPlayerAudio as Audio,
