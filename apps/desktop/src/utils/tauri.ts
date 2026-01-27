@@ -8,8 +8,8 @@ export const commands = {
 async setMicInput(label: string | null) : Promise<null> {
     return await TAURI_INVOKE("set_mic_input", { label });
 },
-async setCameraInput(id: DeviceOrModelID | null) : Promise<null> {
-    return await TAURI_INVOKE("set_camera_input", { id });
+async setCameraInput(id: DeviceOrModelID | null, skipCameraWindow: boolean | null) : Promise<null> {
+    return await TAURI_INVOKE("set_camera_input", { id, skipCameraWindow });
 },
 async setRecordingMode(mode: RecordingMode) : Promise<null> {
     return await TAURI_INVOKE("set_recording_mode", { mode });

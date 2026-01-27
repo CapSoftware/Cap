@@ -397,7 +397,7 @@ function InProgressRecordingInner() {
 			const previous = cloneDeviceOrModelId(selected);
 			optionsQuery.setOptions("cameraID", next);
 			try {
-				await commands.setCameraInput(next);
+				await commands.setCameraInput(next, null);
 				if (!next && cameraWindowOpen()) {
 					const cameraWindow = await WebviewWindow.getByLabel("camera");
 					if (cameraWindow) await cameraWindow.close();
