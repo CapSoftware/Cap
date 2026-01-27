@@ -16,6 +16,8 @@ export function isAudioEnhancementConfigured(): boolean {
 }
 
 export async function enhanceAudioFromUrl(audioUrl: string): Promise<Buffer> {
+	console.log("[audio-enhance] Starting audio enhancement");
+
 	const apiToken = serverEnv().REPLICATE_API_TOKEN;
 	if (!apiToken) {
 		throw new Error("REPLICATE_API_TOKEN is not configured");
@@ -29,12 +31,16 @@ export async function enhanceAudioFromUrl(audioUrl: string): Promise<Buffer> {
 		auth: apiToken,
 	});
 
+	console.log("[audio-enhance] Creating Replicate prediction...");
+
 	const prediction = await replicate.predictions.create({
 		version: "93266a7e7f5805fb79bcf213b1a4e0ef2e45aff3c06eefd96c59e850c87fd6a2",
 		input: {
 			input_audio: audioUrl,
 		},
 	});
+
+	console.log(`[audio-enhance] Prediction created: ${prediction.id}`);
 
 	let result = prediction;
 	let attempts = 0;
@@ -62,13 +68,23 @@ export async function enhanceAudioFromUrl(audioUrl: string): Promise<Buffer> {
 		throw new Error("Replicate enhancement timed out");
 	}
 
+	console.log(
+		`[audio-enhance] Replicate completed after ${attempts} poll attempts`,
+	);
+
 	const output = result.output as string[] | undefined;
 	const enhancedAudioUrl = output?.[0];
 	if (!enhancedAudioUrl) {
 		throw new Error("No output received from Replicate");
 	}
 
+	console.log("[audio-enhance] Converting WAV to MP3 via media server...");
+
 	const mp3Buffer = await convertAudioToMp3ViaMediaServer(enhancedAudioUrl);
+
+	console.log(
+		`[audio-enhance] Conversion complete, buffer size: ${mp3Buffer.length} bytes`,
+	);
 
 	return mp3Buffer;
 }

@@ -63,8 +63,12 @@ export async function transcribeVideoWorkflow(
 		};
 	}
 
-	const shouldEnhanceAudio =
-		videoData.isOwnerPro && isAudioEnhancementConfigured();
+	const enhancementConfigured = isAudioEnhancementConfigured();
+	const shouldEnhanceAudio = videoData.isOwnerPro && enhancementConfigured;
+
+	console.log(
+		`[transcribe] Audio enhancement check: isOwnerPro=${videoData.isOwnerPro}, configured=${enhancementConfigured}, shouldEnhance=${shouldEnhanceAudio}`,
+	);
 
 	if (shouldEnhanceAudio) {
 		await markEnhancedAudioProcessing(videoId);
@@ -337,8 +341,13 @@ async function enhanceAndSaveAudio(
 ): Promise<void> {
 	"use step";
 
+	console.log(`[transcribe] Starting audio enhancement for video ${videoId}`);
+
 	try {
 		const enhancedBuffer = await enhanceAudioFromUrl(audioUrl);
+		console.log(
+			`[transcribe] Audio enhanced, saving to S3 (${enhancedBuffer.length} bytes)`,
+		);
 
 		const [bucket] = await S3Buckets.getBucketAccess(
 			Option.fromNullable(bucketId),
