@@ -2886,7 +2886,6 @@ function EnhancedAudioSync({
 	enhancedAudioEnabled,
 }: EnhancedAudioSyncProps) {
 	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
 
 	const syncEnhancedAudio = React.useCallback(() => {
 		if (!enhancedAudioRef.current || !videoRef.current) return;
@@ -2900,7 +2899,7 @@ function EnhancedAudioSync({
 		if (!video || !audio) return;
 
 		const handlePlay = () => {
-			if (enhancedAudioEnabled && !mediaMuted) {
+			if (enhancedAudioEnabled) {
 				syncEnhancedAudio();
 				audio.play().catch(() => {});
 			}
@@ -2933,13 +2932,7 @@ function EnhancedAudioSync({
 			video.removeEventListener("seeked", handleSeeked);
 			video.removeEventListener("ratechange", handleRateChange);
 		};
-	}, [
-		enhancedAudioEnabled,
-		mediaMuted,
-		syncEnhancedAudio,
-		videoRef,
-		enhancedAudioRef,
-	]);
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef, enhancedAudioRef]);
 
 	React.useEffect(() => {
 		const video = videoRef.current;
@@ -2948,22 +2941,18 @@ function EnhancedAudioSync({
 
 		if (enhancedAudioEnabled) {
 			video.muted = true;
-			audio.volume = mediaMuted ? 0 : mediaVolume;
+			audio.volume = mediaVolume;
 			syncEnhancedAudio();
-			if (!video.paused && !mediaMuted) {
+			if (!video.paused) {
 				audio.play().catch(() => {});
 			}
-			if (mediaMuted) {
-				audio.pause();
-			}
 		} else {
-			video.muted = mediaMuted;
+			video.muted = false;
 			audio.pause();
 		}
 	}, [
 		enhancedAudioEnabled,
 		mediaVolume,
-		mediaMuted,
 		syncEnhancedAudio,
 		videoRef,
 		enhancedAudioRef,
