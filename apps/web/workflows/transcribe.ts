@@ -1,13 +1,21 @@
 import { promises as fs } from "node:fs";
 import { db } from "@cap/database";
-import { organizations, s3Buckets, videos } from "@cap/database/schema";
+import { organizations, s3Buckets, users, videos } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { FatalError } from "workflow";
+import {
+	ENHANCED_AUDIO_CONTENT_TYPE,
+	ENHANCED_AUDIO_EXTENSION,
+	enhanceAudioFromUrl,
+	isAudioEnhancementConfigured,
+} from "@/lib/audio-enhance";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
 import { startAiGeneration } from "@/lib/generate-ai";
 import {
@@ -28,6 +36,7 @@ interface VideoData {
 	video: typeof videos.$inferSelect;
 	bucketId: S3Bucket.S3BucketId | null;
 	transcriptionDisabled: boolean;
+	isOwnerPro: boolean;
 }
 
 export async function transcribeVideoWorkflow(
@@ -54,7 +63,19 @@ export async function transcribeVideoWorkflow(
 		};
 	}
 
-	const transcription = await transcribeWithDeepgram(audioUrl);
+	const shouldEnhanceAudio =
+		videoData.isOwnerPro && isAudioEnhancementConfigured();
+
+	if (shouldEnhanceAudio) {
+		await markEnhancedAudioProcessing(videoId);
+	}
+
+	const [transcription] = await Promise.all([
+		transcribeWithDeepgram(audioUrl),
+		shouldEnhanceAudio
+			? enhanceAndSaveAudio(videoId, userId, audioUrl, videoData.bucketId)
+			: Promise.resolve(),
+	]);
 
 	await saveTranscription(videoId, userId, videoData.bucketId, transcription);
 
@@ -80,10 +101,12 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 			bucket: s3Buckets,
 			settings: videos.settings,
 			orgSettings: organizations.settings,
+			owner: users,
 		})
 		.from(videos)
 		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.innerJoin(users, eq(videos.ownerId, users.id))
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	if (query.length === 0) {
@@ -100,6 +123,8 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 		result.orgSettings?.disableTranscript ??
 		false;
 
+	const isOwnerPro = userIsPro(result.owner);
+
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "PROCESSING" })
@@ -109,6 +134,7 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 		video: result.video,
 		bucketId: (result.bucket?.id ?? null) as S3Bucket.S3BucketId | null,
 		transcriptionDisabled,
+		isOwnerPro,
 	};
 }
 
@@ -280,4 +306,89 @@ async function queueAiGeneration(
 	"use step";
 
 	await startAiGeneration(videoId as Video.VideoId, userId);
+}
+
+async function markEnhancedAudioProcessing(videoId: string): Promise<void> {
+	"use step";
+
+	const [video] = await db()
+		.select({ metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+
+	const currentMetadata = (video?.metadata as VideoMetadata) || {};
+
+	await db()
+		.update(videos)
+		.set({
+			metadata: {
+				...currentMetadata,
+				enhancedAudioStatus: "PROCESSING",
+			},
+		})
+		.where(eq(videos.id, videoId as Video.VideoId));
+}
+
+async function enhanceAndSaveAudio(
+	videoId: string,
+	userId: string,
+	audioUrl: string,
+	bucketId: S3Bucket.S3BucketId | null,
+): Promise<void> {
+	"use step";
+
+	try {
+		const enhancedBuffer = await enhanceAudioFromUrl(audioUrl);
+
+		const [bucket] = await S3Buckets.getBucketAccess(
+			Option.fromNullable(bucketId),
+		).pipe(runPromise);
+
+		const enhancedAudioKey = `${userId}/${videoId}/enhanced-audio.${ENHANCED_AUDIO_EXTENSION}`;
+
+		await bucket
+			.putObject(enhancedAudioKey, enhancedBuffer, {
+				contentType: ENHANCED_AUDIO_CONTENT_TYPE,
+			})
+			.pipe(runPromise);
+
+		const [video] = await db()
+			.select({ metadata: videos.metadata })
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+
+		const currentMetadata = (video?.metadata as VideoMetadata) || {};
+
+		await db()
+			.update(videos)
+			.set({
+				metadata: {
+					...currentMetadata,
+					enhancedAudioStatus: "COMPLETE",
+				},
+			})
+			.where(eq(videos.id, videoId as Video.VideoId));
+	} catch (error) {
+		console.error(
+			`[transcribe] Audio enhancement failed for video ${videoId}:`,
+			error,
+		);
+
+		const [video] = await db()
+			.select({ metadata: videos.metadata })
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+
+		const currentMetadata = (video?.metadata as VideoMetadata) || {};
+
+		await db()
+			.update(videos)
+			.set({
+				metadata: {
+					...currentMetadata,
+					enhancedAudioStatus: "ERROR",
+				},
+			})
+			.where(eq(videos.id, videoId as Video.VideoId));
+	}
 }

@@ -1,4 +1,5 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -7,6 +8,7 @@ import {
 	forwardRef,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -169,7 +171,6 @@ export const ShareVideo = forwardRef<
 
 		if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
-			// Start with CORS enabled for MP4 sources, CapVideoPlayer will disable if needed
 			enableCrossOrigin = true;
 		} else if (
 			NODE_ENV === "development" ||
@@ -182,6 +183,16 @@ export const ShareVideo = forwardRef<
 		} else {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
+
+		const videoMetadata = data.metadata as VideoMetadata | null;
+		const enhancedAudioStatus = videoMetadata?.enhancedAudioStatus ?? null;
+
+		const enhancedAudioUrl = useMemo(() => {
+			if (enhancedAudioStatus === "COMPLETE" && data.owner.isPro) {
+				return `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&fileType=enhanced-audio`;
+			}
+			return null;
+		}, [enhancedAudioStatus, data.owner.isPro, data.owner.id, data.id]);
 
 		return (
 			<>
@@ -208,6 +219,8 @@ export const ShareVideo = forwardRef<
 								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
+							enhancedAudioUrl={enhancedAudioUrl}
+							enhancedAudioStatus={enhancedAudioStatus}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -219,6 +232,8 @@ export const ShareVideo = forwardRef<
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
+							enhancedAudioUrl={enhancedAudioUrl}
+							enhancedAudioStatus={enhancedAudioStatus}
 						/>
 					)}
 				</div>

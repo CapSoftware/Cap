@@ -1427,10 +1427,10 @@ function Page() {
 		}
 
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+			setCamera.mutate({ model: { ModelID: rawOptions.cameraID.ModelID } });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
-		else setCamera.mutate(null);
+			setCamera.mutate({ model: { DeviceID: rawOptions.cameraID.DeviceID } });
+		else setCamera.mutate({ model: null });
 	});
 
 	const license = createLicenseQuery();
@@ -1444,9 +1444,10 @@ function Page() {
 				options={devices.cameras}
 				value={options.camera() ?? null}
 				onChange={(c) => {
-					if (!c) setCamera.mutate(null);
-					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-					else setCamera.mutate({ DeviceID: c.device_id });
+					if (!c) setCamera.mutate({ model: null });
+					else if (c.model_id)
+						setCamera.mutate({ model: { ModelID: c.model_id } });
+					else setCamera.mutate({ model: { DeviceID: c.device_id } });
 				}}
 				permissions={devices.permissions}
 				onOpen={() => {
@@ -1886,10 +1887,10 @@ function Page() {
 									selectedTarget={options.camera() ?? null}
 									isLoading={devices.isPending}
 									onSelect={(c) => {
-										if (!c) setCamera.mutate(null);
+										if (!c) setCamera.mutate({ model: null });
 										else if (c.model_id)
-											setCamera.mutate({ ModelID: c.model_id });
-										else setCamera.mutate({ DeviceID: c.device_id });
+											setCamera.mutate({ model: { ModelID: c.model_id } });
+										else setCamera.mutate({ model: { DeviceID: c.device_id } });
 										setCameraMenuOpen(false);
 									}}
 									disabled={isRecording()}

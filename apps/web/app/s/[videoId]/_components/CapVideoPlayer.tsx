@@ -18,6 +18,7 @@ import {
 	MediaPlayerCaptions,
 	MediaPlayerControls,
 	MediaPlayerControlsOverlay,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerError,
 	MediaPlayerFullscreen,
 	MediaPlayerLoading,
@@ -48,6 +49,8 @@ function getProgressStatusText(
 	}
 }
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
 interface Props {
 	videoSrc: string;
 	videoId: Video.VideoId;
@@ -69,6 +72,8 @@ interface Props {
 		authorName?: string | null;
 	}>;
 	onSeek?: (time: number) => void;
+	enhancedAudioUrl?: string | null;
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
 }
 
 export function CapVideoPlayer({
@@ -86,6 +91,8 @@ export function CapVideoPlayer({
 	disableCommentStamps = false,
 	disableReactionStamps = false,
 	onSeek,
+	enhancedAudioUrl,
+	enhancedAudioStatus,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -103,6 +110,80 @@ export function CapVideoPlayer({
 	const isRetryingRef = useRef(false);
 	const maxRetries = 3;
 	const [duration, setDuration] = useState(0);
+
+	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(false);
+	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
+
+	const syncEnhancedAudio = useCallback(() => {
+		if (!enhancedAudioRef.current || !videoRef.current) return;
+		enhancedAudioRef.current.currentTime = videoRef.current.currentTime;
+		enhancedAudioRef.current.playbackRate = videoRef.current.playbackRate;
+	}, [videoRef]);
+
+	useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const handlePlay = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+				audio.play().catch(() => {});
+			}
+		};
+
+		const handlePause = () => {
+			audio.pause();
+		};
+
+		const handleSeeked = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+			}
+		};
+
+		const handleRateChange = () => {
+			if (enhancedAudioEnabled) {
+				audio.playbackRate = video.playbackRate;
+			}
+		};
+
+		const handleVolumeChange = () => {
+			audio.volume = video.volume;
+		};
+
+		video.addEventListener("play", handlePlay);
+		video.addEventListener("pause", handlePause);
+		video.addEventListener("seeked", handleSeeked);
+		video.addEventListener("ratechange", handleRateChange);
+		video.addEventListener("volumechange", handleVolumeChange);
+
+		return () => {
+			video.removeEventListener("play", handlePlay);
+			video.removeEventListener("pause", handlePause);
+			video.removeEventListener("seeked", handleSeeked);
+			video.removeEventListener("ratechange", handleRateChange);
+			video.removeEventListener("volumechange", handleVolumeChange);
+		};
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef]);
+
+	useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		if (enhancedAudioEnabled) {
+			video.muted = true;
+			audio.volume = video.volume;
+			syncEnhancedAudio();
+			if (!video.paused) {
+				audio.play().catch(() => {});
+			}
+		} else {
+			video.muted = false;
+			audio.pause();
+		}
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef]);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -750,12 +831,31 @@ export function CapVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerSettings />
+						<MediaPlayerEnhancedAudio
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
+						<MediaPlayerSettings
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />
 					</div>
 				</div>
 			</MediaPlayerControls>
+			{enhancedAudioUrl && (
+				<audio
+					ref={enhancedAudioRef}
+					src={enhancedAudioUrl}
+					preload="auto"
+					className="hidden"
+				>
+					<track kind="captions" />
+				</audio>
+			)}
 		</MediaPlayer>
 	);
 }

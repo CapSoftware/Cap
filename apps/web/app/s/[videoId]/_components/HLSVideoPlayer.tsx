@@ -9,7 +9,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useUploadProgress } from "./ProgressCircle";
 
 const { circumference } = getProgressCircleConfig();
@@ -32,6 +32,7 @@ import {
 	MediaPlayerCaptions,
 	MediaPlayerControls,
 	MediaPlayerControlsOverlay,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerError,
 	MediaPlayerFullscreen,
 	MediaPlayerLoading,
@@ -47,6 +48,8 @@ import {
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
 interface Props {
 	videoSrc: string;
 	videoId: Video.VideoId;
@@ -57,6 +60,8 @@ interface Props {
 	disableCaptions?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
+	enhancedAudioUrl?: string | null;
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
 }
 
 export function HLSVideoPlayer({
@@ -69,6 +74,8 @@ export function HLSVideoPlayer({
 	autoplay = false,
 	hasActiveUpload,
 	disableCaptions,
+	enhancedAudioUrl,
+	enhancedAudioStatus,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -77,6 +84,80 @@ export function HLSVideoPlayer({
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+
+	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(false);
+	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
+
+	const syncEnhancedAudio = useCallback(() => {
+		if (!enhancedAudioRef.current || !videoRef.current) return;
+		enhancedAudioRef.current.currentTime = videoRef.current.currentTime;
+		enhancedAudioRef.current.playbackRate = videoRef.current.playbackRate;
+	}, [videoRef]);
+
+	useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const handlePlay = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+				audio.play().catch(() => {});
+			}
+		};
+
+		const handlePause = () => {
+			audio.pause();
+		};
+
+		const handleSeeked = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+			}
+		};
+
+		const handleRateChange = () => {
+			if (enhancedAudioEnabled) {
+				audio.playbackRate = video.playbackRate;
+			}
+		};
+
+		const handleVolumeChange = () => {
+			audio.volume = video.volume;
+		};
+
+		video.addEventListener("play", handlePlay);
+		video.addEventListener("pause", handlePause);
+		video.addEventListener("seeked", handleSeeked);
+		video.addEventListener("ratechange", handleRateChange);
+		video.addEventListener("volumechange", handleVolumeChange);
+
+		return () => {
+			video.removeEventListener("play", handlePlay);
+			video.removeEventListener("pause", handlePause);
+			video.removeEventListener("seeked", handleSeeked);
+			video.removeEventListener("ratechange", handleRateChange);
+			video.removeEventListener("volumechange", handleVolumeChange);
+		};
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef]);
+
+	useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		if (enhancedAudioEnabled) {
+			video.muted = true;
+			audio.volume = video.volume;
+			syncEnhancedAudio();
+			if (!video.paused) {
+				audio.play().catch(() => {});
+			}
+		} else {
+			video.muted = false;
+			audio.pause();
+		}
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -468,12 +549,31 @@ export function HLSVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerSettings />
+						<MediaPlayerEnhancedAudio
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
+						<MediaPlayerSettings
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />
 					</div>
 				</div>
 			</MediaPlayerControls>
+			{enhancedAudioUrl && (
+				<audio
+					ref={enhancedAudioRef}
+					src={enhancedAudioUrl}
+					preload="auto"
+					className="hidden"
+				>
+					<track kind="captions" />
+				</audio>
+			)}
 		</MediaPlayer>
 	);
 }

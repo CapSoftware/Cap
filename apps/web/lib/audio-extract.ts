@@ -7,7 +7,7 @@ import ffmpegStaticPath from "ffmpeg-static";
 
 let cachedFfmpegPath: string | null = null;
 
-function getFfmpegPath(): string {
+export function getFfmpegPath(): string {
 	if (cachedFfmpegPath) {
 		return cachedFfmpegPath;
 	}
@@ -138,6 +138,55 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 				);
 			}
 		});
+	});
+}
+
+export async function convertWavToMp3(wavBuffer: Buffer): Promise<Buffer> {
+	const ffmpeg = getFfmpegPath();
+	const ffmpegArgs = [
+		"-i",
+		"pipe:0",
+		"-acodec",
+		"libmp3lame",
+		"-b:a",
+		"128k",
+		"-f",
+		"mp3",
+		"-pipe:1",
+	];
+
+	return new Promise((resolve, reject) => {
+		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+
+		const chunks: Buffer[] = [];
+		let stderr = "";
+
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			chunks.push(chunk);
+		});
+
+		proc.stderr?.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on("error", (err: Error) => {
+			reject(new Error(`WAV to MP3 conversion failed: ${err.message}`));
+		});
+
+		proc.on("close", (code: number | null) => {
+			if (code === 0) {
+				resolve(Buffer.concat(chunks));
+			} else {
+				reject(
+					new Error(
+						`WAV to MP3 conversion failed with code ${code}: ${stderr}`,
+					),
+				);
+			}
+		});
+
+		proc.stdin?.write(wavBuffer);
+		proc.stdin?.end();
 	});
 }
 

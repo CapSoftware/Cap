@@ -31,6 +31,7 @@ import {
 	RewindIcon,
 	RotateCcwIcon,
 	SettingsIcon,
+	SparklesIcon,
 	SubtitlesIcon,
 	Volume1Icon,
 	Volume2Icon,
@@ -2785,6 +2786,90 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
 	);
 }
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
+interface MediaPlayerEnhancedAudioProps
+	extends React.ComponentProps<typeof Button> {
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	enhancedAudioEnabled?: boolean;
+	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+}
+
+function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
+	const {
+		children,
+		className,
+		disabled,
+		enhancedAudioStatus,
+		enhancedAudioEnabled,
+		setEnhancedAudioEnabled,
+		...enhancedAudioProps
+	} = props;
+
+	const context = useMediaPlayerContext("MediaPlayerEnhancedAudio");
+
+	const isProcessing = enhancedAudioStatus === "PROCESSING";
+	const isComplete = enhancedAudioStatus === "COMPLETE";
+	const isDisabled = disabled || context.disabled || !isComplete;
+
+	const onEnhancedAudioToggle = React.useCallback(() => {
+		if (isComplete) {
+			setEnhancedAudioEnabled?.(!enhancedAudioEnabled);
+		}
+	}, [enhancedAudioEnabled, setEnhancedAudioEnabled, isComplete]);
+
+	if (
+		!enhancedAudioStatus ||
+		enhancedAudioStatus === "ERROR" ||
+		enhancedAudioStatus === "SKIPPED"
+	) {
+		return null;
+	}
+
+	const tooltipText = isProcessing
+		? "Enhancing audio..."
+		: enhancedAudioEnabled
+			? "Enhanced audio on"
+			: "Enhance audio";
+
+	return (
+		<MediaPlayerTooltip tooltip={tooltipText}>
+			<PlayerButton
+				type="button"
+				aria-controls={context.mediaId}
+				aria-label={
+					isProcessing
+						? "Audio enhancement in progress"
+						: enhancedAudioEnabled
+							? "Disable enhanced audio"
+							: "Enable enhanced audio"
+				}
+				aria-pressed={enhancedAudioEnabled}
+				data-disabled={isDisabled ? "" : undefined}
+				data-slot="media-player-enhanced-audio"
+				data-state={enhancedAudioEnabled ? "on" : "off"}
+				disabled={isDisabled}
+				{...enhancedAudioProps}
+				variant="ghost"
+				size="icon"
+				className={cn(
+					"size-8",
+					enhancedAudioEnabled && "text-blue-500",
+					className,
+				)}
+				onClick={onEnhancedAudioToggle}
+			>
+				{children ??
+					(isProcessing ? (
+						<Loader2Icon className="animate-spin" />
+					) : (
+						<SparklesIcon />
+					))}
+			</PlayerButton>
+		</MediaPlayerTooltip>
+	);
+}
+
 interface MediaPlayerDownloadProps
 	extends React.ComponentProps<typeof Button> {}
 
@@ -2836,7 +2921,11 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	);
 }
 
-interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {}
+interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	enhancedAudioEnabled?: boolean;
+	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+}
 
 function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 	const {
@@ -2849,6 +2938,9 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		modal = false,
 		className,
 		disabled,
+		enhancedAudioStatus,
+		enhancedAudioEnabled,
+		setEnhancedAudioEnabled,
 		...settingsProps
 	} = props;
 
@@ -2997,6 +3089,18 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						))}
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
+				{enhancedAudioStatus === "COMPLETE" && (
+					<DropdownMenuItem
+						className="justify-between"
+						onSelect={() => setEnhancedAudioEnabled?.(!enhancedAudioEnabled)}
+					>
+						<span className="flex items-center gap-2">
+							<SparklesIcon className="size-4" />
+							Enhanced Audio
+						</span>
+						{enhancedAudioEnabled && <CheckIcon />}
+					</DropdownMenuItem>
+				)}
 				{context.isVideo && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
@@ -3151,11 +3255,11 @@ export {
 	MediaPlayerFullscreen,
 	MediaPlayerPiP,
 	MediaPlayerCaptions,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerDownload,
 	MediaPlayerSettings,
 	MediaPlayerPortal,
 	MediaPlayerTooltip,
-	//
 	MediaPlayerRoot as Root,
 	MediaPlayerVideo as Video,
 	MediaPlayerAudio as Audio,
@@ -3175,11 +3279,11 @@ export {
 	MediaPlayerFullscreen as Fullscreen,
 	MediaPlayerPiP as PiP,
 	MediaPlayerCaptions as Captions,
+	MediaPlayerEnhancedAudio as EnhancedAudio,
 	MediaPlayerDownload as Download,
 	MediaPlayerSettings as Settings,
 	MediaPlayerPortal as Portal,
 	MediaPlayerTooltip as Tooltip,
-	//
 	useMediaSelector as useMediaPlayer,
 	useStoreSelector as useMediaPlayerStore,
 };
