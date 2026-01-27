@@ -11,7 +11,13 @@ use ffmpeg::{
 use kameo::actor::ActorRef;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{sync::Arc, thread};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+};
 use tauri::{LogicalPosition, LogicalSize, PhysicalSize, WebviewWindow};
 use tokio::{
     runtime::Runtime,
@@ -66,17 +72,22 @@ fn clamp_size(size: f32) -> f32 {
 pub struct CameraPreviewManager {
     store: Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String>,
     preview: Option<InitializedCameraPreview>,
+    preview_session_id: Arc<AtomicU64>,
 }
 
 impl CameraPreviewManager {
-    /// Create a new camera preview manager.
     pub fn new(app: &tauri::AppHandle) -> Self {
         Self {
             store: tauri_plugin_store::StoreBuilder::new(app, "cameraPreview")
                 .build()
                 .map_err(|err| format!("Error initializing camera preview store: {err}")),
             preview: None,
+            preview_session_id: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn session_id_handle(&self) -> Arc<AtomicU64> {
+        self.preview_session_id.clone()
     }
 
     /// Get the current state of the camera window.
@@ -126,12 +137,24 @@ impl CameraPreviewManager {
         }
     }
 
-    /// Initialize the camera preview for a specific Tauri window
     pub async fn init_window(
         &mut self,
         window: WebviewWindow,
         actor: ActorRef<CameraFeed>,
     ) -> anyhow::Result<()> {
+        if let Some(old_preview) = self.preview.take() {
+            info!("Shutting down previous camera preview before initializing new one");
+            old_preview
+                .reconfigure
+                .send(ReconfigureEvent::Shutdown)
+                .map_err(|err| error!("Error sending shutdown to old preview: {err}"))
+                .ok();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let session_id = self.preview_session_id.fetch_add(1, Ordering::AcqRel) + 1;
+
         let (camera_tx, camera_rx) = flume::bounded(4);
 
         actor
@@ -158,12 +181,38 @@ impl CameraPreviewManager {
             info!("DONE");
         });
 
-        self.preview = Some(InitializedCameraPreview { reconfigure });
+        self.preview = Some(InitializedCameraPreview {
+            reconfigure,
+            session_id,
+        });
 
         Ok(())
     }
 
-    /// Called by Tauri's event loop in response to a window destroy event.
+    pub fn on_window_close_for_session(&mut self, expected_session_id: u64) {
+        if let Some(preview) = &self.preview {
+            if preview.session_id != expected_session_id {
+                info!(
+                    "Skipping camera preview close: session mismatch (expected {}, current {})",
+                    expected_session_id, preview.session_id
+                );
+                return;
+            }
+        }
+
+        if let Some(preview) = self.preview.take() {
+            info!(
+                "Camera preview window closed (session {}).",
+                preview.session_id
+            );
+            preview
+                .reconfigure
+                .send(ReconfigureEvent::Shutdown)
+                .map_err(|err| error!("Error sending camera preview shutdown event: {err}"))
+                .ok();
+        }
+    }
+
     pub fn on_window_close(&mut self) {
         if let Some(preview) = self.preview.take() {
             info!("Camera preview window closed.");
@@ -185,6 +234,7 @@ enum ReconfigureEvent {
 
 struct InitializedCameraPreview {
     reconfigure: broadcast::Sender<ReconfigureEvent>,
+    session_id: u64,
 }
 
 impl InitializedCameraPreview {
@@ -619,12 +669,16 @@ impl Renderer {
                     trace!("CameraPreview/ReconfigureEvent.WindowResized({width}x{height})");
                     self.reconfigure_gpu_surface(width, height);
                 }
-                Err(ReconfigureEvent::Shutdown) => return,
+                Err(ReconfigureEvent::Shutdown) => {
+                    info!("Camera preview shutdown requested. Cleaning up...");
+                    self.device.destroy();
+                    return;
+                }
             }
         }
 
-        info!("Camera feed completed. Closing preview window...");
-        window.close().ok();
+        info!("Camera feed completed. Hiding preview window...");
+        window.hide().ok();
         self.device.destroy();
     }
 
