@@ -11,6 +11,7 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, atomic::AtomicU32},
+    time::Duration,
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -250,6 +251,29 @@ impl CursorMonitorInfo {
 
         Self::get()
     }
+}
+
+fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
+    let state = app.state::<ArcLock<crate::App>>();
+    let camera_state = if let Ok(guard) = state.try_read() {
+        guard.camera_preview.get_state().ok().unwrap_or_default()
+    } else {
+        crate::camera::CameraPreviewState::default()
+    };
+
+    let toolbar_height = 56.0;
+    let size = camera_state.size as f64;
+    let is_full = camera_state.shape == crate::camera::CameraPreviewShape::Full;
+    let aspect_ratio = 16.0 / 9.0;
+
+    let window_width = if is_full { size * aspect_ratio } else { size };
+    let window_height = size + toolbar_height;
+
+    let monitor_info = CursorMonitorInfo::get();
+    let (pos_x, pos_y) = monitor_info.center_position(window_width, window_height);
+
+    let _ = window.set_size(tauri::LogicalSize::new(window_width, window_height));
+    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 }
 
 fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
@@ -514,7 +538,7 @@ impl ShowCapWindow {
             }
         }
 
-        if let Self::Camera { .. } = self {
+        if let Self::Camera { centered } = self {
             #[cfg(target_os = "macos")]
             {
                 let panel_manager = app.state::<PanelManager>();
@@ -605,6 +629,12 @@ impl ShowCapWindow {
                             .and_then(|v| v.map(|v| v.enable_native_camera_preview))
                             .unwrap_or_default();
 
+                        let shutdown_preview = if !enable_native_camera_preview {
+                            app_state.camera_preview.begin_shutdown()
+                        } else {
+                            None
+                        };
+
                         if enable_native_camera_preview {
                             let camera_feed = app_state.camera_feed.clone();
                             if let Err(err) = app_state
@@ -620,12 +650,26 @@ impl ShowCapWindow {
 
                         drop(app_state);
 
+                        if let Some(rx) = shutdown_preview {
+                            let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
+                        }
+
                         let (show_tx, show_rx) = tokio::sync::oneshot::channel();
                         app.run_on_main_thread({
                             let window = window.clone();
                             move || {
                                 use crate::panel_manager::try_to_panel;
 
+                                // IMPORTANT: We intentionally use window.show() + set_focus() here
+                                // instead of panel.order_front_regardless().
+                                //
+                                // order_front_regardless() was found to cause a crash after ~4-5
+                                // camera toggle cycles due to macOS internal state accumulation.
+                                // The crash manifested as a hard crash in the Metal/CAMetalLayer
+                                // subsystem, not in our Rust code.
+                                //
+                                // Using standard Tauri window APIs avoids this macOS-specific issue
+                                // while still properly showing and focusing the camera preview window.
                                 let _ = window.show();
                                 let _ = window.set_focus();
                                 let _ = show_tx.send(true);
@@ -636,6 +680,9 @@ impl ShowCapWindow {
                         let show_result = show_rx.await.unwrap_or(false);
 
                         if show_result {
+                            if *centered {
+                                center_camera_window(app, &window);
+                            }
                             return Ok(window);
                         } else {
                             warn!("Camera panel show failed, will recreate window");
@@ -662,6 +709,12 @@ impl ShowCapWindow {
                         .and_then(|v| v.map(|v| v.enable_native_camera_preview))
                         .unwrap_or_default();
 
+                    let shutdown_preview = if !enable_native_camera_preview {
+                        app_state.camera_preview.begin_shutdown()
+                    } else {
+                        None
+                    };
+
                     if enable_native_camera_preview && !app_state.camera_preview.is_initialized() {
                         let camera_feed = app_state.camera_feed.clone();
                         if let Err(err) = app_state
@@ -677,6 +730,13 @@ impl ShowCapWindow {
 
                     drop(app_state);
 
+                    if let Some(rx) = shutdown_preview {
+                        let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
+                    }
+
+                    if *centered {
+                        center_camera_window(app, &window);
+                    }
                     window.show().ok();
                     window.set_focus().ok();
                     return Ok(window);
@@ -1252,10 +1312,13 @@ impl ShowCapWindow {
                     let panel_manager = app.state::<PanelManager>();
                     let state = panel_manager.get_state(PanelWindowType::Camera).await;
                     warn!("Camera window creation blocked, current state: {:?}", state);
-                    if state == PanelState::Ready {
-                        if let Some(window) = CapWindowId::Camera.get(app) {
-                            return Ok(window);
+                    if state == PanelState::Ready
+                        && let Some(window) = CapWindowId::Camera.get(app)
+                    {
+                        if *centered {
+                            center_camera_window(app, &window);
                         }
+                        return Ok(window);
                     }
                     panel_manager
                         .wait_for_state(
@@ -1265,6 +1328,9 @@ impl ShowCapWindow {
                         )
                         .await;
                     if let Some(window) = CapWindowId::Camera.get(app) {
+                        if *centered {
+                            center_camera_window(app, &window);
+                        }
                         return Ok(window);
                     }
                     return Err(tauri::Error::WindowNotFound);
@@ -1278,6 +1344,13 @@ impl ShowCapWindow {
                 {
                     let state = app.state::<ArcLock<App>>();
                     let mut state = state.write().await;
+
+                    let shutdown_preview =
+                        if !enable_native_camera_preview && state.camera_preview.is_initialized() {
+                            state.camera_preview.begin_shutdown()
+                        } else {
+                            None
+                        };
 
                     if enable_native_camera_preview && state.camera_preview.is_initialized() {
                         warn!("Detected existing camera preview, will reuse it");
@@ -1468,6 +1541,12 @@ impl ShowCapWindow {
                     #[cfg(not(target_os = "macos"))]
                     {
                         window.show().ok();
+                    }
+
+                    drop(state);
+
+                    if let Some(rx) = shutdown_preview {
+                        let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
                     }
 
                     window
