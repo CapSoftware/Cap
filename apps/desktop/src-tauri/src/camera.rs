@@ -28,11 +28,8 @@ use tokio::{
 use tracing::{error, info, trace, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
-static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
+static TOOLBAR_HEIGHT: f32 = 56.0;
 
-// We scale up the GPU surfaces resolution by this amount from the OS window's size.
-// This smooths out the curved edges of the window.
-// Basically poor man's MSAA
 static GPU_SURFACE_SCALE: u32 = 4;
 
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
@@ -73,6 +70,7 @@ pub struct CameraPreviewManager {
     store: Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String>,
     preview: Option<InitializedCameraPreview>,
     preview_session_id: Arc<AtomicU64>,
+    wgpu_instance: wgpu::Instance,
 }
 
 impl CameraPreviewManager {
@@ -83,6 +81,7 @@ impl CameraPreviewManager {
                 .map_err(|err| format!("Error initializing camera preview store: {err}")),
             preview: None,
             preview_session_id: Arc::new(AtomicU64::new(0)),
+            wgpu_instance: wgpu::Instance::default(),
         }
     }
 
@@ -90,7 +89,6 @@ impl CameraPreviewManager {
         self.preview_session_id.clone()
     }
 
-    /// Get the current state of the camera window.
     pub fn get_state(&self) -> anyhow::Result<CameraPreviewState> {
         let mut state: CameraPreviewState = self
             .store
@@ -104,7 +102,6 @@ impl CameraPreviewManager {
         Ok(state)
     }
 
-    /// Save the current state of the camera window.
     pub fn set_state(&self, mut state: CameraPreviewState) -> anyhow::Result<()> {
         state.size = clamp_size(state.size);
 
@@ -137,20 +134,105 @@ impl CameraPreviewManager {
         }
     }
 
+    pub fn pause(&mut self) {
+        if let Some(preview) = &mut self.preview {
+            if !preview.is_paused {
+                preview.is_paused = true;
+                preview
+                    .reconfigure
+                    .send(ReconfigureEvent::Pause)
+                    .map_err(|err| error!("Error sending camera preview pause event: {err}"))
+                    .ok();
+            }
+        }
+    }
+
+    pub fn resume(&mut self, window: &WebviewWindow) {
+        if let Some(preview) = &mut self.preview {
+            if preview.is_paused {
+                preview.is_paused = false;
+                preview
+                    .reconfigure
+                    .send(ReconfigureEvent::Resume)
+                    .map_err(|err| error!("Error sending camera preview resume event: {err}"))
+                    .ok();
+                window
+                    .run_on_main_thread({
+                        let window = window.clone();
+                        move || {
+                            let _ = window.show();
+                        }
+                    })
+                    .ok();
+            }
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.preview.as_ref().is_some_and(|p| p.is_paused)
+    }
+
+    pub fn begin_shutdown_for_session(
+        &mut self,
+        expected_session_id: u64,
+    ) -> Option<oneshot::Receiver<()>> {
+        if let Some(preview) = &self.preview {
+            if preview.session_id != expected_session_id {
+                info!(
+                    "Skipping camera preview close: session mismatch (expected {}, current {})",
+                    expected_session_id, preview.session_id
+                );
+                return None;
+            }
+        }
+
+        self.begin_shutdown()
+    }
+
+    pub fn begin_shutdown(&mut self) -> Option<oneshot::Receiver<()>> {
+        let preview = self.preview.take()?;
+        info!(
+            "Camera preview shutdown requested (session {}).",
+            preview.session_id
+        );
+        preview
+            .reconfigure
+            .send(ReconfigureEvent::Shutdown)
+            .map_err(|err| error!("Error sending camera preview shutdown event: {err}"))
+            .ok();
+        Some(preview.shutdown_complete)
+    }
+
     pub async fn init_window(
         &mut self,
         window: WebviewWindow,
         actor: ActorRef<CameraFeed>,
     ) -> anyhow::Result<()> {
-        if let Some(old_preview) = self.preview.take() {
-            info!("Shutting down previous camera preview before initializing new one");
-            old_preview
-                .reconfigure
-                .send(ReconfigureEvent::Shutdown)
-                .map_err(|err| error!("Error sending shutdown to old preview: {err}"))
+        if let Some(preview) = &mut self.preview {
+            actor
+                .ask(feeds::camera::AddSender(preview.camera_tx.clone()))
+                .await
+                .context("Error re-attaching camera feed consumer")?;
+
+            if preview.is_paused {
+                preview.is_paused = false;
+                preview
+                    .reconfigure
+                    .send(ReconfigureEvent::Resume)
+                    .map_err(|err| error!("Error sending camera preview resume event: {err}"))
+                    .ok();
+            }
+
+            window
+                .run_on_main_thread({
+                    let window = window.clone();
+                    move || {
+                        let _ = window.show();
+                    }
+                })
                 .ok();
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            return Ok(());
         }
 
         let session_id = self.preview_session_id.fetch_add(1, Ordering::AcqRel) + 1;
@@ -158,7 +240,7 @@ impl CameraPreviewManager {
         let (camera_tx, camera_rx) = flume::bounded(4);
 
         actor
-            .ask(feeds::camera::AddSender(camera_tx))
+            .ask(feeds::camera::AddSender(camera_tx.clone()))
             .await
             .context("Error attaching camera feed consumer")?;
 
@@ -168,60 +250,61 @@ impl CameraPreviewManager {
             .unwrap_or_default();
 
         let (reconfigure, reconfigure_rx) = broadcast::channel(1);
-        let mut renderer =
-            InitializedCameraPreview::init_wgpu(window.clone(), &default_state).await?;
-        window.show().ok();
+        let mut renderer = InitializedCameraPreview::init_wgpu(
+            window.clone(),
+            &default_state,
+            self.wgpu_instance.clone(),
+        )
+        .await?;
+        window
+            .run_on_main_thread({
+                let window = window.clone();
+                move || {
+                    let _ = window.show();
+                }
+            })
+            .ok();
 
         let rt = Runtime::new().expect("Failed to get Tokio runtime!");
-        thread::spawn(move || {
-            LocalSet::new().block_on(
-                &rt,
-                renderer.run(window, default_state, reconfigure_rx, camera_rx),
-            );
-            info!("DONE");
-        });
+        let (shutdown_complete_tx, shutdown_complete_rx) = oneshot::channel();
 
         self.preview = Some(InitializedCameraPreview {
             reconfigure,
             session_id,
+            shutdown_complete: shutdown_complete_rx,
+            camera_tx,
+            is_paused: false,
+        });
+
+        thread::spawn(move || {
+            LocalSet::new().block_on(
+                &rt,
+                renderer.run(window.clone(), default_state, reconfigure_rx, camera_rx),
+            );
+
+            let (drop_tx, drop_rx) = oneshot::channel();
+            window
+                .run_on_main_thread(move || {
+                    drop(renderer);
+                    let _ = drop_tx.send(());
+                })
+                .ok();
+
+            let _ = rt.block_on(drop_rx);
+
+            shutdown_complete_tx.send(()).ok();
+            info!("DONE");
         });
 
         Ok(())
     }
 
     pub fn on_window_close_for_session(&mut self, expected_session_id: u64) {
-        if let Some(preview) = &self.preview {
-            if preview.session_id != expected_session_id {
-                info!(
-                    "Skipping camera preview close: session mismatch (expected {}, current {})",
-                    expected_session_id, preview.session_id
-                );
-                return;
-            }
-        }
-
-        if let Some(preview) = self.preview.take() {
-            info!(
-                "Camera preview window closed (session {}).",
-                preview.session_id
-            );
-            preview
-                .reconfigure
-                .send(ReconfigureEvent::Shutdown)
-                .map_err(|err| error!("Error sending camera preview shutdown event: {err}"))
-                .ok();
-        }
+        let _ = self.begin_shutdown_for_session(expected_session_id);
     }
 
     pub fn on_window_close(&mut self) {
-        if let Some(preview) = self.preview.take() {
-            info!("Camera preview window closed.");
-            preview
-                .reconfigure
-                .send(ReconfigureEvent::Shutdown)
-                .map_err(|err| error!("Error sending camera preview shutdown event: {err}"))
-                .ok();
-        }
+        let _ = self.begin_shutdown();
     }
 }
 
@@ -229,18 +312,24 @@ impl CameraPreviewManager {
 enum ReconfigureEvent {
     State(CameraPreviewState),
     WindowResized { width: u32, height: u32 },
+    Pause,
+    Resume,
     Shutdown,
 }
 
 struct InitializedCameraPreview {
     reconfigure: broadcast::Sender<ReconfigureEvent>,
     session_id: u64,
+    shutdown_complete: oneshot::Receiver<()>,
+    camera_tx: flume::Sender<FFmpegVideoFrame>,
+    is_paused: bool,
 }
 
 impl InitializedCameraPreview {
     async fn init_wgpu(
         window: WebviewWindow,
         default_state: &CameraPreviewState,
+        instance: wgpu::Instance,
     ) -> anyhow::Result<Renderer> {
         let aspect = if default_state.shape == CameraPreviewShape::Full {
             16.0 / 9.0
@@ -249,23 +338,24 @@ impl InitializedCameraPreview {
         };
 
         let size = resize_window(&window, default_state, aspect, false)
+            .await
             .context("Error resizing Tauri window")?;
 
         let (tx, rx) = oneshot::channel();
         window
             .run_on_main_thread({
                 let window = window.clone();
+                let instance = instance.clone();
                 move || {
-                    let instance = wgpu::Instance::default();
                     let surface = instance.create_surface(window.clone());
-                    tx.send((instance, surface)).ok();
+                    tx.send(surface).ok();
                 }
             })
             .with_context(|| "Failed to initialize wgpu instance")?;
 
-        let (instance, surface) = rx
+        let surface = rx
             .await
-            .with_context(|| "Failed to receive initialized wgpu instance and surface")?;
+            .with_context(|| "Failed to receive initialized wgpu surface")?;
         let surface = surface.with_context(|| "Failed to initialize wgpu surface")?;
 
         let adapter = instance
@@ -312,7 +402,7 @@ impl InitializedCameraPreview {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, // Add FRAGMENT here
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -467,7 +557,7 @@ impl InitializedCameraPreview {
         });
 
         let mut renderer = Renderer {
-            surface,
+            surface: Some(surface),
             surface_config,
             render_pipeline,
             device,
@@ -483,24 +573,22 @@ impl InitializedCameraPreview {
         };
 
         renderer.update_state_uniforms(default_state);
-        renderer.sync_ratio_uniform_and_resize_window_to_it(&window, default_state, aspect);
+        renderer
+            .sync_ratio_uniform_and_resize_window_to_it(&window, default_state, aspect)
+            .await;
         renderer.reconfigure_gpu_surface(size.0, size.1);
 
-        // We initialize and render a blank color fallback.
-        // This is shown until the camera initializes and the first frame is rendered.
-        if let Ok(surface) = renderer
-            .surface
-            .get_current_texture()
-            .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
-        {
+        let initial_surface = renderer.surface.as_ref().and_then(|s| {
+            s.get_current_texture()
+                .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
+                .ok()
+        });
+        if let Some(surface) = initial_surface {
             let output_width = 5;
             let output_height = 5;
 
-            let (buffer, stride) = render_solid_frame(
-                [0x11, 0x11, 0x11, 0xFF], // #111111
-                output_width,
-                output_height,
-            );
+            let (buffer, stride) =
+                render_solid_frame([0x11, 0x11, 0x11, 0xFF], output_width, output_height);
 
             PreparedTexture::init(
                 renderer.device.clone(),
@@ -521,7 +609,7 @@ impl InitializedCameraPreview {
 }
 
 struct Renderer {
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
     surface_config: wgpu::SurfaceConfiguration,
     render_pipeline: wgpu::RenderPipeline,
     device: wgpu::Device,
@@ -561,44 +649,105 @@ impl Renderer {
         let start_time = Instant::now();
         let startup_timeout = Duration::from_secs(5);
         let mut received_first_frame = false;
+        let mut is_paused = false;
 
         let mut state = default_state;
-        while let Some(event) = loop {
-            let timeout_remaining = if received_first_frame {
-                Duration::MAX
-            } else {
-                startup_timeout.saturating_sub(start_time.elapsed())
-            };
 
-            if timeout_remaining.is_zero() {
-                warn!("Camera preview timed out waiting for first frame, closing window");
-                break None;
-            }
-
-            tokio::select! {
-                frame = camera_rx.recv_async() => break frame.ok().map(Ok),
-                result = reconfigure.recv() => {
-                    if let Ok(result) = result {
-                        break Some(Err(result))
-                    } else {
-                        continue;
+        let pause_and_hide = || {
+            window
+                .run_on_main_thread({
+                    let window = window.clone();
+                    move || {
+                        let _ = window.hide();
                     }
-                },
-                _ = tokio::time::sleep(timeout_remaining) => {
-                    warn!("Camera preview timed out waiting for first frame, closing window");
-                    break None;
+                })
+                .ok();
+        };
+
+        'main_loop: loop {
+            if is_paused {
+                loop {
+                    match reconfigure.recv().await {
+                        Ok(ReconfigureEvent::Resume) => {
+                            is_paused = false;
+                            break;
+                        }
+                        Ok(ReconfigureEvent::Shutdown) => {
+                            self.cleanup_for_shutdown(&window).await;
+                            return;
+                        }
+                        Ok(ReconfigureEvent::State(new_state)) => {
+                            state = new_state;
+                        }
+                        Ok(ReconfigureEvent::WindowResized { width, height }) => {
+                            self.reconfigure_gpu_surface(width, height);
+                        }
+                        Ok(ReconfigureEvent::Pause) => {}
+                        Err(_) => {
+                            continue;
+                        }
+                    }
                 }
             }
-        } {
+
+            let event = loop {
+                let timeout_remaining = if received_first_frame {
+                    Duration::MAX
+                } else {
+                    startup_timeout.saturating_sub(start_time.elapsed())
+                };
+
+                if timeout_remaining.is_zero() {
+                    warn!(
+                        "Camera preview timed out waiting for first frame, entering paused state"
+                    );
+                    is_paused = true;
+                    pause_and_hide();
+                    continue 'main_loop;
+                }
+
+                tokio::select! {
+                    frame = camera_rx.recv_async() => {
+                        match frame {
+                            Ok(f) => break Ok(f),
+                            Err(_) => {
+                                is_paused = true;
+                                pause_and_hide();
+                                continue 'main_loop;
+                            }
+                        }
+                    },
+                    result = reconfigure.recv() => {
+                        if let Ok(result) = result {
+                            break Err(result)
+                        } else {
+                            continue;
+                        }
+                    },
+                    _ = tokio::time::sleep(timeout_remaining) => {
+                        warn!("Camera preview timed out waiting for first frame, entering paused state");
+                        is_paused = true;
+                        pause_and_hide();
+                        continue 'main_loop;
+                    }
+                }
+            };
+
             match event {
                 Ok(frame) => {
                     received_first_frame = true;
                     let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
-                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
+                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
+                        .await;
 
-                    if let Ok(surface) = self.surface.get_current_texture().map_err(|err| {
-                        error!("Error getting camera renderer surface texture: {err:?}")
-                    }) {
+                    let surface_result = self.surface.as_ref().and_then(|s| {
+                        s.get_current_texture()
+                            .map_err(|err| {
+                                error!("Error getting camera renderer surface texture: {err:?}")
+                            })
+                            .ok()
+                    });
+                    if let Some(surface) = surface_result {
                         let output_width = 1280;
                         let output_height = (1280.0 / aspect_ratio) as u32;
 
@@ -617,7 +766,7 @@ impl Renderer {
 
                         if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
                             error!("Error rescaling frame with ffmpeg: {err:?}");
-                            continue;
+                            continue 'main_loop;
                         }
 
                         self.texture
@@ -646,20 +795,19 @@ impl Renderer {
 
                     state = new_state;
 
-                    let aspect_ratio = self
-                        .aspect_ratio
-                        .get_latest_key()
-                        .copied()
-                        // Aspect ratio is hardcoded until we can derive it from the camera feed
-                        .unwrap_or(if state.shape == CameraPreviewShape::Full {
+                    let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
+                        if state.shape == CameraPreviewShape::Full {
                             16.0 / 9.0
                         } else {
                             1.0
-                        });
+                        },
+                    );
 
-                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
+                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
+                        .await;
                     self.update_state_uniforms(&state);
                     if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio, false)
+                        .await
                         .map_err(|err| error!("Error resizing camera preview window: {err}"))
                     {
                         self.reconfigure_gpu_surface(width, height);
@@ -669,20 +817,55 @@ impl Renderer {
                     trace!("CameraPreview/ReconfigureEvent.WindowResized({width}x{height})");
                     self.reconfigure_gpu_surface(width, height);
                 }
+                Err(ReconfigureEvent::Pause) => {
+                    is_paused = true;
+                    window
+                        .run_on_main_thread({
+                            let window = window.clone();
+                            move || {
+                                let _ = window.hide();
+                            }
+                        })
+                        .ok();
+                }
+                Err(ReconfigureEvent::Resume) => {
+                    if let Some(surface) = &self.surface {
+                        if let Ok(texture) = surface.get_current_texture() {
+                            texture.present();
+                        }
+                    }
+                }
                 Err(ReconfigureEvent::Shutdown) => {
-                    info!("Camera preview shutdown requested. Cleaning up...");
-                    self.device.destroy();
+                    self.cleanup_for_shutdown(&window).await;
                     return;
                 }
             }
         }
-
-        info!("Camera feed completed. Hiding preview window...");
-        window.hide().ok();
-        self.device.destroy();
     }
 
-    /// Reconfigure the GPU surface if the window has changed size
+    async fn cleanup_for_shutdown(&mut self, window: &WebviewWindow) {
+        info!("Camera preview shutdown requested. Cleaning up...");
+
+        let _ = self.device.poll(wgpu::PollType::Wait);
+
+        drop(std::mem::take(&mut self.texture));
+        drop(std::mem::take(&mut self.aspect_ratio));
+
+        let surface = self.surface.take();
+        let (drop_tx, drop_rx) = oneshot::channel();
+        window
+            .run_on_main_thread(move || {
+                drop(surface);
+                let _ = drop_tx.send(());
+            })
+            .ok();
+        let _ = drop_rx.await;
+
+        self.device.destroy();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
     fn reconfigure_gpu_surface(&mut self, window_width: u32, window_height: u32) {
         self.surface_config.width = if window_width > 0 {
             window_width * GPU_SURFACE_SCALE
@@ -694,7 +877,9 @@ impl Renderer {
         } else {
             1
         };
-        self.surface.configure(&self.device, &self.surface_config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.surface_config);
+        }
 
         let window_uniforms = WindowUniforms {
             window_height: window_height as f32,
@@ -710,7 +895,6 @@ impl Renderer {
         );
     }
 
-    /// Update the uniforms which hold the camera preview state
     fn update_state_uniforms(&self, state: &CameraPreviewState) {
         let clamped_size = clamp_size(state.size);
         let normalized_size =
@@ -733,9 +917,7 @@ impl Renderer {
         );
     }
 
-    /// Update the uniforms which hold the camera aspect ratio if it's changed,
-    /// and resize the window to match the new aspect ratio if required.
-    fn sync_ratio_uniform_and_resize_window_to_it(
+    async fn sync_ratio_uniform_and_resize_window_to_it(
         &mut self,
         window: &WebviewWindow,
         state: &CameraPreviewState,
@@ -753,6 +935,7 @@ impl Renderer {
             );
 
             if let Ok((width, height)) = resize_window(window, state, aspect_ratio, false)
+                .await
                 .map_err(|err| error!("Error resizing camera preview window: {err}"))
             {
                 self.reconfigure_gpu_surface(width, height);
@@ -761,14 +944,12 @@ impl Renderer {
     }
 }
 
-/// Resize the OS window to the correct size,
-/// based on configuration
-fn resize_window(
+async fn resize_window(
     window: &WebviewWindow,
     state: &CameraPreviewState,
     aspect: f32,
     should_move: bool,
-) -> tauri::Result<(u32, u32)> {
+) -> anyhow::Result<(u32, u32)> {
     trace!("CameraPreview/resize_window");
 
     let base = clamp_size(state.size);
@@ -783,70 +964,88 @@ fn resize_window(
         base
     } + TOOLBAR_HEIGHT;
 
-    if should_move {
-        let (monitor_size, monitor_offset, monitor_scale_factor): (
-            PhysicalSize<u32>,
-            LogicalPosition<u32>,
-            _,
-        ) = if let Some(monitor) = window.current_monitor()? {
-            let size = monitor.position().to_logical(monitor.scale_factor());
-            (*monitor.size(), size, monitor.scale_factor())
-        } else {
-            (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
-        };
+    let window_width = window_width as u32;
+    let window_height = window_height as u32;
 
-        let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
-            as u32
-            + monitor_offset.x;
-        let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
-            as u32
-            + monitor_offset.y;
+    let (tx, rx) = oneshot::channel();
+    window
+        .run_on_main_thread({
+            let window = window.clone();
+            move || {
+                let result: tauri::Result<(u32, u32)> = (|| {
+                    if should_move {
+                        let (monitor_size, monitor_offset, monitor_scale_factor): (
+                            PhysicalSize<u32>,
+                            LogicalPosition<u32>,
+                            _,
+                        ) = if let Some(monitor) = window.current_monitor()? {
+                            let size = monitor.position().to_logical(monitor.scale_factor());
+                            (*monitor.size(), size, monitor.scale_factor())
+                        } else {
+                            (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
+                        };
 
-        window.set_position(LogicalPosition::new(x, y))?;
-    } else if let Some(monitor) = window.current_monitor()? {
-        // Ensure the window stays within the monitor bounds when resizing
-        let scale_factor = monitor.scale_factor();
-        let monitor_pos = monitor.position().to_logical::<f64>(scale_factor);
-        let monitor_size = monitor.size().to_logical::<f64>(scale_factor);
+                        let x = (monitor_size.width as f64 / monitor_scale_factor
+                            - window_width as f64
+                            - 100.0) as u32
+                            + monitor_offset.x;
+                        let y = (monitor_size.height as f64 / monitor_scale_factor
+                            - window_height as f64
+                            - 100.0) as u32
+                            + monitor_offset.y;
 
-        let current_pos = window
-            .outer_position()
-            .map(|p| p.to_logical::<f64>(scale_factor))
-            .unwrap_or(monitor_pos);
+                        window.set_position(LogicalPosition::new(x, y))?;
+                    } else if let Some(monitor) = window.current_monitor()? {
+                        let scale_factor = monitor.scale_factor();
+                        let monitor_pos = monitor.position().to_logical::<f64>(scale_factor);
+                        let monitor_size = monitor.size().to_logical::<f64>(scale_factor);
 
-        let mut new_x = current_pos.x;
-        let mut new_y = current_pos.y;
-        let new_width = window_width as f64;
-        let new_height = window_height as f64;
+                        let current_pos = window
+                            .outer_position()
+                            .map(|p| p.to_logical::<f64>(scale_factor))
+                            .unwrap_or(monitor_pos);
 
-        // Check right edge
-        if new_x + new_width > monitor_pos.x + monitor_size.width {
-            new_x = monitor_pos.x + monitor_size.width - new_width;
-        }
+                        let mut new_x = current_pos.x;
+                        let mut new_y = current_pos.y;
+                        let new_width = window_width as f64;
+                        let new_height = window_height as f64;
 
-        // Check bottom edge
-        if new_y + new_height > monitor_pos.y + monitor_size.height {
-            new_y = monitor_pos.y + monitor_size.height - new_height;
-        }
+                        if new_x + new_width > monitor_pos.x + monitor_size.width {
+                            new_x = monitor_pos.x + monitor_size.width - new_width;
+                        }
 
-        // Check left edge
-        if new_x < monitor_pos.x {
-            new_x = monitor_pos.x;
-        }
+                        if new_y + new_height > monitor_pos.y + monitor_size.height {
+                            new_y = monitor_pos.y + monitor_size.height - new_height;
+                        }
 
-        // Check top edge
-        if new_y < monitor_pos.y {
-            new_y = monitor_pos.y;
-        }
+                        if new_x < monitor_pos.x {
+                            new_x = monitor_pos.x;
+                        }
 
-        if (new_x - current_pos.x).abs() > 1.0 || (new_y - current_pos.y).abs() > 1.0 {
-            window.set_position(LogicalPosition::new(new_x, new_y))?;
-        }
-    }
+                        if new_y < monitor_pos.y {
+                            new_y = monitor_pos.y;
+                        }
 
-    window.set_size(LogicalSize::new(window_width, window_height))?;
+                        if (new_x - current_pos.x).abs() > 1.0
+                            || (new_y - current_pos.y).abs() > 1.0
+                        {
+                            window.set_position(LogicalPosition::new(new_x, new_y))?;
+                        }
+                    }
 
-    Ok((window_width as u32, window_height as u32))
+                    window.set_size(LogicalSize::new(window_width, window_height))?;
+
+                    Ok((window_width, window_height))
+                })();
+
+                tx.send(result).ok();
+            }
+        })
+        .context("Failed to run window resize on main thread")?;
+
+    rx.await
+        .context("Failed to receive window resize result")?
+        .map_err(anyhow::Error::new)
 }
 
 fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32) {
@@ -1013,7 +1212,6 @@ impl<K: PartialEq, V> Cached<K, V> {
 }
 
 impl<K: PartialEq> Cached<K, ()> {
-    /// Updates the key and returns `true` when the key was changed.
     pub fn update_key_and_should_init(&mut self, key: K) -> bool {
         if self.value.as_ref().is_none_or(|(k, _)| *k != key) {
             self.value = Some((key, ()));
