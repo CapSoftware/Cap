@@ -55,8 +55,8 @@ use crate::general_settings;
 use crate::permissions;
 use crate::web_api::AuthedApiError;
 use crate::{
-    App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
-    RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
+    App, CameraWindowOperationLock, CurrentRecordingChanged, FinalizingRecordings, MutableState,
+    NewStudioRecordingAdded, RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -576,6 +576,8 @@ pub async fn start_recording(
             }
         }
 
+        let operation_lock = app.state::<CameraWindowOperationLock>();
+        let _operation_guard = operation_lock.lock().await;
         ShowCapWindow::Camera { centered: true }
             .show(&app)
             .await
