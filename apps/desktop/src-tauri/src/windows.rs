@@ -322,6 +322,19 @@ impl CapWindowId {
         )
     }
 
+    pub fn is_transparent(&self) -> bool {
+        matches!(
+            self,
+            Self::Main
+                | Self::Camera
+                | Self::WindowCaptureOccluder { .. }
+                | Self::CaptureArea
+                | Self::RecordingControls
+                | Self::RecordingsOverlay
+                | Self::TargetSelectOverlay { .. }
+        )
+    }
+
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         let label = self.label();
         app.get_webview_window(&label)
