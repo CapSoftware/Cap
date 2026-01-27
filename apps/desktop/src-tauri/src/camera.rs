@@ -35,6 +35,7 @@ static GPU_SURFACE_SCALE: u32 = 4;
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
 pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
+pub const CAMERA_PRESET_LARGE: f32 = 400.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -134,6 +135,9 @@ impl CameraPreviewManager {
         }
     }
 
+    // Pauses the camera preview, hiding the window but keeping GPU resources alive.
+    // Called when the user deselects the camera. This is part of the persistent
+    // renderer architecture that prevents crashes from repeated resource creation.
     pub fn pause(&mut self) {
         if let Some(preview) = &mut self.preview {
             if !preview.is_paused {
@@ -147,6 +151,8 @@ impl CameraPreviewManager {
         }
     }
 
+    // Resumes a paused camera preview. Uses window.show() which is safe, unlike
+    // panel.order_front_regardless() which causes crashes after repeated use.
     pub fn resume(&mut self, window: &WebviewWindow) {
         if let Some(preview) = &mut self.preview {
             if preview.is_paused {
@@ -308,6 +314,16 @@ impl CameraPreviewManager {
     }
 }
 
+// Internal events for the persistent camera renderer architecture.
+//
+// The camera preview uses a persistent WGPU renderer that stays alive across
+// camera deselect/reselect cycles. This avoids repeated GPU resource creation
+// which, combined with macOS panel.order_front_regardless() calls, was causing
+// crashes after ~4-5 toggle cycles.
+//
+// Pause/Resume hide/show the window while keeping GPU resources alive.
+// See the comment in windows.rs ShowCapWindow::Camera for the critical detail
+// about avoiding order_front_regardless().
 #[derive(Clone)]
 enum ReconfigureEvent {
     State(CameraPreviewState),
@@ -818,6 +834,13 @@ impl Renderer {
                     self.reconfigure_gpu_surface(width, height);
                 }
                 Err(ReconfigureEvent::Pause) => {
+                    // When pausing, we hide the window to provide proper UX feedback.
+                    // The WGPU Surface and Device are kept alive to avoid repeated GPU
+                    // resource creation, which previously contributed to crashes.
+                    //
+                    // The corresponding show operation in windows.rs uses window.show()
+                    // instead of panel.order_front_regardless() - see the comment there
+                    // for why this is critical to avoid macOS crashes.
                     is_paused = true;
                     window
                         .run_on_main_thread({
@@ -829,6 +852,8 @@ impl Renderer {
                         .ok();
                 }
                 Err(ReconfigureEvent::Resume) => {
+                    // On resume, we just need to present a frame to wake up the surface.
+                    // The actual window.show() happens in windows.rs ShowCapWindow::Camera.
                     if let Some(surface) = &self.surface {
                         if let Ok(texture) = surface.get_current_texture() {
                             texture.present();

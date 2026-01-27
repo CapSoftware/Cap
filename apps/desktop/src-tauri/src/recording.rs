@@ -558,7 +558,9 @@ pub async fn start_recording(
         inputs.capture_system_audio = false;
 
         {
-            let app_state = state_mtx.read().await;
+            let mut app_state = state_mtx.write().await;
+            app_state.was_camera_only_recording = true;
+
             let current_mirrored = app_state
                 .camera_preview
                 .get_state()
@@ -566,7 +568,7 @@ pub async fn start_recording(
                 .unwrap_or(false);
 
             let camera_state = CameraPreviewState {
-                size: 400.0,
+                size: crate::camera::CAMERA_PRESET_LARGE,
                 shape: CameraPreviewShape::Full,
                 mirrored: current_mirrored,
             };
@@ -1468,6 +1470,15 @@ async fn handle_recording_end(
     app.clear_current_recording();
     app.disconnected_inputs.clear();
     app.camera_in_use = false;
+
+    if app.was_camera_only_recording {
+        app.was_camera_only_recording = false;
+
+        let default_state = CameraPreviewState::default();
+        if let Err(err) = app.camera_preview.set_state(default_state) {
+            error!("Failed to reset camera preview state after camera-only recording: {err}");
+        }
+    }
 
     let res = match recording {
         // we delay reporting errors here so that everything else happens first
