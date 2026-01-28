@@ -139,38 +139,38 @@ impl CameraPreviewManager {
     // Called when the user deselects the camera. This is part of the persistent
     // renderer architecture that prevents crashes from repeated resource creation.
     pub fn pause(&mut self) {
-        if let Some(preview) = &mut self.preview {
-            if !preview.is_paused {
-                preview.is_paused = true;
-                preview
-                    .reconfigure
-                    .send(ReconfigureEvent::Pause)
-                    .map_err(|err| error!("Error sending camera preview pause event: {err}"))
-                    .ok();
-            }
+        if let Some(preview) = &mut self.preview
+            && !preview.is_paused
+        {
+            preview.is_paused = true;
+            preview
+                .reconfigure
+                .send(ReconfigureEvent::Pause)
+                .map_err(|err| error!("Error sending camera preview pause event: {err}"))
+                .ok();
         }
     }
 
     // Resumes a paused camera preview. Uses window.show() which is safe, unlike
     // panel.order_front_regardless() which causes crashes after repeated use.
     pub fn resume(&mut self, window: &WebviewWindow) {
-        if let Some(preview) = &mut self.preview {
-            if preview.is_paused {
-                preview.is_paused = false;
-                preview
-                    .reconfigure
-                    .send(ReconfigureEvent::Resume)
-                    .map_err(|err| error!("Error sending camera preview resume event: {err}"))
-                    .ok();
-                window
-                    .run_on_main_thread({
-                        let window = window.clone();
-                        move || {
-                            let _ = window.show();
-                        }
-                    })
-                    .ok();
-            }
+        if let Some(preview) = &mut self.preview
+            && preview.is_paused
+        {
+            preview.is_paused = false;
+            preview
+                .reconfigure
+                .send(ReconfigureEvent::Resume)
+                .map_err(|err| error!("Error sending camera preview resume event: {err}"))
+                .ok();
+            window
+                .run_on_main_thread({
+                    let window = window.clone();
+                    move || {
+                        let _ = window.show();
+                    }
+                })
+                .ok();
         }
     }
 
@@ -182,14 +182,14 @@ impl CameraPreviewManager {
         &mut self,
         expected_session_id: u64,
     ) -> Option<oneshot::Receiver<()>> {
-        if let Some(preview) = &self.preview {
-            if preview.session_id != expected_session_id {
-                info!(
-                    "Skipping camera preview close: session mismatch (expected {}, current {})",
-                    expected_session_id, preview.session_id
-                );
-                return None;
-            }
+        if let Some(preview) = &self.preview
+            && preview.session_id != expected_session_id
+        {
+            info!(
+                "Skipping camera preview close: session mismatch (expected {}, current {})",
+                expected_session_id, preview.session_id
+            );
+            return None;
         }
 
         self.begin_shutdown()
@@ -854,10 +854,10 @@ impl Renderer {
                 Err(ReconfigureEvent::Resume) => {
                     // On resume, we just need to present a frame to wake up the surface.
                     // The actual window.show() happens in windows.rs ShowCapWindow::Camera.
-                    if let Some(surface) = &self.surface {
-                        if let Ok(texture) = surface.get_current_texture() {
-                            texture.present();
-                        }
+                    if let Some(surface) = &self.surface
+                        && let Ok(texture) = surface.get_current_texture()
+                    {
+                        texture.present();
                     }
                 }
                 Err(ReconfigureEvent::Shutdown) => {
