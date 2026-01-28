@@ -61,14 +61,12 @@ export default function () {
 	});
 
 	const requestPermission = async (permission: OSPermission) => {
-		const currentWindow = getCurrentWindow();
-		await currentWindow.hide();
 		try {
 			await commands.requestPermission(permission);
-		} finally {
-			await currentWindow.show();
-			setInitialCheck(false);
+		} catch (err) {
+			console.error(`Error occurred while requesting permission: ${err}`);
 		}
+		setInitialCheck(false);
 	};
 
 	const openSettings = (permission: OSPermission) => {
