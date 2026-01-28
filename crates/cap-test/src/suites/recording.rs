@@ -198,11 +198,7 @@ impl RecordingTestRunner {
             .map(|v| v.frame_count)
             .unwrap_or(expected_frames);
         let frames_received = expected_frames;
-        let frames_dropped = if frames_received > frames_encoded {
-            frames_received - frames_encoded
-        } else {
-            0
-        };
+        let frames_dropped = frames_received.saturating_sub(frames_encoded);
 
         let actual_fps = if total_duration.as_secs_f64() > 0.0 {
             frames_encoded as f64 / total_duration.as_secs_f64()
