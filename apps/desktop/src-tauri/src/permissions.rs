@@ -73,7 +73,7 @@ pub async fn request_permission(_permission: OSPermission) {
             OSPermission::ScreenRecording => {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = crate::platform::prewarm_shareable_content().await;
+                    let _ = crate::platform::refresh_shareable_content().await;
                 }
             }
             OSPermission::Camera => {
