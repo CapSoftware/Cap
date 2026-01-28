@@ -1,0 +1,15 @@
+{
+  "name": "@cap/chrome-extension",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cap Chrome Extension - Screen recorder for the web",
+  "scripts": {
+    "build": "node scripts/build.js"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.1",
+    "chokidar": "^4.0.3",
+    "esbuild": "^0.24.2",
+    "sharp": "^0.34.5"
+  }
+}
