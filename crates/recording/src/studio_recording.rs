@@ -708,6 +708,25 @@ async fn stop_recording(
                 }
             });
 
+            let raw_display_start = to_start_time(s.pipeline.screen.first_timestamp);
+            let display_start_time = if let Some(cam_start) = camera_start_time {
+                let sync_offset = raw_display_start - cam_start;
+                if sync_offset.abs() > 0.030 {
+                    cam_start
+                } else {
+                    raw_display_start
+                }
+            } else if let Some(mic_start) = mic_start_time {
+                let sync_offset = raw_display_start - mic_start;
+                if sync_offset.abs() > 0.030 {
+                    mic_start
+                } else {
+                    raw_display_start
+                }
+            } else {
+                raw_display_start
+            };
+
             MultipleSegment {
                 display: VideoMeta {
                     path: make_relative(&s.pipeline.screen.path),
@@ -723,7 +742,7 @@ async fn stop_recording(
                             );
                             DEFAULT_FPS
                         }),
-                    start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
+                    start_time: Some(display_start_time),
                     device_id: None,
                 },
                 camera: s.pipeline.camera.map(|camera| VideoMeta {
