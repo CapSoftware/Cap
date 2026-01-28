@@ -181,18 +181,22 @@ function InProgressRecordingInner() {
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		switch (payload.variant) {
 			case "Countdown":
-				setState((s) => {
-					if (s.variant === "countdown")
-						return { ...s, current: payload.value };
-
-					return s;
+				setDisconnectedInputs({ microphone: false, camera: false });
+				setRecordingFailure(null);
+				setPauseResumes([]);
+				setState({
+					variant: "countdown",
+					from: payload.value,
+					current: payload.value,
 				});
 				break;
 			case "Started":
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
+				setPauseResumes([]);
 				setState({ variant: "recording" });
 				setStart(Date.now());
+				setTime(Date.now());
 				break;
 			case "Paused":
 				if (state().variant === "recording") {
@@ -301,7 +305,7 @@ function InProgressRecordingInner() {
 			!currentRecording.isPending &&
 			(currentRecording.data === undefined || currentRecording.data === null)
 		)
-			getCurrentWindow().close();
+			getCurrentWindow().hide();
 	});
 
 	const stopRecording = createMutation(() => ({
