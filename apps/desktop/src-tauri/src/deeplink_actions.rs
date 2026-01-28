@@ -32,6 +32,14 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    PauseRecording,
+    ResumeRecording,
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
+    SwitchCamera {
+        camera: Option<DeviceOrModelID>,
+    },
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -151,6 +159,41 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                if let Some(ref label) = mic_label {
+                    let available_mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
+                    if !available_mics.contains_key(label) {
+                        return Err(format!("Microphone with label \"{}\" not found", label));
+                    }
+                }
+
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, mic_label).await
+            }
+            DeepLinkAction::SwitchCamera { camera } => {
+                if let Some(ref id) = camera {
+                    let cameras: Vec<_> = cap_camera::list_cameras().collect();
+                    let exists = cameras.iter().any(|info| match id {
+                        DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id,
+                        DeviceOrModelID::ModelID(model_id) => {
+                            info.model_id().is_some_and(|existing| existing == model_id)
+                        }
+                    });
+
+                    if !exists {
+                        return Err(format!("Camera with ID \"{:?}\" not found", id));
+                    }
+                }
+
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, camera).await
             }
         }
     }
