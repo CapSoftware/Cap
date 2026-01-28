@@ -6,11 +6,13 @@ use cap_recording::{
     screen_capture::ScreenCaptureTarget,
     studio_recording,
 };
-use chrono::Local;
+use chrono::{Local, Utc};
 use clap::{Parser, Subcommand};
 use kameo::Actor as _;
 use scap_targets::Display;
 use std::{
+    fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -48,6 +50,24 @@ struct Cli {
 
     #[arg(long, global = true)]
     mp4_only: bool,
+
+    #[arg(long, global = true, help = "Write benchmark results to BENCHMARKS.md")]
+    benchmark_output: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Optional notes to include with this benchmark run"
+    )]
+    notes: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "30",
+        help = "Screen recording frame rate (e.g., 30 or 60)"
+    )]
+    fps: u32,
 }
 
 #[derive(Subcommand)]
@@ -1324,6 +1344,7 @@ async fn execute_recording(
     devices: &AvailableDevices,
     fragmented: bool,
     include_camera: bool,
+    screen_fps: u32,
 ) -> anyhow::Result<PathBuf> {
     let recording_dir = output_dir.join(format!(
         "{}_{}",
@@ -1382,7 +1403,7 @@ async fn execute_recording(
     )
     .with_system_audio(true)
     .with_fragmented(fragmented)
-    .with_max_fps(30);
+    .with_max_fps(screen_fps);
 
     if let Some(mic) = mic_lock {
         builder = builder.with_mic_feed(mic);
@@ -1437,6 +1458,7 @@ async fn run_test(
     devices: &AvailableDevices,
     fragmented: bool,
     include_camera: bool,
+    screen_fps: u32,
 ) -> TestReport {
     let start = Instant::now();
 
@@ -1448,8 +1470,15 @@ async fn run_test(
         ..Default::default()
     };
 
-    let recording_result =
-        execute_recording(scenario, output_dir, devices, fragmented, include_camera).await;
+    let recording_result = execute_recording(
+        scenario,
+        output_dir,
+        devices,
+        fragmented,
+        include_camera,
+        screen_fps,
+    )
+    .await;
 
     let recording_dir = match recording_result {
         Ok(dir) => dir,
@@ -1495,7 +1524,7 @@ async fn run_test(
         }
     }
 
-    let expected_fps = 30.0;
+    let expected_fps = screen_fps as f64;
     report.frame_rate = analyze_frame_rate(&meta, scenario, expected_fps).await;
 
     report.audio_timing = analyze_audio_timing(&meta, scenario).await;
@@ -1622,6 +1651,511 @@ fn print_summary(reports: &[TestReport]) {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SystemInfo {
+    os: String,
+    os_version: String,
+    arch: String,
+    cpu: String,
+    primary_display_resolution: String,
+    default_microphone: Option<String>,
+    camera: Option<String>,
+    rust_version: String,
+}
+
+impl SystemInfo {
+    fn collect(devices: &AvailableDevices) -> Self {
+        let os = std::env::consts::OS.to_string();
+        let arch = std::env::consts::ARCH.to_string();
+
+        let os_version = get_os_version();
+        let cpu = get_cpu_info();
+
+        let primary_display_resolution = devices
+            .primary_display
+            .physical_size()
+            .map(|s| format!("{}x{}", s.width(), s.height()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let default_microphone = devices.default_microphone.clone();
+        let camera = devices
+            .cameras
+            .first()
+            .map(|c| c.display_name().to_string());
+
+        let rust_version = env!("CARGO_PKG_RUST_VERSION").to_string();
+
+        Self {
+            os,
+            os_version,
+            arch,
+            cpu,
+            primary_display_resolution,
+            default_microphone,
+            camera,
+            rust_version,
+        }
+    }
+
+    fn to_markdown(&self) -> String {
+        let mut md = String::new();
+        md.push_str("| Property | Value |\n");
+        md.push_str("|----------|-------|\n");
+        md.push_str(&format!("| OS | {} {} |\n", self.os, self.os_version));
+        md.push_str(&format!("| Architecture | {} |\n", self.arch));
+        md.push_str(&format!("| CPU | {} |\n", self.cpu));
+        md.push_str(&format!(
+            "| Display | {} |\n",
+            self.primary_display_resolution
+        ));
+        md.push_str(&format!(
+            "| Microphone | {} |\n",
+            self.default_microphone.as_deref().unwrap_or("None")
+        ));
+        md.push_str(&format!(
+            "| Camera | {} |\n",
+            self.camera.as_deref().unwrap_or("None")
+        ));
+        md.push_str(&format!("| Rust Version | {} |\n", self.rust_version));
+        md
+    }
+}
+
+fn get_os_version() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "ver"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "unknown".to_string()
+    }
+}
+
+fn get_cpu_info() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sysctl")
+            .arg("-n")
+            .arg("machdep.cpu.brand_string")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("wmic")
+            .args(["cpu", "get", "name"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.lines().nth(1).map(|l| l.trim().to_string()))
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "unknown".to_string()
+    }
+}
+
+fn get_failure_tags(report: &TestReport) -> Vec<&'static str> {
+    let mut tags = vec![];
+
+    if !report.segment_timing.all_valid {
+        tags.push("SEGMENT_TIMING");
+    }
+    if !report.segment_count_ok {
+        tags.push("SEGMENT_COUNT");
+    }
+    if !report.duration_validation.total_ok {
+        tags.push("DURATION");
+    }
+    if !report.frame_rate.valid {
+        tags.push("FRAME_RATE");
+    }
+    if !report.audio_timing.valid {
+        tags.push("AUDIO_TIMING");
+    }
+    if report.include_camera && !report.av_sync.all_synced {
+        tags.push("AV_SYNC");
+    }
+    if report.include_camera && report.fragmented && !report.camera_output.valid {
+        tags.push("CAMERA_OUTPUT");
+    }
+    if !report.errors.is_empty() {
+        tags.push("ERRORS");
+    }
+
+    tags
+}
+
+fn report_to_markdown(report: &TestReport) -> String {
+    let mut md = String::new();
+
+    let status = if report.passed {
+        "✅ PASS"
+    } else {
+        "❌ FAIL"
+    };
+    let format_type = if report.fragmented {
+        "fragmented"
+    } else {
+        "mp4"
+    };
+    let camera_str = if report.include_camera { "+camera" } else { "" };
+
+    md.push_str(&format!(
+        "#### {} {} ({}{})\n\n",
+        status, report.scenario, format_type, camera_str
+    ));
+
+    if !report.passed {
+        let tags = get_failure_tags(report);
+        if !tags.is_empty() {
+            md.push_str(&format!("**Failure Tags:** `{}`\n\n", tags.join("`, `")));
+        }
+    }
+
+    md.push_str("| Metric | Result | Details |\n");
+    md.push_str("|--------|--------|--------|\n");
+
+    md.push_str(&format!(
+        "| Segments | {} | {}/{} expected |\n",
+        if report.segment_count_ok {
+            "✅"
+        } else {
+            "❌"
+        },
+        report.actual_segments,
+        report.expected_segments
+    ));
+
+    md.push_str(&format!(
+        "| Start Times | {} | {} |\n",
+        if report.segment_timing.all_valid {
+            "✅"
+        } else {
+            "❌"
+        },
+        if report.segment_timing.all_valid {
+            "All segments near 0"
+        } else {
+            "Bug detected"
+        }
+    ));
+
+    if report.include_camera {
+        md.push_str(&format!(
+            "| A/V Sync | {} | tolerance: {}ms |\n",
+            if report.av_sync.all_synced {
+                "✅"
+            } else {
+                "❌"
+            },
+            SYNC_TOLERANCE_MS
+        ));
+
+        for seg in &report.av_sync.segments {
+            let cam_mic_drift_str = seg
+                .metrics
+                .camera_mic_drift
+                .map(|d| format!("{:.1}ms", d * 1000.0))
+                .unwrap_or_else(|| "N/A".to_string());
+            let disp_cam_drift_str = seg
+                .metrics
+                .display_camera_drift
+                .map(|d| format!("{:.1}ms", d * 1000.0))
+                .unwrap_or_else(|| "N/A".to_string());
+            let disp_mic_drift_str = seg
+                .metrics
+                .display_mic_drift
+                .map(|d| format!("{:.1}ms", d * 1000.0))
+                .unwrap_or_else(|| "N/A".to_string());
+
+            md.push_str(&format!(
+                "| ↳ Seg {} Sync | {} | cam↔mic={} disp↔cam={} disp↔mic={} |\n",
+                seg.index,
+                if seg.camera_mic_sync_ok { "✅" } else { "❌" },
+                cam_mic_drift_str,
+                disp_cam_drift_str,
+                disp_mic_drift_str
+            ));
+        }
+    }
+
+    md.push_str(&format!(
+        "| Duration | {} | {:.2}s/{:.2}s |\n",
+        if report.duration_validation.total_ok {
+            "✅"
+        } else {
+            "❌"
+        },
+        report.duration_validation.actual_total.as_secs_f64(),
+        report.duration_validation.expected_total.as_secs_f64()
+    ));
+
+    md.push_str(&format!(
+        "| Frame Rate | {} | expected {:.0}fps ±{:.0} |\n",
+        if report.frame_rate.valid {
+            "✅"
+        } else {
+            "❌"
+        },
+        report.frame_rate.expected_fps,
+        FPS_TOLERANCE
+    ));
+
+    for seg in &report.frame_rate.segments {
+        let drop_percent = if seg.expected_frame_count > 0 {
+            (seg.dropped_frames as f64 / seg.expected_frame_count as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let seg_status = if seg.fps_ok && seg.jitter_ok && seg.dropped_ok {
+            "✅"
+        } else {
+            "❌"
+        };
+
+        md.push_str(&format!(
+            "| ↳ Seg {} FPS | {} | {:.1}fps frames={} dropped={} ({:.1}%) jitter={:.1}ms |\n",
+            seg.index,
+            seg_status,
+            seg.actual_fps,
+            seg.frame_count,
+            seg.dropped_frames,
+            drop_percent,
+            seg.jitter_ms
+        ));
+
+        if !seg.fps_ok {
+            md.push_str(&format!("| | ⚠️ | FPS outside tolerance |\n"));
+        }
+        if !seg.jitter_ok {
+            md.push_str(&format!(
+                "| | ⚠️ | Jitter exceeds {}ms |\n",
+                JITTER_TOLERANCE_MS
+            ));
+        }
+        if !seg.dropped_ok {
+            md.push_str(&format!(
+                "| | ⚠️ | Dropped frames exceed {}% |\n",
+                MAX_DROPPED_FRAME_PERCENT
+            ));
+        }
+    }
+
+    md.push_str(&format!(
+        "| Audio Timing | {} | tolerance: ±{:.0}ms vs video |\n",
+        if report.audio_timing.valid {
+            "✅"
+        } else {
+            "❌"
+        },
+        AUDIO_VIDEO_DURATION_TOLERANCE_MS
+    ));
+
+    for seg in &report.audio_timing.segments {
+        if let Some(ref mic) = seg.mic {
+            let diff_str = seg
+                .mic_video_duration_diff_ms
+                .map(|d| format!("{d:.1}ms"))
+                .unwrap_or_else(|| "N/A".to_string());
+
+            md.push_str(&format!(
+                "| ↳ Seg {} Mic | {} | {:.2}s diff={} {}Hz {}ch |\n",
+                seg.index,
+                if seg.mic_duration_ok { "✅" } else { "❌" },
+                mic.duration_secs,
+                diff_str,
+                mic.sample_rate,
+                mic.channels
+            ));
+
+            if mic.has_gaps {
+                md.push_str(&format!(
+                    "| | ⚠️ | {} audio gaps ({:.1}ms total) |\n",
+                    mic.gap_count, mic.total_gap_duration_ms
+                ));
+            }
+        }
+
+        if let Some(ref sys) = seg.system_audio {
+            let diff_str = seg
+                .system_audio_video_duration_diff_ms
+                .map(|d| format!("{d:.1}ms"))
+                .unwrap_or_else(|| "N/A".to_string());
+
+            md.push_str(&format!(
+                "| ↳ Seg {} System | {} | {:.2}s diff={} {}Hz {}ch |\n",
+                seg.index,
+                if seg.system_audio_duration_ok {
+                    "✅"
+                } else {
+                    "❌"
+                },
+                sys.duration_secs,
+                diff_str,
+                sys.sample_rate,
+                sys.channels
+            ));
+
+            if sys.has_gaps {
+                md.push_str(&format!(
+                    "| | ⚠️ | {} audio gaps ({:.1}ms total) |\n",
+                    sys.gap_count, sys.total_gap_duration_ms
+                ));
+            }
+        }
+    }
+
+    if !report.errors.is_empty() {
+        md.push_str("\n**Errors:**\n");
+        for error in &report.errors {
+            md.push_str(&format!("- {error}\n"));
+        }
+    }
+
+    md.push_str(&format!(
+        "\n**Elapsed:** {:.2}s\n\n",
+        report.elapsed.as_secs_f64()
+    ));
+
+    md
+}
+
+fn generate_benchmark_markdown(
+    reports: &[TestReport],
+    devices: &AvailableDevices,
+    notes: Option<&str>,
+    command: &str,
+) -> String {
+    let mut md = String::new();
+
+    let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let local_timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    md.push_str(&format!("### Benchmark Run: {}\n\n", timestamp));
+    md.push_str(&format!("*Local time: {}*\n\n", local_timestamp));
+
+    let passed = reports.iter().filter(|r| r.passed).count();
+    let total = reports.len();
+    let overall_status = if passed == total {
+        "✅ ALL PASS"
+    } else {
+        "❌ FAILURES"
+    };
+
+    md.push_str(&format!(
+        "**Overall Result:** {} ({}/{})\n\n",
+        overall_status, passed, total
+    ));
+
+    if let Some(notes_text) = notes {
+        md.push_str(&format!("**Notes:** {}\n\n", notes_text));
+    }
+
+    md.push_str(&format!("**Command:** `{}`\n\n", command));
+
+    md.push_str("<details>\n<summary>System Information</summary>\n\n");
+    let sys_info = SystemInfo::collect(devices);
+    md.push_str(&sys_info.to_markdown());
+    md.push_str("\n</details>\n\n");
+
+    if passed < total {
+        md.push_str("**Failed Tests:**\n");
+        for report in reports.iter().filter(|r| !r.passed) {
+            let format_type = if report.fragmented {
+                "fragmented"
+            } else {
+                "mp4"
+            };
+            let camera_str = if report.include_camera { "+camera" } else { "" };
+            let tags = get_failure_tags(report);
+            md.push_str(&format!(
+                "- {} ({}{}) — `{}`\n",
+                report.scenario,
+                format_type,
+                camera_str,
+                tags.join("`, `")
+            ));
+        }
+        md.push_str("\n");
+    }
+
+    md.push_str("<details>\n<summary>Detailed Results</summary>\n\n");
+
+    for report in reports {
+        md.push_str(&report_to_markdown(report));
+        md.push_str("---\n\n");
+    }
+
+    md.push_str("</details>\n\n");
+
+    md
+}
+
+fn write_benchmark_to_file(benchmark_md: &str) -> anyhow::Result<()> {
+    let benchmark_file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("BENCHMARKS.md");
+
+    if !benchmark_file.exists() {
+        bail!(
+            "BENCHMARKS.md not found at {:?}. Please ensure the file exists.",
+            benchmark_file
+        );
+    }
+
+    let content = fs::read_to_string(&benchmark_file)?;
+
+    let marker_start = "<!-- BENCHMARK_RESULTS_START -->";
+    let marker_end = "<!-- BENCHMARK_RESULTS_END -->";
+
+    let Some(start_idx) = content.find(marker_start) else {
+        bail!("Could not find BENCHMARK_RESULTS_START marker in BENCHMARKS.md");
+    };
+
+    let Some(end_idx) = content.find(marker_end) else {
+        bail!("Could not find BENCHMARK_RESULTS_END marker in BENCHMARKS.md");
+    };
+
+    let insert_pos = start_idx + marker_start.len();
+
+    let mut new_content = String::new();
+    new_content.push_str(&content[..insert_pos]);
+    new_content.push_str("\n\n");
+    new_content.push_str(benchmark_md);
+    new_content.push_str(&content[end_idx..]);
+
+    let mut file = fs::File::create(&benchmark_file)?;
+    file.write_all(new_content.as_bytes())?;
+
+    println!(
+        "\n✅ Benchmark results written to: {}",
+        benchmark_file.display()
+    );
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
@@ -1693,6 +2227,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("Testing fragmented M4S output format only");
     }
+    println!("Screen FPS: {} (use --fps to change)", cli.fps);
     if include_camera {
         println!("Camera: ENABLED (use --no-camera to disable)");
         if devices.default_microphone.is_some() {
@@ -1714,19 +2249,68 @@ async fn main() -> anyhow::Result<()> {
         if test_mp4 {
             let camera_str = if include_camera { "+camera" } else { "" };
             println!("Running: {} (mp4{})...", scenario.name, camera_str);
-            let report = run_test(scenario, &cli.output_dir, &devices, false, include_camera).await;
+            let report = run_test(
+                scenario,
+                &cli.output_dir,
+                &devices,
+                false,
+                include_camera,
+                cli.fps,
+            )
+            .await;
             reports.push(report);
         }
 
         if test_fragmented {
             let camera_str = if include_camera { "+camera" } else { "" };
             println!("Running: {} (fragmented{})...", scenario.name, camera_str);
-            let report = run_test(scenario, &cli.output_dir, &devices, true, include_camera).await;
+            let report = run_test(
+                scenario,
+                &cli.output_dir,
+                &devices,
+                true,
+                include_camera,
+                cli.fps,
+            )
+            .await;
             reports.push(report);
         }
     }
 
     print_summary(&reports);
+
+    if cli.benchmark_output {
+        let command = format!(
+            "cargo run -p cap-recording --example real-device-test-runner -- {} {}{}{}{}--fps {}",
+            match cli.command {
+                Some(Commands::Baseline) => "baseline",
+                Some(Commands::SinglePause) => "single-pause",
+                Some(Commands::MultiplePauses) => "multiple-pauses",
+                Some(Commands::Full) | None => "full",
+                _ => "unknown",
+            },
+            if cli.keep_outputs {
+                "--keep-outputs "
+            } else {
+                ""
+            },
+            if cli.no_camera { "--no-camera " } else { "" },
+            if cli.fragmented_only {
+                "--fragmented-only "
+            } else {
+                ""
+            },
+            if cli.mp4_only { "--mp4-only " } else { "" },
+            cli.fps,
+        );
+
+        let benchmark_md =
+            generate_benchmark_markdown(&reports, &devices, cli.notes.as_deref(), command.trim());
+
+        if let Err(e) = write_benchmark_to_file(&benchmark_md) {
+            tracing::error!("Failed to write benchmark results: {}", e);
+        }
+    }
 
     if !cli.keep_outputs {
         if let Err(e) = std::fs::remove_dir_all(&cli.output_dir) {
