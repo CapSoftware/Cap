@@ -2886,6 +2886,17 @@ function EnhancedAudioSync({
 	enhancedAudioEnabled,
 }: EnhancedAudioSyncProps) {
 	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
+	const hasUserInteractedRef = React.useRef(false);
+	const [effectiveVolume, setEffectiveVolume] = React.useState(1);
+
+	React.useEffect(() => {
+		if (mediaVolume > 0) {
+			hasUserInteractedRef.current = true;
+			setEffectiveVolume(mediaVolume);
+		} else if (hasUserInteractedRef.current) {
+			setEffectiveVolume(mediaVolume);
+		}
+	}, [mediaVolume]);
 
 	const syncEnhancedAudio = React.useCallback(() => {
 		if (!enhancedAudioRef.current || !videoRef.current) return;
@@ -2941,7 +2952,7 @@ function EnhancedAudioSync({
 
 		if (enhancedAudioEnabled) {
 			video.muted = true;
-			audio.volume = mediaVolume;
+			audio.volume = effectiveVolume;
 			syncEnhancedAudio();
 			if (!video.paused) {
 				audio.play().catch(() => {});
@@ -2952,7 +2963,7 @@ function EnhancedAudioSync({
 		}
 	}, [
 		enhancedAudioEnabled,
-		mediaVolume,
+		effectiveVolume,
 		syncEnhancedAudio,
 		videoRef,
 		enhancedAudioRef,
