@@ -745,59 +745,56 @@ impl ShowCapWindow {
         }
 
         #[cfg(target_os = "macos")]
-        if let Self::InProgressRecording { .. } = self {
-            if let Some(window) = self.id(app).get(app) {
-                use crate::panel_manager::is_window_handle_valid;
+        if let Self::InProgressRecording { .. } = self
+            && let Some(window) = self.id(app).get(app)
+        {
+            use crate::panel_manager::is_window_handle_valid;
 
-                if is_window_handle_valid(&window) {
-                    debug!("InProgressRecording: reusing existing window");
-                    let width = 320.0;
-                    let height = 150.0;
-                    let recording_monitor = CursorMonitorInfo::get();
-                    let (pos_x, pos_y) =
-                        recording_monitor.bottom_center_position(width, height, 120.0);
-                    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+            if is_window_handle_valid(&window) {
+                debug!("InProgressRecording: reusing existing window");
+                let width = 320.0;
+                let height = 150.0;
+                let recording_monitor = CursorMonitorInfo::get();
+                let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
+                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
-                    let label = window.label().to_string();
-                    app.run_on_main_thread({
-                        let app = app.clone();
-                        move || {
-                            use tauri_nspanel::ManagerExt;
-                            if let Ok(panel) = app.get_webview_panel(&label) {
-                                panel.order_front_regardless();
-                                panel.show();
-                            }
+                let label = window.label().to_string();
+                app.run_on_main_thread({
+                    let app = app.clone();
+                    move || {
+                        use tauri_nspanel::ManagerExt;
+                        if let Ok(panel) = app.get_webview_panel(&label) {
+                            panel.order_front_regardless();
+                            panel.show();
                         }
-                    })
-                    .ok();
-                    return Ok(window);
-                } else {
-                    warn!(
-                        "InProgressRecording window handle invalid, destroying and recreating..."
-                    );
-                    let _ = window.destroy();
-
-                    let window_id = self.id(app);
-                    let max_wait = std::time::Duration::from_millis(500);
-                    let poll_interval = std::time::Duration::from_millis(25);
-                    let start = std::time::Instant::now();
-                    while start.elapsed() < max_wait {
-                        if window_id.get(app).is_none() {
-                            debug!(
-                                "InProgressRecording window removed from registry after {:?}",
-                                start.elapsed()
-                            );
-                            break;
-                        }
-                        tokio::time::sleep(poll_interval).await;
                     }
+                })
+                .ok();
+                return Ok(window);
+            } else {
+                warn!("InProgressRecording window handle invalid, destroying and recreating...");
+                let _ = window.destroy();
 
-                    if window_id.get(app).is_some() {
-                        error!("InProgressRecording window STILL in registry, cannot recreate");
-                        return Err(tauri::Error::WindowNotFound);
+                let window_id = self.id(app);
+                let max_wait = std::time::Duration::from_millis(500);
+                let poll_interval = std::time::Duration::from_millis(25);
+                let start = std::time::Instant::now();
+                while start.elapsed() < max_wait {
+                    if window_id.get(app).is_none() {
+                        debug!(
+                            "InProgressRecording window removed from registry after {:?}",
+                            start.elapsed()
+                        );
+                        break;
                     }
-                    debug!("InProgressRecording window cleaned up, will recreate");
+                    tokio::time::sleep(poll_interval).await;
                 }
+
+                if window_id.get(app).is_some() {
+                    error!("InProgressRecording window STILL in registry, cannot recreate");
+                    return Err(tauri::Error::WindowNotFound);
+                }
+                debug!("InProgressRecording window cleaned up, will recreate");
             }
         }
 
