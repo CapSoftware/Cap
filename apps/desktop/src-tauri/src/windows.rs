@@ -774,11 +774,12 @@ impl ShowCapWindow {
                         use crate::panel_manager::is_window_handle_valid;
 
                         if is_window_handle_valid(&window) {
+                            let label = window.label().to_string();
                             app.run_on_main_thread({
-                                let window = window.clone();
+                                let app = app.clone();
                                 move || {
-                                    use crate::panel_manager::try_to_panel;
-                                    if let Ok(panel) = try_to_panel(&window) {
+                                    use tauri_nspanel::ManagerExt;
+                                    if let Ok(panel) = app.get_webview_panel(&label) {
                                         panel.order_front_regardless();
                                         panel.show();
                                     }
