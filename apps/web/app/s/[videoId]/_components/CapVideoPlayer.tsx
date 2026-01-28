@@ -799,7 +799,6 @@ export function CapVideoPlayer({
 						videoRef={videoRef}
 						enhancedAudioEnabled={enhancedAudioEnabled}
 						enhancedAudioMuted={enhancedAudioMuted}
-						setEnhancedAudioMuted={setEnhancedAudioMuted}
 					/>
 				</>
 			)}

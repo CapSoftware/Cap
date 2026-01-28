@@ -2904,7 +2904,6 @@ interface EnhancedAudioSyncProps {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	enhancedAudioEnabled: boolean;
 	enhancedAudioMuted: boolean;
-	setEnhancedAudioMuted: (muted: boolean) => void;
 }
 
 function EnhancedAudioSync({
@@ -2912,10 +2911,8 @@ function EnhancedAudioSync({
 	videoRef,
 	enhancedAudioEnabled,
 	enhancedAudioMuted,
-	setEnhancedAudioMuted,
 }: EnhancedAudioSyncProps) {
 	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
 	const wasEnhancedRef = React.useRef(false);
 
 	const syncEnhancedAudio = React.useCallback(() => {
@@ -2978,21 +2975,15 @@ function EnhancedAudioSync({
 		const wasEnhanced = wasEnhancedRef.current;
 
 		if (enhancedAudioEnabled) {
-			const muteForEnhanced = wasEnhanced ? enhancedAudioMuted : mediaMuted;
-
-			if (!wasEnhanced && enhancedAudioMuted !== mediaMuted) {
-				setEnhancedAudioMuted(mediaMuted);
-			}
-
 			wasEnhancedRef.current = true;
 
 			video.muted = true;
 			audio.volume = mediaVolume;
-			audio.muted = muteForEnhanced;
+			audio.muted = enhancedAudioMuted;
 			syncEnhancedAudio();
 
 			if (!video.paused) {
-				if (muteForEnhanced) {
+				if (enhancedAudioMuted) {
 					audio.pause();
 				} else {
 					audio.play().catch(() => {});
@@ -3012,9 +3003,7 @@ function EnhancedAudioSync({
 	}, [
 		enhancedAudioEnabled,
 		enhancedAudioMuted,
-		mediaMuted,
 		mediaVolume,
-		setEnhancedAudioMuted,
 		syncEnhancedAudio,
 		videoRef,
 		enhancedAudioRef,

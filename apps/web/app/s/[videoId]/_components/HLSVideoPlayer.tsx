@@ -517,7 +517,6 @@ export function HLSVideoPlayer({
 						videoRef={videoRef}
 						enhancedAudioEnabled={enhancedAudioEnabled}
 						enhancedAudioMuted={enhancedAudioMuted}
-						setEnhancedAudioMuted={setEnhancedAudioMuted}
 					/>
 				</>
 			)}
