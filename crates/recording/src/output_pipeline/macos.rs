@@ -337,10 +337,10 @@ impl Muxer for AVFoundationMp4Muxer {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("MP4 encoder video channel already closed during stop: {e}");
             }
-            if let Some(audio_tx) = &state.audio_tx {
-                if let Err(e) = audio_tx.send(None) {
-                    trace!("MP4 encoder audio channel already closed during stop: {e}");
-                }
+            if let Some(audio_tx) = &state.audio_tx
+                && let Err(e) = audio_tx.send(None)
+            {
+                trace!("MP4 encoder audio channel already closed during stop: {e}");
             }
         }
     }
@@ -350,10 +350,10 @@ impl Muxer for AVFoundationMp4Muxer {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("MP4 encoder video channel already closed during finish: {e}");
             }
-            if let Some(audio_tx) = &state.audio_tx {
-                if let Err(e) = audio_tx.send(None) {
-                    trace!("MP4 encoder audio channel already closed during finish: {e}");
-                }
+            if let Some(audio_tx) = &state.audio_tx
+                && let Err(e) = audio_tx.send(None)
+            {
+                trace!("MP4 encoder audio channel already closed during finish: {e}");
             }
 
             if let Some(handle) = state.encoder_handle.take() {
@@ -458,26 +458,26 @@ impl VideoMuxer for AVFoundationMp4Muxer {
 
 impl AudioMuxer for AVFoundationMp4Muxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(state) = &self.state {
-            if let Some(audio_tx) = &state.audio_tx {
-                let owned_frame = {
-                    let mut new_frame = ffmpeg::frame::Audio::new(
-                        frame.inner.format(),
-                        frame.inner.samples(),
-                        frame.inner.channel_layout(),
-                    );
-                    new_frame.clone_from(&frame.inner);
-                    new_frame
-                };
+        if let Some(state) = &self.state
+            && let Some(audio_tx) = &state.audio_tx
+        {
+            let owned_frame = {
+                let mut new_frame = ffmpeg::frame::Audio::new(
+                    frame.inner.format(),
+                    frame.inner.samples(),
+                    frame.inner.channel_layout(),
+                );
+                new_frame.clone_from(&frame.inner);
+                new_frame
+            };
 
-                match audio_tx.try_send(Some(AudioFrameMessage::Frame(owned_frame, timestamp))) {
-                    Ok(()) => {}
-                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                        trace!("MP4 audio encoder buffer full, dropping frame");
-                    }
-                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                        trace!("MP4 audio encoder channel disconnected");
-                    }
+            match audio_tx.try_send(Some(AudioFrameMessage::Frame(owned_frame, timestamp))) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    trace!("MP4 audio encoder buffer full, dropping frame");
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    trace!("MP4 audio encoder channel disconnected");
                 }
             }
         }
@@ -638,10 +638,10 @@ impl Muxer for AVFoundationCameraMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.state {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("Camera MP4 encoder channel already closed during stop: {e}");
-            }
+        if let Some(state) = &self.state
+            && let Err(e) = state.video_tx.send(None)
+        {
+            trace!("Camera MP4 encoder channel already closed during stop: {e}");
         }
     }
 
