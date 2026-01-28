@@ -1647,7 +1647,7 @@ function Page() {
 									await commands.showWindow({ Settings: { page: "general" } });
 									getCurrentWindow().hide();
 								}}
-								class="flex items-center justify-center size-5 -ml-[1.5px]"
+								class="flex items-center justify-center size-5 -ml-[1.5px] focus:outline-none"
 							>
 								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1666,7 +1666,7 @@ function Page() {
 										return next;
 									});
 								}}
-								class="flex justify-center items-center size-5"
+								class="flex justify-center items-center size-5 focus:outline-none"
 							>
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1685,7 +1685,7 @@ function Page() {
 										return next;
 									});
 								}}
-								class="flex justify-center items-center size-5"
+								class="flex justify-center items-center size-5 focus:outline-none"
 							>
 								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1697,7 +1697,7 @@ function Page() {
 								onClick={() => {
 									new WebviewWindow("debug", { url: "/debug" });
 								}}
-								class="flex justify-center items-center"
+								class="flex justify-center items-center focus:outline-none"
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
