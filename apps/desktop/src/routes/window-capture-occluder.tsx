@@ -14,11 +14,12 @@ export default function () {
 
 	const bounds = () => {
 		if (!currentRecording.data) return;
-		if ("window" in currentRecording.data.target) {
-			return currentRecording.data.target.window.bounds;
+		const target = currentRecording.data.target;
+		if (typeof target === "object" && "window" in target) {
+			return target.window.bounds;
 		}
-		if ("area" in currentRecording.data.target) {
-			return currentRecording.data.target.area.bounds;
+		if (typeof target === "object" && "area" in target) {
+			return target.area.bounds;
 		}
 	};
 
