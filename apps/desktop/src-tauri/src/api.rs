@@ -328,35 +328,3 @@ pub async fn fetch_workspaces(app: &AppHandle) -> Result<Vec<Workspace>, AuthedA
     Ok(response.workspaces)
 }
 
-#[instrument(skip(app))]
-pub async fn trigger_ai_processing(
-    app: &AppHandle,
-    recording_id: &str,
-) -> Result<(), AuthedApiError> {
-    let resp = app
-        .authed_api_request("/api/recording/process-ai", |c, url| {
-            c.post(url)
-                .header("Content-Type", "application/json")
-                .json(&serde_json::json!({
-                    "recordingId": recording_id
-                }))
-        })
-        .await
-        .map_err(|err| format!("api/trigger_ai_processing/request: {err}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let error_body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        trace!("AI processing trigger failed (non-critical): {status}: {error_body}");
-        return Ok(());
-    }
-
-    trace!(
-        "AI processing triggered successfully for recording {}",
-        recording_id
-    );
-    Ok(())
-}

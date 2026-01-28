@@ -1660,10 +1660,6 @@ async fn upload_exported_video(
 
             NotificationType::ShareableLinkCopied.send(&app);
 
-            if let Err(e) = api::trigger_ai_processing(&app, &uploaded_video.id).await {
-                error!("Failed to trigger AI processing: {e}");
-            }
-
             Ok(UploadResult::Success(uploaded_video.link))
         }
         Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
@@ -2657,13 +2653,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             tokio::spawn(check_notification_permissions(app.clone()));
 
-            println!("Checking startup completion and permissions...");
-            let permissions = permissions::do_permissions_check(false);
-            println!("Permissions check result: {permissions:?}");
-
             tokio::spawn({
                 let app = app.clone();
                 async move {
+                    #[cfg(target_os = "macos")]
+                    scap_screencapturekit::request_permission();
+
+                    println!("Checking startup completion and permissions...");
+                    let permissions = permissions::do_permissions_check(false);
+                    println!("Permissions check result: {permissions:?}");
+
                     if !permissions.screen_recording.permitted()
                         || !permissions.accessibility.permitted()
                         || GeneralSettingsStore::get(&app)
@@ -3079,10 +3078,6 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                             .await
                                             .set_text(uploaded_video.link.clone());
                                         NotificationType::ShareableLinkCopied.send(&app);
-
-                                        if let Err(e) = api::trigger_ai_processing(&app, &uploaded_video.id).await {
-                                            error!("Failed to trigger AI processing: {e}");
-                                        }
                                     }
                             });
                         }
