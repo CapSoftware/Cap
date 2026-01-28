@@ -2886,17 +2886,20 @@ function EnhancedAudioSync({
 	enhancedAudioEnabled,
 }: EnhancedAudioSyncProps) {
 	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const hasUserInteractedRef = React.useRef(false);
-	const [effectiveVolume, setEffectiveVolume] = React.useState(1);
+	const dispatch = useMediaDispatch();
+	const initializedRef = React.useRef(false);
+
+	const effectiveVolume = mediaVolume > 0 ? mediaVolume : 1;
 
 	React.useEffect(() => {
-		if (mediaVolume > 0) {
-			hasUserInteractedRef.current = true;
-			setEffectiveVolume(mediaVolume);
-		} else if (hasUserInteractedRef.current) {
-			setEffectiveVolume(mediaVolume);
+		if (enhancedAudioEnabled && !initializedRef.current && mediaVolume === 0) {
+			initializedRef.current = true;
+			dispatch({
+				type: MediaActionTypes.MEDIA_VOLUME_REQUEST,
+				detail: 1,
+			});
 		}
-	}, [mediaVolume]);
+	}, [enhancedAudioEnabled, mediaVolume, dispatch]);
 
 	const syncEnhancedAudio = React.useCallback(() => {
 		if (!enhancedAudioRef.current || !videoRef.current) return;
@@ -2911,6 +2914,8 @@ function EnhancedAudioSync({
 
 		const handlePlay = () => {
 			if (enhancedAudioEnabled) {
+				audio.muted = false;
+				audio.volume = effectiveVolume;
 				syncEnhancedAudio();
 				audio.play().catch(() => {});
 			}
@@ -2943,7 +2948,13 @@ function EnhancedAudioSync({
 			video.removeEventListener("seeked", handleSeeked);
 			video.removeEventListener("ratechange", handleRateChange);
 		};
-	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef, enhancedAudioRef]);
+	}, [
+		enhancedAudioEnabled,
+		effectiveVolume,
+		syncEnhancedAudio,
+		videoRef,
+		enhancedAudioRef,
+	]);
 
 	React.useEffect(() => {
 		const video = videoRef.current;
@@ -2952,6 +2963,7 @@ function EnhancedAudioSync({
 
 		if (enhancedAudioEnabled) {
 			video.muted = true;
+			audio.muted = false;
 			audio.volume = effectiveVolume;
 			syncEnhancedAudio();
 			if (!video.paused) {
