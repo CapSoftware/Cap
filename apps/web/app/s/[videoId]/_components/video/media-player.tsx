@@ -2261,7 +2261,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 
 	const isDisabled = disabled || context.disabled;
 
-	const displayMuted = enhancedAudioEnabled ? false : mediaMuted;
+	const displayMuted = mediaMuted;
 
 	const onMute = React.useCallback(() => {
 		dispatch({
@@ -2886,18 +2886,32 @@ function EnhancedAudioSync({
 	enhancedAudioEnabled,
 }: EnhancedAudioSyncProps) {
 	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
+	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
 	const dispatch = useMediaDispatch();
-	const initializedRef = React.useRef(false);
+	const wasEnhancedRef = React.useRef(false);
+	const savedVolumeRef = React.useRef(1);
 
-	const effectiveVolume = mediaVolume > 0 ? mediaVolume : 1;
+	if (mediaVolume > 0) {
+		savedVolumeRef.current = mediaVolume;
+	}
+
+	const effectiveVolume =
+		mediaVolume > 0 ? mediaVolume : savedVolumeRef.current;
 
 	React.useEffect(() => {
-		if (enhancedAudioEnabled && !initializedRef.current && mediaVolume === 0) {
-			initializedRef.current = true;
+		if (enhancedAudioEnabled && !wasEnhancedRef.current) {
+			wasEnhancedRef.current = true;
 			dispatch({
-				type: MediaActionTypes.MEDIA_VOLUME_REQUEST,
-				detail: 1,
+				type: MediaActionTypes.MEDIA_UNMUTE_REQUEST,
 			});
+			if (mediaVolume === 0) {
+				dispatch({
+					type: MediaActionTypes.MEDIA_VOLUME_REQUEST,
+					detail: savedVolumeRef.current,
+				});
+			}
+		} else if (!enhancedAudioEnabled) {
+			wasEnhancedRef.current = false;
 		}
 	}, [enhancedAudioEnabled, mediaVolume, dispatch]);
 
@@ -2913,7 +2927,7 @@ function EnhancedAudioSync({
 		if (!video || !audio) return;
 
 		const handlePlay = () => {
-			if (enhancedAudioEnabled) {
+			if (enhancedAudioEnabled && !mediaMuted) {
 				audio.muted = false;
 				audio.volume = effectiveVolume;
 				syncEnhancedAudio();
@@ -2950,6 +2964,7 @@ function EnhancedAudioSync({
 		};
 	}, [
 		enhancedAudioEnabled,
+		mediaMuted,
 		effectiveVolume,
 		syncEnhancedAudio,
 		videoRef,
@@ -2963,18 +2978,23 @@ function EnhancedAudioSync({
 
 		if (enhancedAudioEnabled) {
 			video.muted = true;
-			audio.muted = false;
-			audio.volume = effectiveVolume;
-			syncEnhancedAudio();
-			if (!video.paused) {
-				audio.play().catch(() => {});
+			if (!mediaMuted) {
+				audio.muted = false;
+				audio.volume = effectiveVolume;
+				if (!video.paused) {
+					syncEnhancedAudio();
+					audio.play().catch(() => {});
+				}
+			} else {
+				audio.pause();
 			}
 		} else {
-			video.muted = false;
+			video.muted = mediaMuted;
 			audio.pause();
 		}
 	}, [
 		enhancedAudioEnabled,
+		mediaMuted,
 		effectiveVolume,
 		syncEnhancedAudio,
 		videoRef,
