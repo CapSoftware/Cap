@@ -115,6 +115,7 @@ export function CapVideoPlayer({
 	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
 		enhancedAudioStatus === "COMPLETE",
 	);
+	const [enhancedAudioMuted, setEnhancedAudioMuted] = useState(false);
 	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
 
 	useEffect(() => {
@@ -756,6 +757,8 @@ export function CapVideoPlayer({
 						<MediaPlayerVolume
 							expandable
 							enhancedAudioEnabled={enhancedAudioEnabled}
+							enhancedAudioMuted={enhancedAudioMuted}
+							setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
 						<MediaPlayerTime />
 					</div>
@@ -795,6 +798,8 @@ export function CapVideoPlayer({
 						enhancedAudioRef={enhancedAudioRef}
 						videoRef={videoRef}
 						enhancedAudioEnabled={enhancedAudioEnabled}
+						enhancedAudioMuted={enhancedAudioMuted}
+						setEnhancedAudioMuted={setEnhancedAudioMuted}
 					/>
 				</>
 			)}

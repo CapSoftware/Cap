@@ -89,6 +89,7 @@ export function HLSVideoPlayer({
 	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
 		enhancedAudioStatus === "COMPLETE",
 	);
+	const [enhancedAudioMuted, setEnhancedAudioMuted] = useState(false);
 	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
 
 	useEffect(() => {
@@ -474,6 +475,8 @@ export function HLSVideoPlayer({
 						<MediaPlayerVolume
 							expandable
 							enhancedAudioEnabled={enhancedAudioEnabled}
+							enhancedAudioMuted={enhancedAudioMuted}
+							setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
 						<MediaPlayerTime />
 					</div>
@@ -513,6 +516,8 @@ export function HLSVideoPlayer({
 						enhancedAudioRef={enhancedAudioRef}
 						videoRef={videoRef}
 						enhancedAudioEnabled={enhancedAudioEnabled}
+						enhancedAudioMuted={enhancedAudioMuted}
+						setEnhancedAudioMuted={setEnhancedAudioMuted}
 					/>
 				</>
 			)}
