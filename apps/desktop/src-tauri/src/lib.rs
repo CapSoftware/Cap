@@ -408,7 +408,7 @@ impl App {
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(state))]
-async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
+pub(crate) async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let (mic_feed, studio_handle, current_label) = {
         let app = state.read().await;
         let handle = match app.current_recording() {
@@ -494,7 +494,7 @@ fn get_system_diagnostics() -> cap_recording::diagnostics::SystemDiagnostics {
 #[specta::specta]
 #[instrument(skip(app_handle, state))]
 #[allow(unused_mut)]
-async fn set_camera_input(
+pub(crate) async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,

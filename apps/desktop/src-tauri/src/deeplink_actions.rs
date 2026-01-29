@@ -26,6 +26,22 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    TakeScreenshot {
+        capture_target: ScreenCaptureTarget,
+    },
+    SetCamera {
+        id: Option<DeviceOrModelID>,
+    },
+    SetMicrophone {
+        label: Option<String>,
+    },
+    ListCameras,
+    ListMicrophones,
+    ListDisplays,
+    ListWindows,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +161,73 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TakeScreenshot { capture_target } => {
+                crate::recording::take_screenshot(app.clone(), capture_target)
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::SetCamera { id } => {
+                crate::set_camera_input(app.clone(), app.state(), id).await
+            }
+            DeepLinkAction::SetMicrophone { label } => {
+                crate::set_mic_input(app.state(), label).await
+            }
+            DeepLinkAction::ListCameras => {
+                let cameras = crate::recording::list_cameras();
+                let cameras_json = serde_json::to_string(&cameras)
+                    .map_err(|e| format!("Failed to serialize cameras: {}", e))?;
+                tracing::info!("Available cameras: {}", cameras_json);
+                Ok(())
+            }
+            DeepLinkAction::ListMicrophones => {
+                use cap_recording::feeds::microphone::MicrophoneFeed;
+                let microphones: Vec<String> = MicrophoneFeed::list().keys().cloned().collect();
+                let mics_json = serde_json::to_string(&microphones)
+                    .map_err(|e| format!("Failed to serialize microphones: {}", e))?;
+                tracing::info!("Available microphones: {}", mics_json);
+                Ok(())
+            }
+            DeepLinkAction::ListDisplays => {
+                let displays = cap_recording::screen_capture::list_displays();
+                let displays_data: Vec<_> = displays
+                    .into_iter()
+                    .map(|(capture_display, _)| {
+                        serde_json::json!({
+                            "id": capture_display.id,
+                            "name": capture_display.name,
+                        })
+                    })
+                    .collect();
+                let displays_json = serde_json::to_string(&displays_data)
+                    .map_err(|e| format!("Failed to serialize displays: {}", e))?;
+                tracing::info!("Available displays: {}", displays_json);
+                Ok(())
+            }
+            DeepLinkAction::ListWindows => {
+                let windows = cap_recording::screen_capture::list_windows();
+                let windows_data: Vec<_> = windows
+                    .into_iter()
+                    .map(|(capture_window, _)| {
+                        serde_json::json!({
+                            "id": capture_window.id,
+                            "name": capture_window.name,
+                        })
+                    })
+                    .collect();
+                let windows_json = serde_json::to_string(&windows_data)
+                    .map_err(|e| format!("Failed to serialize windows: {}", e))?;
+                tracing::info!("Available windows: {}", windows_json);
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
