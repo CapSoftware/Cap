@@ -168,27 +168,28 @@ impl DeepLinkAction {
             }
             DeepLinkAction::ListDisplays => {
                 let displays = crate::recording::list_capture_displays().await;
-                let json = serde_json::to_string(&displays).unwrap_or_default();
-                println!("{}", json);
+                let json = serde_json::to_string(&displays).map_err(|e| e.to_string())?;
+                println!("{json}");
                 Ok(())
             }
             DeepLinkAction::ListWindows => {
                 let windows = crate::recording::list_capture_windows().await;
-                let json = serde_json::to_string(&windows).unwrap_or_default();
-                println!("{}", json);
+                let json = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
+                println!("{json}");
                 Ok(())
             }
             DeepLinkAction::ListCameras => {
                 let cameras = crate::recording::list_cameras();
-                let json = serde_json::to_string(&cameras).unwrap_or_default();
-                println!("{}", json);
+                let json = serde_json::to_string(&cameras).map_err(|e| e.to_string())?;
+                println!("{json}");
                 Ok(())
             }
             DeepLinkAction::ListMicrophones => {
                 let mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
-                let mic_names: Vec<_> = mics.keys().cloned().collect();
-                let json = serde_json::to_string(&mic_names).unwrap_or_default();
-                println!("{}", json);
+                let mut mic_names: Vec<_> = mics.keys().cloned().collect();
+                mic_names.sort();
+                let json = serde_json::to_string(&mic_names).map_err(|e| e.to_string())?;
+                println!("{json}");
                 Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {

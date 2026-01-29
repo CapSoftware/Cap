@@ -15,8 +15,7 @@ export type DeepLinkAction =
   | { open_settings: { page?: string } };
 
 export async function executeCapAction(action: DeepLinkAction): Promise<void> {
-  const value = typeof action === "string" ? `"${action}"` : JSON.stringify(action);
-  const encodedValue = encodeURIComponent(value);
+  const encodedValue = encodeURIComponent(JSON.stringify(action));
   const url = `cap-desktop://action?value=${encodedValue}`;
 
   try {

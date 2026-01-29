@@ -19,8 +19,8 @@ Control Cap screen recording directly from Raycast.
 
 ```bash
 cd apps/raycast
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 ## How It Works

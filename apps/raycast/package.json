@@ -12,7 +12,17 @@
       "title": "Start Recording",
       "subtitle": "Cap",
       "description": "Start a new screen recording",
-      "mode": "no-view"
+      "mode": "no-view",
+      "preferences": [
+        {
+          "name": "defaultDisplay",
+          "title": "Default Display",
+          "description": "Name of the display to record (e.g., 'Main Display', 'Built-in Retina Display')",
+          "type": "textfield",
+          "required": false,
+          "default": "Main Display"
+        }
+      ]
     },
     {
       "name": "stop-recording",
