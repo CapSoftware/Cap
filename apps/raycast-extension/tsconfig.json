@@ -1,0 +1,20 @@
+{
+    "compilerOptions": {
+        "lib": [
+            "ES2023"
+        ],
+        "module": "commonjs",
+        "target": "ES2023",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "sourceMap": true,
+        "jsx": "react",
+        "moduleResolution": "Node",
+        "resolveJsonModule": true
+    },
+    "include": [
+        "src/**/*"
+    ]
+}

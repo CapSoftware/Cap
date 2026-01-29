@@ -637,6 +637,90 @@ async fn set_camera_input(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn cycle_mic_input(state: MutableState<'_, App>) -> Result<(), String> {
+    if !permissions::do_permissions_check(false)
+        .microphone
+        .permitted()
+    {
+        return Ok(());
+    }
+
+    let current_label = {
+        let app = state.read().await;
+        app.selected_mic_label.clone()
+    };
+
+    let mut mic_list = MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>();
+    mic_list.sort_unstable();
+
+    if mic_list.is_empty() {
+        return Ok(());
+    }
+
+    let next_label = match current_label {
+        Some(label) => {
+            let index = mic_list.iter().position(|l| l == &label);
+            match index {
+                Some(i) => mic_list.get((i + 1) % mic_list.len()).cloned(),
+                None => mic_list.first().cloned(),
+            }
+        }
+        None => mic_list.first().cloned(),
+    };
+
+    set_mic_input(state, next_label).await
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app_handle, state))]
+pub async fn cycle_camera_input(
+    app_handle: AppHandle,
+    state: MutableState<'_, App>,
+) -> Result<(), String> {
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return Err("Camera permission denied".to_string());
+    }
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return Err("Camera permission denied".to_string());
+    }
+    }
+
+    let current_id = {
+        let app = state.read().await;
+        app.selected_camera_id.clone()
+    };
+
+    let camera_list = cap_camera::list_cameras().collect::<Vec<_>>();
+
+    if camera_list.is_empty() {
+        return Ok(());
+    }
+
+    let current_index = match current_id {
+        Some(id) => camera_list.iter().position(|c| match &id {
+            DeviceOrModelID::DeviceID(dev_id) => c.device_id() == dev_id,
+            DeviceOrModelID::ModelID(mod_id) => c.model_id().is_some_and(|m| m == mod_id),
+        }),
+        None => None,
+    };
+
+    let next_camera = match current_index {
+        Some(i) => camera_list.get((i + 1) % camera_list.len()),
+        None => camera_list.first(),
+    };
+
+    let next_id = next_camera.map(|c| DeviceOrModelID::DeviceID(c.device_id().to_string()));
+    let next_id = next_camera.map(|c| match c.model_id() {
+        Some(model_id) => DeviceOrModelID::ModelID(model_id.to_string()),
+        None => DeviceOrModelID::DeviceID(c.device_id().to_string()),
+    });
+    set_camera_input(app_handle, state, next_id).await
+}
+
 fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<StreamError>) {
     tokio::spawn(async move {
         let state = app_handle.state::<ArcLock<App>>();
