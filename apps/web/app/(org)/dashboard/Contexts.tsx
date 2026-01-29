@@ -124,6 +124,7 @@ export function DashboardContexts({
 
 	const setThemeHandler = (newTheme: ITheme) => {
 		setTheme(newTheme);
+		document.body.className = newTheme;
 		Cookies.set("theme", newTheme, {
 			expires: 365,
 		});
