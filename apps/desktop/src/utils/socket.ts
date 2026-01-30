@@ -14,6 +14,7 @@ import {
 	disposeWebGPU,
 	initWebGPU,
 	isWebGPUSupported,
+	renderFrameWebGPU,
 	renderNv12FrameWebGPU,
 	type WebGPURenderer,
 } from "./webgpu-renderer";
@@ -778,6 +779,38 @@ export function createImageDataWS(
 				framesSentToWorker++;
 				pendingFrame = buffer;
 				processNextFrame();
+			}
+			return;
+		}
+
+		if (mainThreadWebGPU && directCanvas && buffer.byteLength >= 24) {
+			const metadataOffset = buffer.byteLength - 24;
+			const meta = new DataView(buffer, metadataOffset, 24);
+			const strideBytes = meta.getUint32(0, true);
+			const height = meta.getUint32(4, true);
+			const width = meta.getUint32(8, true);
+
+			if (width > 0 && height > 0) {
+				const frameDataSize = strideBytes * height;
+				const frameData = new Uint8ClampedArray(buffer, 0, frameDataSize);
+
+				if (directCanvas.width !== width || directCanvas.height !== height) {
+					directCanvas.width = width;
+					directCanvas.height = height;
+				}
+
+				renderFrameWebGPU(
+					mainThreadWebGPU,
+					frameData,
+					width,
+					height,
+					strideBytes,
+				);
+				actualRendersCount++;
+				renderFrameCount++;
+
+				storeRenderedFrame(frameData, width, height, strideBytes, false);
+				onmessage({ width, height });
 			}
 			return;
 		}
