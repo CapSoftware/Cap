@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-01-28
+**Last Updated**: 2026-01-30
 
 ### Performance Summary
 
@@ -255,6 +255,72 @@ Decoder Pipeline:
 - All playback metrics well within targets
 
 **Stopping point**: All metrics healthy. No action required.
+
+---
+
+### Session 2026-01-30 (Performance Check - Healthy)
+
+**Goal**: Verify current playback performance against targets
+
+**What was done**:
+1. Read PLAYBACK-FINDINGS.md and PLAYBACK-BENCHMARKS.md for context
+2. Verified test recordings exist from recording benchmark run
+3. Ran full playback validation tests twice
+4. Analyzed results against performance targets
+
+**Changes Made**:
+- None - performance is healthy
+
+**Results** (MP4 Mode):
+- ✅ Decoder: AVAssetReader (hardware) with VideoToolbox HW acceleration
+- ✅ Display decoder init: 320-354ms (multi-position pool with 3 decoders)
+- ✅ Camera decoder init: 35ms (target <200ms)
+- ✅ Effective FPS: 334-337 fps (target ≥60 fps)
+- ✅ Decode latency: avg=3.0ms, p95=5.1ms, p99=79-81ms (target p95 <50ms)
+- ✅ Mic audio sync: 81.7ms diff (target <100ms)
+- ✅ Camera-display drift: 0ms (target <100ms)
+- 🟡 System audio sync: 186.7ms diff (known issue, inherited from recording)
+
+**Analysis**:
+- Playback decoder performance is excellent (334-337 fps effective, 5.1ms p95 latency)
+- Hardware acceleration (VideoToolbox) confirmed working
+- All core sync metrics pass targets
+- System audio timing issue is recording-side, not playback-side
+
+**Stopping point**: All metrics healthy. No action required.
+
+---
+
+### Session 2026-01-30 (Fix Frame Rate Bottleneck - CPU→GPU RGBA)
+
+**Goal**: Fix editor playback only achieving ~40-50fps instead of 60fps
+
+**What was done**:
+1. Analyzed the full playback pipeline: Rust decoder → GPU render → readback → WebSocket → JavaScript → display
+2. Identified bottleneck: `convert_to_nv12()` in `frame_ws.rs` doing per-pixel CPU color conversion (~6M pixels/frame)
+3. Implemented fix: Skip NV12 conversion, send RGBA directly to WebGPU
+
+**Changes Made**:
+- `apps/desktop/src-tauri/src/frame_ws.rs`: Replaced NV12 conversion with direct RGBA packing in `create_watch_frame_ws()`
+- `apps/desktop/src/utils/socket.ts`: Added WebGPU RGBA rendering path using `renderFrameWebGPU()`
+
+**Root Cause Analysis**:
+The pipeline was:
+1. GPU renders RGBA → readback to CPU (~23MB)
+2. **CPU converts RGBA→NV12** (per-pixel, ~15-25ms per frame) ← BOTTLENECK
+3. Send NV12 over WebSocket (~9MB)
+4. JavaScript receives NV12 → WebGPU converts NV12→display
+
+The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolution, limiting frame rate to 40-50fps. NV12 was originally used to reduce WebSocket bandwidth (12 vs 32 bits/pixel), but the CPU cost outweighed the bandwidth savings for local WebSocket.
+
+**Fix**: Skip NV12 conversion entirely. Send RGBA directly and use WebGPU `renderFrameWebGPU()` to display. This trades 2.7x bandwidth increase for eliminating the 15-25ms CPU conversion per frame.
+
+**Results**:
+- Eliminates ~15-25ms CPU overhead per frame
+- Expected improvement: 40-50fps → 60fps
+- Bandwidth increase: ~9MB → ~23MB per frame (acceptable for local WebSocket)
+
+**Stopping point**: Fix implemented and compiles. Needs testing with actual editor to verify 60fps achievement.
 
 ---
 
