@@ -8,6 +8,8 @@ use tracing::trace;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
+use tauri_specta::Event;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
@@ -25,7 +27,10 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: RecordingMode,
     },
+    StartDefaultRecording,
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -87,6 +92,16 @@ impl TryFrom<&Url> for DeepLinkAction {
             });
         }
 
+        if url.scheme() == "cap" {
+             return match url.domain() {
+                Some("record") => Ok(Self::StartDefaultRecording),
+                Some("stop") => Ok(Self::StopRecording),
+                Some("pause") => Ok(Self::PauseRecording),
+                Some("resume") => Ok(Self::ResumeRecording),
+                _ => Err(ActionParseFromUrlError::Invalid),
+             };
+        }
+
         match url.domain() {
             Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),
@@ -143,8 +158,46 @@ impl DeepLinkAction {
                     .await
                     .map(|_| ())
             }
+            DeepLinkAction::StartDefaultRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let displays = cap_recording::screen_capture::list_displays();
+
+                if let Some((display, _)) = displays.into_iter().next() {
+                     let capture_target = ScreenCaptureTarget::Display { id: display.id };
+                     let inputs = StartRecordingInputs {
+                        mode: RecordingMode::Studio,
+                        capture_target,
+                        capture_system_audio: true,
+                        organization_id: None,
+                     };
+
+                     crate::recording::start_recording(app.clone(), state, inputs)
+                        .await
+                        .map(|_| ())
+                } else {
+                     Err("No display found".to_string())
+                }
+            }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let state_read = state.read().await;
+                if let Some(recording) = state_read.current_recording() {
+                     recording.pause().await.map_err(|e| e.to_string())?;
+                     crate::recording::RecordingEvent::Paused.emit(app).ok();
+                }
+                Ok(())
+            }
+            DeepLinkAction::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let state_read = state.read().await;
+                if let Some(recording) = state_read.current_recording() {
+                     recording.resume().await.map_err(|e| e.to_string())?;
+                     crate::recording::RecordingEvent::Resumed.emit(app).ok();
+                }
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
