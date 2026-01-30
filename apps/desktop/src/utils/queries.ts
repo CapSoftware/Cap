@@ -25,6 +25,67 @@ import {
 } from "./tauri";
 import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
+let authPlanFetchState = {
+	inFlight: false,
+	lastUserId: null as string | null,
+	succeeded: false,
+	retryCount: 0,
+	retryTimeout: null as ReturnType<typeof setTimeout> | null,
+};
+
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 1000;
+
+function resetAuthPlanFetchState() {
+	if (authPlanFetchState.retryTimeout) {
+		clearTimeout(authPlanFetchState.retryTimeout);
+	}
+	authPlanFetchState = {
+		inFlight: false,
+		lastUserId: null,
+		succeeded: false,
+		retryCount: 0,
+		retryTimeout: null,
+	};
+}
+
+async function fetchAuthPlanWithRetry(userId: string): Promise<void> {
+	if (authPlanFetchState.inFlight) return;
+	if (authPlanFetchState.succeeded && authPlanFetchState.lastUserId === userId)
+		return;
+
+	if (authPlanFetchState.lastUserId !== userId) {
+		resetAuthPlanFetchState();
+		authPlanFetchState.lastUserId = userId;
+	}
+
+	authPlanFetchState.inFlight = true;
+
+	try {
+		await commands.updateAuthPlan();
+		authPlanFetchState.succeeded = true;
+		authPlanFetchState.retryCount = 0;
+	} catch (error) {
+		console.error("Failed to fetch auth plan:", error);
+		authPlanFetchState.retryCount++;
+
+		if (authPlanFetchState.retryCount < MAX_RETRIES) {
+			const delay = BASE_DELAY_MS * 2 ** (authPlanFetchState.retryCount - 1);
+			authPlanFetchState.retryTimeout = setTimeout(() => {
+				authPlanFetchState.inFlight = false;
+				fetchAuthPlanWithRetry(userId);
+			}, delay);
+		}
+	} finally {
+		if (
+			authPlanFetchState.retryCount === 0 ||
+			authPlanFetchState.retryCount >= MAX_RETRIES
+		) {
+			authPlanFetchState.inFlight = false;
+		}
+	}
+}
+
 export const listWindows = queryOptions({
 	queryKey: ["capture", "windows"] as const,
 	queryFn: async () => {
@@ -269,13 +330,13 @@ export function createCustomDomainQuery() {
 export function createOrganizationsQuery() {
 	const auth = authStore.createQuery();
 
-	// Refresh organizations if they're missing
 	createEffect(() => {
+		const userId = auth.data?.user_id;
 		if (
-			auth.data?.user_id &&
+			userId &&
 			(!auth.data?.organizations || auth.data.organizations.length === 0)
 		) {
-			commands.updateAuthPlan().catch(console.error);
+			fetchAuthPlanWithRetry(userId);
 		}
 	});
 
@@ -286,11 +347,12 @@ export function createWorkspacesQuery() {
 	const auth = authStore.createQuery();
 
 	createEffect(() => {
+		const userId = auth.data?.user_id;
 		if (
-			auth.data?.user_id &&
+			userId &&
 			(!auth.data?.workspaces || auth.data.workspaces.length === 0)
 		) {
-			commands.updateAuthPlan().catch(console.error);
+			fetchAuthPlanWithRetry(userId);
 		}
 	});
 
