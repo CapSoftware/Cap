@@ -6,15 +6,8 @@ interface Microphone {
 }
 
 export default function Command() {
-  const [microphones, setMicrophones] = useState<Microphone[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const isLoading = false;
 
-  useEffect(() => {
-    // In a real implementation, you might want to fetch available microphones
-    // from the Cap app via an API. For now, we'll use a placeholder.
-    // Users can manually enter the microphone name.
-    setIsLoading(false);
-  }, []);
 
   const handleSwitchMicrophone = async (micLabel: string | null) => {
     try {
