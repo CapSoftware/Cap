@@ -25,6 +25,7 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: RecordingMode,
     },
+    StartDefaultRecording,
     StopRecording,
     OpenEditor {
         project_path: PathBuf,
@@ -32,6 +33,16 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    PauseRecording,
+    ResumeRecording,
+    SetMicrophone {
+        label: Option<String>,
+    },
+    SetCamera {
+        id: Option<DeviceOrModelID>,
+    },
+    CycleMicrophone,
+    CycleCamera,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -143,6 +154,30 @@ impl DeepLinkAction {
                     .await
                     .map(|_| ())
             }
+            DeepLinkAction::StartDefaultRecording => {
+                let permissions = crate::permissions::do_permissions_check(false);
+                if !permissions.screen_recording.permitted() {
+                    return Err("Screen recording permission denied".to_string());
+                }
+
+                let displays = cap_recording::screen_capture::list_displays();
+                if let Some((display, _)) = displays.first() {
+                    let state = app.state::<ArcLock<App>>();
+
+                    let inputs = StartRecordingInputs {
+                        mode: RecordingMode::Instant,
+                        capture_target: ScreenCaptureTarget::Display { id: display.id },
+                        capture_system_audio: false,
+                        organization_id: None,
+                    };
+
+                    crate::recording::start_recording(app.clone(), state, inputs)
+                        .await
+                        .map(|_| ())
+                } else {
+                    Err("No displays found".to_string())
+                }
+            }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
@@ -151,6 +186,43 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { label } => {
+                let permissions = crate::permissions::do_permissions_check(false);
+                if !permissions.microphone.permitted() {
+                    return Err("Microphone permission denied".to_string());
+                }
+
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, label).await
+            }
+            DeepLinkAction::SetCamera { id } => {
+                let permissions = crate::permissions::do_permissions_check(false);
+                if !permissions.camera.permitted() {
+                    return Err("Camera permission denied".to_string());
+                }
+
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, id).await
+            }
+            DeepLinkAction::CycleMicrophone => {
+                let state = app.state::<ArcLock<App>>();
+                crate::cycle_mic_input(state).await
+            }
+            DeepLinkAction::CycleCamera => {
+                let state = app.state::<ArcLock<App>>();
+                crate::cycle_camera_input(app.clone(), state).await
             }
         }
     }
