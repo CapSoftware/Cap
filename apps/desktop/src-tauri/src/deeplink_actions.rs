@@ -18,6 +18,7 @@ pub enum CaptureMode {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
+    // Recording controls
     StartRecording {
         capture_mode: CaptureMode,
         camera: Option<DeviceOrModelID>,
@@ -26,6 +27,21 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    
+    // Device switching
+    SetMicrophone {
+        /// Microphone label/name. None to disable.
+        label: Option<String>,
+    },
+    SetCamera {
+        /// Camera device ID or model ID. None to disable.
+        device_id: Option<DeviceOrModelID>,
+    },
+    
+    // Navigation
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +161,23 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, label).await
+            }
+            DeepLinkAction::SetCamera { device_id } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, device_id, None).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
