@@ -2,14 +2,6 @@ import { List, ActionPanel, Action, showToast, Toast, open } from "@raycast/api"
 
 export default function Command() {
   const isLoading = false;
-import { useState, useEffect } from "react";
-
-interface Microphone {
-  label: string;
-}
-
-export default function Command() {
-  const isLoading = false;
 
 
   const handleSwitchMicrophone = async (micLabel: string | null) => {
