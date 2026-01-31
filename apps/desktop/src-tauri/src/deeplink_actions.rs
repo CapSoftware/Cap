@@ -113,6 +113,8 @@ impl TryFrom<&Url> for DeepLinkAction {
 }
 
 impl DeepLinkAction {
+    pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        // Check if deeplink actions are enabled for sensitive operations
         let requires_permission = matches!(
             &self,
             DeepLinkAction::StartRecording { .. }
