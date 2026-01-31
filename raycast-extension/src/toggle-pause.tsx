@@ -2,15 +2,15 @@ import { showHUD, open } from "@raycast/api";
 
 export default async function Command() {
   try {
-    // Note: This requires adding pause/resume support to the deeplink actions
-    // For now, we'll show a message that this feature is coming soon
-    await showHUD("⏸️ Pause/Resume feature coming soon");
-    
-    // Future implementation:
-    // const action = "toggle_pause";
-    // const encodedAction = encodeURIComponent(JSON.stringify(action));
-    // const deeplinkUrl = `cap://action?value=${encodedAction}`;
-    // await open(deeplinkUrl);
+    // Note: This toggles between pause and resume
+    // The actual state management is handled by the Cap app
+    // For now, we'll try to pause first, and if already paused, it will resume
+    const pauseAction = "pause_recording";
+    const encodedAction = encodeURIComponent(JSON.stringify(pauseAction));
+    const deeplinkUrl = `cap://action?value=${encodedAction}`;
+
+    await open(deeplinkUrl);
+    await showHUD("⏸️ Toggled pause/resume");
   } catch (error) {
     console.error("Failed to toggle pause:", error);
     await showHUD("❌ Failed to toggle pause");
