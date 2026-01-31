@@ -23,7 +23,7 @@ export default function Command() {
       // For simplicity, we'll use model string format
       const action = {
         switch_camera: {
-          camera_id: cameraId ? cameraId : null,
+          camera_id: cameraId,
         },
       };
 
