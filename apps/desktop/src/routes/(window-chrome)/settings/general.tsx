@@ -442,6 +442,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								handleChange("enableNotifications", value);
 							}}
 						/>
+						<ToggleSettingItem
+							label="Allow deeplink actions"
+							description="Enable deeplink actions for recording control (start, stop, pause, resume, switch devices). When enabled, any app or website can trigger these actions via cap-desktop:// URLs. Only enable if you need automation features like Raycast extensions."
+							value={!!settings.enableDeeplinkActions}
+							onChange={(value) => handleChange("enableDeeplinkActions", value)}
+						/>
 					</SettingGroup>
 				)}
 

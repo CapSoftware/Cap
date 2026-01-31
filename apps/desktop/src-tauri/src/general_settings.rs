@@ -139,6 +139,8 @@ pub struct GeneralSettingsStore {
     pub main_window_position: Option<WindowPosition>,
     #[serde(default)]
     pub camera_window_position: Option<WindowPosition>,
+    #[serde(default)]
+    pub enable_deeplink_actions: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -207,6 +209,7 @@ impl Default for GeneralSettingsStore {
             editor_preview_quality: EditorPreviewQuality::Half,
             main_window_position: None,
             camera_window_position: None,
+            enable_deeplink_actions: false,
         }
     }
 }

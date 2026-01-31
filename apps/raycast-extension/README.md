@@ -24,3 +24,40 @@ Or use the Raycast CLI:
 cd apps/raycast-extension
 pnpm install
 ray dev
+```
+
+## Usage
+
+All commands are available through Raycast's command palette. Simply search for "Cap" and select the desired action.
+
+**Important Security Note**: Deeplink actions for recording control (start, stop, pause, resume, switch devices) require opt-in permission in Cap settings. Go to Settings → General and enable "Allow deeplink actions" to use these features. This prevents unauthorized apps or websites from controlling your recordings via URL schemes.
+
+## Deeplink Format
+
+The extension uses the `cap-desktop://` URL scheme to communicate with the Cap app. The format is:
+
+```
+cap-desktop://action?value={JSON_ACTION}
+```
+
+Where `JSON_ACTION` is a JSON-encoded action matching the `DeepLinkAction` enum in the Cap desktop app.
+
+## Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Develop in Raycast
+pnpm dev
+
+# Build for production
+pnpm build
+
+# Lint
+pnpm lint
+```
+
+## License
+
+MIT
