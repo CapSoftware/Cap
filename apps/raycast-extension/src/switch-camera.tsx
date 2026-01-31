@@ -7,15 +7,8 @@ interface Camera {
 }
 
 export default function Command() {
-  const [cameras, setCameras] = useState<Camera[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const isLoading = false;
 
-  useEffect(() => {
-    // In a real implementation, you might want to fetch available cameras
-    // from the Cap app via an API. For now, we'll use a placeholder.
-    // Users can manually enter the camera ID.
-    setIsLoading(false);
-  }, []);
 
   const handleSwitchCamera = async (cameraId: string | null) => {
     try {
