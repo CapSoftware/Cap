@@ -36,98 +36,79 @@ export default function Command() {
 
   return (
     <List
-      isLoading={isLoading}
-      searchBarPlaceholder="Search or enter camera ID..."
-      actions={
-        <ActionPanel>
-          <Action
-            title="Disable Camera"
-            onAction={() => handleSwitchCamera(null)}
-          />
-        </ActionPanel>
-      }
-    >
-      <List.Item
-        title="Disable Camera"
-        subtitle="Turn off camera input"
-        actions={
-          <ActionPanel>
-            <Action
-              title="Disable Camera"
-              onAction={() => handleSwitchCamera(null)}
-            />
-          </ActionPanel>
-        }
-      />
-      <List.Section title="Quick Actions">
-        <List.Item
-          title="Enter Camera ID"
-          subtitle="Manually specify camera ID or model"
-          actions={
-            <ActionPanel>
-              <Action
-                title="Switch Camera"
-                onAction={async () => {
-                  // In a real implementation, you'd show a form to enter the camera ID
-                  // For now, this is a placeholder
-                  await showToast({
-                    style: Toast.Style.Failure,
-                    title: "Not implemented",
-                    message: "Please use the deeplink directly with the camera ID",
-                  });
-                }}
-import { Action, ActionPanel, Form, open, showToast, Toast } from "@raycast/api";
+import { Action, ActionPanel, Form, List, Toast, open, showToast } from "@raycast/api";
+import { useState } from "react";
 
-type FormValues = {
-  cameraId: string;
-  disableCamera: boolean;
-};
+function buildActionUrl(action: unknown) {
+  return `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
+}
 
-export default function Command() {
-  const handleSubmit = async (values: FormValues) => {
-    const cameraId = values.disableCamera ? null : values.cameraId.trim() || null;
-
-    try {
-      const action = {
-        switch_camera: {
-          camera_id: cameraId ? { DeviceID: cameraId } : null,
-        },
-      };
-
-      const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
-      await open(url);
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Camera switched",
-        message: cameraId ? `Switched to ${cameraId}` : "Camera disabled",
-      });
-    } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to switch camera",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
+async function switchCamera(cameraId: string | null) {
+  const action = {
+    switch_camera: {
+      camera_id: cameraId ? { DeviceID: cameraId } : null,
+    },
   };
+
+  try {
+    await open(buildActionUrl(action));
+    await showToast({
+      style: Toast.Style.Success,
+      title: cameraId ? "Camera switched" : "Camera disabled",
+      message: cameraId ?? undefined,
+    });
+  } catch (error) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Failed to switch camera",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+function CameraIdForm() {
+  const [cameraId, setCameraId] = useState("");
 
   return (
     <Form
       actions={
         <ActionPanel>
-          <Action.SubmitForm title="Switch Camera" onSubmit={handleSubmit} />
+          <Action.SubmitForm
+            title="Switch Camera"
+            onSubmit={() => switchCamera(cameraId.trim() || null)}
+          />
         </ActionPanel>
       }
     >
       <Form.TextField
         id="cameraId"
         title="Camera Device ID"
-        placeholder="e.g. 0x1a2b3c"
-      />
-      <Form.Checkbox
-        id="disableCamera"
-        title="Disable Camera"
-        label="Disable camera input"
+        value={cameraId}
+        onChange={setCameraId}
       />
     </Form>
+  );
+}
+
+export default function Command() {
+  return (
+    <List searchBarPlaceholder="Camera device id...">
+      <List.Item
+        title="Disable Camera"
+        actions={
+          <ActionPanel>
+            <Action title="Disable Camera" onAction={() => switchCamera(null)} />
+          </ActionPanel>
+        }
+      />
+      <List.Item
+        title="Switch Camera"
+        actions={
+          <ActionPanel>
+            <Action.Push title="Enter Camera Device ID" target={<CameraIdForm />} />
+          </ActionPanel>
+        }
+      />
+    </List>
   );
 }
