@@ -1,1 +1,0 @@
-Hey! Here's my plan: I'll add four new deeplink actions (pause, resume, switch mic, switch camera) to the existing `DeepLinkAction` enum and wire them up to the existing Tauri commands. Then I'll create a Raycast extension with commands that use these deeplinks to control recording. Everything will follow the same patterns as the existing deeplink implementation.
