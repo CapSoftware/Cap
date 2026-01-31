@@ -22,7 +22,7 @@ Or use the Raycast CLI:
 
 ```bash
 cd apps/raycast-extension
-npm install
+pnpm install
 ray dev
 ```
 
