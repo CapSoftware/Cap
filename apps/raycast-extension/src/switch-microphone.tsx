@@ -47,7 +47,7 @@ export default function Command() {
       actions={
         <ActionPanel>
           <Action
-            title="Switch to Microphone"
+            title="Disable Microphone"
             onAction={() => handleSwitchMicrophone(null)}
           />
         </ActionPanel>
