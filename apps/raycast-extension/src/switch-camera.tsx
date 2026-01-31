@@ -1,6 +1,5 @@
-import { List, ActionPanel, Action, showToast, Toast } from "@raycast/api";
+import { List, ActionPanel, Action, showToast, Toast, open } from "@raycast/api";
 import { useState, useEffect } from "react";
-import { open } from "@raycast/api";
 
 interface Camera {
   id: string;
