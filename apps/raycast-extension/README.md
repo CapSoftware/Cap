@@ -44,7 +44,17 @@ Where `JSON_ACTION` is a JSON-encoded action matching the `DeepLinkAction` enum 
 
 ```bash
 # Install dependencies
-npm install
+# Install dependencies
+pnpm install
+
+# Develop in Raycast
+pnpm dev
+
+# Build for production
+pnpm build
+
+# Lint
+pnpm lint
 
 # Develop in Raycast
 ray dev
