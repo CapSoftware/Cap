@@ -1,8 +1,18 @@
-import { open } from "@raycast/api";
+import { open, showToast, Toast } from "@raycast/api";
 
 export default async function Command() {
-  const action = { stop_recording: null };
+  try {
+    const action = { stop_recording: null };
 
-  const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
-  await open(url);
+    const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
+    await open(url);
+
+    await showToast({ style: Toast.Style.Success, title: "Stopped recording" });
+  } catch (error) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Failed to stop recording",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
 }
