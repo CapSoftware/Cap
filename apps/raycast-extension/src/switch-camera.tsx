@@ -17,31 +17,8 @@ export default function Command() {
       };
         },
       };
-
-      const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
-      await open(url);
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Camera switched",
-        message: cameraId ? `Switched to ${cameraId}` : "Camera disabled",
-      });
-    } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to switch camera",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-  };
-
-  return (
-    <List
 import { Action, ActionPanel, Form, List, Toast, open, showToast } from "@raycast/api";
 import { useState } from "react";
-
-function buildActionUrl(action: unknown) {
-  return `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
-}
 
 async function switchCamera(cameraId: string | null) {
   const action = {
@@ -50,12 +27,14 @@ async function switchCamera(cameraId: string | null) {
     },
   };
 
+  const url = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
+
   try {
-    await open(buildActionUrl(action));
+    await open(url);
     await showToast({
       style: Toast.Style.Success,
-      title: cameraId ? "Camera switched" : "Camera disabled",
-      message: cameraId ?? undefined,
+      title: "Camera switched",
+      message: cameraId ? `Switched to ${cameraId}` : "Camera disabled",
     });
   } catch (error) {
     await showToast({
@@ -92,9 +71,10 @@ function CameraIdForm() {
 
 export default function Command() {
   return (
-    <List searchBarPlaceholder="Camera device id...">
+    <List searchBarPlaceholder="Camera...">
       <List.Item
         title="Disable Camera"
+        subtitle="Turn off camera input"
         actions={
           <ActionPanel>
             <Action title="Disable Camera" onAction={() => switchCamera(null)} />
@@ -103,9 +83,10 @@ export default function Command() {
       />
       <List.Item
         title="Switch Camera"
+        subtitle="Enter a camera device ID"
         actions={
           <ActionPanel>
-            <Action.Push title="Enter Camera Device ID" target={<CameraIdForm />} />
+            <Action.Push title="Enter Camera ID" target={<CameraIdForm />} />
           </ActionPanel>
         }
       />
