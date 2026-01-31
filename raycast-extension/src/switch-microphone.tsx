@@ -1,4 +1,4 @@
-import { List, ActionPanel, Action, showHUD } from "@raycast/api";
+import { List, ActionPanel, Action, showHUD, open } from "@raycast/api";
 import { useState, useEffect } from "react";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -51,14 +51,17 @@ export default function Command() {
 
   async function switchMicrophone(micId: string) {
     try {
-      // Note: This requires implementing microphone switching in deeplink actions
+      const action = {
+        switch_microphone: {
+          mic_label: micId,
+        },
+      };
+
+      const encodedAction = encodeURIComponent(JSON.stringify(action));
+      const deeplinkUrl = `cap://action?value=${encodedAction}`;
+
+      await open(deeplinkUrl);
       await showHUD(`🎤 Switched to microphone: ${micId}`);
-      
-      // Future implementation with deeplink:
-      // const action = { switch_microphone: micId };
-      // const encodedAction = encodeURIComponent(JSON.stringify(action));
-      // const deeplinkUrl = `cap://action?value=${encodedAction}`;
-      // await open(deeplinkUrl);
     } catch (error) {
       console.error("Failed to switch microphone:", error);
       await showHUD("❌ Failed to switch microphone");
