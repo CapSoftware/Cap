@@ -2,15 +2,6 @@ import { List, ActionPanel, Action, showToast, Toast, open } from "@raycast/api"
 
 export default function Command() {
   const isLoading = false;
-import { useState, useEffect } from "react";
-
-interface Camera {
-  id: string;
-  label: string;
-}
-
-export default function Command() {
-  const isLoading = false;
 
 
   const handleSwitchCamera = async (cameraId: string | null) => {
