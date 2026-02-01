@@ -1,5 +1,6 @@
 import { exec } from "child_process";
 import { promisify } from "util";
+import { open } from "@raycast/api";
 
 const execAsync = promisify(exec);
 
@@ -39,14 +40,17 @@ export interface Microphone {
   label: string;
 }
 
-function buildDeeplinkUrl(action: object): string {
+type DeeplinkAction = string | object;
+
+function buildDeeplinkUrl(action: DeeplinkAction): string {
   const encodedValue = encodeURIComponent(JSON.stringify(action));
   return `${CAP_SCHEME}?value=${encodedValue}`;
 }
 
-export async function openDeeplink(action: object): Promise<void> {
+export async function openDeeplink(action: DeeplinkAction): Promise<void> {
   const url = buildDeeplinkUrl(action);
-  await execAsync(`open "${url}"`);
+  // Use Raycast's open API to avoid command injection risks
+  await open(url);
 }
 
 export async function startRecording(options: StartRecordingOptions): Promise<void> {
@@ -146,22 +150,18 @@ export async function listWindows(): Promise<Window[]> {
 
 export async function listCameras(): Promise<Camera[]> {
   try {
-    const script = `
-      set cameraList to {}
-      try
-        do shell script "system_profiler SPCameraDataType 2>/dev/null | grep -E '^\\s+[A-Za-z]' | sed 's/^[[:space:]]*//' | head -10"
-      on error
-        return ""
-      end try
-    `;
     const { stdout } = await execAsync(`system_profiler SPCameraDataType 2>/dev/null | grep -E "^\\s+[A-Za-z]" | sed 's/^[[:space:]]*//' | head -10`);
     const cameras = stdout.trim().split("\n").filter(Boolean);
-    return cameras.map((name, index) => ({
-      deviceId: `camera-${index}`,
-      displayName: name.replace(/:$/, "").trim(),
-    }));
+    return cameras.map((name) => {
+      const displayName = name.replace(/:$/, "").trim();
+      // Use camera name as deviceId - Cap accepts camera names for matching
+      return {
+        deviceId: displayName,
+        displayName,
+      };
+    });
   } catch {
-    return [{ deviceId: "default", displayName: "Default Camera" }];
+    return [{ deviceId: "FaceTime HD Camera", displayName: "FaceTime HD Camera" }];
   }
 }
 
@@ -193,5 +193,6 @@ export async function isCapRunning(): Promise<boolean> {
 }
 
 export async function openCap(): Promise<void> {
-  await execAsync("open -a Cap");
+  // Use Raycast's open API for launching applications
+  await open("cap://");
 }
