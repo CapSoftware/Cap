@@ -239,8 +239,7 @@ impl DeepLinkAction {
 
                 trace!(
                     "GetRecordingStatus: is_recording={}, is_paused={}",
-                    is_recording,
-                    is_paused
+                    is_recording, is_paused
                 );
                 Ok(())
             }
