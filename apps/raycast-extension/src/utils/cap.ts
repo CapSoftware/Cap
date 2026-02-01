@@ -129,10 +129,11 @@ export async function listWindows(): Promise<Window[]> {
             repeat with win in (every window of proc)
               set windowName to name of win
               set appName to name of proc
-              set end of windowList to appName & ": " & windowName & "\n"
+              set end of windowList to appName & ": " & windowName
             end repeat
           end try
         end repeat
+        set AppleScript's text item delimiters to linefeed
         return windowList as text
       end tell
     `;
