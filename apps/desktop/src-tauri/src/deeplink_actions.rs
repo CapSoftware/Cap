@@ -183,7 +183,18 @@ impl DeepLinkAction {
             }
             DeepLinkAction::SwitchCamera { device_id } => {
                 let state = app.state::<ArcLock<App>>();
-                let camera_id = device_id.map(DeviceOrModelID::DeviceID);
+
+                let camera_id = match device_id {
+                    None => None,
+                    Some(id) => {
+                        let matched = cap_camera::list_cameras()
+                            .find(|c| c.device_id() == id || c.display_name() == id)
+                            .map(|c| c.device_id().to_string())
+                            .ok_or_else(|| format!("No camera with id or name \"{}\"", id))?;
+                        Some(DeviceOrModelID::DeviceID(matched))
+                    }
+                };
+
                 crate::set_camera_input(app.clone(), state, camera_id, Some(true)).await
             }
             DeepLinkAction::SwitchMicrophone { device_label } => {
@@ -217,12 +228,15 @@ impl DeepLinkAction {
             DeepLinkAction::GetRecordingStatus => {
                 let state = app.state::<ArcLock<App>>();
                 let app_state = state.read().await;
-                let is_recording = app_state.current_recording().is_some();
-                let is_paused = if let Some(recording) = app_state.current_recording() {
-                    recording.is_paused().await.unwrap_or(false)
-                } else {
-                    false
+
+                let (is_recording, is_paused) = match app_state.current_recording() {
+                    Some(recording) => {
+                        let paused = recording.is_paused().await.map_err(|e| e.to_string())?;
+                        (true, paused)
+                    }
+                    None => (false, false),
                 };
+
                 trace!(
                     "GetRecordingStatus: is_recording={}, is_paused={}",
                     is_recording,

@@ -49,11 +49,14 @@ function buildDeeplinkUrl(action: DeeplinkAction): string {
 
 export async function openDeeplink(action: DeeplinkAction): Promise<void> {
   const url = buildDeeplinkUrl(action);
-  // Use Raycast's open API to avoid command injection risks
   await open(url);
 }
 
 export async function startRecording(options: StartRecordingOptions): Promise<void> {
+  if (!options.captureMode.screen && !options.captureMode.window) {
+    throw new Error("captureMode must include screen or window");
+  }
+
   const captureMode = options.captureMode.screen
     ? { screen: options.captureMode.screen }
     : { window: options.captureMode.window };
@@ -126,15 +129,15 @@ export async function listWindows(): Promise<Window[]> {
             repeat with win in (every window of proc)
               set windowName to name of win
               set appName to name of proc
-              set end of windowList to appName & ": " & windowName
+              set end of windowList to appName & ": " & windowName & "\n"
             end repeat
           end try
         end repeat
-        return windowList
+        return windowList as text
       end tell
     `;
     const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
-    const windows = stdout.trim().split(", ").filter(Boolean);
+    const windows = stdout.trim().split("\n").filter(Boolean);
     return windows.map((win, index) => {
       const parts = win.split(": ");
       return {
@@ -154,7 +157,6 @@ export async function listCameras(): Promise<Camera[]> {
     const cameras = stdout.trim().split("\n").filter(Boolean);
     return cameras.map((name) => {
       const displayName = name.replace(/:$/, "").trim();
-      // Use camera name as deviceId - Cap accepts camera names for matching
       return {
         deviceId: displayName,
         displayName,
@@ -167,9 +169,6 @@ export async function listCameras(): Promise<Camera[]> {
 
 export async function listMicrophones(): Promise<Microphone[]> {
   try {
-    const script = `
-      do shell script "system_profiler SPAudioDataType 2>/dev/null | grep -A 20 'Input Sources:' | grep -E '^\\s+[A-Za-z]' | sed 's/^[[:space:]]*//' | head -10"
-    `;
     const { stdout } = await execAsync(`system_profiler SPAudioDataType 2>/dev/null | grep -A 50 'Input Sources:' | grep -E "Default Input Device: Yes" -B 10 | grep -E "^\\s+[A-Za-z].*:" | head -5 | sed 's/^[[:space:]]*//' | cut -d: -f1`);
     const mics = stdout.trim().split("\n").filter(Boolean);
     if (mics.length === 0) {
@@ -193,6 +192,5 @@ export async function isCapRunning(): Promise<boolean> {
 }
 
 export async function openCap(): Promise<void> {
-  // Use Raycast's open API for launching applications
   await open("cap://");
 }
