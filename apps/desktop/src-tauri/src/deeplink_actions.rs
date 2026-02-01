@@ -16,6 +16,20 @@ pub enum CaptureMode {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraInfo {
+    pub device_id: String,
+    pub display_name: String,
+    pub model_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneInfo {
+    pub label: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
     StartRecording {
@@ -26,6 +40,18 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SwitchCamera {
+        device_id: Option<String>,
+    },
+    SwitchMicrophone {
+        device_label: Option<String>,
+    },
+    ListCameras,
+    ListMicrophones,
+    GetRecordingStatus,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +171,64 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SwitchCamera { device_id } => {
+                let state = app.state::<ArcLock<App>>();
+                let camera_id = device_id.map(DeviceOrModelID::DeviceID);
+                crate::set_camera_input(app.clone(), state, camera_id, Some(true)).await
+            }
+            DeepLinkAction::SwitchMicrophone { device_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, device_label).await
+            }
+            DeepLinkAction::ListCameras => {
+                let cameras: Vec<CameraInfo> = cap_camera::list_cameras()
+                    .map(|c| CameraInfo {
+                        device_id: c.device_id().to_string(),
+                        display_name: c.display_name().to_string(),
+                        model_id: c.model_id().map(|m| m.to_string()),
+                    })
+                    .collect();
+                let json = serde_json::to_string(&cameras).map_err(|e| e.to_string())?;
+                trace!("ListCameras response: {}", json);
+                Ok(())
+            }
+            DeepLinkAction::ListMicrophones => {
+                let mics: Vec<MicrophoneInfo> =
+                    cap_recording::feeds::microphone::MicrophoneFeed::list()
+                        .keys()
+                        .map(|label| MicrophoneInfo {
+                            label: label.clone(),
+                        })
+                        .collect();
+                let json = serde_json::to_string(&mics).map_err(|e| e.to_string())?;
+                trace!("ListMicrophones response: {}", json);
+                Ok(())
+            }
+            DeepLinkAction::GetRecordingStatus => {
+                let state = app.state::<ArcLock<App>>();
+                let app_state = state.read().await;
+                let is_recording = app_state.current_recording().is_some();
+                let is_paused = if let Some(recording) = app_state.current_recording() {
+                    recording.is_paused().await.unwrap_or(false)
+                } else {
+                    false
+                };
+                trace!(
+                    "GetRecordingStatus: is_recording={}, is_paused={}",
+                    is_recording,
+                    is_paused
+                );
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
