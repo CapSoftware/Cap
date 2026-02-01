@@ -1,0 +1,99 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recording from Raycast",
+  "icon": "cap-icon.png",
+  "author": "Cap Software",
+  "authorUrl": "https://cap.so",
+  "categories": ["Productivity", "Media"],
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CapSoftware/Cap"
+  },
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording with Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "subtitle": "Cap",
+      "description": "Resume a paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "subtitle": "Cap",
+      "description": "Toggle pause state of the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "subtitle": "Cap",
+      "description": "Take a screenshot with Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "open-cap",
+      "title": "Open Cap",
+      "subtitle": "Cap",
+      "description": "Open the Cap application",
+      "mode": "no-view"
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "subtitle": "Cap",
+      "description": "Open Cap settings",
+      "mode": "no-view"
+    },
+    {
+      "name": "recording-controls",
+      "title": "Recording Controls",
+      "subtitle": "Cap",
+      "description": "Quick actions for Cap recording",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "22.10.2",
+    "@types/react": "18.3.16",
+    "eslint": "^9.16.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "build": "ray build --skip-types -e dist -o dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
