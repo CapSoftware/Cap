@@ -19,6 +19,7 @@ import {
 	CheckIcon,
 	DownloadIcon,
 	FastForwardIcon,
+	GlobeIcon,
 	Loader2Icon,
 	Maximize2Icon,
 	Minimize2Icon,
@@ -3063,10 +3064,22 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	);
 }
 
+type CaptionLanguage = string;
+
+interface CaptionOption {
+	code: CaptionLanguage;
+	name: string;
+}
+
 interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	enhancedAudioEnabled?: boolean;
 	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+	captionLanguage?: CaptionLanguage;
+	onCaptionLanguageChange?: (language: CaptionLanguage) => void;
+	availableCaptions?: CaptionOption[];
+	isCaptionLoading?: boolean;
+	hasCaptions?: boolean;
 }
 
 function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
@@ -3083,6 +3096,11 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		enhancedAudioStatus,
 		enhancedAudioEnabled,
 		setEnhancedAudioEnabled,
+		captionLanguage = "original",
+		onCaptionLanguageChange,
+		availableCaptions = [],
+		isCaptionLoading = false,
+		hasCaptions = false,
 		...settingsProps
 	} = props;
 
@@ -3289,6 +3307,53 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				)}
+				{hasCaptions && (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger disabled={isCaptionLoading}>
+							<span className="flex items-center gap-2 flex-1">
+								<GlobeIcon className="size-4" />
+								Captions
+							</span>
+							<Badge variant="outline" className="rounded-sm">
+								{isCaptionLoading
+									? "..."
+									: captionLanguage === "off"
+										? "Off"
+										: captionLanguage === "original"
+											? "Original"
+											: (availableCaptions.find(
+													(c) => c.code === captionLanguage,
+												)?.name ?? captionLanguage)}
+							</Badge>
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => onCaptionLanguageChange?.("off")}
+							>
+								Off
+								{captionLanguage === "off" && <CheckIcon />}
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => onCaptionLanguageChange?.("original")}
+							>
+								Original
+								{captionLanguage === "original" && <CheckIcon />}
+							</DropdownMenuItem>
+							{availableCaptions.map((caption) => (
+								<DropdownMenuItem
+									key={caption.code}
+									className="justify-between"
+									onSelect={() => onCaptionLanguageChange?.(caption.code)}
+								>
+									{caption.name}
+									{captionLanguage === caption.code && <CheckIcon />}
+								</DropdownMenuItem>
+							))}
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
@@ -3430,3 +3495,5 @@ export {
 	useMediaSelector as useMediaPlayer,
 	useStoreSelector as useMediaPlayerStore,
 };
+
+export type { CaptionOption, CaptionLanguage };

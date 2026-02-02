@@ -14,14 +14,10 @@ import {
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
+import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
-import {
-	formatChaptersAsVTT,
-	formatTranscriptAsVTT,
-	parseVTT,
-	type TranscriptEntry,
-} from "./utils/transcript-utils";
+import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 declare global {
 	interface Window {
@@ -71,8 +67,13 @@ export const ShareVideo = forwardRef<
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 
+		const captionContext = useCaptionContext();
+
+		const handleCaptionLanguageChange = (language: string) => {
+			captionContext.setSelectedLanguage(language as CaptionLanguage);
+		};
+
 		const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
@@ -102,23 +103,33 @@ export const ShareVideo = forwardRef<
 
 		useEffect(() => {
 			if (transcriptContent) {
-				const parsed = parseVTT(transcriptContent);
-				setTranscriptData(parsed);
+				captionContext.setOriginalVttContent(transcriptContent);
 			} else if (transcriptError) {
 				console.error(
 					"[Transcript] Transcript error from React Query:",
 					transcriptError.message,
 				);
 			}
-		}, [transcriptContent, transcriptError]);
+		}, [
+			transcriptContent,
+			transcriptError,
+			captionContext.setOriginalVttContent,
+		]);
 
 		useEffect(() => {
-			if (
-				data.transcriptionStatus === "COMPLETE" &&
-				transcriptData &&
-				transcriptData.length > 0
-			) {
-				const vttContent = formatTranscriptAsVTT(transcriptData);
+			const vttContent = captionContext.currentVttContent;
+
+			if (captionContext.selectedLanguage === "off") {
+				setSubtitleUrl((prev) => {
+					if (prev) {
+						URL.revokeObjectURL(prev);
+					}
+					return null;
+				});
+				return;
+			}
+
+			if (data.transcriptionStatus === "COMPLETE" && vttContent) {
 				const blob = new Blob([vttContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
@@ -138,7 +149,11 @@ export const ShareVideo = forwardRef<
 				}
 				return null;
 			});
-		}, [data.transcriptionStatus, transcriptData]);
+		}, [
+			data.transcriptionStatus,
+			captionContext.currentVttContent,
+			captionContext.selectedLanguage,
+		]);
 
 		useEffect(() => {
 			if (chapters?.length > 0) {
@@ -221,6 +236,11 @@ export const ShareVideo = forwardRef<
 							onSeek={handleSeek}
 							enhancedAudioUrl={enhancedAudioUrl}
 							enhancedAudioStatus={enhancedAudioStatus}
+							captionLanguage={captionContext.selectedLanguage}
+							onCaptionLanguageChange={handleCaptionLanguageChange}
+							availableCaptions={captionContext.availableTranslations}
+							isCaptionLoading={captionContext.isTranslating}
+							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -234,6 +254,11 @@ export const ShareVideo = forwardRef<
 							hasActiveUpload={data.hasActiveUpload}
 							enhancedAudioUrl={enhancedAudioUrl}
 							enhancedAudioStatus={enhancedAudioStatus}
+							captionLanguage={captionContext.selectedLanguage}
+							onCaptionLanguageChange={handleCaptionLanguageChange}
+							availableCaptions={captionContext.availableTranslations}
+							isCaptionLoading={captionContext.isTranslating}
+							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 						/>
 					)}
 				</div>
