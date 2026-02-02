@@ -11,11 +11,11 @@ import {
 	useState,
 } from "react";
 import { getAvailableTranslations } from "@/actions/videos/get-available-translations";
+import { translateTranscript } from "@/actions/videos/translate-transcript";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
-	translateTranscript,
-} from "@/actions/videos/translate-transcript";
+} from "@/actions/videos/translation-languages";
 
 export type CaptionLanguage = LanguageCode | "original" | "off";
 

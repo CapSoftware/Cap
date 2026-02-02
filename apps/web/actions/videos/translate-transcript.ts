@@ -8,25 +8,10 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { runPromise } from "@/lib/server";
-
-export const SUPPORTED_LANGUAGES = {
-	en: "English",
-	es: "Spanish",
-	fr: "French",
-	de: "German",
-	pt: "Portuguese",
-	it: "Italian",
-	nl: "Dutch",
-	pl: "Polish",
-	ru: "Russian",
-	ja: "Japanese",
-	ko: "Korean",
-	zh: "Chinese (Simplified)",
-	ar: "Arabic",
-	hi: "Hindi",
-} as const;
-
-export type LanguageCode = keyof typeof SUPPORTED_LANGUAGES;
+import {
+	type LanguageCode,
+	SUPPORTED_LANGUAGES,
+} from "./translation-languages";
 
 interface TranslateResult {
 	success: boolean;

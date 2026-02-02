@@ -18,7 +18,7 @@ import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
-} from "@/actions/videos/translate-transcript";
+} from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";

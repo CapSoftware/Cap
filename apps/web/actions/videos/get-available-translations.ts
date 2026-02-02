@@ -7,7 +7,10 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";
-import { type LanguageCode, SUPPORTED_LANGUAGES } from "./translate-transcript";
+import {
+	type LanguageCode,
+	SUPPORTED_LANGUAGES,
+} from "./translation-languages";
 
 interface AvailableTranslation {
 	code: LanguageCode;
