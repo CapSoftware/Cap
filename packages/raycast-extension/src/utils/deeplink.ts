@@ -1,12 +1,12 @@
-export const generateDeeplink = (action: string, params?: Record<string, string>): string => {
+export const generateDeeplink = (action: string, params?: Record<string, any>): string => {
   const url = new URL(`cap://action`);
   
-  const actionObj: any = { [action]: {} };
+  const actionObj: any = {};
   
-  if (action === "switch_camera" && params?.device_id) {
-    actionObj.switch_camera = { device_id: params.device_id };
-  } else if (action === "switch_microphone" && params?.mic_label) {
-    actionObj.switch_microphone = { mic_label: params.mic_label };
+  if (params) {
+    actionObj[action] = params;
+  } else {
+    actionObj[action] = {};
   }
   
   url.searchParams.append("value", JSON.stringify(actionObj));

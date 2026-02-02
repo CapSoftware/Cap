@@ -2,7 +2,10 @@ import { open, showToast, Toast } from "@raycast/api";
 import { generateDeeplink } from "../utils/deeplink";
 
 export default async function Command() {
-  const deeplink = generateDeeplink("ACTION_HERE");
+  const deeplink = generateDeeplink("start_recording", {
+    capture_mode: { screen: "default" },
+    mode: "normal"
+  });
   
   try {
     await open(deeplink);
