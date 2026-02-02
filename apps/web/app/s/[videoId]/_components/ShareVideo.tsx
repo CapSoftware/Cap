@@ -199,15 +199,15 @@ export const ShareVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
 
-		const videoMetadata = data.metadata as VideoMetadata | null;
-		const enhancedAudioStatus = videoMetadata?.enhancedAudioStatus ?? null;
+		// const videoMetadata = data.metadata as VideoMetadata | null;
+		// const enhancedAudioStatus = videoMetadata?.enhancedAudioStatus ?? null;
 
-		const enhancedAudioUrl = useMemo(() => {
-			if (enhancedAudioStatus === "COMPLETE" && data.owner.isPro) {
-				return `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&fileType=enhanced-audio`;
-			}
-			return null;
-		}, [enhancedAudioStatus, data.owner.isPro, data.owner.id, data.id]);
+		// const enhancedAudioUrl = useMemo(() => {
+		// 	if (enhancedAudioStatus === "COMPLETE" && data.owner.isPro) {
+		// 		return `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&fileType=enhanced-audio`;
+		// 	}
+		// 	return null;
+		// }, [enhancedAudioStatus, data.owner.isPro, data.owner.id, data.id]);
 
 		return (
 			<>
@@ -234,8 +234,8 @@ export const ShareVideo = forwardRef<
 								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
-							enhancedAudioUrl={enhancedAudioUrl}
-							enhancedAudioStatus={enhancedAudioStatus}
+							// enhancedAudioUrl={enhancedAudioUrl}
+							// enhancedAudioStatus={enhancedAudioStatus}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
@@ -252,8 +252,8 @@ export const ShareVideo = forwardRef<
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
-							enhancedAudioUrl={enhancedAudioUrl}
-							enhancedAudioStatus={enhancedAudioStatus}
+							// enhancedAudioUrl={enhancedAudioUrl}
+							// enhancedAudioStatus={enhancedAudioStatus}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
