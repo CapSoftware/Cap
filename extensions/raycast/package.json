@@ -3,7 +3,7 @@
   "name": "cap",
   "title": "Cap",
   "description": "Control Cap screen recorder with Raycast",
-  "icon": "cap-icon.png",
+  "icon": "assets/cap-icon.png",
   "author": "cap-software",
   "categories": ["Productivity", "Media"],
   "license": "MIT",

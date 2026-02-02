@@ -32,7 +32,6 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
-    // New actions for Raycast integration (#1540)
     PauseRecording,
     ResumeRecording,
     TogglePauseRecording,

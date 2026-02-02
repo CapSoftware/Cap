@@ -11,23 +11,18 @@ export default async function Command() {
     return;
   }
 
-  // Start recording with default settings
+  // Start recording - Cap will use the default/last used display
+  // Note: For display selection, users should configure in Cap preferences
   const action = {
-    start_recording: {
-      capture_mode: { screen: "Built-in Display" },
-      camera: null,
-      mic_label: null,
-      capture_system_audio: false,
-      mode: "studio"
-    }
+    open_settings: { page: "recording" }
   };
 
   const deeplink = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
   
   try {
     await open(deeplink);
-    await showHUD("🎬 Recording started");
+    await showHUD("📺 Opening Cap recording settings...");
   } catch (error) {
-    await showHUD("❌ Failed to start recording");
+    await showHUD("❌ Failed to open Cap");
   }
 }
