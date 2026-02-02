@@ -749,10 +749,10 @@ export const videoUploads = mysqlTable("video_uploads", {
 	videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
 	uploaded: bigint("uploaded", { mode: "number", unsigned: true })
 		.notNull()
-		.default(0),
+		.$defaultFn(() => 0),
 	total: bigint("total", { mode: "number", unsigned: true })
 		.notNull()
-		.default(0),
+		.$defaultFn(() => 0),
 	startedAt: timestamp("started_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at").notNull().defaultNow(),
 	mode: varchar("mode", { length: 255, enum: ["singlepart", "multipart"] }),
