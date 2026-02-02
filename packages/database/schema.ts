@@ -10,6 +10,7 @@ import type {
 } from "@cap/web-domain";
 import { sql } from "drizzle-orm";
 import {
+	bigint,
 	boolean,
 	customType,
 	datetime,
@@ -746,8 +747,12 @@ export const foldersRelations = relations(folders, ({ one, many }) => ({
 
 export const videoUploads = mysqlTable("video_uploads", {
 	videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
-	uploaded: int("uploaded").notNull().default(0),
-	total: int("total").notNull().default(0),
+	uploaded: bigint("uploaded", { mode: "number", unsigned: true })
+		.notNull()
+		.default(0),
+	total: bigint("total", { mode: "number", unsigned: true })
+		.notNull()
+		.default(0),
 	startedAt: timestamp("started_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at").notNull().defaultNow(),
 	mode: varchar("mode", { length: 255, enum: ["singlepart", "multipart"] }),
