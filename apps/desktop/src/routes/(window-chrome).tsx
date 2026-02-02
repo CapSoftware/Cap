@@ -6,6 +6,7 @@ import { cx } from "cva";
 import { onCleanup, onMount, type ParentProps, Suspense } from "solid-js";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import {
@@ -29,9 +30,16 @@ export default function (props: RouteSectionProps) {
 		unlistenResize?.();
 	});
 
+	const isMacOS = ostype() === "macos";
+
 	return (
 		<WindowChromeContext>
-			<div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1">
+			<div
+				class={cx(
+					"flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1",
+					isMacOS && "rounded-[16px]",
+				)}
+			>
 				<Header />
 
 				{/* breaks sometimes */}
@@ -73,17 +81,25 @@ function Header() {
 	const ctx = useWindowChromeContext()!;
 
 	const isWindows = ostype() === "windows";
+	const isMacOS = ostype() === "macos";
 
 	return (
 		<header
 			class={cx(
-				"flex items-center space-x-1 h-9 select-none shrink-0 bg-gray-2",
-				isWindows ? "flex-row" : "flex-row-reverse pl-[4.2rem]",
+				"flex items-center h-9 select-none shrink-0 bg-gray-2",
+				isWindows ? "flex-row" : "flex-row-reverse",
 			)}
 			data-tauri-drag-region
 		>
 			{ctx.state()?.items}
 			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
+			{isMacOS && (
+				<CaptionControlsMacOS
+					class="!mr-auto ml-3"
+					showMinimize={false}
+					showZoom={false}
+				/>
+			)}
 		</header>
 	);
 }

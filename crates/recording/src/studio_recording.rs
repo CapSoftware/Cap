@@ -1,3 +1,10 @@
+#[cfg(target_os = "macos")]
+use crate::SendableShareableContent;
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::{
+    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, MacOSFragmentedM4SCameraMuxer,
+    MacOSFragmentedM4SCameraMuxerConfig,
+};
 use crate::{
     ActorError, H264_MAX_DIMENSION, MediaError, RecordingBaseInputs, RecordingError,
     SharedPauseState, calculate_gpu_compatible_size,
@@ -10,12 +17,6 @@ use crate::{
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
-};
-
-#[cfg(target_os = "macos")]
-use crate::output_pipeline::{
-    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, MacOSFragmentedM4SCameraMuxer,
-    MacOSFragmentedM4SCameraMuxerConfig,
 };
 
 #[cfg(windows)]
@@ -537,7 +538,7 @@ impl ActorBuilder {
 
     pub async fn build(
         self,
-        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+        #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
         spawn_studio_recording_actor(
             self.output_path,
@@ -707,6 +708,25 @@ async fn stop_recording(
                 }
             });
 
+            let raw_display_start = to_start_time(s.pipeline.screen.first_timestamp);
+            let display_start_time = if let Some(cam_start) = camera_start_time {
+                let sync_offset = raw_display_start - cam_start;
+                if sync_offset.abs() > 0.030 {
+                    cam_start
+                } else {
+                    raw_display_start
+                }
+            } else if let Some(mic_start) = mic_start_time {
+                let sync_offset = raw_display_start - mic_start;
+                if sync_offset.abs() > 0.030 {
+                    mic_start
+                } else {
+                    raw_display_start
+                }
+            } else {
+                raw_display_start
+            };
+
             MultipleSegment {
                 display: VideoMeta {
                     path: make_relative(&s.pipeline.screen.path),
@@ -722,7 +742,7 @@ async fn stop_recording(
                             );
                             DEFAULT_FPS
                         }),
-                    start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
+                    start_time: Some(display_start_time),
                     device_id: None,
                 },
                 camera: s.pipeline.camera.map(|camera| VideoMeta {
@@ -954,32 +974,6 @@ async fn create_segment_pipeline(
     let d3d_device = crate::capture_pipeline::create_d3d_device()
         .context("D3D11 device creation failed - this may happen in VMs, RDP sessions, or systems without GPU drivers")?;
 
-    let (display, crop) =
-        target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
-
-    let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
-        display,
-        crop,
-        !custom_cursor_capture,
-        max_fps,
-        start_time.system_time(),
-        base_inputs.capture_system_audio,
-        #[cfg(windows)]
-        d3d_device,
-        #[cfg(target_os = "macos")]
-        base_inputs.shareable_content,
-        #[cfg(target_os = "macos")]
-        base_inputs.excluded_windows,
-    )
-    .await
-    .context("screen capture init")?;
-
-    let screen_info = screen_config.info();
-    let output_size =
-        calculate_gpu_compatible_size(screen_info.width, screen_info.height, H264_MAX_DIMENSION);
-
-    let (capture_source, system_audio) = screen_config.to_sources().await?;
-
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
     let screen_output_path = dir.join("display.mp4");
@@ -1004,22 +998,102 @@ async fn create_segment_pipeline(
         None
     };
 
-    let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
-        capture_source,
-        screen_output_path.clone(),
-        start_time,
-        fragmented,
-        shared_pause_state.clone(),
-        output_size,
+    let camera_only = matches!(
+        base_inputs.capture_target,
+        screen_capture::ScreenCaptureTarget::CameraOnly
+    );
+
+    let (screen, system_audio, cursor_display) = if camera_only {
+        let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
+            anyhow!(
+                "Camera-only recording requires a camera, but no camera is currently available. \
+                Please select a camera in the recording settings before starting. \
+                If you have already selected a camera, it may have been disconnected or \
+                failed to initialize. Try reconnecting your camera or selecting a different one."
+            )
+        })?;
+
+        #[cfg(target_os = "macos")]
+        let screen = OutputPipeline::builder(screen_output_path.clone())
+            .with_video::<sources::NativeCamera>(camera_feed.clone())
+            .with_timestamps(start_time)
+            .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+            .instrument(error_span!("screen-out"))
+            .await
+            .context("camera-only screen pipeline setup")?;
+
         #[cfg(windows)]
-        encoder_preferences.clone(),
-    )
-    .instrument(error_span!("screen-out"))
-    .await
-    .context("screen pipeline setup")?;
+        let screen = OutputPipeline::builder(screen_output_path.clone())
+            .with_video::<sources::NativeCamera>(camera_feed.clone())
+            .with_timestamps(start_time)
+            .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
+                encoder_preferences: encoder_preferences.clone(),
+                ..Default::default()
+            })
+            .instrument(error_span!("screen-out"))
+            .await
+            .context("camera-only screen pipeline setup")?;
+
+        (screen, None, None)
+    } else {
+        let capture_target = base_inputs.capture_target.clone();
+
+        #[cfg(windows)]
+        let d3d_device = d3d_device;
+
+        let (display, crop) =
+            target_to_display_and_crop(&capture_target).context("target_display_crop")?;
+
+        let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+            display,
+            crop,
+            !custom_cursor_capture,
+            max_fps,
+            start_time.system_time(),
+            base_inputs.capture_system_audio,
+            #[cfg(windows)]
+            d3d_device,
+            #[cfg(target_os = "macos")]
+            base_inputs
+                .shareable_content
+                .clone()
+                .ok_or_else(|| anyhow!("Missing shareable content"))?,
+            #[cfg(target_os = "macos")]
+            base_inputs.excluded_windows.clone(),
+        )
+        .await
+        .context("screen capture init")?;
+
+        let screen_info = screen_config.info();
+        let output_size = calculate_gpu_compatible_size(
+            screen_info.width,
+            screen_info.height,
+            H264_MAX_DIMENSION,
+        );
+
+        let (capture_source, system_audio) = screen_config.to_sources().await?;
+
+        let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
+            capture_source,
+            screen_output_path.clone(),
+            start_time,
+            fragmented,
+            shared_pause_state.clone(),
+            output_size,
+            #[cfg(windows)]
+            encoder_preferences.clone(),
+        )
+        .instrument(error_span!("screen-out"))
+        .await
+        .context("screen pipeline setup")?;
+
+        (screen, system_audio, Some(display))
+    };
 
     #[cfg(target_os = "macos")]
-    let camera = if let Some(camera_feed) = base_inputs.camera_feed {
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
@@ -1045,7 +1119,9 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let camera = if let Some(camera_feed) = base_inputs.camera_feed {
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
@@ -1121,36 +1197,42 @@ async fn create_segment_pipeline(
         None
     };
 
-    let cursor = custom_cursor_capture
-        .then(move || {
-            let cursor_crop_bounds = base_inputs
-                .capture_target
-                .cursor_crop()
-                .ok_or(CreateSegmentPipelineError::NoBounds)?;
+    let cursor = if camera_only {
+        None
+    } else {
+        custom_cursor_capture
+            .then(move || {
+                let cursor_crop_bounds = base_inputs
+                    .capture_target
+                    .cursor_crop()
+                    .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
-            let cursor_output_path = dir.join("cursor.json");
-            let incremental_output = if fragmented {
-                Some(cursor_output_path.clone())
-            } else {
-                None
-            };
+                let cursor_output_path = dir.join("cursor.json");
+                let incremental_output = if fragmented {
+                    Some(cursor_output_path.clone())
+                } else {
+                    None
+                };
 
-            let cursor = spawn_cursor_recorder(
-                cursor_crop_bounds,
-                display,
-                cursors_dir.to_path_buf(),
-                prev_cursors,
-                next_cursors_id,
-                start_time,
-                incremental_output,
-            );
+                let cursor_display = cursor_display.ok_or(CreateSegmentPipelineError::NoDisplay)?;
 
-            Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
-                output_path: cursor_output_path,
-                actor: cursor,
+                let cursor = spawn_cursor_recorder(
+                    cursor_crop_bounds,
+                    cursor_display,
+                    cursors_dir.to_path_buf(),
+                    prev_cursors,
+                    next_cursors_id,
+                    start_time,
+                    incremental_output,
+                );
+
+                Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
+                    output_path: cursor_output_path,
+                    actor: cursor,
+                })
             })
-        })
-        .transpose()?;
+            .transpose()?
+    };
 
     info!("pipeline playing");
 

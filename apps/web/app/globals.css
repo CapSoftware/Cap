@@ -782,6 +782,13 @@ footer a {
 	@apply text-gray-12 !important;
 }
 
+.prose .not-prose p,
+.prose .not-prose li {
+	color: inherit !important;
+	font-size: inherit !important;
+	line-height: inherit !important;
+}
+
 .new-card-style {
 	background: #ffffff;
 	border: 1px solid #e7eaf0;

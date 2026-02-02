@@ -128,8 +128,8 @@ async fn run_encoding_benchmark(
         frames_processed += 1;
 
         let elapsed = frame_start.elapsed();
-        if elapsed < frame_interval {
-            tokio::time::sleep(frame_interval - elapsed).await;
+        if let Some(remaining) = frame_interval.checked_sub(elapsed) {
+            tokio::time::sleep(remaining).await;
         }
     }
 

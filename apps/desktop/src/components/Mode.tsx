@@ -21,7 +21,7 @@ const Mode = (props: ModeProps) => {
 	};
 
 	return (
-		<div class="flex gap-2 relative justify-end items-center p-1.5 rounded-full bg-gray-3 w-fit">
+		<div class="flex gap-2 relative justify-end items-center p-1.5 rounded-full border border-gray-5 bg-gray-3 w-fit">
 			<div
 				class="absolute -left-1.5 -top-2 p-1 rounded-full w-fit bg-gray-5 group"
 				onClick={handleInfoClick}

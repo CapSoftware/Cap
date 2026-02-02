@@ -14,10 +14,12 @@ import CommentStamp from "./CommentStamp";
 import { useUploadProgress } from "./ProgressCircle";
 
 import {
+	EnhancedAudioSync,
 	MediaPlayer,
 	MediaPlayerCaptions,
 	MediaPlayerControls,
 	MediaPlayerControlsOverlay,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerError,
 	MediaPlayerFullscreen,
 	MediaPlayerLoading,
@@ -48,6 +50,8 @@ function getProgressStatusText(
 	}
 }
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
 interface Props {
 	videoSrc: string;
 	videoId: Video.VideoId;
@@ -69,6 +73,8 @@ interface Props {
 		authorName?: string | null;
 	}>;
 	onSeek?: (time: number) => void;
+	enhancedAudioUrl?: string | null;
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
 }
 
 export function CapVideoPlayer({
@@ -86,6 +92,8 @@ export function CapVideoPlayer({
 	disableCommentStamps = false,
 	disableReactionStamps = false,
 	onSeek,
+	enhancedAudioUrl,
+	enhancedAudioStatus,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -103,6 +111,12 @@ export function CapVideoPlayer({
 	const isRetryingRef = useRef(false);
 	const maxRetries = 3;
 	const [duration, setDuration] = useState(0);
+
+	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
+		enhancedAudioStatus === "COMPLETE",
+	);
+	const [enhancedAudioMuted, setEnhancedAudioMuted] = useState(false);
+	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -740,7 +754,12 @@ export function CapVideoPlayer({
 						<MediaPlayerPlay />
 						<MediaPlayerSeekBackward />
 						<MediaPlayerSeekForward />
-						<MediaPlayerVolume expandable />
+						<MediaPlayerVolume
+							expandable
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							enhancedAudioMuted={enhancedAudioMuted}
+							setEnhancedAudioMuted={setEnhancedAudioMuted}
+						/>
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
@@ -750,12 +769,39 @@ export function CapVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerSettings />
+						<MediaPlayerEnhancedAudio
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
+						<MediaPlayerSettings
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />
 					</div>
 				</div>
 			</MediaPlayerControls>
+			{enhancedAudioUrl && (
+				<>
+					<audio
+						ref={enhancedAudioRef}
+						src={enhancedAudioUrl}
+						preload="auto"
+						className="hidden"
+					>
+						<track kind="captions" />
+					</audio>
+					<EnhancedAudioSync
+						enhancedAudioRef={enhancedAudioRef}
+						videoRef={videoRef}
+						enhancedAudioEnabled={enhancedAudioEnabled}
+						enhancedAudioMuted={enhancedAudioMuted}
+					/>
+				</>
+			)}
 		</MediaPlayer>
 	);
 }

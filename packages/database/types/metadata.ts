@@ -33,6 +33,7 @@ export interface VideoMetadata {
 		| "COMPLETE"
 		| "ERROR"
 		| "SKIPPED";
+	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 }
 
 /**

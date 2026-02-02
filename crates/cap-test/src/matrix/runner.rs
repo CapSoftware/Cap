@@ -70,7 +70,7 @@ impl MatrixRunner {
         let mut results = Vec::new();
 
         for test_case in &self.test_cases {
-            progress.set_message(format!("{}", test_case.name));
+            progress.set_message(test_case.name.to_string());
 
             let result = self.run_test_case(test_case).await;
             results.push(result);

@@ -130,6 +130,7 @@
 		"react-scroll-parallax": "^3.4.5",
 		"react-tooltip": "^5.26.3",
 		"recharts": "^3.3.0",
+		"replicate": "^1.4.0",
 		"resend": "4.6.0",
 		"server-only": "^0.0.1",
 		"sonner": "^2.0.3",

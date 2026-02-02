@@ -395,11 +395,9 @@ impl EditorInstance {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
-            let mut has_rendered_first_frame = false;
 
             loop {
                 preview_rx.changed().await.unwrap();
-                has_rendered_first_frame = false;
 
                 loop {
                     let Some((frame_number, fps, resolution_base)) =
@@ -484,8 +482,6 @@ impl EditorInstance {
                         }
                     }
 
-                    let use_initial_timeout = !has_rendered_first_frame;
-
                     tokio::select! {
                         biased;
 
@@ -493,28 +489,16 @@ impl EditorInstance {
                             continue;
                         }
 
-                        segment_frames_opt = async {
-                            if use_initial_timeout {
-                                segment_medias.decoders.get_frames_initial(
-                                    segment_time as f32,
-                                    !project.camera.hide,
-                                    clip_offsets,
-                                ).await
-                            } else {
-                                segment_medias.decoders.get_frames(
-                                    segment_time as f32,
-                                    !project.camera.hide,
-                                    clip_offsets,
-                                ).await
-                            }
-                        } => {
+                        segment_frames_opt = segment_medias.decoders.get_frames_initial(
+                            segment_time as f32,
+                            !project.camera.hide,
+                            clip_offsets,
+                        ) => {
                             if preview_rx.has_changed().unwrap_or(false) {
                                 continue;
                             }
 
                             if let Some(segment_frames) = segment_frames_opt {
-                                has_rendered_first_frame = true;
-
                                 let total_duration = project
                                     .timeline
                                     .as_ref()

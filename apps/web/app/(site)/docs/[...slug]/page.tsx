@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { MDXRemote } from "next-mdx-remote/rsc";
+import { CustomMDX } from "@/components/mdx";
 import type { DocMetadata } from "@/utils/blog";
 import { getDocs } from "@/utils/blog";
 
@@ -121,7 +121,7 @@ export default async function DocPage(props: DocProps) {
 				{/* Show root category content if it exists */}
 				{rootDoc && (
 					<div className="mb-8">
-						<MDXRemote source={rootDoc.content} />
+						<CustomMDX source={rootDoc.content} />
 						<hr className="my-8" />
 					</div>
 				)}
@@ -194,7 +194,7 @@ export default async function DocPage(props: DocProps) {
 					<h1 className="mb-2">{doc.metadata.title}</h1>
 				</header>
 				<hr className="my-6" />
-				<MDXRemote source={doc.content} />
+				<CustomMDX source={doc.content} />
 			</div>
 		</article>
 	);

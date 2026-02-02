@@ -88,7 +88,8 @@ impl RecordingTestRunner {
         #[cfg(target_os = "macos")]
         let shareable_content = cidre::sc::ShareableContent::current()
             .await
-            .context("Failed to get shareable content - check screen recording permissions")?;
+            .context("Failed to get shareable content - check screen recording permissions")
+            .map(cap_recording::SendableShareableContent::from)?;
 
         let (error_tx, _error_rx) = flume::bounded::<StreamError>(16);
 
@@ -162,7 +163,7 @@ impl RecordingTestRunner {
         let handle = builder
             .build(
                 #[cfg(target_os = "macos")]
-                shareable_content,
+                Some(shareable_content),
             )
             .await
             .context("Failed to start recording")?;
@@ -189,13 +190,15 @@ impl RecordingTestRunner {
             completed.project_path.display()
         );
 
-        let frames_encoded = completed.display_frame_count;
+        let validation = super::validate::validate_recording(&completed.project_path).await?;
+
+        let frames_encoded = validation
+            .video_info
+            .as_ref()
+            .map(|v| v.frame_count)
+            .unwrap_or(expected_frames);
         let frames_received = expected_frames;
-        let frames_dropped = if frames_received > frames_encoded {
-            frames_received - frames_encoded
-        } else {
-            0
-        };
+        let frames_dropped = frames_received.saturating_sub(frames_encoded);
 
         let actual_fps = if total_duration.as_secs_f64() > 0.0 {
             frames_encoded as f64 / total_duration.as_secs_f64()
@@ -203,8 +206,6 @@ impl RecordingTestRunner {
             target_fps as f64
         };
         let actual_duration = total_duration.as_secs_f64();
-
-        let validation = super::validate::validate_recording(&completed.project_path).await?;
 
         let frame_time_ms = if actual_fps > 0.0 {
             1000.0 / actual_fps
@@ -236,12 +237,12 @@ impl RecordingTestRunner {
             warn!("Validation warning: {}", warning);
         }
 
-        if let Some(ref sync) = validation.sync_info {
-            if !sync.in_sync {
-                metrics
-                    .errors
-                    .push(format!("A/V drift too high: {:.1}ms", sync.drift_ms));
-            }
+        if let Some(ref sync) = validation.sync_info
+            && !sync.in_sync
+        {
+            metrics
+                .errors
+                .push(format!("A/V drift too high: {:.1}ms", sync.drift_ms));
         }
 
         info!(
@@ -307,8 +308,8 @@ impl RecordingTestRunner {
             }
 
             let elapsed = frame_start.elapsed();
-            if elapsed < frame_interval {
-                tokio::time::sleep(frame_interval - elapsed).await;
+            if let Some(remaining) = frame_interval.checked_sub(elapsed) {
+                tokio::time::sleep(remaining).await;
             }
         }
 

@@ -1289,6 +1289,7 @@ dependencies = [
  "whisper-rs",
  "windows 0.60.0",
  "windows-sys 0.59.0",
+ "winreg 0.55.0",
  "workspace-hack",
 ]
 

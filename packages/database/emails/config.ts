@@ -47,6 +47,6 @@ export const sendEmail = async ({
 		react,
 		scheduledAt,
 		cc: test ? undefined : cc,
-		replyTo,
+		replyTo: replyTo,
 	}) as any;
 };

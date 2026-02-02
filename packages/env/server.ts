@@ -85,6 +85,10 @@ function createServerEnv() {
 			DEEPGRAM_API_KEY: z.string().optional().describe("Audio transcription"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
+			REPLICATE_API_TOKEN: z
+				.string()
+				.optional()
+				.describe("Replicate API token for audio enhancement"),
 
 			/// Cap Cloud
 			// These are only needed for Cap Cloud (https://cap.so)

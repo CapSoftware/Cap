@@ -50,60 +50,10 @@ pub struct DisplayInformation {
 
 #[specta::specta]
 #[tauri::command]
-#[instrument(skip(app, prewarmed))]
-pub async fn prewarm_target_select_overlays(
-    app: AppHandle,
-    prewarmed: tauri::State<'_, PrewarmedOverlays>,
-) -> Result<(), String> {
-    if prewarmed.set_prewarming(true) {
-        return Ok(());
-    }
-
-    prewarmed.cleanup_stale();
-
-    let displays = scap_targets::Display::list();
-
-    for display in displays {
-        let display_id = display.id();
-
-        if prewarmed.has(&display_id) {
-            continue;
-        }
-
-        match (ShowCapWindow::TargetSelectOverlay {
-            display_id: display_id.clone(),
-            target_mode: None,
-        })
-        .show(&app)
-        .await
-        {
-            Ok(window) => {
-                let _ = window.hide();
-                let _ = window.set_ignore_cursor_events(true);
-                prewarmed.store(display_id, window);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to prewarm overlay for display {}: {}",
-                    display_id,
-                    e
-                );
-            }
-        }
-    }
-
-    prewarmed.set_prewarming(false);
-
-    Ok(())
-}
-
-#[specta::specta]
-#[tauri::command]
-#[instrument(skip(app, state, prewarmed))]
+#[instrument(skip(app, state))]
 pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
-    prewarmed: tauri::State<'_, PrewarmedOverlays>,
     focused_target: Option<ScreenCaptureTarget>,
     specific_display_id: Option<String>,
     target_mode: Option<RecordingTargetMode>,
@@ -147,36 +97,28 @@ pub async fn open_target_select_overlays(
                 .iter()
                 .any(|display_id| display_id == &existing_id)
         {
-            let _ = window.close();
+            let _ = window.hide();
+            state.destroy(&existing_id, app.global_shortcut());
         }
     }
 
     for display_id in &display_ids {
-        let mut used_prewarmed = false;
-        if let Some(window) = prewarmed.take(display_id) {
-            let _ = window.set_ignore_cursor_events(false);
+        let should_focus = display_id == &focus_display_id;
+
+        let existing_window = CapWindowId::TargetSelectOverlay {
+            display_id: display_id.clone(),
+        }
+        .get(&app);
+
+        if let Some(window) = existing_window {
             window.show().ok();
-            if display_id == &focus_display_id {
+
+            if should_focus {
                 window.set_focus().ok();
             }
 
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let is_visible_after = window.is_visible().unwrap_or(false);
-
-            if is_visible_after {
-                used_prewarmed = true;
-            } else {
-                let _ = window.close();
-            }
-        }
-
-        if used_prewarmed {
-            continue;
-        }
-
-        let should_focus = display_id == &focus_display_id;
-
-        if start.elapsed() < Duration::from_secs(1) {
+            state.spawn(display_id, window.clone());
+        } else if start.elapsed() < Duration::from_secs(1) {
             if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
                 display_id: display_id.clone(),
                 target_mode,
@@ -347,12 +289,22 @@ pub async fn update_camera_overlay_bounds(
 
 #[specta::specta]
 #[tauri::command]
-#[instrument(skip(app))]
-pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
+#[instrument(skip(app, state))]
+pub async fn close_target_select_overlays(
+    app: AppHandle,
+    state: tauri::State<'_, WindowFocusManager>,
+) -> Result<(), String> {
+    let mut closed_display_ids = Vec::new();
+
     for (id, window) in app.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
-            let _ = window.close();
+        if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id) {
+            let _ = window.hide();
+            closed_display_ids.push(display_id);
         }
+    }
+
+    for display_id in closed_display_ids {
+        state.destroy(&display_id, app.global_shortcut());
     }
 
     Ok(())
@@ -448,66 +400,6 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-pub struct PrewarmedOverlays {
-    windows: Mutex<HashMap<String, (WebviewWindow, Instant)>>,
-    prewarming_in_progress: Mutex<bool>,
-}
-
-impl Default for PrewarmedOverlays {
-    fn default() -> Self {
-        Self {
-            windows: Mutex::new(HashMap::new()),
-            prewarming_in_progress: Mutex::new(false),
-        }
-    }
-}
-
-impl PrewarmedOverlays {
-    pub fn take(&self, display_id: &DisplayId) -> Option<WebviewWindow> {
-        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
-        windows.remove(&display_id.to_string()).map(|(w, _)| w)
-    }
-
-    pub fn store(&self, display_id: DisplayId, window: WebviewWindow) {
-        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
-        windows.insert(display_id.to_string(), (window, Instant::now()));
-    }
-
-    pub fn has(&self, display_id: &DisplayId) -> bool {
-        let windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((window, created_at)) = windows.get(&display_id.to_string()) {
-            if created_at.elapsed() > Duration::from_secs(30) {
-                return false;
-            }
-            !window.is_visible().unwrap_or(false)
-        } else {
-            false
-        }
-    }
-
-    pub fn set_prewarming(&self, in_progress: bool) -> bool {
-        let mut prewarming = self
-            .prewarming_in_progress
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let was_prewarming = *prewarming;
-        *prewarming = in_progress;
-        was_prewarming
-    }
-
-    pub fn cleanup_stale(&self) {
-        let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
-        windows.retain(|_, (window, created_at)| {
-            if created_at.elapsed() > Duration::from_secs(30) {
-                let _ = window.close();
-                false
-            } else {
-                true
-            }
-        });
-    }
 }
 
 #[derive(Default)]

@@ -2,7 +2,7 @@ import { buildEnv } from "@cap/env";
 import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
-import { MDXRemote } from "next-mdx-remote/rsc";
+import { CustomMDX } from "@/components/mdx";
 import { getDocs } from "@/utils/blog";
 
 interface DocProps {
@@ -77,7 +77,7 @@ export default async function DocPage(props: DocProps) {
 					<h1 className="mb-2">{doc.metadata.title}</h1>
 				</header>
 				<hr className="my-6" />
-				<MDXRemote source={doc.content} />
+				<CustomMDX source={doc.content} />
 			</div>
 		</article>
 	);

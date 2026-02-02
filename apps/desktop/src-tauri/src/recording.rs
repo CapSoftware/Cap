@@ -8,6 +8,8 @@ use cap_project::{
     StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta,
     ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
+#[cfg(target_os = "macos")]
+use cap_recording::SendableShareableContent;
 use cap_recording::feeds::camera::CameraFeedLock;
 #[cfg(target_os = "macos")]
 use cap_recording::sources::screen_capture::SourceError;
@@ -47,14 +49,14 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
-use crate::camera::{CameraPreviewManager, CameraPreviewShape};
+use crate::camera::{CameraPreviewManager, CameraPreviewShape, CameraPreviewState};
 #[cfg(target_os = "macos")]
 use crate::general_settings;
 use crate::permissions;
 use crate::web_api::AuthedApiError;
 use crate::{
-    App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
-    RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
+    App, CameraWindowOperationLock, CurrentRecordingChanged, FinalizingRecordings, MutableState,
+    NewStudioRecordingAdded, RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -93,39 +95,20 @@ pub enum InProgressRecording {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone)]
-struct SendableShareableContent(cidre::arc::R<cidre::sc::ShareableContent>);
-
-#[cfg(target_os = "macos")]
-impl SendableShareableContent {
-    fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
-        self.0.clone()
-    }
-}
-
-#[cfg(target_os = "macos")]
-unsafe impl Send for SendableShareableContent {}
-
-#[cfg(target_os = "macos")]
-unsafe impl Sync for SendableShareableContent {}
-
-#[cfg(target_os = "macos")]
 async fn acquire_shareable_content_for_target(
     capture_target: &ScreenCaptureTarget,
 ) -> anyhow::Result<SendableShareableContent> {
     let mut refreshed = false;
 
     loop {
-        let shareable_content = SendableShareableContent(
+        let shareable_content = SendableShareableContent::from(
             crate::platform::get_shareable_content()
                 .await
                 .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
                 .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
         );
 
-        if !shareable_content_missing_target_display(capture_target, shareable_content.retained())
-            .await
-        {
+        if !shareable_content_missing_target_display(capture_target, &shareable_content) {
             return Ok(shareable_content);
         }
 
@@ -141,15 +124,14 @@ async fn acquire_shareable_content_for_target(
 }
 
 #[cfg(target_os = "macos")]
-async fn shareable_content_missing_target_display(
+fn shareable_content_missing_target_display(
     capture_target: &ScreenCaptureTarget,
-    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    shareable_content: &SendableShareableContent,
 ) -> bool {
     match capture_target.display() {
         Some(display) => display
             .raw_handle()
-            .as_sc(shareable_content)
-            .await
+            .as_sc(shareable_content.retained())
             .is_none(),
         None => false,
     }
@@ -307,6 +289,104 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
         return vec![];
     }
     cap_camera::list_cameras().collect()
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraFormatInfo {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraWithFormats {
+    pub device_id: String,
+    pub display_name: String,
+    pub model_id: Option<String>,
+    pub formats: Vec<CameraFormatInfo>,
+    pub best_format: Option<CameraFormatInfo>,
+}
+
+fn get_best_format(formats: &[CameraFormatInfo]) -> Option<CameraFormatInfo> {
+    formats
+        .iter()
+        .filter(|f| f.frame_rate >= 24.0 && f.frame_rate <= 60.0)
+        .max_by(|a, b| {
+            let res_a = a.width * a.height;
+            let res_b = b.width * b.height;
+            res_a.cmp(&res_b)
+        })
+        .or_else(|| {
+            formats.iter().max_by(|a, b| {
+                let res_a = a.width * a.height;
+                let res_b = b.width * b.height;
+                res_a.cmp(&res_b)
+            })
+        })
+        .cloned()
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_camera_formats(device_id: String) -> Option<CameraWithFormats> {
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return None;
+    }
+
+    cap_camera::list_cameras()
+        .find(|c| c.device_id() == device_id)
+        .map(|camera| {
+            let formats: Vec<CameraFormatInfo> = camera
+                .formats()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| CameraFormatInfo {
+                    width: f.width(),
+                    height: f.height(),
+                    frame_rate: f.frame_rate(),
+                })
+                .collect();
+
+            let best_format = get_best_format(&formats);
+
+            CameraWithFormats {
+                device_id: camera.device_id().to_string(),
+                display_name: camera.display_name().to_string(),
+                model_id: camera.model_id().map(|m| m.to_string()),
+                formats,
+                best_format,
+            }
+        })
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneInfo {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_microphone_info(name: String) -> Option<MicrophoneInfo> {
+    if !permissions::do_permissions_check(false)
+        .microphone
+        .permitted()
+    {
+        return None;
+    }
+
+    microphone::MicrophoneFeed::list()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .map(|(name, (_device, config))| MicrophoneInfo {
+            name,
+            sample_rate: config.sample_rate().0,
+            channels: config.channels(),
+        })
 }
 
 #[tauri::command]
@@ -473,6 +553,39 @@ pub async fn start_recording(
         return Err("Recording already in progress".to_string());
     }
 
+    let mut inputs = inputs;
+    if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+        inputs.capture_system_audio = false;
+
+        {
+            let mut app_state = state_mtx.write().await;
+            app_state.was_camera_only_recording = true;
+
+            let current_mirrored = app_state
+                .camera_preview
+                .get_state()
+                .map(|s| s.mirrored)
+                .unwrap_or(false);
+
+            let camera_state = CameraPreviewState {
+                size: crate::camera::CAMERA_PRESET_LARGE,
+                shape: CameraPreviewShape::Full,
+                mirrored: current_mirrored,
+            };
+
+            if let Err(err) = app_state.camera_preview.set_state(camera_state) {
+                error!("Failed to set camera preview state for camera-only mode: {err}");
+            }
+        }
+
+        let operation_lock = app.state::<CameraWindowOperationLock>();
+        let _operation_guard = operation_lock.lock().await;
+        ShowCapWindow::Camera { centered: true }
+            .show(&app)
+            .await
+            .map_err(|err| format!("Failed to show centered camera window: {err}"))?;
+    }
+
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
 
@@ -621,7 +734,7 @@ pub async fn start_recording(
         .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
     {
         if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            win.close().ok();
+            win.hide().ok();
         }
     }
     let _ = ShowCapWindow::InProgressRecording { countdown }
@@ -711,8 +824,10 @@ pub async fn start_recording(
             state.camera_in_use = camera_feed.is_some();
 
             #[cfg(target_os = "macos")]
-            let mut shareable_content =
-                acquire_shareable_content_for_target(&inputs.capture_target).await?;
+            let mut shareable_content = match inputs.capture_target {
+                ScreenCaptureTarget::CameraOnly => None,
+                _ => Some(acquire_shareable_content_for_target(&inputs.capture_target).await?),
+            };
 
             let common = InProgressRecordingCommon {
                 target_name: project_name,
@@ -780,7 +895,7 @@ pub async fn start_recording(
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
-                                    shareable_content.retained(),
+                                    shareable_content.clone(),
                                 )
                                 .await
                                 .map_err(|e| {
@@ -816,6 +931,10 @@ pub async fn start_recording(
                                 builder = builder.with_excluded_windows(excluded_windows.clone());
                             }
 
+                            if let Some(camera_feed) = camera_feed.clone() {
+                                builder = builder.with_camera_feed(camera_feed);
+                            }
+
                             if let Some(mic_feed) = mic_feed.clone() {
                                 builder = builder.with_mic_feed(mic_feed);
                             }
@@ -823,7 +942,7 @@ pub async fn start_recording(
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
-                                    shareable_content.retained(),
+                                    shareable_content.clone(),
                                 )
                                 .await
                                 .map_err(|e| {
@@ -862,8 +981,9 @@ pub async fn start_recording(
                     }
                     #[cfg(target_os = "macos")]
                     Err(err) if is_shareable_content_error(&err) => {
-                        shareable_content =
-                            acquire_shareable_content_for_target(&inputs.capture_target).await?;
+                        shareable_content = Some(
+                            acquire_shareable_content_for_target(&inputs.capture_target).await?,
+                        );
                         continue;
                     }
                     Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {
@@ -1156,7 +1276,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .unwrap_or_default();
 
         if let Some(window) = CapWindowId::RecordingControls.get(&app) {
-            let _ = window.close();
+            let _ = window.hide();
         }
 
         match settings.post_deletion_behaviour {
@@ -1351,6 +1471,15 @@ async fn handle_recording_end(
     app.disconnected_inputs.clear();
     app.camera_in_use = false;
 
+    if app.was_camera_only_recording {
+        app.was_camera_only_recording = false;
+
+        let default_state = CameraPreviewState::default();
+        if let Err(err) = app.camera_preview.set_state(default_state) {
+            error!("Failed to reset camera preview state after camera-only recording: {err}");
+        }
+    }
+
     let res = match recording {
         // we delay reporting errors here so that everything else happens first
         Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
@@ -1387,23 +1516,20 @@ async fn handle_recording_end(
     let _ = app.recording_logging_handle.reload(None);
 
     if let Some(window) = CapWindowId::RecordingControls.get(&handle) {
-        let _ = window.close();
+        let _ = window.hide();
     }
 
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
         if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.close();
+            let _ = v.hide();
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
         app.camera_in_use = false;
-        if let Some(win) = CapWindowId::Camera.get(&handle) {
-            win.close().ok();
-        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();

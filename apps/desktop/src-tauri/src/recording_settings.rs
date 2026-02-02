@@ -12,6 +12,7 @@ pub enum RecordingTargetMode {
     Display,
     Window,
     Area,
+    Camera,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, specta::Type, Debug, Clone, Default)]

@@ -121,6 +121,18 @@ const getPlaylistResponse = (
 				);
 		}
 
+		if (
+			Option.isSome(urlParams.fileType) &&
+			urlParams.fileType.value === "enhanced-audio"
+		) {
+			const enhancedAudioKey = `${video.ownerId}/${video.id}/enhanced-audio.mp3`;
+			return yield* s3.getSignedObjectUrl(enhancedAudioKey).pipe(
+				Effect.map(HttpServerResponse.redirect),
+				Effect.catchTag("S3Error", () => new HttpApiError.NotFound()),
+				Effect.withSpan("fetchEnhancedAudio"),
+			);
+		}
+
 		yield* Effect.log("Resolving path with custom bucket");
 
 		const videoPrefix = `${video.ownerId}/${video.id}/video/`;

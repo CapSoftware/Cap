@@ -28,10 +28,12 @@ function getProgressStatusText(
 }
 
 import {
+	EnhancedAudioSync,
 	MediaPlayer,
 	MediaPlayerCaptions,
 	MediaPlayerControls,
 	MediaPlayerControlsOverlay,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerError,
 	MediaPlayerFullscreen,
 	MediaPlayerLoading,
@@ -47,6 +49,8 @@ import {
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
 interface Props {
 	videoSrc: string;
 	videoId: Video.VideoId;
@@ -57,6 +61,8 @@ interface Props {
 	disableCaptions?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
+	enhancedAudioUrl?: string | null;
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
 }
 
 export function HLSVideoPlayer({
@@ -69,6 +75,8 @@ export function HLSVideoPlayer({
 	autoplay = false,
 	hasActiveUpload,
 	disableCaptions,
+	enhancedAudioUrl,
+	enhancedAudioStatus,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -77,6 +85,12 @@ export function HLSVideoPlayer({
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+
+	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
+		enhancedAudioStatus === "COMPLETE",
+	);
+	const [enhancedAudioMuted, setEnhancedAudioMuted] = useState(false);
+	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -458,7 +472,12 @@ export function HLSVideoPlayer({
 						<MediaPlayerPlay />
 						<MediaPlayerSeekBackward />
 						<MediaPlayerSeekForward />
-						<MediaPlayerVolume expandable />
+						<MediaPlayerVolume
+							expandable
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							enhancedAudioMuted={enhancedAudioMuted}
+							setEnhancedAudioMuted={setEnhancedAudioMuted}
+						/>
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
@@ -468,12 +487,39 @@ export function HLSVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerSettings />
+						<MediaPlayerEnhancedAudio
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
+						<MediaPlayerSettings
+							enhancedAudioStatus={enhancedAudioStatus}
+							enhancedAudioEnabled={enhancedAudioEnabled}
+							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+						/>
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />
 					</div>
 				</div>
 			</MediaPlayerControls>
+			{enhancedAudioUrl && (
+				<>
+					<audio
+						ref={enhancedAudioRef}
+						src={enhancedAudioUrl}
+						preload="auto"
+						className="hidden"
+					>
+						<track kind="captions" />
+					</audio>
+					<EnhancedAudioSync
+						enhancedAudioRef={enhancedAudioRef}
+						videoRef={videoRef}
+						enhancedAudioEnabled={enhancedAudioEnabled}
+						enhancedAudioMuted={enhancedAudioMuted}
+					/>
+				</>
+			)}
 		</MediaPlayer>
 	);
 }

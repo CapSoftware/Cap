@@ -21,6 +21,7 @@ import {
 	commands,
 	type DeviceOrModelID,
 	type RecordingMode,
+	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
 import { orgCustomDomainClient, protectedHeaders } from "./web-api";
@@ -146,14 +147,17 @@ export const isSystemAudioSupported = queryOptions({
 	staleTime: Number.POSITIVE_INFINITY, // This won't change during runtime
 });
 
+type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
+type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
+
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{
-		captureTarget: ScreenCaptureTarget;
+		captureTarget: CameraCaptureTarget;
 		micName: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
-		targetMode?: "display" | "window" | "area" | null;
+		targetMode?: ExtendedRecordingTargetMode;
 		cameraID?: DeviceOrModelID | null;
 		organizationId?: string | null;
 		/** @deprecated */
@@ -245,33 +249,45 @@ export function createLicenseQuery() {
 export function createCameraMutation() {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
-	const rawMutate = async (model: DeviceOrModelID | null) => {
+	const rawMutate = async (
+		model: DeviceOrModelID | null,
+		skipCameraWindow?: boolean,
+	) => {
 		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
 		setOptions("cameraID", reconcile(model));
-		await commands.setCameraInput(model).catch(async (e) => {
-			const message =
-				typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+		await commands
+			.setCameraInput(model, skipCameraWindow ?? null)
+			.catch(async (e) => {
+				const message =
+					typeof e === "string"
+						? e
+						: e instanceof Error
+							? e.message
+							: String(e);
 
-			if (message.includes("DeviceNotFound")) {
-				setOptions("cameraID", null);
-				console.warn("Selected camera is unavailable.");
-				return;
-			}
+				if (message.includes("DeviceNotFound")) {
+					setOptions("cameraID", null);
+					console.warn("Selected camera is unavailable.");
+					return;
+				}
 
-			if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-				setOptions("cameraID", null);
-			} else setOptions("cameraID", reconcile(before));
+				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+					setOptions("cameraID", null);
+				} else setOptions("cameraID", reconcile(before));
 
-			throw e;
-		});
+				throw e;
+			});
 
-		if (model) {
+		if (model && !skipCameraWindow) {
 			getCurrentWindow().setFocus();
 		}
 	};
 
 	const setCameraInput = useMutation(() => ({
-		mutationFn: rawMutate,
+		mutationFn: (args: {
+			model: DeviceOrModelID | null;
+			skipCameraWindow?: boolean;
+		}) => rawMutate(args.model, args.skipCameraWindow),
 	}));
 
 	return new Proxy(

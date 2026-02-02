@@ -26,6 +26,34 @@ pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLev
     });
 }
 
+pub fn apply_squircle_corners(window: &tauri::WebviewWindow, radius: f64) {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{msg_send, sel, sel_impl};
+
+    let Ok(ns_win) = window.ns_window() else {
+        return;
+    };
+
+    unsafe {
+        let ns_win = ns_win as id;
+        let content_view: id = msg_send![ns_win, contentView];
+
+        if content_view != nil {
+            let _: () = msg_send![content_view, setWantsLayer: true];
+
+            let layer: id = msg_send![content_view, layer];
+            if layer != nil {
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: true];
+
+                let continuous = NSString::alloc(nil).init_str("continuous");
+                let _: () = msg_send![layer, setCornerCurve: continuous];
+            }
+        }
+    }
+}
+
 // pub fn get_ns_window_number(ns_window: *mut c_void) -> isize {
 //     let ns_window = ns_window as *const objc2_app_kit::NSWindow;
 

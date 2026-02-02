@@ -1,9 +1,10 @@
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
-import type { GeneralSettingsStore } from "~/utils/tauri";
+import { commands, type GeneralSettingsStore } from "~/utils/tauri";
 import { ToggleSettingItem } from "./Setting";
 
 export default function ExperimentalSettings() {
@@ -37,6 +38,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 		setSettings(key as keyof GeneralSettingsStore, value);
 		generalSettingsStore.set({ [key]: value });
+		if (key === "enableNativeCameraPreview") {
+			await commands.setCameraInput(null, true);
+			try {
+				const cameraWindow = await WebviewWindow.getByLabel("camera");
+				await cameraWindow?.close();
+			} catch (error) {
+				console.error("Failed to close camera window", error);
+			}
+		}
 	};
 
 	return (

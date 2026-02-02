@@ -68,7 +68,7 @@ pub async fn run_suite(hardware: &DiscoveredHardware, duration: u64) -> Result<T
                     dropped: 0,
                     drop_rate_percent: 0.0,
                     effective_fps: metrics.video_frames as f64 / metrics.duration_secs,
-                    target_fps: fps as u32,
+                    target_fps: fps,
                 },
                 latency_ms: LatencyMetrics {
                     avg: 5.0,
@@ -164,8 +164,8 @@ async fn run_sync_test(fps: u32, duration_secs: u64) -> Result<SyncTestMetrics> 
         drifts.push(drift);
 
         let elapsed = frame_start.elapsed();
-        if elapsed < frame_interval {
-            tokio::time::sleep(frame_interval - elapsed).await;
+        if let Some(remaining) = frame_interval.checked_sub(elapsed) {
+            tokio::time::sleep(remaining).await;
         }
     }
 

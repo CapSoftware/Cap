@@ -43,7 +43,7 @@ pub enum EditorPreviewQuality {
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
-            Self::Close => window.close(),
+            Self::Close => window.hide(),
             Self::Minimise => window.minimize(),
         }
     }
@@ -70,6 +70,13 @@ pub fn default_excluded_windows() -> Vec<WindowExclusion> {
 // When adding fields here, #[serde(default)] defines the value to use for existing configurations,
 // and `Default::default` defines the value to use for new configurations.
 // Things that affect the user experience should only be enabled by default for new configurations.
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
@@ -99,14 +106,12 @@ pub struct GeneralSettingsStore {
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
-    // Renamed from `custom_cursor_capture` to `custom_cursor_capture2` so we can change the default.
     #[serde(default = "default_true", rename = "custom_cursor_capture2")]
     pub custom_cursor_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
     #[serde(default)]
     pub recording_countdown: Option<u32>,
-    // #[deprecated = "can be removed when native camera preview is ready"]
     #[serde(
         default = "default_enable_native_camera_preview",
         skip_serializing_if = "no"
@@ -130,6 +135,10 @@ pub struct GeneralSettingsStore {
     pub max_fps: u32,
     #[serde(default)]
     pub editor_preview_quality: EditorPreviewQuality,
+    #[serde(default)]
+    pub main_window_position: Option<WindowPosition>,
+    #[serde(default)]
+    pub camera_window_position: Option<WindowPosition>,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -196,6 +205,8 @@ impl Default for GeneralSettingsStore {
             crash_recovery_recording: true,
             max_fps: 60,
             editor_preview_quality: EditorPreviewQuality::Half,
+            main_window_position: None,
+            camera_window_position: None,
         }
     }
 }

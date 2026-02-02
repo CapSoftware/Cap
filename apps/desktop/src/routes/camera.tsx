@@ -44,6 +44,16 @@ const CAMERA_DEFAULT_SIZE = 230;
 const CAMERA_PRESET_SMALL = 230;
 const CAMERA_PRESET_LARGE = 400;
 
+const getCameraOnlyMode = () => {
+	return window.__CAP__?.cameraOnlyMode === true;
+};
+
+const getCameraOnlyInitialState = (): CameraWindowState => ({
+	size: CAMERA_PRESET_LARGE,
+	shape: "full",
+	mirrored: false,
+});
+
 export default function () {
 	document.documentElement.classList.toggle("dark", true);
 
@@ -78,12 +88,18 @@ export default function () {
 }
 
 function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+	const isCameraOnlyMode = getCameraOnlyMode();
+
 	const [state, setState] = makePersisted(
-		createStore<CameraWindowState>({
-			size: CAMERA_DEFAULT_SIZE,
-			shape: "round",
-			mirrored: false,
-		}),
+		createStore<CameraWindowState>(
+			isCameraOnlyMode
+				? getCameraOnlyInitialState()
+				: {
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+					},
+		),
 		{ name: "cameraWindowState" },
 	);
 
@@ -95,8 +111,15 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		corner: "",
 	});
 
+	onMount(() => {
+		if (isCameraOnlyMode) {
+			const cameraOnlyState = getCameraOnlyInitialState();
+			setState("size", cameraOnlyState.size);
+			setState("shape", cameraOnlyState.shape);
+		}
+	});
+
 	createEffect(() => {
-		// Support for legacy size strings.
 		let currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
 			currentSize =
@@ -284,18 +307,30 @@ function ControlButton(
 
 function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	const { rawOptions } = useRecordingOptions();
+	const isCameraOnlyMode = getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
-		createStore<CameraWindowState>({
-			size: CAMERA_DEFAULT_SIZE,
-			shape: "round",
-			mirrored: false,
-		}),
+		createStore<CameraWindowState>(
+			isCameraOnlyMode
+				? getCameraOnlyInitialState()
+				: {
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+					},
+		),
 		{ name: "cameraWindowState" },
 	);
 
+	onMount(() => {
+		if (isCameraOnlyMode) {
+			const cameraOnlyState = getCameraOnlyInitialState();
+			setState("size", cameraOnlyState.size);
+			setState("shape", cameraOnlyState.shape);
+		}
+	});
+
 	createEffect(() => {
-		// Support for legacy size strings.
 		const currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
 			setState(
@@ -313,7 +348,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		corner: "",
 	});
 
-	const [hasPositioned, setHasPositioned] = createSignal(false);
+	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode);
 
 	const [latestFrame, setLatestFrame] = createLazySignal<{
 		width: number;
