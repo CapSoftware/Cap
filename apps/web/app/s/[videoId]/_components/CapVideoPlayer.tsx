@@ -429,9 +429,9 @@ export function CapVideoPlayer({
 			setupTracks();
 		};
 
-		// Monitor for track changes and ensure they stay hidden
 		const handleTrackChange = () => {
 			ensureTracksHidden();
+			setupTracks();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);

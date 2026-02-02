@@ -285,9 +285,9 @@ export function HLSVideoPlayer({
 			setupTracks();
 		};
 
-		// Monitor for track changes and ensure they stay hidden
 		const handleTrackChange = () => {
 			ensureTracksHidden();
+			setupTracks();
 		};
 
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
