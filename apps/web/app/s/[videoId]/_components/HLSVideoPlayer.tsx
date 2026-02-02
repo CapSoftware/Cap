@@ -51,6 +51,11 @@ import {
 
 type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 
+interface CaptionOption {
+	code: string;
+	name: string;
+}
+
 interface Props {
 	videoSrc: string;
 	videoId: Video.VideoId;
@@ -63,6 +68,11 @@ interface Props {
 	hasActiveUpload?: boolean;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	captionLanguage?: string;
+	onCaptionLanguageChange?: (language: string) => void;
+	availableCaptions?: CaptionOption[];
+	isCaptionLoading?: boolean;
+	hasCaptions?: boolean;
 }
 
 export function HLSVideoPlayer({
@@ -77,6 +87,11 @@ export function HLSVideoPlayer({
 	disableCaptions,
 	enhancedAudioUrl,
 	enhancedAudioStatus,
+	captionLanguage,
+	onCaptionLanguageChange,
+	availableCaptions = [],
+	isCaptionLoading = false,
+	hasCaptions = false,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -496,6 +511,11 @@ export function HLSVideoPlayer({
 							enhancedAudioStatus={enhancedAudioStatus}
 							enhancedAudioEnabled={enhancedAudioEnabled}
 							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+							captionLanguage={captionLanguage}
+							onCaptionLanguageChange={onCaptionLanguageChange}
+							availableCaptions={availableCaptions}
+							isCaptionLoading={isCaptionLoading}
+							hasCaptions={hasCaptions}
 						/>
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />
