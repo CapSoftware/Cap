@@ -4,6 +4,9 @@ import { generateDeeplink } from "../utils/deeplink";
 export default async function Command() {
   const deeplink = generateDeeplink("start_recording", {
     capture_mode: { screen: "default" },
+    camera: null,
+    mic_label: null,
+    capture_system_audio: false,
     mode: "normal"
   });
   

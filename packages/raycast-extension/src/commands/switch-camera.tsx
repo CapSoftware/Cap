@@ -2,7 +2,11 @@ import { open, showToast, Toast } from "@raycast/api";
 import { generateDeeplink } from "../utils/deeplink";
 
 export default async function Command() {
-  const deeplink = generateDeeplink("switch_camera", { device_id: "TODO" });
+  // TODO: Replace "default" with actual device picker when available
+  // For now, this will use the default/primary camera device
+  const deeplink = generateDeeplink("switch_camera", { 
+    device_id: "default" 
+  });
   
   try {
     await open(deeplink);

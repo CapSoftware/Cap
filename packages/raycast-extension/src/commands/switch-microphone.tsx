@@ -2,7 +2,11 @@ import { open, showToast, Toast } from "@raycast/api";
 import { generateDeeplink } from "../utils/deeplink";
 
 export default async function Command() {
-  const deeplink = generateDeeplink("switch_microphone", { mic_label: "TODO" });
+  // TODO: Replace "default" with actual mic picker when available
+  // For now, this will use the default/system microphone
+  const deeplink = generateDeeplink("switch_microphone", { 
+    mic_label: "default" 
+  });
   
   try {
     await open(deeplink);
