@@ -1,28 +1,29 @@
 import { open, showHUD, getApplications } from "@raycast/api";
 
 export default async function Command() {
-  const apps = await getApplications();
-  const capInstalled = apps.some(
-    (app) => app.bundleId === "so.cap.desktop" || app.bundleId === "so.cap.desktop.dev"
-  );
-
-  if (!capInstalled) {
-    await showHUD("❌ Cap is not installed");
-    return;
-  }
-
-  // Start recording - Cap will use the default/last used display
-  // Note: For display selection, users should configure in Cap preferences
-  const action = {
-    open_settings: { page: "recording" }
-  };
-
-  const deeplink = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
-  
   try {
+    const apps = await getApplications();
+    const capInstalled = apps.some(
+      (app) =>
+        app.bundleId === "so.cap.desktop" ||
+        app.bundleId === "so.cap.desktop.dev",
+    );
+
+    if (!capInstalled) {
+      await showHUD("❌ Cap is not installed");
+      return;
+    }
+
+    const action = {
+      start_recording: {},
+    };
+
+    const deeplink = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;
+
     await open(deeplink);
-    await showHUD("📺 Opening Cap recording settings...");
+    await showHUD("🎥 Started recording");
   } catch (error) {
-    await showHUD("❌ Failed to open Cap");
+    console.error("Failed to start recording:", error);
+    await showHUD("❌ Failed to start recording");
   }
 }

@@ -3,8 +3,8 @@
   "name": "cap",
   "title": "Cap",
   "description": "Control Cap screen recorder with Raycast",
-  "icon": "assets/cap-icon.png",
-  "author": "cap-software",
+  "icon": "cap-icon-512.png",
+  "author": "Cap",
   "categories": ["Productivity", "Media"],
   "license": "MIT",
   "commands": [
@@ -36,6 +36,18 @@
       "name": "toggle-pause",
       "title": "Toggle Pause",
       "description": "Toggle pause/resume on current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch to the next available camera",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "description": "Switch to the next available microphone",
       "mode": "no-view"
     }
   ],
