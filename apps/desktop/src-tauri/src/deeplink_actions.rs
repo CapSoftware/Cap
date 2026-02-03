@@ -91,7 +91,9 @@ impl TryFrom<&Url> for DeepLinkAction {
         #[cfg(target_os = "macos")]
         if url.scheme() == "file" {
             return Ok(Self::OpenEditor {
-                project_path: url.to_file_path().unwrap(),
+                project_path: url
+                    .to_file_path()
+                    .map_err(|_| ActionParseFromUrlError::Invalid)?,
             });
         }
 
