@@ -11,13 +11,13 @@
       "name": "start-recording-screen",
       "title": "Start Recording (Screen)",
       "description": "Start a screen recording in Cap",
-      "mode": "no-view"
+      "mode": "view"
     },
     {
       "name": "start-recording-window",
       "title": "Start Recording (Window)",
       "description": "Start a window recording in Cap",
-      "mode": "no-view"
+      "mode": "view"
     },
     {
       "name": "stop-recording",

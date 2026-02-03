@@ -1,13 +1,34 @@
+import { Form, ActionPanel, Action, showToast, Toast } from "@raycast/api";
 import { openCapDeepLink } from "./utils";
 
-export default async function Command() {
-  await openCapDeepLink({
-    start_recording: {
-      capture_mode: { window: "" },
-      camera: null,
-      mic_label: null,
-      capture_system_audio: true,
-      mode: "instant",
-    },
-  });
+export default function Command() {
+  return (
+    <Form
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="Start Recording (Window)"
+            onSubmit={async (values) => {
+              const windowName = (values.windowName as string)?.trim();
+              if (!windowName) {
+                await showToast({ style: Toast.Style.Failure, title: "Window name is required" });
+                return;
+              }
+              await openCapDeepLink({
+                start_recording: {
+                  capture_mode: { window: windowName },
+                  camera: null,
+                  mic_label: null,
+                  capture_system_audio: true,
+                  mode: "instant",
+                },
+              });
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.TextField id="windowName" title="Window Name" placeholder="My App" />
+    </Form>
+  );
 }
