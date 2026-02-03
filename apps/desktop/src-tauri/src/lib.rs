@@ -85,7 +85,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -133,6 +133,39 @@ impl CameraWindowCloseGate {
 
     pub fn set_allow_close(&self, value: bool) {
         self.0.store(value, Ordering::Release);
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[derive(Debug)]
+pub struct CameraWindowPositionGuard {
+    ignore_until_ms: AtomicU64,
+}
+
+impl Default for CameraWindowPositionGuard {
+    fn default() -> Self {
+        Self {
+            ignore_until_ms: AtomicU64::new(0),
+        }
+    }
+}
+
+impl CameraWindowPositionGuard {
+    pub fn ignore_for(&self, duration_ms: u64) {
+        let now = now_millis();
+        let until = now.saturating_add(duration_ms);
+        self.ignore_until_ms.store(until, Ordering::Release);
+    }
+
+    pub fn should_ignore(&self) -> bool {
+        let now = now_millis();
+        now < self.ignore_until_ms.load(Ordering::Acquire)
     }
 }
 
@@ -635,6 +668,43 @@ async fn set_camera_input(
     }
 
     Ok(())
+}
+
+fn display_for_position(pos_x: f64, pos_y: f64) -> Option<Display> {
+    Display::list().into_iter().find_map(|display| {
+        let bounds = display.raw_handle().logical_bounds()?;
+        let x = bounds.position().x();
+        let y = bounds.position().y();
+        let width = bounds.size().width();
+        let height = bounds.size().height();
+        if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
+            Some(display)
+        } else {
+            None
+        }
+    })
+}
+
+fn display_id_for_position(pos_x: f64, pos_y: f64) -> Option<DisplayId> {
+    display_for_position(pos_x, pos_y).map(|display| display.id())
+}
+
+fn monitor_name_for_position(pos_x: f64, pos_y: f64) -> Option<String> {
+    display_for_position(pos_x, pos_y)
+        .and_then(|display| display.name())
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn update_camera_window_position_settings(settings: &mut GeneralSettingsStore, x: f64, y: f64) {
+    let display_id = display_id_for_position(x, y);
+    let monitor_name = monitor_name_for_position(x, y);
+    let position = general_settings::WindowPosition { x, y, display_id };
+    settings.camera_window_position = Some(position.clone());
+    if let Some(monitor_name) = monitor_name {
+        settings
+            .camera_window_positions_by_monitor_name
+            .insert(monitor_name, position);
+    }
 }
 
 fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<StreamError>) {
@@ -2678,6 +2748,33 @@ async fn set_camera_preview_state(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
+fn set_camera_window_position(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let guard = app.state::<CameraWindowPositionGuard>();
+    if guard.should_ignore() {
+        return Ok(());
+    }
+
+    GeneralSettingsStore::update(&app, |settings| {
+        update_camera_window_position_settings(settings, x, y);
+    })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+fn ignore_camera_window_position(
+    guard: State<'_, CameraWindowPositionGuard>,
+    duration_ms: u32,
+) -> Result<(), String> {
+    guard.ignore_for(duration_ms as u64);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
 async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, String> {
     let app = app.read().await.camera_feed.clone();
 
@@ -2837,6 +2934,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_pretty_name,
             set_server_url,
             set_camera_preview_state,
+            set_camera_window_position,
+            ignore_camera_window_position,
             await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
@@ -3126,6 +3225,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 app.manage(camera_session_id_handle);
                 app.manage(CameraWindowCloseGate::default());
+                app.manage(CameraWindowPositionGuard::default());
                 app.manage(CameraWindowOperationLock::default());
 
                 app.manage(Arc::new(RwLock::new(
@@ -3441,21 +3541,28 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         let logical_pos = position.to_logical::<f64>(scale_factor);
                         match window_id {
                             CapWindowId::Main => {
+                                let display_id =
+                                    display_id_for_position(logical_pos.x, logical_pos.y);
                                 let _ = GeneralSettingsStore::update(app, |settings| {
                                     settings.main_window_position =
                                         Some(general_settings::WindowPosition {
                                             x: logical_pos.x,
                                             y: logical_pos.y,
+                                            display_id,
                                         });
                                 });
                             }
                             CapWindowId::Camera => {
+                                let guard = app.state::<CameraWindowPositionGuard>();
+                                if guard.should_ignore() {
+                                    return;
+                                }
                                 let _ = GeneralSettingsStore::update(app, |settings| {
-                                    settings.camera_window_position =
-                                        Some(general_settings::WindowPosition {
-                                            x: logical_pos.x,
-                                            y: logical_pos.y,
-                                        });
+                                    update_camera_window_position_settings(
+                                        settings,
+                                        logical_pos.x,
+                                        logical_pos.y,
+                                    );
                                 });
                             }
                             _ => {}

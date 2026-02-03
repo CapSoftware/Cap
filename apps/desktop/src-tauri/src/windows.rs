@@ -25,7 +25,8 @@ use tracing::{debug, error, instrument, warn};
 use crate::panel_manager::{PanelManager, PanelState, PanelWindowType};
 
 use crate::{
-    App, ArcLock, CameraWindowCloseGate, RequestScreenCapturePrewarm, RequestSetTargetMode,
+    App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, RequestScreenCapturePrewarm,
+    RequestSetTargetMode,
     editor_window::PendingEditorInstances,
     fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
@@ -273,7 +274,65 @@ fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
     let (pos_x, pos_y) = monitor_info.center_position(window_width, window_height);
 
     let _ = window.set_size(tauri::LogicalSize::new(window_width, window_height));
+    app.state::<CameraWindowPositionGuard>().ignore_for(1000);
     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+}
+
+fn is_position_on_display(display_id: &DisplayId, pos_x: f64, pos_y: f64) -> bool {
+    Display::from_id(display_id)
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .map(|bounds| {
+            let (x, y, width, height) = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+
+            pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
+        })
+        .unwrap_or(false)
+}
+
+fn display_name_for_position(pos_x: f64, pos_y: f64) -> Option<String> {
+    Display::list().into_iter().find_map(|display| {
+        let bounds = display.raw_handle().logical_bounds()?;
+        let (x, y, width, height) = (
+            bounds.position().x(),
+            bounds.position().y(),
+            bounds.size().width(),
+            bounds.size().height(),
+        );
+
+        if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
+            display.name().filter(|name| !name.trim().is_empty())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_position_on_monitor_name(monitor_name: &str, pos_x: f64, pos_y: f64) -> bool {
+    Display::list().into_iter().any(|display| {
+        if display.name().as_deref() != Some(monitor_name) {
+            return false;
+        }
+
+        display
+            .raw_handle()
+            .logical_bounds()
+            .map(|bounds| {
+                let (x, y, width, height) = (
+                    bounds.position().x(),
+                    bounds.position().y(),
+                    bounds.size().width(),
+                    bounds.size().height(),
+                );
+
+                pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
@@ -1436,11 +1495,43 @@ impl ShowCapWindow {
                         .map(|w| CursorMonitorInfo::from_window(&w))
                         .unwrap_or(cursor_monitor);
 
-                    let saved_position = GeneralSettingsStore::get(app)
-                        .ok()
-                        .flatten()
-                        .and_then(|s| s.camera_window_position)
-                        .filter(|pos| is_position_on_any_screen(pos.x, pos.y));
+                    let preferred_monitor_name = display_name_for_position(
+                        camera_monitor.x + camera_monitor.width / 2.0,
+                        camera_monitor.y + camera_monitor.height / 2.0,
+                    );
+
+                    let saved_position =
+                        GeneralSettingsStore::get(app)
+                            .ok()
+                            .flatten()
+                            .and_then(|settings| {
+                                if let Some(monitor_name) = preferred_monitor_name.as_deref() {
+                                    settings
+                                        .camera_window_positions_by_monitor_name
+                                        .get(monitor_name)
+                                        .cloned()
+                                        .filter(|pos| {
+                                            is_position_on_monitor_name(monitor_name, pos.x, pos.y)
+                                        })
+                                        .or_else(|| {
+                                            settings.camera_window_position.filter(|pos| {
+                                                is_position_on_monitor_name(
+                                                    monitor_name,
+                                                    pos.x,
+                                                    pos.y,
+                                                )
+                                            })
+                                        })
+                                } else {
+                                    settings.camera_window_position.filter(|pos| {
+                                        if let Some(display_id) = &pos.display_id {
+                                            is_position_on_display(display_id, pos.x, pos.y)
+                                        } else {
+                                            is_position_on_any_screen(pos.x, pos.y)
+                                        }
+                                    })
+                                }
+                            });
 
                     let (camera_pos_x, camera_pos_y) = if let Some(pos) = saved_position {
                         (pos.x, pos.y)
@@ -1460,6 +1551,7 @@ impl ShowCapWindow {
 
                     #[cfg(not(target_os = "macos"))]
                     {
+                        app.state::<CameraWindowPositionGuard>().ignore_for(1000);
                         let _ = window
                             .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
                     }
@@ -1531,6 +1623,7 @@ impl ShowCapWindow {
                                     unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                                 panel.set_level(max_level);
 
+                                app.state::<CameraWindowPositionGuard>().ignore_for(1000);
                                 let _ = window.set_position(tauri::LogicalPosition::new(
                                     camera_pos_x,
                                     camera_pos_y,
