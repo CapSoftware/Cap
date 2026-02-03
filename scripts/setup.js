@@ -90,7 +90,7 @@ async function main() {
 		}
 		console.log("Copied ffmpeg dylibs to target/debug");
 	} else if (process.platform === "win32") {
-		const FFMPEG_VERSION = "7.1";
+		const FFMPEG_VERSION = "6.1";
 		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
 		const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
 
@@ -156,10 +156,11 @@ async function main() {
 			{ shell: "powershell.exe" },
 		);
 
-		const libclangPath = path.join(
-			vcInstallDir.trim(),
-			"VC/Tools/LLVM/x64/bin/libclang.dll",
-		);
+		const libclangPath = (await fileExists(
+			"C:/Program Files/LLVM/bin/libclang.dll",
+		))
+			? "C:/Program Files/LLVM/bin/libclang.dll"
+			: path.join(vcInstallDir.trim(), "VC/Tools/LLVM/x64/bin/libclang.dll");
 
 		cargoConfigContents += `LIBCLANG_PATH = "${libclangPath.replaceAll(
 			"\\",
