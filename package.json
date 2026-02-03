@@ -59,5 +59,8 @@
 	"name": "cap",
 	"engines": {
 		"node": ">=20"
+	},
+	"dependencies": {
+		"@raycast/api": "^1.104.4"
 	}
 }
