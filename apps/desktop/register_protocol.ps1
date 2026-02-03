@@ -1,4 +1,4 @@
-$ExePath = "C:\DEV\AG-Workspace\BountyHunter\Cap\target\debug\cap-desktop.exe"
+$ExePath = Join-Path $PSScriptRoot "../../target/debug/cap-desktop.exe"
 $Protocol = "cap"
 
 if (-not (Test-Path $ExePath)) {

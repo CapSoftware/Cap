@@ -93,7 +93,7 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         if url.scheme() == "cap" {
-            return match url.domain() {
+            return match url.host_str() {
                 Some("record") => Ok(Self::StartDefaultRecording),
                 Some("stop") => Ok(Self::StopRecording),
                 Some("pause") => Ok(Self::PauseRecording),
@@ -102,7 +102,7 @@ impl TryFrom<&Url> for DeepLinkAction {
             };
         }
 
-        match url.domain() {
+        match url.host_str() {
             Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),
         }?;

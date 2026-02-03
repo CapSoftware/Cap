@@ -203,9 +203,10 @@ impl FfmpegDecoder {
 
         std::thread::spawn(move || {
             #[cfg(target_os = "windows")]
-            unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            }
+            let com_initialized = unsafe {
+                let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+                hr.is_ok()
+            };
 
             let hw_device_type = if use_hw_acceleration {
                 #[cfg(target_os = "windows")]
@@ -823,8 +824,10 @@ impl FfmpegDecoder {
             }
 
             #[cfg(target_os = "windows")]
-            unsafe {
-                CoUninitialize();
+            if com_initialized {
+                unsafe {
+                    CoUninitialize();
+                }
             }
         });
 

@@ -8,11 +8,11 @@ echo " - Unset VCPKG_ROOT"
 # 2. Add CMake to PATH (VS Build Tools)
 export PATH="/c/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH"
 
-# 3. Configure FFmpeg 7.1
+# 3. Configure FFmpeg 6.1
 export FFMPEG_DIR="C:/Tools/ffmpeg-6.1-shared"
 export PATH="$FFMPEG_DIR/bin:$PATH"
 export BINDGEN_EXTRA_CLANG_ARGS="-I$FFMPEG_DIR/include"
-echo " - Configured FFmpeg 7.1 at $FFMPEG_DIR"
+echo " - Configured FFmpeg 6.1 at $FFMPEG_DIR"
 
 # 4. Configure Clang
 export LIBCLANG_PATH="C:/Program Files/LLVM/bin"
