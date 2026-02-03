@@ -11,8 +11,6 @@ export default async function Command() {
     return;
   }
 
-  // Start recording - Cap will use the default/last used display
-  // Note: For display selection, users should configure in Cap preferences
   const action = {
     open_settings: { page: "recording" }
   };
