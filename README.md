@@ -105,19 +105,19 @@ Start recording (window capture):
 cap-desktop://action?value={"start_recording":{"capture_mode":{"window":"My App"},"camera":null,"mic_label":null,"capture_system_audio":true,"mode":"instant"}}
 ```
 
-Stop recording:
+Stop recording (URL-encoded JSON string):
 ```
-cap-desktop://action?value={"stop_recording":{}}
-```
-
-Pause recording:
-```
-cap-desktop://action?value={"pause_recording":{}}
+cap-desktop://action?value=%22stop_recording%22
 ```
 
-Resume recording:
+Pause recording (URL-encoded JSON string):
 ```
-cap-desktop://action?value={"resume_recording":{}}
+cap-desktop://action?value=%22pause_recording%22
+```
+
+Resume recording (URL-encoded JSON string):
+```
+cap-desktop://action?value=%22resume_recording%22
 ```
 
 Switch microphone (by label):
