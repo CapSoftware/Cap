@@ -8,7 +8,7 @@ use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
     DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
-use cap_media_info::{AudioInfo, VideoInfo};
+use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use scap_ffmpeg::AsFFmpeg;
 use std::{
     path::PathBuf,
@@ -672,6 +672,48 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
 }
 
 impl WindowsFragmentedM4SCameraMuxer {
+    fn normalize_video_config_for_frame(&mut self, frame: &NativeCameraFrame) {
+        let mut updated = false;
+
+        let desired_pixel_format = match frame.pixel_format {
+            cap_camera_windows::PixelFormat::UYVY422 => Pixel::YUYV422,
+            _ => self.video_config.pixel_format,
+        };
+
+        if desired_pixel_format != self.video_config.pixel_format {
+            self.video_config.pixel_format = desired_pixel_format;
+            updated = true;
+        }
+
+        if frame.width != self.video_config.width {
+            self.video_config.width = frame.width;
+            updated = true;
+        }
+
+        if frame.height != self.video_config.height {
+            self.video_config.height = frame.height;
+            updated = true;
+        }
+
+        if updated {
+            info!(
+                width = self.video_config.width,
+                height = self.video_config.height,
+                pixel_format = ?self.video_config.pixel_format,
+                "Adjusted camera video config to match native frame"
+            );
+        }
+    }
+
+    fn ensure_encoder_started(&mut self, frame: &NativeCameraFrame) -> anyhow::Result<()> {
+        if self.started {
+            return Ok(());
+        }
+
+        self.normalize_video_config_for_frame(frame);
+        self.start_encoder()
+    }
+
     fn start_encoder(&mut self) -> anyhow::Result<()> {
         let buffer_size = get_muxer_buffer_size();
         debug!(
@@ -936,6 +978,8 @@ impl VideoMuxer for WindowsFragmentedM4SCameraMuxer {
         let Some(adjusted_timestamp) = self.pause.adjust(timestamp)? else {
             return Ok(());
         };
+
+        self.ensure_encoder_started(&frame)?;
 
         if let Some(state) = &self.state {
             match state.video_tx.send(Some((frame, adjusted_timestamp))) {
