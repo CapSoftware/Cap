@@ -8,6 +8,8 @@ use cap_project::{
     StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta,
     ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
+#[cfg(target_os = "macos")]
+use cap_recording::SendableShareableContent;
 use cap_recording::feeds::camera::CameraFeedLock;
 #[cfg(target_os = "macos")]
 use cap_recording::sources::screen_capture::SourceError;
@@ -47,14 +49,14 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
-use crate::camera::{CameraPreviewManager, CameraPreviewShape};
+use crate::camera::{CameraPreviewManager, CameraPreviewShape, CameraPreviewState};
 #[cfg(target_os = "macos")]
 use crate::general_settings;
 use crate::permissions;
 use crate::web_api::AuthedApiError;
 use crate::{
-    App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
-    RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
+    App, CameraWindowOperationLock, CurrentRecordingChanged, FinalizingRecordings, MutableState,
+    NewStudioRecordingAdded, RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -93,39 +95,20 @@ pub enum InProgressRecording {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone)]
-struct SendableShareableContent(cidre::arc::R<cidre::sc::ShareableContent>);
-
-#[cfg(target_os = "macos")]
-impl SendableShareableContent {
-    fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
-        self.0.clone()
-    }
-}
-
-#[cfg(target_os = "macos")]
-unsafe impl Send for SendableShareableContent {}
-
-#[cfg(target_os = "macos")]
-unsafe impl Sync for SendableShareableContent {}
-
-#[cfg(target_os = "macos")]
 async fn acquire_shareable_content_for_target(
     capture_target: &ScreenCaptureTarget,
 ) -> anyhow::Result<SendableShareableContent> {
     let mut refreshed = false;
 
     loop {
-        let shareable_content = SendableShareableContent(
+        let shareable_content = SendableShareableContent::from(
             crate::platform::get_shareable_content()
                 .await
                 .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
                 .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
         );
 
-        if !shareable_content_missing_target_display(capture_target, shareable_content.retained())
-            .await
-        {
+        if !shareable_content_missing_target_display(capture_target, &shareable_content) {
             return Ok(shareable_content);
         }
 
@@ -141,15 +124,14 @@ async fn acquire_shareable_content_for_target(
 }
 
 #[cfg(target_os = "macos")]
-async fn shareable_content_missing_target_display(
+fn shareable_content_missing_target_display(
     capture_target: &ScreenCaptureTarget,
-    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    shareable_content: &SendableShareableContent,
 ) -> bool {
     match capture_target.display() {
         Some(display) => display
             .raw_handle()
-            .as_sc(shareable_content)
-            .await
+            .as_sc(shareable_content.retained())
             .is_none(),
         None => false,
     }
@@ -309,6 +291,104 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     cap_camera::list_cameras().collect()
 }
 
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraFormatInfo {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraWithFormats {
+    pub device_id: String,
+    pub display_name: String,
+    pub model_id: Option<String>,
+    pub formats: Vec<CameraFormatInfo>,
+    pub best_format: Option<CameraFormatInfo>,
+}
+
+fn get_best_format(formats: &[CameraFormatInfo]) -> Option<CameraFormatInfo> {
+    formats
+        .iter()
+        .filter(|f| f.frame_rate >= 24.0 && f.frame_rate <= 60.0)
+        .max_by(|a, b| {
+            let res_a = a.width * a.height;
+            let res_b = b.width * b.height;
+            res_a.cmp(&res_b)
+        })
+        .or_else(|| {
+            formats.iter().max_by(|a, b| {
+                let res_a = a.width * a.height;
+                let res_b = b.width * b.height;
+                res_a.cmp(&res_b)
+            })
+        })
+        .cloned()
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_camera_formats(device_id: String) -> Option<CameraWithFormats> {
+    if !permissions::do_permissions_check(false).camera.permitted() {
+        return None;
+    }
+
+    cap_camera::list_cameras()
+        .find(|c| c.device_id() == device_id)
+        .map(|camera| {
+            let formats: Vec<CameraFormatInfo> = camera
+                .formats()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| CameraFormatInfo {
+                    width: f.width(),
+                    height: f.height(),
+                    frame_rate: f.frame_rate(),
+                })
+                .collect();
+
+            let best_format = get_best_format(&formats);
+
+            CameraWithFormats {
+                device_id: camera.device_id().to_string(),
+                display_name: camera.display_name().to_string(),
+                model_id: camera.model_id().map(|m| m.to_string()),
+                formats,
+                best_format,
+            }
+        })
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneInfo {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_microphone_info(name: String) -> Option<MicrophoneInfo> {
+    if !permissions::do_permissions_check(false)
+        .microphone
+        .permitted()
+    {
+        return None;
+    }
+
+    microphone::MicrophoneFeed::list()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .map(|(name, (_device, config))| MicrophoneInfo {
+            name,
+            sample_rate: config.sample_rate().0,
+            channels: config.channels(),
+        })
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -376,7 +456,21 @@ pub fn format_project_name<'a>(
     datetime: Option<chrono::DateTime<chrono::Local>>,
 ) -> String {
     const DEFAULT_FILENAME_TEMPLATE: &str = "{target_name} ({target_kind}) {date} {time}";
+    const MAX_TARGET_NAME_CHARS: usize = 180;
     let datetime = datetime.unwrap_or(chrono::Local::now());
+
+    let truncated_target_name: std::borrow::Cow<'_, str> =
+        if target_name.chars().count() > MAX_TARGET_NAME_CHARS {
+            std::borrow::Cow::Owned(
+                target_name
+                    .chars()
+                    .take(MAX_TARGET_NAME_CHARS)
+                    .collect::<String>()
+                    + "...",
+            )
+        } else {
+            std::borrow::Cow::Borrowed(target_name)
+        };
 
     lazy_static! {
         static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
@@ -402,7 +496,10 @@ pub fn format_project_name<'a>(
     };
 
     let result = AC
-        .try_replace_all(haystack, &[recording_mode, mode, target_kind, target_name])
+        .try_replace_all(
+            haystack,
+            &[recording_mode, mode, target_kind, &truncated_target_name],
+        )
         .expect("AhoCorasick replace should never fail with default configuration");
 
     let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
@@ -454,6 +551,39 @@ pub async fn start_recording(
 ) -> Result<RecordingAction, String> {
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
+    }
+
+    let mut inputs = inputs;
+    if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+        inputs.capture_system_audio = false;
+
+        {
+            let mut app_state = state_mtx.write().await;
+            app_state.was_camera_only_recording = true;
+
+            let current_mirrored = app_state
+                .camera_preview
+                .get_state()
+                .map(|s| s.mirrored)
+                .unwrap_or(false);
+
+            let camera_state = CameraPreviewState {
+                size: crate::camera::CAMERA_PRESET_LARGE,
+                shape: CameraPreviewShape::Full,
+                mirrored: current_mirrored,
+            };
+
+            if let Err(err) = app_state.camera_preview.set_state(camera_state) {
+                error!("Failed to set camera preview state for camera-only mode: {err}");
+            }
+        }
+
+        let operation_lock = app.state::<CameraWindowOperationLock>();
+        let _operation_guard = operation_lock.lock().await;
+        ShowCapWindow::Camera { centered: true }
+            .show(&app)
+            .await
+            .map_err(|err| format!("Failed to show centered camera window: {err}"))?;
     }
 
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
@@ -604,7 +734,7 @@ pub async fn start_recording(
         .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
     {
         if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            win.close().ok();
+            win.hide().ok();
         }
     }
     let _ = ShowCapWindow::InProgressRecording { countdown }
@@ -694,8 +824,10 @@ pub async fn start_recording(
             state.camera_in_use = camera_feed.is_some();
 
             #[cfg(target_os = "macos")]
-            let mut shareable_content =
-                acquire_shareable_content_for_target(&inputs.capture_target).await?;
+            let mut shareable_content = match inputs.capture_target {
+                ScreenCaptureTarget::CameraOnly => None,
+                _ => Some(acquire_shareable_content_for_target(&inputs.capture_target).await?),
+            };
 
             let common = InProgressRecordingCommon {
                 target_name: project_name,
@@ -763,7 +895,7 @@ pub async fn start_recording(
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
-                                    shareable_content.retained(),
+                                    shareable_content.clone(),
                                 )
                                 .await
                                 .map_err(|e| {
@@ -799,6 +931,10 @@ pub async fn start_recording(
                                 builder = builder.with_excluded_windows(excluded_windows.clone());
                             }
 
+                            if let Some(camera_feed) = camera_feed.clone() {
+                                builder = builder.with_camera_feed(camera_feed);
+                            }
+
                             if let Some(mic_feed) = mic_feed.clone() {
                                 builder = builder.with_mic_feed(mic_feed);
                             }
@@ -806,7 +942,7 @@ pub async fn start_recording(
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
-                                    shareable_content.retained(),
+                                    shareable_content.clone(),
                                 )
                                 .await
                                 .map_err(|e| {
@@ -845,8 +981,9 @@ pub async fn start_recording(
                     }
                     #[cfg(target_os = "macos")]
                     Err(err) if is_shareable_content_error(&err) => {
-                        shareable_content =
-                            acquire_shareable_content_for_target(&inputs.capture_target).await?;
+                        shareable_content = Some(
+                            acquire_shareable_content_for_target(&inputs.capture_target).await?,
+                        );
                         continue;
                     }
                     Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {
@@ -1139,7 +1276,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .unwrap_or_default();
 
         if let Some(window) = CapWindowId::RecordingControls.get(&app) {
-            let _ = window.close();
+            let _ = window.hide();
         }
 
         match settings.post_deletion_behaviour {
@@ -1187,6 +1324,8 @@ pub async fn take_screenshot(
     let image = capture_screenshot(target)
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
+
+    AppSounds::Notification.play();
 
     let image_width = image.width();
     let image_height = image.height();
@@ -1299,8 +1438,6 @@ pub async fn take_screenshot(
                     &app_handle,
                     notifications::NotificationType::ScreenshotSaved,
                 );
-
-                AppSounds::StopRecording.play();
             }
             Ok(Err(e)) => {
                 error!("Failed to encode PNG: {e}");
@@ -1333,6 +1470,15 @@ async fn handle_recording_end(
     app.clear_current_recording();
     app.disconnected_inputs.clear();
     app.camera_in_use = false;
+
+    if app.was_camera_only_recording {
+        app.was_camera_only_recording = false;
+
+        let default_state = CameraPreviewState::default();
+        if let Err(err) = app.camera_preview.set_state(default_state) {
+            error!("Failed to reset camera preview state after camera-only recording: {err}");
+        }
+    }
 
     let res = match recording {
         // we delay reporting errors here so that everything else happens first
@@ -1370,23 +1516,20 @@ async fn handle_recording_end(
     let _ = app.recording_logging_handle.reload(None);
 
     if let Some(window) = CapWindowId::RecordingControls.get(&handle) {
-        let _ = window.close();
+        let _ = window.hide();
     }
 
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
         if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.close();
+            let _ = v.hide();
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
         app.camera_in_use = false;
-        if let Some(win) = CapWindowId::Camera.get(&handle) {
-            win.close().ok();
-        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
@@ -2154,16 +2297,7 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
 }
 
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
-    let meta = RecordingMeta::load_for_project(recording_dir)
-        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
-
-    let incomplete =
-        RecoveryManager::find_incomplete(recording_dir.parent().unwrap_or(recording_dir));
-
-    let incomplete_recording = incomplete
-        .into_iter()
-        .find(|r| r.project_path == recording_dir)
-        .or_else(|| analyze_recording_for_remux(recording_dir, &meta));
+    let incomplete_recording = RecoveryManager::find_incomplete_single(recording_dir);
 
     if let Some(recording) = incomplete_recording {
         RecoveryManager::recover(&recording)
@@ -2173,125 +2307,6 @@ pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
     } else {
         Err("Could not find fragments to remux".to_string())
     }
-}
-
-fn analyze_recording_for_remux(
-    project_path: &Path,
-    meta: &RecordingMeta,
-) -> Option<cap_recording::recovery::IncompleteRecording> {
-    use cap_recording::recovery::{IncompleteRecording, RecoverableSegment};
-
-    let StudioRecordingMeta::MultipleSegments { inner, .. } = meta.studio_meta()? else {
-        return None;
-    };
-
-    let mut recoverable_segments = Vec::new();
-
-    for (index, segment) in inner.segments.iter().enumerate() {
-        let display_path = segment.display.path.to_path(project_path);
-        let (display_fragments, display_init_segment) = if display_path.is_dir() {
-            let frags = find_fragments_in_dir(&display_path);
-            let init = display_path.join("init.mp4");
-            (frags, if init.exists() { Some(init) } else { None })
-        } else if display_path.exists() {
-            (vec![display_path], None)
-        } else {
-            continue;
-        };
-
-        if display_fragments.is_empty() {
-            continue;
-        }
-
-        let (camera_fragments, camera_init_segment) = segment
-            .camera
-            .as_ref()
-            .map(|cam| {
-                let cam_path = cam.path.to_path(project_path);
-                if cam_path.is_dir() {
-                    let frags = find_fragments_in_dir(&cam_path);
-                    let init = cam_path.join("init.mp4");
-                    let init_seg = if init.exists() { Some(init) } else { None };
-                    if frags.is_empty() {
-                        (None, None)
-                    } else {
-                        (Some(frags), init_seg)
-                    }
-                } else if cam_path.exists() {
-                    (Some(vec![cam_path]), None)
-                } else {
-                    (None, None)
-                }
-            })
-            .unwrap_or((None, None));
-
-        let cursor_path = segment
-            .cursor
-            .as_ref()
-            .map(|c| c.to_path(project_path))
-            .filter(|p| p.exists());
-
-        let mic_fragments = segment.mic.as_ref().and_then(|mic| {
-            let mic_path = mic.path.to_path(project_path);
-            if mic_path.is_dir() {
-                let frags = find_fragments_in_dir(&mic_path);
-                if frags.is_empty() { None } else { Some(frags) }
-            } else if mic_path.exists() {
-                Some(vec![mic_path])
-            } else {
-                None
-            }
-        });
-
-        let system_audio_fragments = segment.system_audio.as_ref().and_then(|sys| {
-            let sys_path = sys.path.to_path(project_path);
-            if sys_path.is_dir() {
-                let frags = find_fragments_in_dir(&sys_path);
-                if frags.is_empty() { None } else { Some(frags) }
-            } else if sys_path.exists() {
-                Some(vec![sys_path])
-            } else {
-                None
-            }
-        });
-
-        recoverable_segments.push(RecoverableSegment {
-            index: index as u32,
-            display_fragments,
-            display_init_segment,
-            camera_fragments,
-            camera_init_segment,
-            mic_fragments,
-            system_audio_fragments,
-            cursor_path,
-        });
-    }
-
-    if recoverable_segments.is_empty() {
-        return None;
-    }
-
-    Some(IncompleteRecording {
-        project_path: project_path.to_path_buf(),
-        meta: meta.clone(),
-        recoverable_segments,
-        estimated_duration: Duration::ZERO,
-    })
-}
-
-fn find_fragments_in_dir(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    let mut fragments: Vec<_> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "mp4" || e == "m4a"))
-        .collect();
-
-    fragments.sort();
-    fragments
 }
 
 #[cfg(test)]

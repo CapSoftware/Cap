@@ -8,12 +8,10 @@ import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
+import { startAiGeneration } from "@/lib/generate-ai";
 import * as EffectRuntime from "@/lib/server";
-import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
-import { generateAiMetadata } from "./generate-ai-metadata";
-
-const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
+import { isAiGenerationEnabled } from "../../utils/flags";
 
 type TranscriptionStatus =
 	| "PROCESSING"
@@ -22,11 +20,17 @@ type TranscriptionStatus =
 	| "SKIPPED"
 	| "NO_AUDIO";
 
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
+
 export interface VideoStatusResult {
 	transcriptionStatus: TranscriptionStatus | null;
+	aiGenerationStatus: AiGenerationStatus | null;
 	aiTitle: string | null;
-	aiProcessing: boolean;
-	aiGenerationSkipped: boolean;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
 	error?: string;
@@ -66,8 +70,8 @@ export async function getVideoStatus(
 
 			return {
 				transcriptionStatus: "PROCESSING",
-				aiProcessing: false,
-				aiGenerationSkipped: metadata.aiGenerationSkipped || false,
+				aiGenerationStatus:
+					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
@@ -79,8 +83,8 @@ export async function getVideoStatus(
 			);
 			return {
 				transcriptionStatus: "ERROR",
-				aiProcessing: false,
-				aiGenerationSkipped: metadata.aiGenerationSkipped || false,
+				aiGenerationStatus:
+					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
@@ -92,8 +96,8 @@ export async function getVideoStatus(
 	if (video.transcriptionStatus === "ERROR") {
 		return {
 			transcriptionStatus: "ERROR",
-			aiProcessing: false,
-			aiGenerationSkipped: metadata.aiGenerationSkipped || false,
+			aiGenerationStatus:
+				(metadata.aiGenerationStatus as AiGenerationStatus) || null,
 			aiTitle: metadata.aiTitle || null,
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
@@ -101,136 +105,49 @@ export async function getVideoStatus(
 		};
 	}
 
-	if (metadata.aiProcessing) {
-		const updatedAtTime = new Date(video.updatedAt).getTime();
-		const currentTime = Date.now();
+	const shouldTriggerAiGeneration =
+		video.transcriptionStatus === "COMPLETE" &&
+		!metadata.aiGenerationStatus &&
+		!metadata.summary &&
+		(serverEnv().GROQ_API_KEY || serverEnv().OPENAI_API_KEY);
 
-		if (currentTime - updatedAtTime > MAX_AI_PROCESSING_TIME) {
-			console.log(
-				`[Get Status] AI processing appears stuck for video ${videoId} (${Math.round(
-					(currentTime - updatedAtTime) / 60000,
-				)} minutes), resetting flag`,
-			);
-
-			await db()
-				.update(videos)
-				.set({
-					metadata: {
-						...metadata,
-						aiProcessing: false,
-						// generationError: "AI processing timed out and was reset",
-					},
+	if (shouldTriggerAiGeneration) {
+		try {
+			const ownerQuery = await db()
+				.select({
+					email: users.email,
+					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+					thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
 				})
-				.where(eq(videos.id, videoId));
+				.from(users)
+				.where(eq(users.id, video.ownerId))
+				.limit(1);
 
-			const updatedResult = await db()
-				.select()
-				.from(videos)
-				.where(eq(videos.id, videoId));
-			if (updatedResult.length > 0 && updatedResult[0]) {
-				const updatedVideo = updatedResult[0];
-				const updatedMetadata = (updatedVideo.metadata as VideoMetadata) || {};
+			const owner = ownerQuery[0];
+			if (owner && (await isAiGenerationEnabled(owner))) {
+				console.log(
+					`[Get Status] AI generation not started for video ${videoId}, triggering generation`,
+				);
+				startAiGeneration(videoId, video.ownerId).catch((error) => {
+					console.error(
+						`[Get Status] Error starting AI generation for video ${videoId}:`,
+						error,
+					);
+				});
 
 				return {
 					transcriptionStatus:
-						(updatedVideo.transcriptionStatus as TranscriptionStatus) || null,
-					aiProcessing: false,
-					aiGenerationSkipped: updatedMetadata.aiGenerationSkipped || false,
-					aiTitle: updatedMetadata.aiTitle || null,
-					summary: updatedMetadata.summary || null,
-					chapters: updatedMetadata.chapters || null,
-					error: "AI processing timed out and was reset",
+						(video.transcriptionStatus as TranscriptionStatus) || null,
+					aiGenerationStatus: "QUEUED" as AiGenerationStatus,
+					aiTitle: metadata.aiTitle || null,
+					summary: metadata.summary || null,
+					chapters: metadata.chapters || null,
 				};
 			}
-		}
-	}
-
-	if (
-		video.transcriptionStatus === "COMPLETE" &&
-		!metadata.aiProcessing &&
-		!metadata.aiGenerationSkipped &&
-		!metadata.summary &&
-		!metadata.chapters
-	) {
-		console.log(
-			`[Get Status] Transcription complete but no AI data, checking feature flag for video owner ${video.ownerId}`,
-		);
-
-		const videoOwnerQuery = await db()
-			.select({
-				email: users.email,
-				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-			})
-			.from(users)
-			.where(eq(users.id, video.ownerId))
-			.limit(1);
-
-		if (
-			videoOwnerQuery.length > 0 &&
-			videoOwnerQuery[0] &&
-			(await isAiGenerationEnabled(videoOwnerQuery[0]))
-		) {
-			console.log(
-				`[Get Status] Feature flag enabled, triggering AI generation for video ${videoId}`,
-			);
-
-			(async () => {
-				try {
-					console.log(
-						`[Get Status] Starting AI metadata generation for video ${videoId}`,
-					);
-					await generateAiMetadata(videoId, video.ownerId);
-					console.log(
-						`[Get Status] AI metadata generation completed for video ${videoId}`,
-					);
-				} catch (error) {
-					console.error(
-						"[Get Status] Error generating AI metadata for video %s",
-						videoId,
-						error,
-					);
-
-					try {
-						const currentVideo = await db()
-							.select()
-							.from(videos)
-							.where(eq(videos.id, videoId));
-						if (currentVideo.length > 0 && currentVideo[0]) {
-							const currentMetadata =
-								(currentVideo[0].metadata as VideoMetadata) || {};
-							await db()
-								.update(videos)
-								.set({
-									metadata: {
-										...currentMetadata,
-										aiProcessing: false,
-									},
-								})
-								.where(eq(videos.id, videoId));
-						}
-					} catch (resetError) {
-						console.error(
-							`[Get Status] Failed to reset AI processing flag for video %s`,
-							videoId,
-							resetError,
-						);
-					}
-				}
-			})();
-
-			return {
-				transcriptionStatus:
-					(video.transcriptionStatus as TranscriptionStatus) || null,
-				aiProcessing: true,
-				aiGenerationSkipped: false,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-			};
-		} else {
-			const videoOwner = videoOwnerQuery[0];
-			console.log(
-				`[Get Status] AI generation feature disabled for video owner ${video.ownerId} (email: ${videoOwner?.email}, pro: ${videoOwner?.stripeSubscriptionStatus})`,
+		} catch (error) {
+			console.error(
+				`[Get Status] Error checking AI generation eligibility for video ${videoId}:`,
+				error,
 			);
 		}
 	}
@@ -238,8 +155,8 @@ export async function getVideoStatus(
 	return {
 		transcriptionStatus:
 			(video.transcriptionStatus as TranscriptionStatus) || null,
-		aiProcessing: metadata.aiProcessing || false,
-		aiGenerationSkipped: metadata.aiGenerationSkipped || false,
+		aiGenerationStatus:
+			(metadata.aiGenerationStatus as AiGenerationStatus) || null,
 		aiTitle: metadata.aiTitle || null,
 		summary: metadata.summary || null,
 		chapters: metadata.chapters || null,

@@ -21,6 +21,7 @@ app.get("/", (c) => {
 			"/audio/status",
 			"/audio/check",
 			"/audio/extract",
+			"/audio/convert",
 			"/video/status",
 			"/video/probe",
 			"/video/thumbnail",

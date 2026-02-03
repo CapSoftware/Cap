@@ -36,8 +36,7 @@ fn generate_test_video(output_path: &Path, duration_secs: u32) -> Result<(), Str
             "lavfi",
             "-i",
             &format!(
-                "testsrc=duration={}:size={}x{}:rate={}",
-                duration_secs, TEST_VIDEO_WIDTH, TEST_VIDEO_HEIGHT, TEST_VIDEO_FPS
+                "testsrc=duration={duration_secs}:size={TEST_VIDEO_WIDTH}x{TEST_VIDEO_HEIGHT}:rate={TEST_VIDEO_FPS}"
             ),
             "-c:v",
             "libx264",
@@ -137,7 +136,7 @@ async fn run_export(project_path: PathBuf, fps: u32) -> Result<(PathBuf, Duratio
     };
 
     let total_frames = exporter_base.total_frames(fps);
-    println!("Starting export of {} frames at {} fps", total_frames, fps);
+    println!("Starting export of {total_frames} frames at {fps} fps");
 
     let start = Instant::now();
     let last_frame = Arc::new(AtomicU32::new(0));
@@ -185,7 +184,7 @@ async fn test_export_35_minute_video() -> Result<(), Box<dyn std::error::Error>>
     let project_dir = temp_dir.path().to_path_buf();
 
     let duration_secs = TEST_VIDEO_DURATION_SECS;
-    println!("Creating Cap project structure in {:?}", project_dir);
+    println!("Creating Cap project structure in {project_dir:?}");
     create_cap_project(&project_dir, duration_secs)?;
 
     let video_path = project_dir.join("content/display.mp4");
@@ -215,7 +214,7 @@ async fn test_export_35_minute_video() -> Result<(), Box<dyn std::error::Error>>
         output_path.display()
     );
 
-    let expected_frames = (duration_secs * 30) as u32;
+    let expected_frames = duration_secs * 30;
     let tolerance = expected_frames / 100;
     assert!(
         frames >= expected_frames - tolerance,
@@ -245,7 +244,7 @@ async fn test_export_10_minute_video() -> Result<(), Box<dyn std::error::Error>>
     let temp_dir = TempDir::new()?;
     let project_dir = temp_dir.path().to_path_buf();
 
-    println!("Creating Cap project structure in {:?}", project_dir);
+    println!("Creating Cap project structure in {project_dir:?}");
     create_cap_project(&project_dir, duration_secs)?;
 
     let video_path = project_dir.join("content/display.mp4");
@@ -266,7 +265,7 @@ async fn test_export_10_minute_video() -> Result<(), Box<dyn std::error::Error>>
         output_path.display()
     );
 
-    let expected_frames = (duration_secs * 30) as u32;
+    let expected_frames = duration_secs * 30;
     let tolerance = expected_frames / 100;
     assert!(
         frames >= expected_frames - tolerance,
@@ -296,7 +295,7 @@ async fn test_export_55_minute_video() -> Result<(), Box<dyn std::error::Error>>
     let temp_dir = TempDir::new()?;
     let project_dir = temp_dir.path().to_path_buf();
 
-    println!("Creating Cap project structure in {:?}", project_dir);
+    println!("Creating Cap project structure in {project_dir:?}");
     create_cap_project(&project_dir, duration_secs)?;
 
     let video_path = project_dir.join("content/display.mp4");
@@ -323,7 +322,7 @@ async fn test_export_55_minute_video() -> Result<(), Box<dyn std::error::Error>>
         output_path.display()
     );
 
-    let expected_frames = (duration_secs * 30) as u32;
+    let expected_frames = duration_secs * 30;
     let tolerance = expected_frames / 100;
     assert!(
         frames >= expected_frames - tolerance,

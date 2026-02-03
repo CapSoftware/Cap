@@ -162,24 +162,18 @@ pub async fn create_watch_frame_ws(
         {
             let frame_opt = camera_rx.borrow().clone();
             if let Some(frame) = frame_opt {
-                let width = frame.width & !1;
-                let height = frame.height & !1;
-                let nv12_data =
-                    convert_to_nv12(&frame.data, frame.width, frame.height, frame.stride);
+                let packed = pack_frame_data(
+                    frame.data,
+                    frame.stride,
+                    frame.height,
+                    frame.width,
+                    frame.frame_number,
+                    frame.target_time_ns,
+                );
 
-                if !nv12_data.is_empty() {
-                    let packed = pack_nv12_frame(
-                        nv12_data,
-                        width,
-                        height,
-                        frame.frame_number,
-                        frame.target_time_ns,
-                    );
-
-                    if let Err(e) = socket.send(Message::Binary(packed)).await {
-                        tracing::error!("Failed to send initial frame to socket: {:?}", e);
-                        return;
-                    }
+                if let Err(e) = socket.send(Message::Binary(packed)).await {
+                    tracing::error!("Failed to send initial frame to socket: {:?}", e);
+                    return;
                 }
             }
         }
@@ -202,18 +196,14 @@ pub async fn create_watch_frame_ws(
                 _ = camera_rx.changed() => {
                     let frame_opt = camera_rx.borrow_and_update().clone();
                     if let Some(frame) = frame_opt {
-                        let width = frame.width & !1;
-                        let height = frame.height & !1;
-                        let nv12_data = convert_to_nv12(&frame.data, frame.width, frame.height, frame.stride);
+                        let width = frame.width;
+                        let height = frame.height;
 
-                        if nv12_data.is_empty() {
-                            continue;
-                        }
-
-                        let packed = pack_nv12_frame(
-                            nv12_data,
-                            width,
-                            height,
+                        let packed = pack_frame_data(
+                            frame.data,
+                            frame.stride,
+                            frame.height,
+                            frame.width,
                             frame.frame_number,
                             frame.target_time_ns,
                         );
@@ -236,7 +226,7 @@ pub async fn create_watch_frame_ws(
                                         mb_per_sec = format!("{:.1}", mb_per_sec),
                                         avg_kb = format!("{:.1}", (total_bytes as f64 / total_frames.max(1) as f64) / 1024.0),
                                         dims = format!("{}x{}", width, height),
-                                        format = "NV12",
+                                        format = "RGBA",
                                         "WS frame stats"
                                     );
                                 }

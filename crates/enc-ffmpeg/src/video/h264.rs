@@ -26,6 +26,7 @@ pub struct H264EncoderBuilder {
     preset: H264Preset,
     output_size: Option<(u32, u32)>,
     external_conversion: bool,
+    encoder_priority_override: Option<&'static [&'static str]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,6 +59,7 @@ impl H264EncoderBuilder {
             preset: H264Preset::Ultrafast,
             output_size: None,
             external_conversion: false,
+            encoder_priority_override: None,
         }
     }
 
@@ -85,6 +87,13 @@ impl H264EncoderBuilder {
         self
     }
 
+    pub fn with_export_priority(mut self) -> Self {
+        if let Some(priority) = export_encoder_priority_override(&self.input_config, self.preset) {
+            self.encoder_priority_override = Some(priority);
+        }
+        self
+    }
+
     pub fn build(
         self,
         output: &mut format::context::Output,
@@ -107,7 +116,8 @@ impl H264EncoderBuilder {
             );
         }
 
-        let candidates = get_codec_and_options(&input_config, self.preset);
+        let candidates =
+            get_codec_and_options(&input_config, self.preset, self.encoder_priority_override);
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
         }
@@ -580,11 +590,7 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset) -> bool {
     false
 }
 
-fn get_encoder_priority(config: &VideoInfo, preset: H264Preset) -> &'static [&'static str] {
-    if requires_software_encoder(config, preset) {
-        return &["libx264"];
-    }
-
+fn get_default_encoder_priority(config: &VideoInfo) -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
         &[
@@ -624,11 +630,47 @@ fn get_encoder_priority(config: &VideoInfo, preset: H264Preset) -> &'static [&'s
     }
 }
 
+fn get_encoder_priority_with_override(
+    config: &VideoInfo,
+    preset: H264Preset,
+    override_priority: Option<&'static [&'static str]>,
+) -> &'static [&'static str] {
+    if requires_software_encoder(config, preset) {
+        return &["libx264"];
+    }
+
+    override_priority.unwrap_or_else(|| get_default_encoder_priority(config))
+}
+
+fn export_encoder_priority_override(
+    config: &VideoInfo,
+    preset: H264Preset,
+) -> Option<&'static [&'static str]> {
+    if requires_software_encoder(config, preset) {
+        return None;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use cap_frame_converter::{GpuVendor, detect_primary_gpu};
+
+        static ENCODER_PRIORITY_AMD_EXPORT: &[&str] =
+            &["h264_mf", "h264_amf", "h264_nvenc", "h264_qsv", "libx264"];
+
+        if let Some(GpuVendor::Amd) = detect_primary_gpu().map(|info| info.vendor) {
+            return Some(ENCODER_PRIORITY_AMD_EXPORT);
+        }
+    }
+
+    None
+}
+
 pub const DEFAULT_KEYFRAME_INTERVAL_SECS: u32 = 3;
 
 fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
+    encoder_priority_override: Option<&'static [&'static str]>,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
     let denominator = config.frame_rate.denominator();
@@ -639,7 +681,8 @@ fn get_codec_and_options(
         .max(1.0) as i32;
     let keyframe_interval_str = keyframe_interval.to_string();
 
-    let encoder_priority = get_encoder_priority(config, preset);
+    let encoder_priority =
+        get_encoder_priority_with_override(config, preset, encoder_priority_override);
 
     let mut encoders = Vec::new();
 

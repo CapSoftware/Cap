@@ -1,6 +1,11 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
+import {
+	createMutation,
+	queryOptions,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -18,6 +23,7 @@ import {
 	createMemo,
 	createSignal,
 	ErrorBoundary,
+	For,
 	onCleanup,
 	onMount,
 	Show,
@@ -32,7 +38,11 @@ import { Input } from "~/routes/editor/ui";
 import { authStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { createDevicesQuery } from "~/utils/devices";
+import {
+	type CameraWithDetails,
+	createStableDevicesQuery,
+	type MicrophoneWithDetails,
+} from "~/utils/devices";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
@@ -44,7 +54,6 @@ import {
 	listWindowsWithThumbnails,
 } from "~/utils/queries";
 import {
-	type CameraInfo,
 	type CaptureDisplay,
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindow,
@@ -52,6 +61,7 @@ import {
 	commands,
 	type DeviceOrModelID,
 	events,
+	type OSPermissionsCheck,
 	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 	type UploadProgress,
@@ -66,6 +76,7 @@ import IconLucideImage from "~icons/lucide/image";
 import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
+import IconLucideVideo from "~icons/lucide/video";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
@@ -82,10 +93,11 @@ import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import useRequestPermission from "./useRequestPermission";
 
-const WINDOW_SIZE = { width: 330, height: 345 } as const;
+const WINDOW_SIZE = { width: 330, height: 395 } as const;
 
-const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
+const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
 		if (!id) return false;
 		return "DeviceID" in id
@@ -159,6 +171,20 @@ type TargetMenuPanelProps =
 			targets?: ScreenshotWithPath[];
 			onSelect: (target: ScreenshotWithPath) => void;
 			onViewAll: () => void;
+	  }
+	| {
+			variant: "camera";
+			targets?: CameraWithDetails[];
+			selectedTarget: CameraWithDetails | null;
+			onSelect: (target: CameraWithDetails | null) => void;
+			permissions?: OSPermissionsCheck;
+	  }
+	| {
+			variant: "microphone";
+			targets?: MicrophoneWithDetails[];
+			selectedTarget: MicrophoneWithDetails | null;
+			onSelect: (target: MicrophoneWithDetails | null) => void;
+			permissions?: OSPermissionsCheck;
 	  };
 
 type SharedTargetMenuProps = {
@@ -168,10 +194,388 @@ type SharedTargetMenuProps = {
 	onBack: () => void;
 };
 
+type DeviceListPanelProps =
+	| {
+			variant: "camera";
+			targets: CameraWithDetails[];
+			selectedTarget: CameraWithDetails | null;
+			onSelect: (target: CameraWithDetails | null) => void;
+			isLoading?: boolean;
+			errorMessage?: string;
+			disabled?: boolean;
+			emptyMessage?: string;
+			permissions?: OSPermissionsCheck;
+	  }
+	| {
+			variant: "microphone";
+			targets: MicrophoneWithDetails[];
+			selectedTarget: MicrophoneWithDetails | null;
+			onSelect: (target: MicrophoneWithDetails | null) => void;
+			isLoading?: boolean;
+			errorMessage?: string;
+			disabled?: boolean;
+			emptyMessage?: string;
+			permissions?: OSPermissionsCheck;
+	  };
+
+function CameraListItem(props: {
+	camera: CameraWithDetails;
+	isSelected: boolean;
+	isFocused: boolean;
+	disabled?: boolean;
+	onSelect: () => void;
+	ref?: (el: HTMLButtonElement) => void;
+}) {
+	const formatDetails = () => {
+		if (!props.camera.bestFormat) return null;
+		const { width, height, frameRate } = props.camera.bestFormat;
+		return `${width}×${height} @ ${Math.round(frameRate)}fps`;
+	};
+
+	return (
+		<button
+			ref={props.ref}
+			type="button"
+			disabled={props.disabled}
+			onClick={props.onSelect}
+			class={cx(
+				"flex flex-col gap-0.5 px-3 py-2.5 rounded-lg text-sm text-left outline-none",
+				props.isSelected
+					? "bg-blue-500 text-white"
+					: props.isFocused
+						? "bg-gray-5 text-gray-12"
+						: "hover:bg-gray-4 text-gray-12",
+				props.disabled && "opacity-50 cursor-not-allowed",
+			)}
+		>
+			<div class="flex items-center gap-3 w-full">
+				<IconCapCamera class="size-4 shrink-0" />
+				<span class="truncate flex-1">{props.camera.display_name}</span>
+				<Show when={props.isSelected}>
+					<IconLucideCheck class="size-4 shrink-0" />
+				</Show>
+			</div>
+			<Show when={formatDetails()}>
+				{(details) => (
+					<span
+						class={cx(
+							"text-[11px] pl-7",
+							props.isSelected ? "text-white/70" : "text-gray-10",
+						)}
+					>
+						{details()}
+					</span>
+				)}
+			</Show>
+		</button>
+	);
+}
+
+function MicrophoneListItem(props: {
+	mic: MicrophoneWithDetails;
+	isSelected: boolean;
+	isFocused: boolean;
+	disabled?: boolean;
+	onSelect: () => void;
+	ref?: (el: HTMLButtonElement) => void;
+	audioLevel?: number;
+}) {
+	const formatDetails = () => {
+		if (!props.mic.sampleRate) return null;
+		const channels =
+			props.mic.channels === 1
+				? "Mono"
+				: props.mic.channels === 2
+					? "Stereo"
+					: `${props.mic.channels}ch`;
+		return `${props.mic.sampleRate / 1000}kHz ${channels}`;
+	};
+
+	return (
+		<button
+			ref={props.ref}
+			type="button"
+			disabled={props.disabled}
+			onClick={props.onSelect}
+			class={cx(
+				"relative overflow-hidden flex flex-col gap-0.5 px-3 py-2.5 rounded-lg text-sm text-left outline-none",
+				props.isSelected
+					? "bg-blue-500 text-white"
+					: props.isFocused
+						? "bg-gray-5 text-gray-12"
+						: "hover:bg-gray-4 text-gray-12",
+				props.disabled && "opacity-50 cursor-not-allowed",
+			)}
+		>
+			<Show when={props.isSelected && props.audioLevel !== undefined}>
+				<div
+					class="absolute inset-y-0 left-0 transition-[right] duration-100 rounded-lg"
+					style={{
+						right: `${(props.audioLevel ?? 1) * 100}%`,
+						"background-color": "rgba(255, 255, 255, 0.25)",
+					}}
+				/>
+			</Show>
+			<div class="relative flex items-center gap-3 w-full">
+				<IconCapMicrophone class="size-4 shrink-0" />
+				<span class="truncate flex-1">{props.mic.name}</span>
+				<Show when={props.isSelected}>
+					<IconLucideCheck class="size-4 shrink-0" />
+				</Show>
+			</div>
+			<Show when={formatDetails()}>
+				{(details) => (
+					<span
+						class={cx(
+							"relative text-[11px] pl-7",
+							props.isSelected ? "text-white/70" : "text-gray-10",
+						)}
+					>
+						{details()}
+					</span>
+				)}
+			</Show>
+		</button>
+	);
+}
+
+function DeviceListPanel(props: DeviceListPanelProps) {
+	const DB_SCALE = 40;
+	const requestPermission = useRequestPermission();
+	const [focusedIndex, setFocusedIndex] = createSignal(-1);
+	const [dbs, setDbs] = createSignal<number | undefined>();
+	const itemRefs: HTMLButtonElement[] = [];
+	let containerRef: HTMLDivElement | undefined;
+
+	createTauriEventListener(events.audioInputLevelChange, (d) => {
+		if (props.variant !== "microphone" || props.selectedTarget === null) {
+			setDbs();
+		} else {
+			setDbs(d);
+		}
+	});
+
+	const audioLevel = () => {
+		const d = dbs();
+		if (d === undefined) return undefined;
+		return (1 - Math.max(d + DB_SCALE, 0) / DB_SCALE) ** 0.5;
+	};
+
+	const totalItems = () => props.targets.length + 1;
+
+	const getInitialFocusIndex = () => {
+		if (props.selectedTarget === null) return 0;
+		if (props.variant === "camera") {
+			const target = props.selectedTarget as CameraWithDetails;
+			const idx = (props.targets as CameraWithDetails[]).findIndex(
+				(c) => c.device_id === target.device_id,
+			);
+			return idx >= 0 ? idx + 1 : 0;
+		}
+		const target = props.selectedTarget as MicrophoneWithDetails;
+		const idx = (props.targets as MicrophoneWithDetails[]).findIndex(
+			(m) => m.name === target.name,
+		);
+		return idx >= 0 ? idx + 1 : 0;
+	};
+
+	onMount(() => {
+		setFocusedIndex(getInitialFocusIndex());
+		setTimeout(() => containerRef?.focus(), 50);
+	});
+
+	createEffect(() => {
+		const idx = focusedIndex();
+		if (idx >= 0 && itemRefs[idx]) {
+			itemRefs[idx].scrollIntoView({ block: "nearest" });
+		}
+	});
+
+	const permissionGranted = () => {
+		if (props.variant === "camera") {
+			return (
+				props.permissions?.camera === "granted" ||
+				props.permissions?.camera === "notNeeded"
+			);
+		}
+		return (
+			props.permissions?.microphone === "granted" ||
+			props.permissions?.microphone === "notNeeded"
+		);
+	};
+
+	const handleSelect = (
+		item: CameraWithDetails | MicrophoneWithDetails | null,
+	) => {
+		if (!permissionGranted()) {
+			if (props.variant === "camera") {
+				requestPermission("camera", props.permissions?.camera);
+			} else {
+				requestPermission("microphone", props.permissions?.microphone);
+			}
+			return;
+		}
+		if (props.variant === "camera") {
+			(props.onSelect as (target: CameraWithDetails | null) => void)(
+				item as CameraWithDetails | null,
+			);
+		} else {
+			(props.onSelect as (target: MicrophoneWithDetails | null) => void)(
+				item as MicrophoneWithDetails | null,
+			);
+		}
+	};
+
+	const handleKeyDown = (e: KeyboardEvent) => {
+		const total = totalItems();
+		if (total === 0) return;
+
+		switch (e.key) {
+			case "ArrowDown": {
+				e.preventDefault();
+				setFocusedIndex((prev) => (prev + 1) % total);
+				break;
+			}
+			case "ArrowUp": {
+				e.preventDefault();
+				setFocusedIndex((prev) => (prev - 1 + total) % total);
+				break;
+			}
+			case "Enter": {
+				e.preventDefault();
+				const idx = focusedIndex();
+				if (idx === 0) {
+					handleSelect(null);
+				} else if (idx > 0 && idx <= props.targets.length) {
+					handleSelect(props.targets[idx - 1]);
+				}
+				break;
+			}
+			case "Home": {
+				e.preventDefault();
+				setFocusedIndex(0);
+				break;
+			}
+			case "End": {
+				e.preventDefault();
+				setFocusedIndex(total - 1);
+				break;
+			}
+		}
+	};
+
+	const isNoneSelected = () => props.selectedTarget === null;
+
+	const isCameraSelected = (camera: CameraWithDetails) => {
+		if (props.variant !== "camera") return false;
+		const target = props.selectedTarget as CameraWithDetails | null;
+		return target !== null && camera.device_id === target.device_id;
+	};
+
+	const isMicSelected = (mic: MicrophoneWithDetails) => {
+		if (props.variant !== "microphone") return false;
+		const target = props.selectedTarget as MicrophoneWithDetails | null;
+		return target !== null && mic.name === target.name;
+	};
+
+	return (
+		<div
+			ref={containerRef}
+			class="flex flex-col gap-1 outline-none"
+			tabIndex={0}
+			onKeyDown={handleKeyDown}
+		>
+			<Show when={props.errorMessage}>
+				<div class="py-6 text-sm text-center text-gray-11">
+					{props.errorMessage}
+				</div>
+			</Show>
+			<Show when={props.isLoading}>
+				<div class="py-6 text-sm text-center text-gray-11">Loading...</div>
+			</Show>
+			<Show
+				when={
+					!props.isLoading &&
+					!props.errorMessage &&
+					(props.targets.length > 0 || true)
+				}
+			>
+				<button
+					ref={(el) => {
+						itemRefs[0] = el;
+					}}
+					type="button"
+					disabled={props.disabled}
+					onClick={() => handleSelect(null)}
+					class={cx(
+						"flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left outline-none",
+						isNoneSelected()
+							? "bg-blue-500 text-white"
+							: focusedIndex() === 0
+								? "bg-gray-5 text-gray-12"
+								: "hover:bg-gray-4 text-gray-12",
+						props.disabled && "opacity-50 cursor-not-allowed",
+					)}
+				>
+					<IconLucideCircleOff class="size-4 shrink-0" />
+					<span class="truncate flex-1">
+						{props.variant === "camera" ? "No Camera" : "No Microphone"}
+					</span>
+					<Show when={isNoneSelected()}>
+						<IconLucideCheck class="size-4 shrink-0" />
+					</Show>
+				</button>
+
+				<Show when={props.targets.length === 0}>
+					<div class="py-4 text-sm text-center text-gray-11">
+						{props.emptyMessage}
+					</div>
+				</Show>
+
+				<Show when={props.variant === "camera"}>
+					<For each={props.targets as CameraWithDetails[]}>
+						{(camera, index) => (
+							<CameraListItem
+								ref={(el) => {
+									itemRefs[index() + 1] = el;
+								}}
+								camera={camera}
+								isSelected={isCameraSelected(camera)}
+								isFocused={focusedIndex() === index() + 1}
+								disabled={props.disabled}
+								onSelect={() => handleSelect(camera)}
+							/>
+						)}
+					</For>
+				</Show>
+
+				<Show when={props.variant === "microphone"}>
+					<For each={props.targets as MicrophoneWithDetails[]}>
+						{(mic, index) => (
+							<MicrophoneListItem
+								ref={(el) => {
+									itemRefs[index() + 1] = el;
+								}}
+								mic={mic}
+								isSelected={isMicSelected(mic)}
+								isFocused={focusedIndex() === index() + 1}
+								disabled={props.disabled}
+								onSelect={() => handleSelect(mic)}
+								audioLevel={isMicSelected(mic) ? audioLevel() : undefined}
+							/>
+						)}
+					</For>
+				</Show>
+			</Show>
+		</div>
+	);
+}
+
 function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
+	let scrollContainerRef: HTMLDivElement | undefined;
 	const placeholder =
 		props.variant === "display"
 			? "Search displays"
@@ -179,7 +583,11 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				? "Search windows"
 				: props.variant === "recording"
 					? "Search recordings"
-					: "Search screenshots";
+					: props.variant === "screenshot"
+						? "Search screenshots"
+						: props.variant === "camera"
+							? "Search cameras"
+							: "Search microphones";
 	const noResultsMessage =
 		props.variant === "display"
 			? "No matching displays"
@@ -187,7 +595,11 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				? "No matching windows"
 				: props.variant === "recording"
 					? "No matching recordings"
-					: "No matching screenshots";
+					: props.variant === "screenshot"
+						? "No matching screenshots"
+						: props.variant === "camera"
+							? "No matching cameras"
+							: "No matching microphones";
 
 	const handleImport = async () => {
 		const result = await dialog.open({
@@ -272,6 +684,48 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		return targets.filter((target) => matchesQuery(target.pretty_name));
 	});
 
+	const filteredCameraTargets = createMemo<CameraWithDetails[]>((prev) => {
+		if (props.variant !== "camera") return [];
+		const query = normalizedQuery();
+		const targets = (props.targets ?? []) as CameraWithDetails[];
+		if (!query) {
+			if (
+				prev &&
+				prev.length === targets.length &&
+				prev.every((p, i) => p.device_id === targets[i]?.device_id)
+			) {
+				return prev;
+			}
+			return [...targets];
+		}
+
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
+
+		return targets.filter((target) => matchesQuery(target.display_name));
+	}, []);
+
+	const filteredMicrophoneTargets = createMemo<MicrophoneWithDetails[]>(
+		(prev) => {
+			if (props.variant !== "microphone") return [];
+			const query = normalizedQuery();
+			const targets = (props.targets ?? []) as MicrophoneWithDetails[];
+			if (!query) {
+				if (
+					prev &&
+					prev.length === targets.length &&
+					prev.every((p, i) => p.name === targets[i]?.name)
+				) {
+					return prev;
+				}
+				return [...targets];
+			}
+
+			return targets.filter((mic) => mic.name.toLowerCase().includes(query));
+		},
+		[],
+	);
+
 	return (
 		<div class="flex flex-col w-full h-full min-h-0">
 			<div class="flex gap-3 justify-between items-center mt-3">
@@ -320,7 +774,11 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				</div>
 			</div>
 			<div class="flex flex-col flex-1 min-h-0 pt-4">
-				<div class="px-2 custom-scroll flex-1 overflow-y-auto">
+				<div
+					ref={scrollContainerRef}
+					class="px-2 custom-scroll flex-1 overflow-y-auto"
+					style={{ "overflow-anchor": "none" }}
+				>
 					{props.variant === "display" ? (
 						<TargetMenuGrid
 							variant="display"
@@ -358,6 +816,34 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							onReupload={props.onReupload}
 							onRefetch={props.onRefetch}
 							onViewAll={props.onViewAll}
+						/>
+					) : props.variant === "camera" ? (
+						<DeviceListPanel
+							variant="camera"
+							targets={filteredCameraTargets()}
+							selectedTarget={props.selectedTarget}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							emptyMessage={
+								trimmedSearch() ? noResultsMessage : "No cameras found"
+							}
+							permissions={props.permissions}
+						/>
+					) : props.variant === "microphone" ? (
+						<DeviceListPanel
+							variant="microphone"
+							targets={filteredMicrophoneTargets()}
+							selectedTarget={props.selectedTarget}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							emptyMessage={
+								trimmedSearch() ? noResultsMessage : "No microphones found"
+							}
+							permissions={props.permissions}
 						/>
 					) : (
 						<TargetMenuGrid
@@ -465,18 +951,35 @@ function Page() {
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
 	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
 	const [modeInfoMenuOpen, setModeInfoMenuOpen] = createSignal(false);
+	const [cameraMenuOpen, setCameraMenuOpen] = createSignal(false);
+	const [microphoneMenuOpen, setMicrophoneMenuOpen] = createSignal(false);
 	const activeMenu = createMemo<
-		"display" | "window" | "recording" | "screenshot" | "modeInfo" | null
+		| "display"
+		| "window"
+		| "recording"
+		| "screenshot"
+		| "modeInfo"
+		| "camera"
+		| "microphone"
+		| null
 	>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
 		if (recordingsMenuOpen()) return "recording";
 		if (screenshotsMenuOpen()) return "screenshot";
 		if (modeInfoMenuOpen()) return "modeInfo";
+		if (cameraMenuOpen()) return "camera";
+		if (microphoneMenuOpen()) return "microphone";
 		return null;
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
 	const [hasOpenedWindowMenu, setHasOpenedWindowMenu] = createSignal(false);
+
+	const queryClient = useQueryClient();
+	onMount(() => {
+		queryClient.prefetchQuery(listDisplaysWithThumbnails);
+		queryClient.prefetchQuery(listWindowsWithThumbnails);
+	});
 
 	let displayTriggerRef: HTMLButtonElement | undefined;
 	let windowTriggerRef: HTMLButtonElement | undefined;
@@ -484,11 +987,13 @@ function Page() {
 	const displayTargets = useQuery(() => ({
 		...listDisplaysWithThumbnails,
 		refetchInterval: false,
+		enabled: hasOpenedDisplayMenu(),
 	}));
 
 	const windowTargets = useQuery(() => ({
 		...listWindowsWithThumbnails,
 		refetchInterval: false,
+		enabled: hasOpenedWindowMenu(),
 	}));
 
 	const recordings = useQuery(() => listRecordings);
@@ -678,11 +1183,17 @@ function Page() {
 		setRecordingsMenuOpen(false);
 		setScreenshotsMenuOpen(false);
 		setModeInfoMenuOpen(false);
+		setCameraMenuOpen(false);
+		setMicrophoneMenuOpen(false);
 	});
 
 	createUpdateCheck();
 
 	onMount(async () => {
+		if (document.activeElement instanceof HTMLElement) {
+			document.activeElement.blur();
+		}
+
 		const { __CAP__ } = window as typeof window & {
 			__CAP__?: { initialTargetMode?: RecordingTargetMode | null };
 		};
@@ -744,10 +1255,7 @@ function Page() {
 		});
 	});
 
-	const devices = createDevicesQuery();
-	const cameras = createMemo(() => devices.data?.cameras ?? []);
-	const mics = createMemo(() => devices.data?.microphones ?? []);
-	const permissions = createMemo(() => devices.data?.permissions);
+	const devices = createStableDevicesQuery();
 
 	const windowListSignature = createMemo(() =>
 		createWindowSignature(windows.data),
@@ -792,15 +1300,18 @@ function Page() {
 	});
 
 	createEffect(() => {
-		const cameraList = cameras();
+		const cameraList = devices.cameras;
 		if (rawOptions.cameraID && findCamera(cameraList, rawOptions.cameraID)) {
 			setOptions("cameraLabel", null);
 		}
 	});
 
 	createEffect(() => {
-		const micList = mics();
-		if (rawOptions.micName && !micList.includes(rawOptions.micName)) {
+		const micList = devices.microphones;
+		if (
+			rawOptions.micName &&
+			!micList.find((m) => m.name === rawOptions.micName)
+		) {
 			setOptions("micName", null);
 		}
 	});
@@ -833,9 +1344,10 @@ function Page() {
 		},
 		camera: () => {
 			if (!rawOptions.cameraID) return undefined;
-			return findCamera(cameras(), rawOptions.cameraID);
+			return findCamera(devices.cameras, rawOptions.cameraID);
 		},
-		micName: () => mics().find((name) => name === rawOptions.micName),
+		micName: () =>
+			devices.microphones.find((m) => m.name === rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
 				case "display": {
@@ -857,15 +1369,30 @@ function Page() {
 						screen: screen.id,
 					};
 				}
+				case "cameraOnly":
+					return rawOptions.captureTarget as ScreenCaptureTarget;
 			}
 		},
 	};
 
-	const toggleTargetMode = async (mode: "display" | "window" | "area") => {
+	const toggleTargetMode = async (
+		mode: "display" | "window" | "area" | "camera",
+	) => {
 		if (isRecording()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		if (nextMode) {
-			await commands.openTargetSelectOverlays(null, null, nextMode);
+			if (nextMode === "camera") {
+				setOptions(
+					"captureTarget",
+					reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
+				);
+				setOptions("captureSystemAudio", false);
+			}
+			await commands.openTargetSelectOverlays(
+				null,
+				null,
+				nextMode as RecordingTargetMode,
+			);
 			setOptions("targetMode", nextMode);
 		} else {
 			setOptions("targetMode", nextMode);
@@ -904,10 +1431,10 @@ function Page() {
 		}
 
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+			setCamera.mutate({ model: { ModelID: rawOptions.cameraID.ModelID } });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
-		else setCamera.mutate(null);
+			setCamera.mutate({ model: { DeviceID: rawOptions.cameraID.DeviceID } });
+		else setCamera.mutate({ model: null });
 	});
 
 	const license = createLicenseQuery();
@@ -918,21 +1445,40 @@ function Page() {
 		<div class="space-y-2">
 			<CameraSelect
 				disabled={devices.isPending}
-				options={cameras()}
+				options={devices.cameras}
 				value={options.camera() ?? null}
 				onChange={(c) => {
-					if (!c) setCamera.mutate(null);
-					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-					else setCamera.mutate({ DeviceID: c.device_id });
+					if (!c) setCamera.mutate({ model: null });
+					else if (c.model_id)
+						setCamera.mutate({ model: { ModelID: c.model_id } });
+					else setCamera.mutate({ model: { DeviceID: c.device_id } });
 				}}
-				permissions={permissions()}
+				permissions={devices.permissions}
+				onOpen={() => {
+					setCameraMenuOpen(true);
+					setDisplayMenuOpen(false);
+					setWindowMenuOpen(false);
+					setRecordingsMenuOpen(false);
+					setScreenshotsMenuOpen(false);
+					setModeInfoMenuOpen(false);
+					setMicrophoneMenuOpen(false);
+				}}
 			/>
 			<MicrophoneSelect
 				disabled={devices.isPending}
-				options={mics()}
-				value={options.micName() ?? null}
+				options={devices.microphones.map((m) => m.name)}
+				value={options.micName()?.name ?? null}
 				onChange={(v) => setMicInput.mutate(v)}
-				permissions={permissions()}
+				permissions={devices.permissions}
+				onOpen={() => {
+					setMicrophoneMenuOpen(true);
+					setDisplayMenuOpen(false);
+					setWindowMenuOpen(false);
+					setRecordingsMenuOpen(false);
+					setScreenshotsMenuOpen(false);
+					setModeInfoMenuOpen(false);
+					setCameraMenuOpen(false);
+				}}
 			/>
 			<SystemAudio />
 		</div>
@@ -949,92 +1495,113 @@ function Page() {
 			exitToClass="scale-95"
 		>
 			<div class="flex flex-col gap-2 w-full">
-				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
-								"ring-blue-9",
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "display"}
-							Component={IconMdiMonitor}
-							disabled={isRecording()}
-							onClick={() => toggleTargetMode("display")}
-							name="Display"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
+				<div class="flex flex-col gap-2 w-full text-xs text-gray-11">
+					<div class="flex flex-row gap-2 items-stretch w-full">
+						<div
 							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								displayMenuOpen() && "bg-gray-5",
+								"flex flex-1 overflow-hidden rounded-lg border border-gray-5 bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+								(rawOptions.targetMode === "display" || displayMenuOpen()) &&
+									"ring-blue-9",
 							)}
-							ref={displayTriggerRef}
+						>
+							<TargetTypeButton
+								selected={rawOptions.targetMode === "display"}
+								Component={IconMdiMonitor}
+								disabled={isRecording()}
+								onClick={() => {
+									toggleTargetMode("display");
+								}}
+								name="Display"
+								class="flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
+							/>
+							<TargetDropdownButton
+								class={cx(
+									"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+									displayMenuOpen() && "bg-gray-5",
+								)}
+								ref={displayTriggerRef}
+								disabled={isRecording()}
+								expanded={displayMenuOpen()}
+								onClick={() => {
+									setDisplayMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setWindowMenuOpen(false);
+											setHasOpenedDisplayMenu(true);
+											screens.refetch();
+											displayTargets.refetch();
+										}
+										return next;
+									});
+								}}
+								aria-haspopup="menu"
+								aria-label="Choose display"
+							/>
+						</div>
+						<div
+							class={cx(
+								"flex flex-1 overflow-hidden rounded-lg border border-gray-5 bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+								(rawOptions.targetMode === "window" || windowMenuOpen()) &&
+									"ring-blue-9",
+							)}
+						>
+							<TargetTypeButton
+								selected={rawOptions.targetMode === "window"}
+								Component={IconLucideAppWindowMac}
+								disabled={isRecording()}
+								onClick={() => {
+									toggleTargetMode("window");
+								}}
+								name="Window"
+								class="flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
+							/>
+							<TargetDropdownButton
+								class={cx(
+									"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+									windowMenuOpen() && "bg-gray-5",
+								)}
+								ref={windowTriggerRef}
+								disabled={isRecording()}
+								expanded={windowMenuOpen()}
+								onClick={() => {
+									setWindowMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setDisplayMenuOpen(false);
+											setHasOpenedWindowMenu(true);
+											windows.refetch();
+											windowTargets.refetch();
+										}
+										return next;
+									});
+								}}
+								aria-haspopup="menu"
+								aria-label="Choose window"
+							/>
+						</div>
+					</div>
+					<div class="flex flex-row gap-2 items-stretch w-full">
+						<TargetTypeButton
+							selected={rawOptions.targetMode === "area"}
+							Component={IconMaterialSymbolsScreenshotFrame2Rounded}
 							disabled={isRecording()}
-							expanded={displayMenuOpen()}
 							onClick={() => {
-								setDisplayMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setWindowMenuOpen(false);
-										setHasOpenedDisplayMenu(true);
-										screens.refetch();
-										displayTargets.refetch();
-									}
-									return next;
-								});
+								toggleTargetMode("area");
 							}}
-							aria-haspopup="menu"
-							aria-label="Choose display"
+							name="Area"
+							class="flex-1"
+						/>
+						<TargetTypeButton
+							selected={rawOptions.targetMode === "camera"}
+							Component={IconLucideVideo}
+							disabled={isRecording()}
+							onClick={() => {
+								toggleTargetMode("camera");
+							}}
+							name="Camera Only"
+							class="flex-1"
 						/>
 					</div>
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
-								"ring-blue-9",
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "window"}
-							Component={IconLucideAppWindowMac}
-							disabled={isRecording()}
-							onClick={() => toggleTargetMode("window")}
-							name="Window"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
-							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								windowMenuOpen() && "bg-gray-5",
-							)}
-							ref={windowTriggerRef}
-							disabled={isRecording()}
-							expanded={windowMenuOpen()}
-							onClick={() => {
-								setWindowMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setDisplayMenuOpen(false);
-										setHasOpenedWindowMenu(true);
-										windows.refetch();
-										windowTargets.refetch();
-									}
-									return next;
-								});
-							}}
-							aria-haspopup="menu"
-							aria-label="Choose window"
-						/>
-					</div>
-					<TargetTypeButton
-						selected={rawOptions.targetMode === "area"}
-						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-						disabled={isRecording()}
-						onClick={() => toggleTargetMode("area")}
-						name="Area"
-					/>
 				</div>
 				<BaseControls />
 			</div>
@@ -1080,7 +1647,7 @@ function Page() {
 									await commands.showWindow({ Settings: { page: "general" } });
 									getCurrentWindow().hide();
 								}}
-								class="flex items-center justify-center size-5 -ml-[1.5px]"
+								class="flex items-center justify-center size-5 -ml-[1.5px] focus:outline-none"
 							>
 								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1099,7 +1666,7 @@ function Page() {
 										return next;
 									});
 								}}
-								class="flex justify-center items-center size-5"
+								class="flex justify-center items-center size-5 focus:outline-none"
 							>
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1118,7 +1685,7 @@ function Page() {
 										return next;
 									});
 								}}
-								class="flex justify-center items-center size-5"
+								class="flex justify-center items-center size-5 focus:outline-none"
 							>
 								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1130,7 +1697,7 @@ function Page() {
 								onClick={() => {
 									new WebviewWindow("debug", { url: "/debug" });
 								}}
-								class="flex justify-center items-center"
+								class="flex justify-center items-center focus:outline-none"
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1142,7 +1709,7 @@ function Page() {
 				</div>
 			</WindowChromeHeader>
 			<Show when={!activeMenu()}>
-				<div class="flex items-center justify-between mt-[18px] mb-[6px]">
+				<div class="flex items-center justify-between mt-[16px] mb-[6px]">
 					<div class="flex items-center space-x-1">
 						<a
 							class="*:w-[92px] *:h-auto text-[--text-primary]"
@@ -1165,7 +1732,7 @@ function Page() {
 										}
 									}}
 									class={cx(
-										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
+										"text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5",
 										license.data?.type === "pro"
 											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
 											: "bg-gray-3 cursor-pointer hover:bg-gray-5",
@@ -1187,6 +1754,8 @@ function Page() {
 							setWindowMenuOpen(false);
 							setRecordingsMenuOpen(false);
 							setScreenshotsMenuOpen(false);
+							setCameraMenuOpen(false);
+							setMicrophoneMenuOpen(false);
 						}}
 					/>
 				</div>
@@ -1314,6 +1883,41 @@ function Page() {
 										});
 										getCurrentWindow().hide();
 									}}
+								/>
+							) : variant === "camera" ? (
+								<TargetMenuPanel
+									variant="camera"
+									targets={devices.cameras}
+									selectedTarget={options.camera() ?? null}
+									isLoading={devices.isPending}
+									onSelect={(c) => {
+										if (!c) setCamera.mutate({ model: null });
+										else if (c.model_id)
+											setCamera.mutate({ model: { ModelID: c.model_id } });
+										else setCamera.mutate({ model: { DeviceID: c.device_id } });
+										setCameraMenuOpen(false);
+									}}
+									disabled={isRecording()}
+									onBack={() => {
+										setCameraMenuOpen(false);
+									}}
+									permissions={devices.permissions}
+								/>
+							) : variant === "microphone" ? (
+								<TargetMenuPanel
+									variant="microphone"
+									targets={devices.microphones}
+									selectedTarget={options.micName() ?? null}
+									isLoading={devices.isPending}
+									onSelect={(v) => {
+										setMicInput.mutate(v?.name ?? null);
+										setMicrophoneMenuOpen(false);
+									}}
+									disabled={isRecording()}
+									onBack={() => {
+										setMicrophoneMenuOpen(false);
+									}}
+									permissions={devices.permissions}
 								/>
 							) : (
 								<ModeInfoPanel

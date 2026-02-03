@@ -444,4 +444,18 @@ impl DisplayLayer {
             );
         }
     }
+
+    pub fn prepare_for_video_dimensions(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if let Err(e) = self
+            .yuv_converter
+            .prepare_for_dimensions(device, width, height)
+        {
+            tracing::warn!(
+                width = width,
+                height = height,
+                error = ?e,
+                "Failed to pre-allocate YUV converter textures"
+            );
+        }
+    }
 }

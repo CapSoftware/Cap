@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{self, AtomicBool, Ordering},
+        atomic::{self, AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -27,7 +27,7 @@ use tracing::*;
 
 const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
-const LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
+const LARGE_FORWARD_JUMP_SECS: f64 = 0.5;
 
 struct AudioTimestampGenerator {
     sample_rate: u32,
@@ -45,9 +45,13 @@ impl AudioTimestampGenerator {
     }
 
     fn next_timestamp(&mut self, frame_samples: u64) -> Duration {
-        let timestamp_secs = self.total_samples as f64 / self.sample_rate as f64;
+        let timestamp_nanos = if self.sample_rate == 0 {
+            0u128
+        } else {
+            (self.total_samples as u128 * 1_000_000_000u128) / self.sample_rate as u128
+        };
         self.total_samples += frame_samples;
-        Duration::from_secs_f64(timestamp_secs)
+        Duration::from_nanos(timestamp_nanos.min(u64::MAX as u128) as u64)
     }
 }
 
@@ -150,6 +154,7 @@ pub struct TimestampAnomalyTracker {
     total_forward_skew_secs: f64,
     max_forward_skew_secs: f64,
     last_valid_duration: Option<Duration>,
+    first_frame_baseline: Option<Duration>,
     accumulated_compensation_secs: f64,
     resync_count: u64,
 }
@@ -165,6 +170,7 @@ impl TimestampAnomalyTracker {
             total_forward_skew_secs: 0.0,
             max_forward_skew_secs: 0.0,
             last_valid_duration: None,
+            first_frame_baseline: None,
             accumulated_compensation_secs: 0.0,
             resync_count: 0,
         }
@@ -181,7 +187,11 @@ impl TimestampAnomalyTracker {
             return self.handle_backward_timestamp(signed_secs);
         }
 
-        let adjusted_secs = (signed_secs + self.accumulated_compensation_secs).max(0.0);
+        let signed_duration = Duration::from_secs_f64(signed_secs);
+        let baseline = self.first_frame_baseline.get_or_insert(signed_duration);
+        let baseline_adjusted = signed_duration.saturating_sub(*baseline);
+        let adjusted_secs =
+            (baseline_adjusted.as_secs_f64() + self.accumulated_compensation_secs).max(0.0);
         let adjusted = Duration::from_secs_f64(adjusted_secs);
 
         if let Some(last) = self.last_valid_duration
@@ -630,6 +640,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         .await?;
 
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+        let video_frame_count = Arc::new(AtomicU64::new(0));
 
         spawn_video_encoder(
             &mut setup_ctx,
@@ -640,6 +651,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             muxer.clone(),
             timestamps,
             shared_pause.clone(),
+            video_frame_count.clone(),
         );
 
         finish_build(
@@ -663,6 +675,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             done_fut: build_ctx.done_rx,
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
+            video_frame_count,
         })
     }
 }
@@ -730,6 +743,7 @@ impl OutputPipelineBuilder<NoVideo> {
             done_fut: build_ctx.done_rx,
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
+            video_frame_count: Arc::new(AtomicU64::new(0)),
         })
     }
 }
@@ -877,6 +891,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     muxer: Arc<Mutex<TMutex>>,
     timestamps: Timestamps,
     shared_pause: SharedWallClockPause,
+    frame_counter: Arc<AtomicU64>,
 ) {
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
@@ -970,7 +985,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             info!("mux-video cancelled, draining remaining frames from channel");
             let drain_start = std::time::Instant::now();
             let drain_timeout = Duration::from_secs(2);
-            let max_drain_frames = 30u64;
+            let max_drain_frames = 500u64;
             let mut drained = 0u64;
             let mut skipped = 0u64;
 
@@ -1055,6 +1070,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             );
         }
 
+        frame_counter.store(frame_count, Ordering::Release);
+
         Ok(())
     });
 }
@@ -1071,7 +1088,7 @@ impl PreparedAudioSources {
         setup_ctx: &mut SetupCtx,
         muxer: Arc<Mutex<TMutex>>,
         stop_token: CancellationToken,
-        timestamps: Timestamps,
+        _timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
         shared_pause: SharedWallClockPause,
     ) {
@@ -1102,17 +1119,16 @@ impl PreparedAudioSources {
                             let frame_samples = frame.inner.samples() as u64;
                             frame_count += 1;
 
-                            let timestamp = timestamp_generator.next_timestamp(frame_samples);
+                            let sample_based_timestamp =
+                                timestamp_generator.next_timestamp(frame_samples);
+                            let timestamp = sample_based_timestamp;
 
                             if frame_count.is_multiple_of(500) {
-                                let raw_wall_clock = timestamps.instant().elapsed();
-                                let effective_wall_clock =
-                                    raw_wall_clock.saturating_sub(total_pause_duration);
                                 debug!(
-                                    wall_clock_secs = effective_wall_clock.as_secs_f64(),
-                                    sample_based_secs = timestamp.as_secs_f64(),
-                                    total_samples = timestamp_generator.total_samples,
                                     frame_count,
+                                    sample_based_secs = sample_based_timestamp.as_secs_f64(),
+                                    corrected_secs = timestamp.as_secs_f64(),
+                                    total_samples = timestamp_generator.total_samples,
                                     total_pause_ms = total_pause_duration.as_millis(),
                                     "Audio timestamp status"
                                 );
@@ -1227,12 +1243,14 @@ pub struct OutputPipeline {
     done_fut: DoneFut,
     pause_flag: Arc<AtomicBool>,
     cancel_token: CancellationToken,
+    video_frame_count: Arc<AtomicU64>,
 }
 
 pub struct FinishedOutputPipeline {
     pub path: PathBuf,
     pub first_timestamp: Timestamp,
     pub video_info: Option<VideoInfo>,
+    pub video_frame_count: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -1264,6 +1282,7 @@ impl OutputPipeline {
             path: self.path,
             first_timestamp: self.first_timestamp_rx.await?,
             video_info: self.video_info,
+            video_frame_count: self.video_frame_count.load(Ordering::Acquire),
         })
     }
 

@@ -188,6 +188,9 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
             }
             unsafe { core_graphics::image::CGImage::from_ptr(image) }
         }
+        ScreenCaptureTarget::CameraOnly => {
+            return None;
+        }
     };
 
     let width = cg_image.width();
@@ -275,6 +278,10 @@ fn frame_to_rgb(frame: &Frame) -> anyhow::Result<RgbImage> {
 
 #[cfg(target_os = "windows")]
 fn windows_capture_settings(target: &ScreenCaptureTarget) -> anyhow::Result<(Settings, bool)> {
+    if matches!(target, ScreenCaptureTarget::CameraOnly) {
+        return Err(anyhow!("Camera-only not supported for screenshots"));
+    }
+
     let mut settings = Settings {
         is_cursor_capture_enabled: Some(false),
         pixel_format: PixelFormat::B8G8R8A8Unorm,
@@ -543,6 +550,7 @@ fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<Rg
             debug!("Windows GDI area capture");
             Ok(image)
         }
+        ScreenCaptureTarget::CameraOnly => Err(unsupported_error()),
     }
 }
 
@@ -581,6 +589,9 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
         ScreenCaptureTarget::Area { screen, .. } => {
             let display = scap_targets::Display::from_id(&screen)?;
             display.raw_handle().try_as_capture_item().ok()?
+        }
+        ScreenCaptureTarget::CameraOnly => {
+            return None;
         }
     };
 
@@ -661,7 +672,6 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                             .await
                             .map_err(|e| anyhow!("Failed to get shareable content: {e}"))?,
                     )
-                    .await
                     .ok_or_else(|| anyhow!("Failed to get content filter"))?
             }
             ScreenCaptureTarget::Window { id } => {
@@ -674,7 +684,6 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                 let sc_window = window
                     .raw_handle()
                     .as_sc(sc_content)
-                    .await
                     .ok_or_else(|| anyhow!("Failed to get SCWindow"))?;
 
                 sc::ContentFilter::with_desktop_independent_window(sc_window.as_ref())
@@ -690,8 +699,10 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                             .await
                             .map_err(|e| anyhow!("Failed to get shareable content: {e}"))?,
                     )
-                    .await
                     .ok_or_else(|| anyhow!("Failed to get content filter"))?
+            }
+            ScreenCaptureTarget::CameraOnly => {
+                return Err(anyhow!("Camera-only not supported for screenshots"));
             }
         };
 
@@ -708,6 +719,9 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                 .and_then(|d| d.physical_size())
                 .map(|s| s.width())
                 .unwrap_or(1920.0),
+            ScreenCaptureTarget::CameraOnly => {
+                return Err(anyhow!("Camera-only not supported for screenshots"));
+            }
         } as usize;
 
         let height = match target.clone() {
@@ -723,6 +737,9 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                 .and_then(|d| d.physical_size())
                 .map(|s| s.height())
                 .unwrap_or(1080.0),
+            ScreenCaptureTarget::CameraOnly => {
+                return Err(anyhow!("Camera-only not supported for screenshots"));
+            }
         } as usize;
 
         let config = StreamCfgBuilder::default()
@@ -788,6 +805,9 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                     .raw_handle()
                     .try_as_capture_item()
                     .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+            }
+            ScreenCaptureTarget::CameraOnly => {
+                return Err(anyhow!("Camera-only not supported for screenshots"));
             }
         };
 

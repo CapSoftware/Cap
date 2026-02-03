@@ -246,15 +246,26 @@ impl Playback {
                         let decoders = segment_media.decoders.clone();
                         let hide_camera = cached_project.camera.hide;
                         let segment_index = segment.recording_clip;
+                        let is_initial = frames_decoded < 10;
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.insert(frame_num);
                         }
 
                         in_flight.push(Box::pin(async move {
-                            let result = decoders
-                                .get_frames(segment_time as f32, !hide_camera, clip_offsets)
-                                .await;
+                            let result = if is_initial {
+                                decoders
+                                    .get_frames_initial(
+                                        segment_time as f32,
+                                        !hide_camera,
+                                        clip_offsets,
+                                    )
+                                    .await
+                            } else {
+                                decoders
+                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .await
+                            };
                             (frame_num, segment_index, result)
                         }));
                     }
@@ -929,6 +940,13 @@ impl AudioPlayback {
                 }
             };
 
+            // Clamp output info for FFmpeg compatibility (max 8 channels)
+            // This must match what AudioPlaybackBuffer will use internally
+            base_output_info = base_output_info.for_ffmpeg_output();
+
+            // Also update the stream config to match the clamped channels
+            config.channels = base_output_info.channels as u16;
+
             let sample_rate = base_output_info.sample_rate;
             let buffer_size = base_output_info.buffer_size;
             let channels = base_output_info.channels;
@@ -1148,8 +1166,13 @@ impl AudioPlayback {
 
         let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
+        // Clamp output info for FFmpeg compatibility (max 8 channels)
+        output_info = output_info.for_ffmpeg_output();
 
-        let config = supported_config.config();
+        let mut config = supported_config.config();
+        // Match stream config channels to clamped output info
+        config.channels = output_info.channels as u16;
+
         let sample_rate = output_info.sample_rate;
 
         let playhead = f64::from(start_frame_number) / f64::from(fps);

@@ -1,4 +1,4 @@
-import { ProgressCircle } from "@cap/ui-solid";
+import { Button, ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
 import {
 	createMutation,
@@ -13,6 +13,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -20,8 +21,9 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import CapTooltip from "~/components/Tooltip";
+import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -30,6 +32,7 @@ import {
 	type RecordingMetaWithMetadata,
 	type UploadProgress,
 } from "~/utils/tauri";
+import IconLucideSearch from "~icons/lucide/search";
 
 type Recording = {
 	meta: RecordingMetaWithMetadata;
@@ -55,7 +58,18 @@ const Tabs = [
 	},
 ] satisfies { id: string; label: string; icon?: JSX.Element }[];
 
-const recordingsQuery = queryOptions({
+const PAGE_SIZE = 20;
+
+const hasActiveRecording = (recording: Recording) => {
+	const status = recording.meta.status.status;
+	if (status === "InProgress" || status === "NeedsRemux") return true;
+	const uploadState = recording.meta.upload?.state;
+	return (
+		uploadState === "MultipartUpload" || uploadState === "SinglePartUpload"
+	);
+};
+
+const recordingsQuery = queryOptions<Recording[]>({
 	queryKey: ["recordings"],
 	queryFn: async () => {
 		const result = await commands.listRecordings().catch(() => [] as const);
@@ -75,15 +89,22 @@ const recordingsQuery = queryOptions({
 		);
 		return recordings;
 	},
-	reconcile: (old, n) => reconcile(n)(old),
-	// This will ensure any changes to the upload status in the project meta are reflected.
-	refetchInterval: 2000,
+	reconcile: "path",
+	refetchInterval: (query) => {
+		const data = query.state.data;
+		if (!data) return false;
+		return data.some(hasActiveRecording) ? 2000 : false;
+	},
 });
 
 export default function Recordings() {
 	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
 		Tabs[0].id,
 	);
+	const [search, setSearch] = createSignal("");
+	const trimmedSearch = createMemo(() => search().trim());
+	const normalizedSearch = createMemo(() => trimmedSearch().toLowerCase());
+	const [visibleCount, setVisibleCount] = createSignal(PAGE_SIZE);
 	const [uploadProgress, setUploadProgress] = createStore<
 		Record</* video_id */ string, number>
 	>({});
@@ -105,16 +126,40 @@ export default function Recordings() {
 
 	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
 
+	createEffect(() => {
+		activeTab();
+		trimmedSearch();
+		setVisibleCount(PAGE_SIZE);
+	});
+
 	const filteredRecordings = createMemo(() => {
-		if (!recordings.data) {
-			return [];
-		}
-		if (activeTab() === "all") {
-			return recordings.data;
-		}
-		return recordings.data.filter(
-			(recording) => recording.meta.mode === activeTab(),
+		const data = recordings.data ?? [];
+		const scopedRecordings =
+			activeTab() === "all"
+				? data
+				: data.filter((recording) => recording.meta.mode === activeTab());
+		const query = normalizedSearch();
+		if (!query) return scopedRecordings;
+		return scopedRecordings.filter((recording) =>
+			recording.prettyName.toLowerCase().includes(query),
 		);
+	});
+
+	const visibleRecordings = createMemo(() => {
+		const items = filteredRecordings();
+		if (normalizedSearch()) return items;
+		return items.slice(0, visibleCount());
+	});
+
+	const hasMoreRecordings = createMemo(
+		() => !normalizedSearch() && filteredRecordings().length > visibleCount(),
+	);
+
+	const emptyMessage = createMemo(() => {
+		const tabLabel =
+			activeTab() === "all" ? "recordings" : `${activeTab()} recordings`;
+		const prefix = trimmedSearch() ? "No matching" : "No";
+		return `${prefix} ${tabLabel}`;
 	});
 
 	const handleRecordingClick = (recording: Recording) => {
@@ -155,33 +200,56 @@ export default function Recordings() {
 					</p>
 				}
 			>
-				<div class="flex gap-3 items-center pb-4 w-full border-b border-gray-2">
-					<For each={Tabs}>
-						{(tab) => (
-							<div
-								class={cx(
-									"flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
-									activeTab() === tab.id
-										? "bg-gray-5 cursor-default border-gray-5"
-										: "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-5",
-								)}
-								onClick={() => setActiveTab(tab.id)}
-							>
-								{tab.icon && tab.icon}
-								<p class="text-xs text-gray-12">{tab.label}</p>
-							</div>
-						)}
-					</For>
+				<div class="flex flex-col gap-3 pb-4 w-full border-b border-gray-2">
+					<div class="flex flex-wrap gap-3 items-center">
+						<For each={Tabs}>
+							{(tab) => (
+								<div
+									class={cx(
+										"flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
+										activeTab() === tab.id
+											? "bg-gray-5 cursor-default border-gray-5"
+											: "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-5",
+									)}
+									onClick={() => setActiveTab(tab.id)}
+								>
+									{tab.icon && tab.icon}
+									<p class="text-xs text-gray-12">{tab.label}</p>
+								</div>
+							)}
+						</For>
+					</div>
+					<div class="relative w-full max-w-[260px] h-[36px] flex items-center">
+						<IconLucideSearch class="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
+						<Input
+							type="search"
+							class="py-2 pl-6 h-full w-full"
+							value={search()}
+							onInput={(event) => setSearch(event.currentTarget.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Escape" && search()) {
+									event.preventDefault();
+									setSearch("");
+								}
+							}}
+							placeholder="Search recordings"
+							autoCapitalize="off"
+							autocorrect="off"
+							autocomplete="off"
+							spellcheck={false}
+							aria-label="Search recordings"
+						/>
+					</div>
 				</div>
 
 				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
 					<Show when={filteredRecordings().length === 0}>
 						<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
-							No {activeTab()} recordings
+							{emptyMessage()}
 						</p>
 					</Show>
 					<ul class="flex flex-col w-full text-[--text-primary]">
-						<For each={filteredRecordings()}>
+						<For each={visibleRecordings()}>
 							{(recording) => (
 								<RecordingItem
 									recording={recording}
@@ -202,6 +270,21 @@ export default function Recordings() {
 							)}
 						</For>
 					</ul>
+					<Show when={hasMoreRecordings()}>
+						<div class="flex justify-center p-3 border-t border-gray-3">
+							<Button
+								variant="gray"
+								size="sm"
+								onClick={() =>
+									setVisibleCount((count) =>
+										Math.min(count + PAGE_SIZE, filteredRecordings().length),
+									)
+								}
+							>
+								Load more
+							</Button>
+						</div>
+					</Show>
 				</div>
 			</Show>
 		</div>

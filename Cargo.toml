@@ -64,6 +64,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "dispatch",
     "io_surface",
     "mtl",
+    "vt",
 ], default-features = false }
 
 windows = "0.60.0"
@@ -82,7 +83,7 @@ unused_must_use = "deny"
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
-unchecked_duration_subtraction = "deny"
+unchecked_time_subtraction = "deny"
 collapsible_if = "deny"
 clone_on_copy = "deny"
 redundant_closure = "deny"

@@ -27,8 +27,13 @@ export interface VideoMetadata {
 	 * Chapter markers generated from the transcript
 	 */
 	chapters?: { title: string; start: number }[];
-	aiProcessing?: boolean;
-	aiGenerationSkipped?: boolean;
+	aiGenerationStatus?:
+		| "QUEUED"
+		| "PROCESSING"
+		| "COMPLETE"
+		| "ERROR"
+		| "SKIPPED";
+	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 }
 
 /**

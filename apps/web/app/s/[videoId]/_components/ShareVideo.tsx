@@ -1,4 +1,5 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -7,19 +8,16 @@ import {
 	forwardRef,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
+import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
-import {
-	formatChaptersAsVTT,
-	formatTranscriptAsVTT,
-	parseVTT,
-	type TranscriptEntry,
-} from "./utils/transcript-utils";
+import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 declare global {
 	interface Window {
@@ -31,6 +29,13 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
 	authorImage: ImageUpload.ImageUrl | null;
 };
+
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
 
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
@@ -44,7 +49,7 @@ export const ShareVideo = forwardRef<
 		areCaptionsDisabled?: boolean;
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
-		aiProcessing?: boolean;
+		aiGenerationStatus?: AiGenerationStatus | null;
 	}
 >(
 	(
@@ -62,8 +67,13 @@ export const ShareVideo = forwardRef<
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 
+		const captionContext = useCaptionContext();
+
+		const handleCaptionLanguageChange = (language: string) => {
+			captionContext.setSelectedLanguage(language as CaptionLanguage);
+		};
+
 		const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
@@ -93,23 +103,33 @@ export const ShareVideo = forwardRef<
 
 		useEffect(() => {
 			if (transcriptContent) {
-				const parsed = parseVTT(transcriptContent);
-				setTranscriptData(parsed);
+				captionContext.setOriginalVttContent(transcriptContent);
 			} else if (transcriptError) {
 				console.error(
 					"[Transcript] Transcript error from React Query:",
 					transcriptError.message,
 				);
 			}
-		}, [transcriptContent, transcriptError]);
+		}, [
+			transcriptContent,
+			transcriptError,
+			captionContext.setOriginalVttContent,
+		]);
 
 		useEffect(() => {
-			if (
-				data.transcriptionStatus === "COMPLETE" &&
-				transcriptData &&
-				transcriptData.length > 0
-			) {
-				const vttContent = formatTranscriptAsVTT(transcriptData);
+			const vttContent = captionContext.currentVttContent;
+
+			if (captionContext.selectedLanguage === "off") {
+				setSubtitleUrl((prev) => {
+					if (prev) {
+						URL.revokeObjectURL(prev);
+					}
+					return null;
+				});
+				return;
+			}
+
+			if (data.transcriptionStatus === "COMPLETE" && vttContent) {
 				const blob = new Blob([vttContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
@@ -129,7 +149,11 @@ export const ShareVideo = forwardRef<
 				}
 				return null;
 			});
-		}, [data.transcriptionStatus, transcriptData]);
+		}, [
+			data.transcriptionStatus,
+			captionContext.currentVttContent,
+			captionContext.selectedLanguage,
+		]);
 
 		useEffect(() => {
 			if (chapters?.length > 0) {
@@ -162,7 +186,6 @@ export const ShareVideo = forwardRef<
 
 		if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
-			// Start with CORS enabled for MP4 sources, CapVideoPlayer will disable if needed
 			enableCrossOrigin = true;
 		} else if (
 			NODE_ENV === "development" ||
@@ -175,6 +198,16 @@ export const ShareVideo = forwardRef<
 		} else {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
+
+		// const videoMetadata = data.metadata as VideoMetadata | null;
+		// const enhancedAudioStatus = videoMetadata?.enhancedAudioStatus ?? null;
+
+		// const enhancedAudioUrl = useMemo(() => {
+		// 	if (enhancedAudioStatus === "COMPLETE" && data.owner.isPro) {
+		// 		return `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&fileType=enhanced-audio`;
+		// 	}
+		// 	return null;
+		// }, [enhancedAudioStatus, data.owner.isPro, data.owner.id, data.id]);
 
 		return (
 			<>
@@ -201,6 +234,13 @@ export const ShareVideo = forwardRef<
 								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
+							// enhancedAudioUrl={enhancedAudioUrl}
+							// enhancedAudioStatus={enhancedAudioStatus}
+							captionLanguage={captionContext.selectedLanguage}
+							onCaptionLanguageChange={handleCaptionLanguageChange}
+							availableCaptions={captionContext.availableTranslations}
+							isCaptionLoading={captionContext.isTranslating}
+							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -212,6 +252,13 @@ export const ShareVideo = forwardRef<
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
+							// enhancedAudioUrl={enhancedAudioUrl}
+							// enhancedAudioStatus={enhancedAudioStatus}
+							captionLanguage={captionContext.selectedLanguage}
+							onCaptionLanguageChange={handleCaptionLanguageChange}
+							availableCaptions={captionContext.availableTranslations}
+							isCaptionLoading={captionContext.isTranslating}
+							hasCaptions={data.transcriptionStatus === "COMPLETE"}
 						/>
 					)}
 				</div>

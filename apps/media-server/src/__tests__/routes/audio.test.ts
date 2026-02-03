@@ -146,7 +146,10 @@ describe("POST /audio/extract", () => {
 			new Request("http://localhost/audio/extract", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+				body: JSON.stringify({
+					videoUrl: "https://example.com/video.mp4",
+					stream: false,
+				}),
 			}),
 		);
 
@@ -174,7 +177,10 @@ describe("POST /audio/extract", () => {
 			new Request("http://localhost/audio/extract", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ videoUrl: "https://example.com/video.mp4" }),
+				body: JSON.stringify({
+					videoUrl: "https://example.com/video.mp4",
+					stream: false,
+				}),
 			}),
 		);
 

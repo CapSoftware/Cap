@@ -4,6 +4,7 @@ export interface AudioExtractionOptions {
 	format?: "mp3";
 	codec?: "libmp3lame";
 	bitrate?: string;
+	timeoutMs?: number;
 }
 
 const DEFAULT_OPTIONS: Required<AudioExtractionOptions> = {
@@ -240,6 +241,7 @@ export function extractAudioStream(
 	activeProcesses++;
 
 	const opts = { ...DEFAULT_OPTIONS, ...options };
+	const timeout = options.timeoutMs ?? EXTRACT_TIMEOUT_MS;
 
 	const ffmpegArgs = [
 		"ffmpeg",
@@ -283,7 +285,7 @@ export function extractAudioStream(
 	timeoutId = setTimeout(() => {
 		console.error("[ffmpeg] Stream extraction timed out");
 		cleanup();
-	}, EXTRACT_TIMEOUT_MS);
+	}, timeout);
 
 	drainStream(proc.stderr as ReadableStream<Uint8Array>);
 

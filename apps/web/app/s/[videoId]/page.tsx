@@ -407,6 +407,7 @@ async function AuthorizedContent({
 		.select({
 			email: users.email,
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
 		})
 		.from(users)
 		.where(eq(users.id, video.owner.id))
@@ -468,33 +469,14 @@ async function AuthorizedContent({
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
 	const metadata = currentMetadata;
-	let initialAiData = null;
+	const aiGenerationStatus = metadata.aiGenerationStatus || null;
 
-	if (metadata.summary || metadata.chapters || metadata.aiTitle) {
-		initialAiData = {
-			title: metadata.aiTitle || null,
-			summary: metadata.summary || null,
-			chapters: metadata.chapters || null,
-			processing: metadata.aiProcessing || false,
-			generationSkipped: metadata.aiGenerationSkipped || false,
-		};
-	} else if (metadata.aiProcessing) {
-		initialAiData = {
-			title: null,
-			summary: null,
-			chapters: null,
-			processing: true,
-			generationSkipped: false,
-		};
-	} else if (metadata.aiGenerationSkipped) {
-		initialAiData = {
-			title: null,
-			summary: null,
-			chapters: null,
-			processing: false,
-			generationSkipped: true,
-		};
-	}
+	const initialAiData = {
+		title: metadata.aiTitle || null,
+		summary: metadata.summary || null,
+		chapters: metadata.chapters || null,
+		aiGenerationStatus,
+	};
 
 	const customDomainPromise = (async () => {
 		if (!user) {

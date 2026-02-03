@@ -1,6 +1,7 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
 import {
+	availableMonitors,
 	currentMonitor,
 	getCurrentWindow,
 	LogicalPosition,
@@ -26,10 +27,7 @@ import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createLazySignal } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
-import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
-} from "./(window-chrome)/OptionsContext";
+import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
 
 type CameraWindowShape = "round" | "square" | "full";
 type CameraWindowState = {
@@ -43,6 +41,58 @@ const CAMERA_MAX_SIZE = 600;
 const CAMERA_DEFAULT_SIZE = 230;
 const CAMERA_PRESET_SMALL = 230;
 const CAMERA_PRESET_LARGE = 400;
+
+const getCameraOnlyMode = () => {
+	return window.__CAP__?.cameraOnlyMode === true;
+};
+
+const getCameraOnlyInitialState = (): CameraWindowState => ({
+	size: CAMERA_PRESET_LARGE,
+	shape: "full",
+	mirrored: false,
+});
+
+let ignoreMoveUntil = 0;
+
+const ignoreMoveFor = (durationMs: number) => {
+	ignoreMoveUntil = Date.now() + durationMs;
+};
+
+const shouldIgnoreMove = () => Date.now() < ignoreMoveUntil;
+
+const queueCameraPositionSave = (() => {
+	let pending: { x: number; y: number } | null = null;
+	let timeout: ReturnType<typeof setTimeout> | null = null;
+
+	return (pos: { x: number; y: number }) => {
+		pending = pos;
+		if (timeout) return;
+		timeout = setTimeout(async () => {
+			timeout = null;
+			const next = pending;
+			pending = null;
+			if (!next || shouldIgnoreMove()) return;
+			try {
+				await commands.setCameraWindowPosition(next.x, next.y);
+			} catch (error) {
+				console.error("Failed to save camera window position", error);
+			}
+		}, 200);
+	};
+})();
+
+async function centerCurrentWindow() {
+	const monitor = await currentMonitor();
+	if (!monitor) return;
+	const window = getCurrentWindow();
+	const scaleFactor = monitor.scaleFactor;
+	const monitorPosition = monitor.position.toLogical(scaleFactor);
+	const monitorSize = monitor.size.toLogical(scaleFactor);
+	const windowSize = (await window.outerSize()).toLogical(scaleFactor);
+	const x = monitorPosition.x + (monitorSize.width - windowSize.width) / 2;
+	const y = monitorPosition.y + (monitorSize.height - windowSize.height) / 2;
+	await window.setPosition(new LogicalPosition(x, y));
+}
 
 export default function () {
 	document.documentElement.classList.toggle("dark", true);
@@ -65,6 +115,57 @@ export default function () {
 		}
 	});
 
+	onMount(() => {
+		const currentWindow = getCurrentWindow();
+		let unlistenMoved: (() => void) | null = null;
+		let syncingPosition = false;
+		let lastSavedPosition: { x: number; y: number } | null = null;
+		const queueIfChanged = (x: number, y: number) => {
+			if (shouldIgnoreMove()) return;
+			if (
+				lastSavedPosition &&
+				Math.abs(lastSavedPosition.x - x) < 1 &&
+				Math.abs(lastSavedPosition.y - y) < 1
+			) {
+				return;
+			}
+			lastSavedPosition = { x, y };
+			queueCameraPositionSave({ x, y });
+		};
+		const syncCurrentPosition = async () => {
+			if (syncingPosition || shouldIgnoreMove()) return;
+			syncingPosition = true;
+			try {
+				const scaleFactor = await currentWindow.scaleFactor();
+				const outerPosition = await currentWindow.outerPosition();
+				const logicalPosition = outerPosition.toLogical(scaleFactor);
+				queueIfChanged(logicalPosition.x, logicalPosition.y);
+			} catch (error) {
+				console.error("Failed to read camera window position", error);
+			}
+			syncingPosition = false;
+		};
+
+		void currentWindow
+			.onMoved(async ({ payload }) => {
+				const scaleFactor = await currentWindow.scaleFactor();
+				const logicalPos = payload.toLogical(scaleFactor);
+				queueIfChanged(logicalPos.x, logicalPos.y);
+			})
+			.then((unlisten) => {
+				unlistenMoved = unlisten;
+			});
+
+		const interval = window.setInterval(() => {
+			void syncCurrentPosition();
+		}, 400);
+
+		onCleanup(() => {
+			window.clearInterval(interval);
+			unlistenMoved?.();
+		});
+	});
+
 	return (
 		<RecordingOptionsProvider>
 			<Show
@@ -78,12 +179,18 @@ export default function () {
 }
 
 function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+	const isCameraOnlyMode = () => getCameraOnlyMode();
+
 	const [state, setState] = makePersisted(
-		createStore<CameraWindowState>({
-			size: CAMERA_DEFAULT_SIZE,
-			shape: "round",
-			mirrored: false,
-		}),
+		createStore<CameraWindowState>(
+			isCameraOnlyMode()
+				? getCameraOnlyInitialState()
+				: {
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+					},
+		),
 		{ name: "cameraWindowState" },
 	);
 
@@ -95,8 +202,40 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		corner: "",
 	});
 
+	const applyCameraOnlyDefaults = () => {
+		const cameraOnlyState = getCameraOnlyInitialState();
+		setState("size", cameraOnlyState.size);
+		setState("shape", cameraOnlyState.shape);
+	};
+
+	const centerCameraOnlyWindow = () => {
+		applyCameraOnlyDefaults();
+		ignoreMoveFor(1500);
+		void commands.ignoreCameraWindowPosition(1500);
+		void centerCurrentWindow();
+		setTimeout(() => {
+			void centerCurrentWindow();
+		}, 120);
+	};
+
+	onMount(() => {
+		if (isCameraOnlyMode()) {
+			centerCameraOnlyWindow();
+		}
+	});
+
+	createEffect(
+		on(
+			() => isCameraOnlyMode(),
+			(isCameraOnly, wasCameraOnly) => {
+				if (isCameraOnly && !wasCameraOnly) {
+					centerCameraOnlyWindow();
+				}
+			},
+		),
+	);
+
 	createEffect(() => {
-		// Support for legacy size strings.
 		let currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
 			currentSize =
@@ -283,19 +422,55 @@ function ControlButton(
 // Legacy stuff below
 
 function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
-	const { rawOptions } = useRecordingOptions();
+	const isCameraOnlyMode = () => getCameraOnlyMode();
 
 	const [state, setState] = makePersisted(
-		createStore<CameraWindowState>({
-			size: CAMERA_DEFAULT_SIZE,
-			shape: "round",
-			mirrored: false,
-		}),
+		createStore<CameraWindowState>(
+			isCameraOnlyMode()
+				? getCameraOnlyInitialState()
+				: {
+						size: CAMERA_DEFAULT_SIZE,
+						shape: "round",
+						mirrored: false,
+					},
+		),
 		{ name: "cameraWindowState" },
 	);
 
+	const applyCameraOnlyDefaults = () => {
+		const cameraOnlyState = getCameraOnlyInitialState();
+		setState("size", cameraOnlyState.size);
+		setState("shape", cameraOnlyState.shape);
+	};
+
+	const centerCameraOnlyWindow = () => {
+		applyCameraOnlyDefaults();
+		ignoreMoveFor(1500);
+		void commands.ignoreCameraWindowPosition(1500);
+		void centerCurrentWindow();
+		setTimeout(() => {
+			void centerCurrentWindow();
+		}, 120);
+	};
+
+	onMount(() => {
+		if (isCameraOnlyMode()) {
+			centerCameraOnlyWindow();
+		}
+	});
+
+	createEffect(
+		on(
+			() => isCameraOnlyMode(),
+			(isCameraOnly, wasCameraOnly) => {
+				if (isCameraOnly && !wasCameraOnly) {
+					centerCameraOnlyWindow();
+				}
+			},
+		),
+	);
+
 	createEffect(() => {
-		// Support for legacy size strings.
 		const currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
 			setState(
@@ -313,7 +488,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		corner: "",
 	});
 
-	const [hasPositioned, setHasPositioned] = createSignal(false);
+	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode());
 
 	const [latestFrame, setLatestFrame] = createLazySignal<{
 		width: number;
@@ -555,25 +730,59 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			await currentWindow.setSize(new LogicalSize(windowWidth, totalHeight));
 
 			const monitor = await currentMonitor();
-			if (!monitor) return { size: base, windowWidth, windowHeight };
+			const monitors = await availableMonitors();
+			const activeMonitor = monitor ?? monitors[0];
+			if (!activeMonitor) {
+				return { size: base, windowWidth, windowHeight };
+			}
 
-			const scalingFactor = monitor.scaleFactor;
-			const width = monitor.size.width / scalingFactor - windowWidth - 100;
-			const height = monitor.size.height / scalingFactor - totalHeight - 100;
+			const scalingFactor = activeMonitor.scaleFactor;
+			const width =
+				activeMonitor.size.width / scalingFactor - windowWidth - 100;
+			const height =
+				activeMonitor.size.height / scalingFactor - totalHeight - 100;
 
 			if (!hasPositioned()) {
-				currentWindow.setPosition(
-					new LogicalPosition(
-						width + monitor.position.toLogical(scalingFactor).x,
-						height + monitor.position.toLogical(scalingFactor).y,
-					),
-				);
+				ignoreMoveFor(1500);
+				const settings = await generalSettingsStore.get();
+				const saved = settings?.cameraWindowPosition ?? null;
+				if (saved) {
+					const onMonitor = monitors.some((m) => {
+						const scale = m.scaleFactor;
+						const pos = m.position.toLogical(scale);
+						const size = m.size.toLogical(scale);
+						return (
+							saved.x >= pos.x &&
+							saved.x < pos.x + size.width &&
+							saved.y >= pos.y &&
+							saved.y < pos.y + size.height
+						);
+					});
+					if (onMonitor) {
+						currentWindow.setPosition(new LogicalPosition(saved.x, saved.y));
+					} else {
+						currentWindow.setPosition(
+							new LogicalPosition(
+								width + activeMonitor.position.toLogical(scalingFactor).x,
+								height + activeMonitor.position.toLogical(scalingFactor).y,
+							),
+						);
+					}
+				} else {
+					currentWindow.setPosition(
+						new LogicalPosition(
+							width + activeMonitor.position.toLogical(scalingFactor).x,
+							height + activeMonitor.position.toLogical(scalingFactor).y,
+						),
+					);
+				}
 				setHasPositioned(true);
 			} else {
 				const outerPos = await currentWindow.outerPosition();
 				const logicalPos = outerPos.toLogical(scalingFactor);
-				const monitorLogicalPos = monitor.position.toLogical(scalingFactor);
-				const monitorLogicalSize = monitor.size.toLogical(scalingFactor);
+				const monitorLogicalPos =
+					activeMonitor.position.toLogical(scalingFactor);
+				const monitorLogicalSize = activeMonitor.size.toLogical(scalingFactor);
 
 				let newX = logicalPos.x;
 				let newY = logicalPos.y;
@@ -605,6 +814,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 					Math.abs(newX - logicalPos.x) > 1 ||
 					Math.abs(newY - logicalPos.y) > 1
 				) {
+					ignoreMoveFor(1000);
 					await currentWindow.setPosition(new LogicalPosition(newX, newY));
 				}
 			}

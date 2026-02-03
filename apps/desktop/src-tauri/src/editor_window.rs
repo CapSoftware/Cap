@@ -144,6 +144,39 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
     }
 }
 
+pub struct OptionalWindowEditorInstance(pub Option<Arc<EditorInstance>>);
+
+impl specta::function::FunctionArg for OptionalWindowEditorInstance {
+    fn to_datatype(_: &mut specta::TypeMap) -> Option<specta::DataType> {
+        None
+    }
+}
+
+impl Deref for OptionalWindowEditorInstance {
+    type Target = Option<Arc<EditorInstance>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'de, R: Runtime> CommandArg<'de, R> for OptionalWindowEditorInstance {
+    fn from_command(
+        command: tauri::ipc::CommandItem<'de, R>,
+    ) -> Result<Self, tauri::ipc::InvokeError> {
+        let Ok(window) = Window::from_command(command) else {
+            return Ok(Self(None));
+        };
+
+        let Some(instances) = window.try_state::<EditorInstances>() else {
+            return Ok(Self(None));
+        };
+
+        let instance = futures::executor::block_on(instances.0.read());
+        Ok(Self(instance.get(window.label()).cloned()))
+    }
+}
+
 impl EditorInstances {
     pub async fn get_or_create(
         window: &Window,

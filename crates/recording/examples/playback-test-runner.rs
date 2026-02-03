@@ -2,11 +2,14 @@ use anyhow::bail;
 use cap_audio::{AudioData, SyncAnalyzer};
 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
 use cap_rendering::decoder::spawn_decoder;
+use chrono::{Local, Utc};
 use clap::{Parser, Subcommand};
 use std::{
+    fs,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+use sysinfo::System;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[cfg(windows)]
@@ -37,6 +40,12 @@ struct Cli {
 
     #[arg(long, global = true)]
     verbose: bool,
+
+    #[arg(long, global = true)]
+    benchmark_output: bool,
+
+    #[arg(long, global = true)]
+    notes: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -304,7 +313,7 @@ async fn test_decoder(video_path: &Path, fps: u32, is_camera: bool) -> DecoderTe
     let name = if is_camera { "camera" } else { "display" };
 
     let start = Instant::now();
-    match spawn_decoder(name, video_path.to_path_buf(), fps, 0.0).await {
+    match spawn_decoder(name, video_path.to_path_buf(), fps, 0.0, false).await {
         Ok(decoder) => {
             result.init_time_ms = start.elapsed().as_secs_f64() * 1000.0;
             result.decoder_type = format!("{}", decoder.decoder_type());
@@ -347,7 +356,7 @@ async fn test_playback(
         }
     };
 
-    let decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0).await {
+    let decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0, false).await {
         Ok(d) => d,
         Err(e) => {
             result.errors.push(format!("Failed to create decoder: {e}"));
@@ -579,17 +588,18 @@ async fn test_camera_sync(
         result.drift_ok = true;
     }
 
-    let display_decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0).await {
-        Ok(d) => d,
-        Err(e) => {
-            result
-                .errors
-                .push(format!("Failed to create display decoder: {e}"));
-            return result;
-        }
-    };
+    let display_decoder =
+        match spawn_decoder("display", display_path.clone(), fps, 0.0, false).await {
+            Ok(d) => d,
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("Failed to create display decoder: {e}"));
+                return result;
+            }
+        };
 
-    let camera_decoder = match spawn_decoder("camera", camera_path.clone(), fps, 0.0).await {
+    let camera_decoder = match spawn_decoder("camera", camera_path.clone(), fps, 0.0, false).await {
         Ok(d) => {
             result.camera_decoder_ok = true;
             d
@@ -846,6 +856,335 @@ async fn run_tests_on_recording(
     Ok(report)
 }
 
+#[derive(Debug)]
+struct SystemInfo {
+    os: String,
+    arch: String,
+    cpu: String,
+}
+
+impl SystemInfo {
+    fn collect() -> Self {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        let os = format!(
+            "{} {}",
+            System::name().unwrap_or_default(),
+            System::os_version().unwrap_or_default()
+        );
+        let arch = std::env::consts::ARCH.to_string();
+        let cpu = sys
+            .cpus()
+            .first()
+            .map(|c| c.brand().to_string())
+            .unwrap_or_default();
+
+        Self { os, arch, cpu }
+    }
+
+    fn to_markdown(&self) -> String {
+        let mut md = String::new();
+        md.push_str("| Property | Value |\n");
+        md.push_str("|----------|-------|\n");
+        md.push_str(&format!("| OS | {} |\n", self.os));
+        md.push_str(&format!("| Architecture | {} |\n", self.arch));
+        md.push_str(&format!("| CPU | {} |\n", self.cpu));
+        md
+    }
+}
+
+fn get_failure_tags(report: &RecordingTestReport) -> Vec<String> {
+    let mut tags = Vec::new();
+
+    if report.decoder_results.iter().any(|r| !r.passed) {
+        tags.push("DECODER".to_string());
+    }
+    if report.playback_results.iter().any(|r| !r.fps_ok) {
+        tags.push("FPS".to_string());
+    }
+    if report.playback_results.iter().any(|r| !r.decode_latency_ok) {
+        tags.push("LATENCY".to_string());
+    }
+    if report.playback_results.iter().any(|r| r.failed_frames > 0) {
+        tags.push("DECODE_ERRORS".to_string());
+    }
+    if report.audio_sync_results.iter().any(|r| !r.mic_sync_ok) {
+        tags.push("MIC_SYNC".to_string());
+    }
+    if report
+        .audio_sync_results
+        .iter()
+        .any(|r| !r.system_audio_sync_ok)
+    {
+        tags.push("SYS_AUDIO_SYNC".to_string());
+    }
+    if report.camera_sync_results.iter().any(|r| !r.drift_ok) {
+        tags.push("CAMERA_DRIFT".to_string());
+    }
+
+    tags
+}
+
+fn report_to_markdown(report: &RecordingTestReport) -> String {
+    let mut md = String::new();
+
+    let status = if report.overall_passed {
+        "✅ PASS"
+    } else {
+        "❌ FAIL"
+    };
+    let format_type = if report.is_fragmented {
+        "fragmented"
+    } else {
+        "mp4"
+    };
+
+    md.push_str(&format!(
+        "#### {} {} ({})\n\n",
+        status, report.recording_name, format_type
+    ));
+
+    if !report.overall_passed {
+        let tags = get_failure_tags(report);
+        if !tags.is_empty() {
+            md.push_str(&format!("**Failure Tags:** `{}`\n\n", tags.join("`, `")));
+        }
+    }
+
+    md.push_str("| Metric | Result | Details |\n");
+    md.push_str("|--------|--------|--------|\n");
+
+    md.push_str(&format!(
+        "| Features | ℹ️ | camera={} mic={} sys_audio={} |\n",
+        report.has_camera, report.has_mic, report.has_system_audio
+    ));
+    md.push_str(&format!("| Segments | ℹ️ | {} |\n", report.segment_count));
+
+    for (i, result) in report.decoder_results.iter().enumerate() {
+        let status = if result.passed { "✅" } else { "❌" };
+        let hw_str = if result.is_hardware_accelerated {
+            "HW"
+        } else {
+            "SW"
+        };
+        md.push_str(&format!(
+            "| Decoder {} | {} | {} {}x{} init={:.1}ms {} |\n",
+            i,
+            status,
+            result.decoder_type,
+            result.video_width,
+            result.video_height,
+            result.init_time_ms,
+            hw_str
+        ));
+        if let Some(reason) = &result.fallback_reason {
+            md.push_str(&format!("| ↳ Fallback | ⚠️ | {} |\n", reason));
+        }
+    }
+
+    for result in &report.playback_results {
+        let status = if result.passed { "✅" } else { "❌" };
+        md.push_str(&format!(
+            "| Playback Seg {} | {} | frames={}/{} fps={:.1}/{:.1} |\n",
+            result.segment_index,
+            status,
+            result.decoded_frames,
+            result.total_frames,
+            result.effective_fps,
+            result.expected_fps
+        ));
+        md.push_str(&format!(
+            "| ↳ Latency | {} | min={:.1}ms avg={:.1}ms p95={:.1}ms p99={:.1}ms max={:.1}ms |\n",
+            if result.decode_latency_ok {
+                "✅"
+            } else {
+                "❌"
+            },
+            result.min_decode_time_ms,
+            result.avg_decode_time_ms,
+            result.p95_decode_time_ms,
+            result.p99_decode_time_ms,
+            result.max_decode_time_ms
+        ));
+        if result.failed_frames > 0 {
+            md.push_str(&format!(
+                "| ↳ Failed Frames | ⚠️ | {} |\n",
+                result.failed_frames
+            ));
+        }
+    }
+
+    for result in &report.audio_sync_results {
+        if result.has_mic_audio {
+            let status = if result.mic_sync_ok { "✅" } else { "❌" };
+            md.push_str(&format!(
+                "| Mic Sync Seg {} | {} | {:.2}s diff={:.1}ms |\n",
+                result.segment_index, status, result.mic_duration_secs, result.mic_video_diff_ms
+            ));
+        }
+        if result.has_system_audio {
+            let status = if result.system_audio_sync_ok {
+                "✅"
+            } else {
+                "❌"
+            };
+            md.push_str(&format!(
+                "| Sys Audio Sync Seg {} | {} | {:.2}s diff={:.1}ms |\n",
+                result.segment_index,
+                status,
+                result.system_audio_duration_secs,
+                result.system_audio_video_diff_ms
+            ));
+        }
+        if let Some(offset) = result.detected_sync_offset_ms {
+            md.push_str(&format!(
+                "| ↳ Detected Offset | ℹ️ | {:.1}ms (confidence: {:.0}%) |\n",
+                offset,
+                result.sync_confidence * 100.0
+            ));
+        }
+    }
+
+    for result in &report.camera_sync_results {
+        if result.has_camera {
+            let status = if result.drift_ok { "✅" } else { "❌" };
+            let drift_str = result
+                .camera_display_drift_ms
+                .map(|d| format!("{d:.1}ms"))
+                .unwrap_or_else(|| "N/A".to_string());
+            md.push_str(&format!(
+                "| Camera Sync Seg {} | {} | drift={} cam_frames={} disp_frames={} |\n",
+                result.segment_index,
+                status,
+                drift_str,
+                result.camera_frame_count,
+                result.display_frame_count
+            ));
+        }
+    }
+
+    md.push_str(&format!(
+        "\n**Elapsed:** {:.2}s\n\n",
+        report.elapsed.as_secs_f64()
+    ));
+
+    md
+}
+
+fn generate_benchmark_markdown(
+    reports: &[RecordingTestReport],
+    notes: Option<&str>,
+    command: &str,
+) -> String {
+    let mut md = String::new();
+
+    let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let local_timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    md.push_str(&format!("### Benchmark Run: {}\n\n", timestamp));
+    md.push_str(&format!("*Local time: {}*\n\n", local_timestamp));
+
+    let passed = reports.iter().filter(|r| r.overall_passed).count();
+    let total = reports.len();
+    let overall_status = if passed == total {
+        "✅ ALL PASS"
+    } else {
+        "❌ FAILURES"
+    };
+
+    md.push_str(&format!(
+        "**Overall Result:** {} ({}/{})\n\n",
+        overall_status, passed, total
+    ));
+
+    if let Some(notes_text) = notes {
+        md.push_str(&format!("**Notes:** {}\n\n", notes_text));
+    }
+
+    md.push_str(&format!("**Command:** `{}`\n\n", command));
+
+    md.push_str("<details>\n<summary>System Information</summary>\n\n");
+    let sys_info = SystemInfo::collect();
+    md.push_str(&sys_info.to_markdown());
+    md.push_str("\n</details>\n\n");
+
+    if passed < total {
+        md.push_str("**Failed Tests:**\n");
+        for report in reports.iter().filter(|r| !r.overall_passed) {
+            let format_type = if report.is_fragmented {
+                "fragmented"
+            } else {
+                "mp4"
+            };
+            let tags = get_failure_tags(report);
+            md.push_str(&format!(
+                "- {} ({}) — `{}`\n",
+                report.recording_name,
+                format_type,
+                tags.join("`, `")
+            ));
+        }
+        md.push_str("\n");
+    }
+
+    md.push_str("<details>\n<summary>Detailed Results</summary>\n\n");
+
+    for report in reports {
+        md.push_str(&report_to_markdown(report));
+        md.push_str("---\n\n");
+    }
+
+    md.push_str("</details>\n\n");
+
+    md
+}
+
+fn write_benchmark_to_file(benchmark_md: &str) -> anyhow::Result<()> {
+    let benchmark_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("editor")
+        .join("PLAYBACK-BENCHMARKS.md");
+
+    if !benchmark_file.exists() {
+        bail!(
+            "PLAYBACK-BENCHMARKS.md not found at {:?}. Please ensure the file exists.",
+            benchmark_file
+        );
+    }
+
+    let content = fs::read_to_string(&benchmark_file)?;
+
+    let marker_start = "<!-- PLAYBACK_BENCHMARK_RESULTS_START -->";
+    let marker_end = "<!-- PLAYBACK_BENCHMARK_RESULTS_END -->";
+
+    let Some(start_idx) = content.find(marker_start) else {
+        bail!("Could not find PLAYBACK_BENCHMARK_RESULTS_START marker in PLAYBACK-BENCHMARKS.md");
+    };
+
+    let Some(end_idx) = content.find(marker_end) else {
+        bail!("Could not find PLAYBACK_BENCHMARK_RESULTS_END marker in PLAYBACK-BENCHMARKS.md");
+    };
+
+    let insert_pos = start_idx + marker_start.len();
+
+    let mut new_content = String::new();
+    new_content.push_str(&content[..insert_pos]);
+    new_content.push_str("\n\n");
+    new_content.push_str(benchmark_md);
+    new_content.push_str(&content[end_idx..]);
+
+    fs::write(&benchmark_file, new_content)?;
+
+    println!(
+        "\n✅ Benchmark results written to {}",
+        benchmark_file.display()
+    );
+
+    Ok(())
+}
+
 fn print_summary(reports: &[RecordingTestReport]) {
     println!("\n{}", "=".repeat(70));
     println!("PLAYBACK TEST SUMMARY");
@@ -913,8 +1252,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let recordings = if let Some(path) = cli.recording_path {
-        vec![path]
+    let recordings = if let Some(ref path) = cli.recording_path {
+        vec![path.clone()]
     } else {
         discover_recordings(&cli.input_dir)
     };
@@ -975,6 +1314,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     print_summary(&reports);
+
+    if cli.benchmark_output {
+        let command = format!(
+            "cargo run -p cap-recording --example playback-test-runner -- {} --fps {}{}",
+            match cli.command {
+                Some(Commands::Decoder) => "decoder",
+                Some(Commands::Playback) => "playback",
+                Some(Commands::AudioSync) => "audio-sync",
+                Some(Commands::CameraSync) => "camera-sync",
+                Some(Commands::Full) | None => "full",
+                Some(Commands::List) => "list",
+            },
+            cli.fps,
+            cli.recording_path
+                .as_ref()
+                .map(|p| format!(" --recording-path {}", p.display()))
+                .unwrap_or_default(),
+        );
+
+        let benchmark_md =
+            generate_benchmark_markdown(&reports, cli.notes.as_deref(), command.trim());
+
+        if let Err(e) = write_benchmark_to_file(&benchmark_md) {
+            tracing::error!("Failed to write benchmark results: {}", e);
+        }
+    }
 
     let failed = reports.iter().filter(|r| !r.overall_passed).count();
     std::process::exit(if failed > 0 { 1 } else { 0 });

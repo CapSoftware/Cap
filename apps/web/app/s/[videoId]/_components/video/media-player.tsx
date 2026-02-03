@@ -19,6 +19,7 @@ import {
 	CheckIcon,
 	DownloadIcon,
 	FastForwardIcon,
+	GlobeIcon,
 	Loader2Icon,
 	Maximize2Icon,
 	Minimize2Icon,
@@ -31,6 +32,7 @@ import {
 	RewindIcon,
 	RotateCcwIcon,
 	SettingsIcon,
+	SparklesIcon,
 	SubtitlesIcon,
 	Volume1Icon,
 	Volume2Icon,
@@ -833,6 +835,14 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 			[dispatch, props.onClick],
 		);
 
+		const onContextMenu = React.useCallback(
+			(event: React.MouseEvent<HTMLVideoElement>) => {
+				event.preventDefault();
+				props.onContextMenu?.(event);
+			},
+			[props.onContextMenu],
+		);
+
 		const VideoPrimitive = asChild ? Slot : "video";
 
 		return (
@@ -844,6 +854,7 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 				id={context.mediaId}
 				ref={composedRef}
 				onClick={onPlayToggle}
+				onContextMenu={onContextMenu}
 			/>
 		);
 	},
@@ -2224,12 +2235,18 @@ interface MediaPlayerVolumeProps
 	extends React.ComponentProps<typeof SliderPrimitive.Root> {
 	asChild?: boolean;
 	expandable?: boolean;
+	enhancedAudioEnabled?: boolean;
+	enhancedAudioMuted?: boolean;
+	setEnhancedAudioMuted?: (muted: boolean) => void;
 }
 
 function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 	const {
 		asChild,
 		expandable = false,
+		enhancedAudioEnabled = false,
+		enhancedAudioMuted,
+		setEnhancedAudioMuted,
 		className,
 		disabled,
 		...volumeProps
@@ -2249,13 +2266,36 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 
 	const isDisabled = disabled || context.disabled;
 
+	const displayMuted = enhancedAudioEnabled
+		? (enhancedAudioMuted ?? false)
+		: mediaMuted;
+
+	const resolvedVolumeLevel = enhancedAudioEnabled
+		? displayMuted || mediaVolume === 0
+			? "off"
+			: mediaVolume >= 0.5
+				? "high"
+				: "low"
+		: mediaVolumeLevel;
+
 	const onMute = React.useCallback(() => {
+		if (enhancedAudioEnabled && setEnhancedAudioMuted) {
+			setEnhancedAudioMuted(!(enhancedAudioMuted ?? false));
+			return;
+		}
+
 		dispatch({
 			type: mediaMuted
 				? MediaActionTypes.MEDIA_UNMUTE_REQUEST
 				: MediaActionTypes.MEDIA_MUTE_REQUEST,
 		});
-	}, [dispatch, mediaMuted]);
+	}, [
+		dispatch,
+		enhancedAudioEnabled,
+		enhancedAudioMuted,
+		mediaMuted,
+		setEnhancedAudioMuted,
+	]);
 
 	const onVolumeChange = React.useCallback(
 		(value: number[]) => {
@@ -2289,7 +2329,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 		[dispatch, store],
 	);
 
-	const effectiveVolume = mediaMuted ? 0 : mediaVolume;
+	const effectiveVolume = displayMuted ? 0 : mediaVolume;
 
 	return (
 		<div
@@ -2308,19 +2348,19 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 					id={volumeTriggerId}
 					type="button"
 					aria-controls={`${context.mediaId} ${sliderId}`}
-					aria-label={mediaMuted ? "Unmute" : "Mute"}
-					aria-pressed={mediaMuted}
+					aria-label={displayMuted ? "Unmute" : "Mute"}
+					aria-pressed={displayMuted}
 					data-slot="media-player-volume-trigger"
-					data-state={mediaMuted ? "on" : "off"}
+					data-state={displayMuted ? "on" : "off"}
 					variant="ghost"
 					size="icon"
 					className="size-8"
 					disabled={isDisabled}
 					onClick={onMute}
 				>
-					{mediaVolumeLevel === "off" || mediaMuted ? (
+					{resolvedVolumeLevel === "off" ? (
 						<VolumeXIcon />
-					) : mediaVolumeLevel === "high" ? (
+					) : resolvedVolumeLevel === "high" ? (
 						<Volume2Icon />
 					) : (
 						<Volume1Icon />
@@ -2776,6 +2816,203 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
 	);
 }
 
+type EnhancedAudioStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
+interface MediaPlayerEnhancedAudioProps
+	extends React.ComponentProps<typeof Button> {
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	enhancedAudioEnabled?: boolean;
+	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+}
+
+function MediaPlayerEnhancedAudio(props: MediaPlayerEnhancedAudioProps) {
+	const {
+		children,
+		className,
+		disabled,
+		enhancedAudioStatus,
+		enhancedAudioEnabled,
+		setEnhancedAudioEnabled,
+		...enhancedAudioProps
+	} = props;
+
+	const context = useMediaPlayerContext("MediaPlayerEnhancedAudio");
+
+	const isProcessing = enhancedAudioStatus === "PROCESSING";
+	const isComplete = enhancedAudioStatus === "COMPLETE";
+	const isDisabled = disabled || context.disabled || !isComplete;
+
+	const onEnhancedAudioToggle = React.useCallback(() => {
+		if (isComplete) {
+			setEnhancedAudioEnabled?.(!enhancedAudioEnabled);
+		}
+	}, [enhancedAudioEnabled, setEnhancedAudioEnabled, isComplete]);
+
+	if (
+		!enhancedAudioStatus ||
+		enhancedAudioStatus === "ERROR" ||
+		enhancedAudioStatus === "SKIPPED"
+	) {
+		return null;
+	}
+
+	const tooltipText = isProcessing
+		? "Enhancing audio..."
+		: enhancedAudioEnabled
+			? "Enhanced audio on"
+			: "Enhance audio";
+
+	return (
+		<MediaPlayerTooltip tooltip={tooltipText}>
+			<PlayerButton
+				type="button"
+				aria-controls={context.mediaId}
+				aria-label={
+					isProcessing
+						? "Audio enhancement in progress"
+						: enhancedAudioEnabled
+							? "Disable enhanced audio"
+							: "Enable enhanced audio"
+				}
+				aria-pressed={enhancedAudioEnabled}
+				data-disabled={isDisabled ? "" : undefined}
+				data-slot="media-player-enhanced-audio"
+				data-state={enhancedAudioEnabled ? "on" : "off"}
+				disabled={isDisabled}
+				{...enhancedAudioProps}
+				variant="ghost"
+				size="icon"
+				className={cn(
+					"size-8",
+					enhancedAudioEnabled && "text-blue-500",
+					className,
+				)}
+				onClick={onEnhancedAudioToggle}
+			>
+				{children ??
+					(isProcessing ? (
+						<Loader2Icon className="animate-spin" />
+					) : (
+						<SparklesIcon />
+					))}
+			</PlayerButton>
+		</MediaPlayerTooltip>
+	);
+}
+
+interface EnhancedAudioSyncProps {
+	enhancedAudioRef: React.RefObject<HTMLAudioElement | null>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
+	enhancedAudioEnabled: boolean;
+	enhancedAudioMuted: boolean;
+}
+
+function EnhancedAudioSync({
+	enhancedAudioRef,
+	videoRef,
+	enhancedAudioEnabled,
+	enhancedAudioMuted,
+}: EnhancedAudioSyncProps) {
+	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
+	const wasEnhancedRef = React.useRef(false);
+
+	const syncEnhancedAudio = React.useCallback(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+		audio.currentTime = video.currentTime;
+		audio.playbackRate = video.playbackRate;
+	}, [enhancedAudioRef, videoRef]);
+
+	React.useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const handlePlay = () => {
+			if (!enhancedAudioEnabled) return;
+			syncEnhancedAudio();
+			if (audio.muted) {
+				audio.pause();
+				return;
+			}
+			audio.play().catch(() => {});
+		};
+
+		const handlePause = () => {
+			audio.pause();
+		};
+
+		const handleSeeked = () => {
+			if (enhancedAudioEnabled) {
+				syncEnhancedAudio();
+			}
+		};
+
+		const handleRateChange = () => {
+			if (enhancedAudioEnabled) {
+				audio.playbackRate = video.playbackRate;
+			}
+		};
+
+		video.addEventListener("play", handlePlay);
+		video.addEventListener("pause", handlePause);
+		video.addEventListener("seeked", handleSeeked);
+		video.addEventListener("ratechange", handleRateChange);
+
+		return () => {
+			video.removeEventListener("play", handlePlay);
+			video.removeEventListener("pause", handlePause);
+			video.removeEventListener("seeked", handleSeeked);
+			video.removeEventListener("ratechange", handleRateChange);
+		};
+	}, [enhancedAudioEnabled, syncEnhancedAudio, videoRef, enhancedAudioRef]);
+
+	React.useEffect(() => {
+		const video = videoRef.current;
+		const audio = enhancedAudioRef.current;
+		if (!video || !audio) return;
+
+		const wasEnhanced = wasEnhancedRef.current;
+
+		if (enhancedAudioEnabled) {
+			wasEnhancedRef.current = true;
+
+			video.muted = true;
+			audio.volume = mediaVolume;
+			audio.muted = enhancedAudioMuted;
+			syncEnhancedAudio();
+
+			if (!video.paused) {
+				if (enhancedAudioMuted) {
+					audio.pause();
+				} else {
+					audio.play().catch(() => {});
+				}
+			}
+
+			return;
+		}
+
+		wasEnhancedRef.current = false;
+
+		audio.pause();
+
+		if (wasEnhanced) {
+			video.muted = enhancedAudioMuted;
+		}
+	}, [
+		enhancedAudioEnabled,
+		enhancedAudioMuted,
+		mediaVolume,
+		syncEnhancedAudio,
+		videoRef,
+		enhancedAudioRef,
+	]);
+
+	return null;
+}
+
 interface MediaPlayerDownloadProps
 	extends React.ComponentProps<typeof Button> {}
 
@@ -2827,7 +3064,23 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 	);
 }
 
-interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {}
+type CaptionLanguage = string;
+
+interface CaptionOption {
+	code: CaptionLanguage;
+	name: string;
+}
+
+interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
+	enhancedAudioStatus?: EnhancedAudioStatus | null;
+	enhancedAudioEnabled?: boolean;
+	setEnhancedAudioEnabled?: (enabled: boolean) => void;
+	captionLanguage?: CaptionLanguage;
+	onCaptionLanguageChange?: (language: CaptionLanguage) => void;
+	availableCaptions?: CaptionOption[];
+	isCaptionLoading?: boolean;
+	hasCaptions?: boolean;
+}
 
 function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 	const {
@@ -2840,6 +3093,14 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		modal = false,
 		className,
 		disabled,
+		enhancedAudioStatus,
+		enhancedAudioEnabled,
+		setEnhancedAudioEnabled,
+		captionLanguage = "original",
+		onCaptionLanguageChange,
+		availableCaptions = [],
+		isCaptionLoading = false,
+		hasCaptions = false,
 		...settingsProps
 	} = props;
 
@@ -2988,6 +3249,18 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						))}
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
+				{enhancedAudioStatus === "COMPLETE" && (
+					<DropdownMenuItem
+						className="justify-between"
+						onSelect={() => setEnhancedAudioEnabled?.(!enhancedAudioEnabled)}
+					>
+						<span className="flex items-center gap-2">
+							<SparklesIcon className="size-4" />
+							Enhanced Audio
+						</span>
+						{enhancedAudioEnabled && <CheckIcon />}
+					</DropdownMenuItem>
+				)}
 				{context.isVideo && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
@@ -3031,6 +3304,53 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 										</DropdownMenuItem>
 									);
 								})}
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				)}
+				{hasCaptions && (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger disabled={isCaptionLoading}>
+							<span className="flex items-center gap-2 flex-1">
+								<GlobeIcon className="size-4" />
+								Captions
+							</span>
+							<Badge variant="outline" className="rounded-sm">
+								{isCaptionLoading
+									? "..."
+									: captionLanguage === "off"
+										? "Off"
+										: captionLanguage === "original"
+											? "Original"
+											: (availableCaptions.find(
+													(c) => c.code === captionLanguage,
+												)?.name ?? captionLanguage)}
+							</Badge>
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => onCaptionLanguageChange?.("off")}
+							>
+								Off
+								{captionLanguage === "off" && <CheckIcon />}
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								className="justify-between"
+								onSelect={() => onCaptionLanguageChange?.("original")}
+							>
+								Original
+								{captionLanguage === "original" && <CheckIcon />}
+							</DropdownMenuItem>
+							{availableCaptions.map((caption) => (
+								<DropdownMenuItem
+									key={caption.code}
+									className="justify-between"
+									onSelect={() => onCaptionLanguageChange?.(caption.code)}
+								>
+									{caption.name}
+									{captionLanguage === caption.code && <CheckIcon />}
+								</DropdownMenuItem>
+							))}
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				)}
@@ -3142,11 +3462,12 @@ export {
 	MediaPlayerFullscreen,
 	MediaPlayerPiP,
 	MediaPlayerCaptions,
+	MediaPlayerEnhancedAudio,
 	MediaPlayerDownload,
 	MediaPlayerSettings,
 	MediaPlayerPortal,
 	MediaPlayerTooltip,
-	//
+	EnhancedAudioSync,
 	MediaPlayerRoot as Root,
 	MediaPlayerVideo as Video,
 	MediaPlayerAudio as Audio,
@@ -3166,11 +3487,13 @@ export {
 	MediaPlayerFullscreen as Fullscreen,
 	MediaPlayerPiP as PiP,
 	MediaPlayerCaptions as Captions,
+	MediaPlayerEnhancedAudio as EnhancedAudio,
 	MediaPlayerDownload as Download,
 	MediaPlayerSettings as Settings,
 	MediaPlayerPortal as Portal,
 	MediaPlayerTooltip as Tooltip,
-	//
 	useMediaSelector as useMediaPlayer,
 	useStoreSelector as useMediaPlayerStore,
 };
+
+export type { CaptionOption, CaptionLanguage };

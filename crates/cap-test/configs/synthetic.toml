@@ -1,0 +1,45 @@
+[meta]
+name = "Synthetic Tests"
+description = "Tests using synthetic video/audio sources - no hardware required"
+
+[recording]
+duration_secs = 5
+warmup_secs = 1
+iterations = 3
+
+[displays]
+use_discovered = false
+frame_rates = [30, 60]
+resolutions = [
+    { width = 1280, height = 720, label = "720p" },
+    { width = 1920, height = 1080, label = "1080p" },
+    { width = 2560, height = 1440, label = "1440p" },
+    { width = 3840, height = 2160, label = "4K" },
+]
+
+[cameras]
+enabled = true
+frame_rates = [30]
+pixel_formats = ["NV12"]
+resolutions = [
+    { width = 640, height = 480, label = "VGA" },
+    { width = 1280, height = 720, label = "720p" },
+]
+
+[audio.microphones]
+enabled = true
+sample_rates = [44100, 48000]
+channels = [1, 2]
+include_bluetooth = false
+include_usb = false
+include_builtin = false
+
+[audio.system]
+enabled = true
+sample_rates = [48000]
+
+[thresholds]
+max_drop_rate_percent = 1.0
+min_effective_fps_ratio = 0.95
+max_p95_latency_ms = 50.0
+max_av_sync_drift_ms = 100.0

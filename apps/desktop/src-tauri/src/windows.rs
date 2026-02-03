@@ -11,6 +11,7 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, atomic::AtomicU32},
+    time::Duration,
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -20,8 +21,12 @@ use tauri_specta::Event;
 use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
+#[cfg(target_os = "macos")]
+use crate::panel_manager::{PanelManager, PanelState, PanelWindowType};
+
 use crate::{
-    App, ArcLock, RequestScreenCapturePrewarm, RequestSetTargetMode,
+    App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, RequestScreenCapturePrewarm,
+    RequestSetTargetMode,
     editor_window::PendingEditorInstances,
     fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
@@ -37,6 +42,130 @@ const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(
 
 const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
 const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
+
+#[cfg(target_os = "macos")]
+fn is_system_dark_mode() -> bool {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let appearance: id = msg_send![app, effectiveAppearance];
+        if appearance == nil {
+            return false;
+        }
+        let name: id = msg_send![appearance, name];
+        if name == nil {
+            return false;
+        }
+        let dark_appearance = NSString::alloc(nil).init_str("NSAppearanceNameDarkAqua");
+        let vibrant_dark = NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark");
+        let is_dark: bool = msg_send![name, isEqualToString: dark_appearance];
+        let is_vibrant_dark: bool = msg_send![name, isEqualToString: vibrant_dark];
+        is_dark || is_vibrant_dark
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_system_dark_mode() -> bool {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(key) =
+        hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+    {
+        if let Ok(value) = key.get_value::<u32, _>("AppsUseLightTheme") {
+            return value == 0;
+        }
+    }
+    false
+}
+
+fn hide_recording_windows(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if let Ok(id) = CapWindowId::from_str(&label)
+            && matches!(
+                id,
+                CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main | CapWindowId::Camera
+            )
+        {
+            let _ = window.hide();
+        }
+    }
+}
+
+async fn cleanup_camera_window(
+    app: &AppHandle,
+    window: Option<&WebviewWindow>,
+    #[allow(unused_variables)] reset_panel: bool,
+    wait_for_removal: bool,
+) -> bool {
+    use crate::CameraWindowCloseGate;
+
+    #[cfg(target_os = "macos")]
+    if reset_panel {
+        let panel_manager = app.state::<PanelManager>();
+        panel_manager.force_reset(PanelWindowType::Camera).await;
+    }
+
+    app.state::<CameraWindowCloseGate>().set_allow_close(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        let (panel_close_tx, panel_close_rx) = tokio::sync::oneshot::channel();
+        let app_for_close = app.clone();
+        app.run_on_main_thread(move || {
+            use tauri_nspanel::ManagerExt;
+            let label = CapWindowId::Camera.label();
+            if let Ok(panel) = app_for_close.get_webview_panel(&label) {
+                panel.released_when_closed(false);
+                panel.close();
+            }
+            let _ = panel_close_tx.send(());
+        })
+        .ok();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), panel_close_rx).await;
+    }
+
+    if let Some(window) = window {
+        let (destroy_tx, destroy_rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread({
+            let window = window.clone();
+            move || {
+                let _ = window.destroy();
+                let _ = destroy_tx.send(());
+            }
+        })
+        .ok();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), destroy_rx).await;
+    } else if let Some(stale) = CapWindowId::Camera.get(app) {
+        let (destroy_tx, destroy_rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread({
+            let stale = stale.clone();
+            move || {
+                let _ = stale.destroy();
+                let _ = destroy_tx.send(());
+            }
+        })
+        .ok();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), destroy_rx).await;
+    }
+
+    if wait_for_removal {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(2000);
+        while start.elapsed() < timeout && CapWindowId::Camera.get(app).is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    let still_exists = CapWindowId::Camera.get(app).is_some();
+    app.state::<CameraWindowCloseGate>().set_allow_close(false);
+
+    !still_exists
+}
 
 struct CursorMonitorInfo {
     x: f64,
@@ -123,6 +252,105 @@ impl CursorMonitorInfo {
 
         Self::get()
     }
+}
+
+fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
+    let state = app.state::<ArcLock<crate::App>>();
+    let camera_state = if let Ok(guard) = state.try_read() {
+        guard.camera_preview.get_state().ok().unwrap_or_default()
+    } else {
+        crate::camera::CameraPreviewState::default()
+    };
+
+    let toolbar_height = 56.0;
+    let size = camera_state.size as f64;
+    let is_full = camera_state.shape == crate::camera::CameraPreviewShape::Full;
+    let aspect_ratio = 16.0 / 9.0;
+
+    let window_width = if is_full { size * aspect_ratio } else { size };
+    let window_height = size + toolbar_height;
+
+    let monitor_info = CursorMonitorInfo::get();
+    let (pos_x, pos_y) = monitor_info.center_position(window_width, window_height);
+
+    let _ = window.set_size(tauri::LogicalSize::new(window_width, window_height));
+    app.state::<CameraWindowPositionGuard>().ignore_for(1000);
+    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+}
+
+fn is_position_on_display(display_id: &DisplayId, pos_x: f64, pos_y: f64) -> bool {
+    Display::from_id(display_id)
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .map(|bounds| {
+            let (x, y, width, height) = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+
+            pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
+        })
+        .unwrap_or(false)
+}
+
+fn display_name_for_position(pos_x: f64, pos_y: f64) -> Option<String> {
+    Display::list().into_iter().find_map(|display| {
+        let bounds = display.raw_handle().logical_bounds()?;
+        let (x, y, width, height) = (
+            bounds.position().x(),
+            bounds.position().y(),
+            bounds.size().width(),
+            bounds.size().height(),
+        );
+
+        if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
+            display.name().filter(|name| !name.trim().is_empty())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_position_on_monitor_name(monitor_name: &str, pos_x: f64, pos_y: f64) -> bool {
+    Display::list().into_iter().any(|display| {
+        if display.name().as_deref() != Some(monitor_name) {
+            return false;
+        }
+
+        display
+            .raw_handle()
+            .logical_bounds()
+            .map(|bounds| {
+                let (x, y, width, height) = (
+                    bounds.position().x(),
+                    bounds.position().y(),
+                    bounds.size().width(),
+                    bounds.size().height(),
+                );
+
+                pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
+    for display in Display::list() {
+        if let Some(bounds) = display.raw_handle().logical_bounds() {
+            let (x, y, width, height) = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+
+            if pos_x >= x && pos_x < x + width && pos_y >= y && pos_y < y + height {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[derive(Clone, Deserialize, Type)]
@@ -231,6 +459,7 @@ impl CapWindowId {
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
+            Self::TargetSelectOverlay { .. } => "Cap Target Select".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -248,6 +477,19 @@ impl CapWindowId {
         )
     }
 
+    pub fn is_transparent(&self) -> bool {
+        matches!(
+            self,
+            Self::Main
+                | Self::Camera
+                | Self::WindowCaptureOccluder { .. }
+                | Self::CaptureArea
+                | Self::RecordingControls
+                | Self::RecordingsOverlay
+                | Self::TargetSelectOverlay { .. }
+        )
+    }
+
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         let label = self.label();
         app.get_webview_window(&label)
@@ -259,11 +501,12 @@ impl CapWindowId {
             Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
                 Some(Some(LogicalPosition::new(20.0, 32.0)))
             }
-            Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
+            | Self::Main
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay
+            | Self::RecordingControls
             | Self::TargetSelectOverlay { .. } => None,
             _ => Some(None),
         }
@@ -272,7 +515,7 @@ impl CapWindowId {
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
-            Self::Main => (330.0, 345.0),
+            Self::Main => (330.0, 395.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (700.0, 540.0),
@@ -307,7 +550,9 @@ pub enum ShowCapWindow {
     CaptureArea {
         screen_id: DisplayId,
     },
-    Camera,
+    Camera {
+        centered: bool,
+    },
     InProgressRecording {
         countdown: Option<u32>,
     },
@@ -352,7 +597,283 @@ impl ShowCapWindow {
             }
         }
 
-        if let Some(window) = self.id(app).get(app) {
+        if let Self::Camera { centered } = self {
+            #[cfg(target_os = "macos")]
+            {
+                let panel_manager = app.state::<PanelManager>();
+                let mut panel_state = panel_manager.get_state(PanelWindowType::Camera).await;
+
+                if panel_state == PanelState::Destroying {
+                    debug!("Camera window is being destroyed, waiting...");
+                    let wait_result = panel_manager
+                        .wait_for_state(
+                            PanelWindowType::Camera,
+                            &[PanelState::None],
+                            std::time::Duration::from_millis(500),
+                        )
+                        .await;
+
+                    if !wait_result {
+                        warn!("Camera destroy wait timed out, force resetting state");
+                        panel_manager.force_reset(PanelWindowType::Camera).await;
+                    }
+                    panel_state = panel_manager.get_state(PanelWindowType::Camera).await;
+                }
+
+                if panel_state == PanelState::Creating {
+                    debug!("Camera window is being created, waiting...");
+                    panel_manager
+                        .wait_for_state(
+                            PanelWindowType::Camera,
+                            &[PanelState::Ready],
+                            std::time::Duration::from_millis(500),
+                        )
+                        .await;
+                }
+            }
+
+            if let Some(window) = self.id(app).get(app) {
+                #[cfg(target_os = "macos")]
+                {
+                    use crate::panel_manager::is_window_handle_valid;
+
+                    let handle_valid = is_window_handle_valid(&window);
+
+                    if !handle_valid {
+                        warn!(
+                            "Camera window exists but handle is invalid, destroying and recreating..."
+                        );
+                        let cleanup_success =
+                            cleanup_camera_window(app, Some(&window), true, true).await;
+                        if !cleanup_success {
+                            warn!(
+                                "Camera window still in registry after cleanup attempts, will retry later"
+                            );
+                            return Err(tauri::Error::WindowNotFound);
+                        }
+                        debug!("Camera window successfully removed from registry");
+                    } else {
+                        let panel_manager = app.state::<PanelManager>();
+                        let mut panel_state =
+                            panel_manager.get_state(PanelWindowType::Camera).await;
+
+                        if panel_state == PanelState::Creating {
+                            debug!(
+                                "Camera window valid but state is Creating, waiting for completion"
+                            );
+                            panel_manager
+                                .wait_for_state(
+                                    PanelWindowType::Camera,
+                                    &[PanelState::Ready, PanelState::None],
+                                    std::time::Duration::from_millis(1000),
+                                )
+                                .await;
+                            panel_state = panel_manager.get_state(PanelWindowType::Camera).await;
+                        }
+
+                        if panel_state != PanelState::Ready {
+                            debug!(
+                                "Camera window exists but panel state is {:?}, updating to Ready",
+                                panel_state
+                            );
+                            panel_manager.force_reset(PanelWindowType::Camera).await;
+                            panel_manager.mark_ready(PanelWindowType::Camera, 0).await;
+                        }
+
+                        let state = app.state::<ArcLock<App>>();
+                        let mut app_state = state.write().await;
+
+                        let enable_native_camera_preview = GeneralSettingsStore::get(app)
+                            .ok()
+                            .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                            .unwrap_or_default();
+
+                        let shutdown_preview = if !enable_native_camera_preview {
+                            app_state.camera_preview.begin_shutdown()
+                        } else {
+                            None
+                        };
+
+                        if enable_native_camera_preview {
+                            let camera_feed = app_state.camera_feed.clone();
+                            if let Err(err) = app_state
+                                .camera_preview
+                                .init_window(window.clone(), camera_feed)
+                                .await
+                            {
+                                error!(
+                                    "Error reinitializing camera preview for existing window: {err}"
+                                );
+                            }
+                        }
+
+                        drop(app_state);
+
+                        if let Some(rx) = shutdown_preview {
+                            let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
+                        }
+
+                        let (show_tx, show_rx) = tokio::sync::oneshot::channel();
+                        app.run_on_main_thread({
+                            let window = window.clone();
+                            move || {
+                                use crate::panel_manager::try_to_panel;
+
+                                // IMPORTANT: We intentionally use window.show() + set_focus() here
+                                // instead of panel.order_front_regardless().
+                                //
+                                // order_front_regardless() was found to cause a crash after ~4-5
+                                // camera toggle cycles due to macOS internal state accumulation.
+                                // The crash manifested as a hard crash in the Metal/CAMetalLayer
+                                // subsystem, not in our Rust code.
+                                //
+                                // Using standard Tauri window APIs avoids this macOS-specific issue
+                                // while still properly showing and focusing the camera preview window.
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                let _ = show_tx.send(true);
+                            }
+                        })
+                        .ok();
+
+                        let show_result = show_rx.await.unwrap_or(false);
+
+                        if show_result {
+                            if *centered {
+                                center_camera_window(app, &window);
+                            }
+                            return Ok(window);
+                        } else {
+                            warn!("Camera panel show failed, will recreate window");
+                            let cleanup_success =
+                                cleanup_camera_window(app, Some(&window), true, true).await;
+                            if !cleanup_success {
+                                warn!(
+                                    "Camera window still in registry after show failure, will retry later"
+                                );
+                                return Err(tauri::Error::WindowNotFound);
+                            }
+                            debug!("Camera window successfully removed after show failure");
+                        }
+                    }
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let state = app.state::<ArcLock<App>>();
+                    let mut app_state = state.write().await;
+
+                    let enable_native_camera_preview = GeneralSettingsStore::get(app)
+                        .ok()
+                        .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                        .unwrap_or_default();
+
+                    let shutdown_preview = if !enable_native_camera_preview {
+                        app_state.camera_preview.begin_shutdown()
+                    } else {
+                        None
+                    };
+
+                    if enable_native_camera_preview && !app_state.camera_preview.is_initialized() {
+                        let camera_feed = app_state.camera_feed.clone();
+                        if let Err(err) = app_state
+                            .camera_preview
+                            .init_window(window.clone(), camera_feed)
+                            .await
+                        {
+                            error!(
+                                "Error reinitializing camera preview for existing window: {err}"
+                            );
+                        }
+                    }
+
+                    drop(app_state);
+
+                    if let Some(rx) = shutdown_preview {
+                        let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
+                    }
+
+                    if *centered {
+                        center_camera_window(app, &window);
+                    }
+                    window.show().ok();
+                    window.set_focus().ok();
+                    return Ok(window);
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Self::InProgressRecording { .. } = self
+            && let Some(window) = self.id(app).get(app)
+        {
+            use crate::panel_manager::is_window_handle_valid;
+
+            if is_window_handle_valid(&window) {
+                debug!("InProgressRecording: reusing existing window");
+                let width = 320.0;
+                let height = 150.0;
+                let recording_monitor = CursorMonitorInfo::get();
+                let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
+                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+                let label = window.label().to_string();
+                app.run_on_main_thread({
+                    let app = app.clone();
+                    move || {
+                        use tauri_nspanel::ManagerExt;
+                        if let Ok(panel) = app.get_webview_panel(&label) {
+                            panel.order_front_regardless();
+                            panel.show();
+                        }
+                    }
+                })
+                .ok();
+                return Ok(window);
+            } else {
+                warn!("InProgressRecording window handle invalid, destroying and recreating...");
+                let _ = window.destroy();
+
+                let window_id = self.id(app);
+                let max_wait = std::time::Duration::from_millis(500);
+                let poll_interval = std::time::Duration::from_millis(25);
+                let start = std::time::Instant::now();
+                while start.elapsed() < max_wait {
+                    if window_id.get(app).is_none() {
+                        debug!(
+                            "InProgressRecording window removed from registry after {:?}",
+                            start.elapsed()
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(poll_interval).await;
+                }
+
+                if window_id.get(app).is_some() {
+                    error!("InProgressRecording window STILL in registry, cannot recreate");
+                    return Err(tauri::Error::WindowNotFound);
+                }
+                debug!("InProgressRecording window cleaned up, will recreate");
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        if let Self::InProgressRecording { .. } = self {
+            if let Some(window) = self.id(app).get(app) {
+                let width = 320.0;
+                let height = 150.0;
+                let recording_monitor = CursorMonitorInfo::get();
+                let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
+                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+                window.show().ok();
+                window.set_focus().ok();
+                return Ok(window);
+            }
+        }
+
+        if !matches!(self, Self::Camera { .. } | Self::InProgressRecording { .. })
+            && let Some(window) = self.id(app).get(app)
+        {
             let cursor_display_id = if let Self::Main { init_target_mode } = self {
                 if init_target_mode.is_some() {
                     Display::get_containing_cursor()
@@ -366,34 +887,7 @@ impl ShowCapWindow {
             };
 
             match self {
-                Self::Main { .. } => {
-                    let cursor_monitor = CursorMonitorInfo::get();
-                    let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 345.0);
-                    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                    if let Some(camera_window) = CapWindowId::Camera.get(app) {
-                        const WINDOW_SIZE: f64 = 230.0 * 2.0;
-                        let camera_pos_x =
-                            cursor_monitor.x + cursor_monitor.width - WINDOW_SIZE - 100.0;
-                        let camera_pos_y =
-                            cursor_monitor.y + cursor_monitor.height - WINDOW_SIZE - 100.0;
-                        let _ = camera_window
-                            .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
-                    }
-                }
-                Self::Camera => {
-                    const WINDOW_SIZE: f64 = 230.0 * 2.0;
-                    let camera_monitor = CapWindowId::Main
-                        .get(app)
-                        .map(|w| CursorMonitorInfo::from_window(&w))
-                        .unwrap_or_else(CursorMonitorInfo::get);
-                    let camera_pos_x =
-                        camera_monitor.x + camera_monitor.width - WINDOW_SIZE - 100.0;
-                    let camera_pos_y =
-                        camera_monitor.y + camera_monitor.height - WINDOW_SIZE - 100.0;
-                    let _ = window
-                        .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
-                }
+                Self::Main { .. } => {}
                 _ => {}
             }
 
@@ -464,6 +958,10 @@ impl ShowCapWindow {
                 let title = CapWindowId::Main.title();
                 let should_protect = should_protect_window(app, &title);
 
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                    .ok();
+
                 let window = self
                     .window_builder(app, "/")
                     .resizable(false)
@@ -473,6 +971,8 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
+                    .transparent(true)
+                    .visible(false)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -483,14 +983,68 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(330.0, 345.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+                let saved_position = GeneralSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.main_window_position)
+                    .filter(|pos| is_position_on_any_screen(pos.x, pos.y));
 
-                #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(window.as_ref().window(), 50);
+                let (pos_x, pos_y) = if let Some(pos) = saved_position {
+                    (pos.x, pos.y)
+                } else {
+                    cursor_monitor.center_position(330.0, 395.0)
+                };
 
                 #[cfg(target_os = "macos")]
                 {
+                    app.run_on_main_thread({
+                        let window = window.clone();
+                        let app = app.clone();
+                        move || {
+                            use tauri::ActivationPolicy;
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::panel_delegate;
+                            use crate::panel_manager::try_to_panel;
+
+                            const MAIN_PANEL_LEVEL: i32 = 100;
+
+                            let delegate = panel_delegate!(MainPanelDelegate {
+                                window_did_become_key,
+                                window_did_resign_key
+                            });
+
+                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
+
+                            let panel = match try_to_panel(&window) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::error!("Failed to convert main window to panel: {}", e);
+                                    app.set_activation_policy(ActivationPolicy::Regular).ok();
+                                    return;
+                                }
+                            };
+
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            );
+
+                            panel.set_delegate(delegate);
+
+                            panel.set_level(MAIN_PANEL_LEVEL);
+
+                            let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+                            panel.order_front_regardless();
+                            panel.show();
+
+                            crate::platform::apply_squircle_corners(&window, 16.0);
+
+                            app.set_activation_policy(ActivationPolicy::Regular).ok();
+                        }
+                    })
+                    .ok();
+
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         let prewarmer =
@@ -501,6 +1055,12 @@ impl ShowCapWindow {
                     if let Err(error) = (RequestScreenCapturePrewarm { force: false }).emit(app) {
                         warn!(%error, "Failed to emit ScreenCaptureKit prewarm event");
                     }
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+                    window.show().ok();
                 }
 
                 window
@@ -526,8 +1086,19 @@ impl ShowCapWindow {
                     Some(RecordingTargetMode::Display) => "&targetMode=display",
                     Some(RecordingTargetMode::Window) => "&targetMode=window",
                     Some(RecordingTargetMode::Area) => "&targetMode=area",
+                    Some(RecordingTargetMode::Camera) => "&targetMode=camera",
                     None => "",
                 };
+
+                let camera_ws_port = {
+                    let state = app.state::<ArcLock<App>>();
+                    let state = state.read().await;
+                    state.camera_ws_port
+                };
+
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                    .ok();
 
                 let mut window_builder = self
                     .window_builder(
@@ -543,7 +1114,11 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .visible(false);
+                    .visible(false)
+                    .initialization_script(format!(
+                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {};",
+                        camera_ws_port
+                    ));
 
                 #[cfg(target_os = "macos")]
                 {
@@ -576,7 +1151,6 @@ impl ShowCapWindow {
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
                     let actual_physical_size = window.inner_size().unwrap();
-                    // this third time makes it work when the resulting size is wrong, god knows why
                     if physical_size.width() != actual_physical_size.width as f64 {
                         let _ = window.set_size(LogicalSize::new(
                             logical_size.width(),
@@ -590,24 +1164,67 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    crate::platform::set_window_level(window.as_ref().window(), 45);
+                    app.run_on_main_thread({
+                        let window = window.clone();
+                        let app = app.clone();
+                        move || {
+                            use tauri::ActivationPolicy;
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::panel_delegate;
+                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+
+                            #[link(name = "CoreGraphics", kind = "framework")]
+                            unsafe extern "C" {
+                                fn CGWindowLevelForKey(key: i32) -> i32;
+                            }
+
+                            #[allow(non_upper_case_globals)]
+                            const kCGMaximumWindowLevelKey: i32 = 10;
+
+                            let delegate = panel_delegate!(TargetSelectOverlayPanelDelegate {
+                                window_did_become_key,
+                                window_did_resign_key
+                            });
+
+                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
+
+                            let panel = match window.to_panel() {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::error!("Failed to convert target select overlay to panel: {:?}", e);
+                                    app.set_activation_policy(ActivationPolicy::Regular).ok();
+                                    return;
+                                }
+                            };
+
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            );
+
+                            panel.set_delegate(delegate);
+
+                            let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                            panel.set_level(max_level - 1);
+
+                            panel.order_front_regardless();
+                            panel.show();
+
+                            app.set_activation_policy(ActivationPolicy::Regular).ok();
+                        }
+                    })
+                    .ok();
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.show().ok();
                 }
 
                 window
             }
             Self::Settings { page } => {
-                for (label, window) in app.webview_windows() {
-                    if let Ok(id) = CapWindowId::from_str(&label)
-                        && matches!(
-                            id,
-                            CapWindowId::TargetSelectOverlay { .. }
-                                | CapWindowId::Main
-                                | CapWindowId::Camera
-                        )
-                    {
-                        let _ = window.hide();
-                    }
-                }
+                hide_recording_windows(app);
 
                 let window = self
                     .window_builder(
@@ -637,12 +1254,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Editor { .. } => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.close();
-                };
-                if let Some(camera) = CapWindowId::Camera.get(app) {
-                    let _ = camera.close();
-                };
+                hide_recording_windows(app);
 
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Regular)
@@ -673,12 +1285,7 @@ impl ShowCapWindow {
                 window
             }
             Self::ScreenshotEditor { path: _ } => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.close();
-                };
-                if let Some(camera) = CapWindowId::Camera.get(app) {
-                    let _ = camera.close();
-                };
+                hide_recording_windows(app);
 
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Regular)
@@ -778,8 +1385,46 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::Camera => {
-                const WINDOW_SIZE: f64 = 230.0 * 2.0;
+            Self::Camera { centered } => {
+                const DEFAULT_WINDOW_SIZE: f64 = 230.0 * 2.0;
+                const CENTERED_WINDOW_SIZE: f64 = 400.0;
+
+                #[cfg(target_os = "macos")]
+                let create_guard = {
+                    let panel_manager = app.state::<PanelManager>();
+                    panel_manager
+                        .try_begin_create(PanelWindowType::Camera)
+                        .await
+                };
+
+                #[cfg(target_os = "macos")]
+                let Some(mut create_guard) = create_guard else {
+                    let panel_manager = app.state::<PanelManager>();
+                    let state = panel_manager.get_state(PanelWindowType::Camera).await;
+                    warn!("Camera window creation blocked, current state: {:?}", state);
+                    if state == PanelState::Ready
+                        && let Some(window) = CapWindowId::Camera.get(app)
+                    {
+                        if *centered {
+                            center_camera_window(app, &window);
+                        }
+                        return Ok(window);
+                    }
+                    panel_manager
+                        .wait_for_state(
+                            PanelWindowType::Camera,
+                            &[PanelState::Ready, PanelState::None],
+                            std::time::Duration::from_millis(500),
+                        )
+                        .await;
+                    if let Some(window) = CapWindowId::Camera.get(app) {
+                        if *centered {
+                            center_camera_window(app, &window);
+                        }
+                        return Ok(window);
+                    }
+                    return Err(tauri::Error::WindowNotFound);
+                };
 
                 let enable_native_camera_preview = GeneralSettingsStore::get(app)
                     .ok()
@@ -790,13 +1435,20 @@ impl ShowCapWindow {
                     let state = app.state::<ArcLock<App>>();
                     let mut state = state.write().await;
 
+                    let shutdown_preview =
+                        if !enable_native_camera_preview && state.camera_preview.is_initialized() {
+                            state.camera_preview.begin_shutdown()
+                        } else {
+                            None
+                        };
+
                     if enable_native_camera_preview && state.camera_preview.is_initialized() {
-                        warn!("Cleaning up stale camera preview before creating new one");
-                        state.camera_preview.on_window_close();
-                        if let Some(window) = CapWindowId::Camera.get(app) {
-                            window.close().ok();
-                        }
+                        warn!("Detected existing camera preview, will reuse it");
                     }
+
+                    #[cfg(target_os = "macos")]
+                    app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                        .ok();
 
                     let mut window_builder = self
                         .window_builder(app, "/camera")
@@ -811,24 +1463,98 @@ impl ShowCapWindow {
                             "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {};
+			                window.__CAP__.cameraOnlyMode = {};
 		                ",
-                            state.camera_ws_port
+                            state.camera_ws_port, centered
                         ))
                         .transparent(true)
                         .visible(false);
 
-                    let window = window_builder.build()?;
+                    let window = match window_builder.build() {
+                        Ok(w) => w,
+                        Err(e) => {
+                            let is_label_exists = e.to_string().contains("already exists");
+                            if is_label_exists {
+                                warn!(
+                                    "Camera webview label already exists, cleaning up for next attempt"
+                                );
+                                cleanup_camera_window(app, None, false, false).await;
+                            }
+
+                            #[cfg(target_os = "macos")]
+                            {
+                                let panel_manager = app.state::<PanelManager>();
+                                panel_manager.force_reset(PanelWindowType::Camera).await;
+                            }
+                            return Err(e);
+                        }
+                    };
 
                     let camera_monitor = CapWindowId::Main
                         .get(app)
                         .map(|w| CursorMonitorInfo::from_window(&w))
                         .unwrap_or(cursor_monitor);
-                    let camera_pos_x =
-                        camera_monitor.x + camera_monitor.width - WINDOW_SIZE - 100.0;
-                    let camera_pos_y =
-                        camera_monitor.y + camera_monitor.height - WINDOW_SIZE - 100.0;
-                    let _ = window
-                        .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+
+                    let preferred_monitor_name = display_name_for_position(
+                        camera_monitor.x + camera_monitor.width / 2.0,
+                        camera_monitor.y + camera_monitor.height / 2.0,
+                    );
+
+                    let saved_position =
+                        GeneralSettingsStore::get(app)
+                            .ok()
+                            .flatten()
+                            .and_then(|settings| {
+                                if let Some(monitor_name) = preferred_monitor_name.as_deref() {
+                                    settings
+                                        .camera_window_positions_by_monitor_name
+                                        .get(monitor_name)
+                                        .cloned()
+                                        .filter(|pos| {
+                                            is_position_on_monitor_name(monitor_name, pos.x, pos.y)
+                                        })
+                                        .or_else(|| {
+                                            settings.camera_window_position.filter(|pos| {
+                                                is_position_on_monitor_name(
+                                                    monitor_name,
+                                                    pos.x,
+                                                    pos.y,
+                                                )
+                                            })
+                                        })
+                                } else {
+                                    settings.camera_window_position.filter(|pos| {
+                                        if let Some(display_id) = &pos.display_id {
+                                            is_position_on_display(display_id, pos.x, pos.y)
+                                        } else {
+                                            is_position_on_any_screen(pos.x, pos.y)
+                                        }
+                                    })
+                                }
+                            });
+
+                    let (camera_pos_x, camera_pos_y) = if let Some(pos) = saved_position {
+                        (pos.x, pos.y)
+                    } else if *centered {
+                        let aspect_ratio = 16.0 / 9.0;
+                        let toolbar_height = 56.0;
+                        let window_width = CENTERED_WINDOW_SIZE * aspect_ratio;
+                        let window_height = CENTERED_WINDOW_SIZE + toolbar_height;
+                        camera_monitor.center_position(window_width, window_height)
+                    } else {
+                        let camera_pos_x =
+                            camera_monitor.x + camera_monitor.width - DEFAULT_WINDOW_SIZE - 100.0;
+                        let camera_pos_y =
+                            camera_monitor.y + camera_monitor.height - DEFAULT_WINDOW_SIZE - 100.0;
+                        (camera_pos_x, camera_pos_y)
+                    };
+
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        app.state::<CameraWindowPositionGuard>().ignore_for(1000);
+                        let _ = window
+                            .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
+                    }
 
                     if let Some(id) = state.selected_camera_id.clone()
                         && !state.camera_in_use
@@ -846,6 +1572,83 @@ impl ShowCapWindow {
                         state.camera_in_use = true;
                     }
 
+                    #[cfg(target_os = "macos")]
+                    {
+                        let panel_manager = app.state::<PanelManager>();
+                        let operation_id = create_guard.operation_id;
+
+                        let (panel_tx, panel_rx) = tokio::sync::oneshot::channel();
+                        app.run_on_main_thread({
+                            let window = window.clone();
+                            let app = app.clone();
+                            move || {
+                                use tauri::ActivationPolicy;
+                                use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                                use tauri_nspanel::panel_delegate;
+                                use crate::panel_manager::try_to_panel;
+
+                                #[link(name = "CoreGraphics", kind = "framework")]
+                                unsafe extern "C" {
+                                    fn CGWindowLevelForKey(key: i32) -> i32;
+                                }
+
+                                #[allow(non_upper_case_globals)]
+                                const kCGMaximumWindowLevelKey: i32 = 10;
+
+                                let delegate = panel_delegate!(CameraPanelDelegate {
+                                    window_did_become_key,
+                                    window_did_resign_key
+                                });
+
+                                delegate.set_listener(Box::new(|_delegate_name: String| {}));
+
+                                let panel = match try_to_panel(&window) {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        tracing::error!("Failed to convert camera to panel: {}", e);
+                                        app.set_activation_policy(ActivationPolicy::Regular).ok();
+                                        let _ = panel_tx.send(false);
+                                        return;
+                                    }
+                                };
+
+                                panel.set_collection_behaviour(
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                        | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                                );
+
+                                panel.set_delegate(delegate);
+
+                                let max_level =
+                                    unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                                panel.set_level(max_level);
+
+                                app.state::<CameraWindowPositionGuard>().ignore_for(1000);
+                                let _ = window.set_position(tauri::LogicalPosition::new(
+                                    camera_pos_x,
+                                    camera_pos_y,
+                                ));
+
+                                panel.order_front_regardless();
+                                panel.show();
+
+                                app.set_activation_policy(ActivationPolicy::Regular).ok();
+                                let _ = panel_tx.send(true);
+                            }
+                        })
+                        .ok();
+
+                        if panel_rx.await.unwrap_or(false) {
+                            panel_manager
+                                .mark_ready(PanelWindowType::Camera, operation_id)
+                                .await;
+                            create_guard.mark_completed();
+                        } else {
+                            warn!("Camera panel creation failed");
+                            panel_manager.force_reset(PanelWindowType::Camera).await;
+                        }
+                    }
+
                     if enable_native_camera_preview {
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
@@ -856,28 +1659,18 @@ impl ShowCapWindow {
                             error!(
                                 "Error initializing camera preview, falling back to WebSocket preview: {err}"
                             );
-                            window.show().ok();
                         }
-                    } else {
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
+                    {
                         window.show().ok();
                     }
 
-                    #[cfg(target_os = "macos")]
-                    {
-                        crate::platform::set_window_level(window.as_ref().window(), 60);
+                    drop(state);
 
-                        _ = window.run_on_main_thread({
-                            let window = window.as_ref().window();
-                            move || unsafe {
-                                let Ok(win) = window.ns_window() else {
-                                    return;
-                                };
-                                let win = win as *const objc2_app_kit::NSWindow;
-                                (*win).setCollectionBehavior(
-                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                                );
-                            }
-                        });
+                    if let Some(rx) = shutdown_preview {
+                        let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
                     }
 
                     window
@@ -990,6 +1783,10 @@ impl ShowCapWindow {
                 let should_protect = should_protect_window(app, &title);
 
                 #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                    .ok();
+
+                #[cfg(target_os = "macos")]
                 let window = {
                     self.window_builder(app, "/in-progress-recording")
                         .maximized(false)
@@ -1002,6 +1799,7 @@ impl ShowCapWindow {
                         .content_protected(should_protect)
                         .inner_size(width, height)
                         .skip_taskbar(true)
+                        .visible(false)
                         .initialization_script(format!(
                             "window.COUNTDOWN = {};",
                             countdown.unwrap_or_default()
@@ -1050,16 +1848,57 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    crate::platform::set_window_level(window.as_ref().window(), 1000);
-                }
+                    app.run_on_main_thread({
+                        let window = window.clone();
+                        let app = app.clone();
+                        move || {
+                            use tauri::ActivationPolicy;
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::panel_delegate;
+                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
-                #[cfg(target_os = "macos")]
-                {
-                    let show_result = window.show();
-                    debug!(
-                        "InProgressRecording window.show() result: {:?}",
-                        show_result
-                    );
+                            #[link(name = "CoreGraphics", kind = "framework")]
+                            unsafe extern "C" {
+                                fn CGWindowLevelForKey(key: i32) -> i32;
+                            }
+
+                            #[allow(non_upper_case_globals)]
+                            const kCGMaximumWindowLevelKey: i32 = 10;
+
+                            let delegate = panel_delegate!(RecordingControlsPanelDelegate {
+                                window_did_become_key,
+                                window_did_resign_key
+                            });
+
+                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
+
+                            let panel = match window.to_panel() {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::error!("Failed to convert recording controls to panel: {:?}", e);
+                                    app.set_activation_policy(ActivationPolicy::Regular).ok();
+                                    return;
+                                }
+                            };
+
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
+                            );
+
+                            panel.set_delegate(delegate);
+
+                            let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
+                            panel.set_level(max_level);
+
+                            panel.order_front_regardless();
+                            panel.show();
+
+                            app.set_activation_policy(ActivationPolicy::Regular).ok();
+                        }
+                    })
+                    .ok();
+
                     fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 }
 
@@ -1107,9 +1946,15 @@ impl ShowCapWindow {
                         let window = window.clone();
                         move || {
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                            use crate::panel_manager::try_to_panel;
 
-                            let panel = window.to_panel().unwrap();
+                            let panel = match try_to_panel(&window) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::error!("Failed to convert recordings overlay to panel: {}", e);
+                                    return;
+                                }
+                            };
 
                             panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
 
@@ -1120,7 +1965,6 @@ impl ShowCapWindow {
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
                             );
 
-                            // seems like this doesn't work properly -_-
                             #[allow(non_upper_case_globals)]
                             const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
                             panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
@@ -1170,6 +2014,21 @@ impl ShowCapWindow {
             .shadow(true)
             .theme(theme);
 
+        if !id.is_transparent() {
+            let is_dark = match theme {
+                Some(tauri::Theme::Dark) => true,
+                Some(tauri::Theme::Light) => false,
+                None | Some(_) => is_system_dark_mode(),
+            };
+
+            let bg_color = if is_dark { "#141414" } else { "#ffffff" };
+            let init_script = format!(
+                r#"(function(){{var s=document.createElement('style');s.textContent='html,body{{background-color:{bg}}}';document.documentElement.appendChild(s);}})();"#,
+                bg = bg_color
+            );
+            builder = builder.initialization_script(&init_script);
+        }
+
         if let Some(min) = id.min_size() {
             builder = builder
                 .inner_size(min.0, min.1)
@@ -1218,7 +2077,7 @@ impl ShowCapWindow {
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera => CapWindowId::Camera,
+            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,

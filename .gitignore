@@ -58,3 +58,11 @@ tauri.windows.conf.json
 scripts/backfill-releases.sh
 scripts/update-github-releases.sh
 scripts/releases-backfill-data.txt
+
+# SEO agent state (machine-local, contains sensitive ranking data)
+seo/
+
+# OpenCode commands (local)
+.opencode/
+analysis/
+analysis/plans/

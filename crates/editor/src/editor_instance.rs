@@ -87,6 +87,7 @@ pub struct EditorInstance {
     pub segment_medias: Arc<Vec<SegmentMedia>>,
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
+    pub export_active: AtomicBool,
 }
 
 impl EditorInstance {
@@ -288,6 +289,7 @@ impl EditorInstance {
             playback_active: playback_active_tx,
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
+            export_active: AtomicBool::new(false),
         });
 
         this.state.lock().await.preview_task =
@@ -412,6 +414,11 @@ impl EditorInstance {
                         break;
                     }
 
+                    if self.export_active.load(Ordering::Acquire) {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        break;
+                    }
+
                     let project = self.project_config.1.borrow().clone();
 
                     let Some((segment_time, segment)) =
@@ -437,7 +444,8 @@ impl EditorInstance {
                     let playback_is_active = *self.playback_active_rx.borrow();
                     let export_preview_is_active =
                         self.export_preview_active.load(Ordering::Acquire);
-                    if !playback_is_active && !export_preview_is_active {
+                    let export_is_active = self.export_active.load(Ordering::Acquire);
+                    if !playback_is_active && !export_preview_is_active && !export_is_active {
                         let prefetch_frames_count = 15u32;
                         let hide_camera = project.camera.hide;
                         let playback_rx = self.playback_active_rx.clone();
@@ -474,12 +482,6 @@ impl EditorInstance {
                         }
                     }
 
-                    let get_frames_future = segment_medias.decoders.get_frames(
-                        segment_time as f32,
-                        !project.camera.hide,
-                        clip_offsets,
-                    );
-
                     tokio::select! {
                         biased;
 
@@ -487,7 +489,11 @@ impl EditorInstance {
                             continue;
                         }
 
-                        segment_frames_opt = get_frames_future => {
+                        segment_frames_opt = segment_medias.decoders.get_frames_initial(
+                            segment_time as f32,
+                            !project.camera.hide,
+                            clip_offsets,
+                        ) => {
                             if preview_rx.has_changed().unwrap_or(false) {
                                 continue;
                             }

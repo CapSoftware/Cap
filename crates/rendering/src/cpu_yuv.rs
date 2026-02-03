@@ -1123,9 +1123,9 @@ mod tests {
         let y_stride = 1920u32;
         let uv_stride = 1920u32;
 
-        let y_data: Vec<u8> = (0..y_stride * height).map(|i| ((i % 256) as u8)).collect();
+        let y_data: Vec<u8> = (0..y_stride * height).map(|i| (i % 256) as u8).collect();
         let uv_data: Vec<u8> = (0..uv_stride * height / 2)
-            .map(|i| (((i + 64) % 256) as u8))
+            .map(|i| ((i + 64) % 256) as u8)
             .collect();
 
         let mut output = vec![0u8; (width * height * 4) as usize];

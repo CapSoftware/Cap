@@ -19,6 +19,13 @@ type CommentType = typeof commentsSchema.$inferSelect & {
 	authorImage?: ImageUpload.ImageUrl | null;
 };
 
+type AiGenerationStatus =
+	| "QUEUED"
+	| "PROCESSING"
+	| "COMPLETE"
+	| "ERROR"
+	| "SKIPPED";
+
 interface SidebarProps {
 	data: VideoData;
 	commentsData: CommentType[];
@@ -34,7 +41,7 @@ interface SidebarProps {
 		title?: string | null;
 		summary?: string | null;
 		chapters?: { title: string; start: number }[] | null;
-		processing?: boolean;
+		aiGenerationStatus?: AiGenerationStatus | null;
 	} | null;
 	aiGenerationEnabled?: boolean;
 }

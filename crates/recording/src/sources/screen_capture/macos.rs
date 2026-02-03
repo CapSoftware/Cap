@@ -11,8 +11,9 @@ use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
 use std::{
+    ptr,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
     time::Duration,
@@ -22,20 +23,119 @@ use tokio_util::{
     future::FutureExt as _,
     sync::{CancellationToken, DropGuard},
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
+
+struct FrameScaler {
+    session: arc::R<cidre::vt::PixelTransferSession>,
+    pool: arc::R<cv::PixelBufPool>,
+}
+
+unsafe impl Send for FrameScaler {}
+
+impl FrameScaler {
+    fn new(expected_width: usize, expected_height: usize) -> Option<Self> {
+        let mut session = cidre::vt::PixelTransferSession::new().ok()?;
+        session.set_scaling_letter_box().ok()?;
+        session.set_realtime(true).ok()?;
+        let pool = create_pixel_buffer_pool(expected_width, expected_height)?;
+
+        Some(Self { session, pool })
+    }
+
+    fn scale_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+        let src_image_buf = src_sample_buf.image_buf()?;
+        let dst_buf = self.pool.pixel_buf().ok()?;
+
+        self.session.transfer(src_image_buf, &dst_buf).ok()?;
+
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&dst_buf).ok()?;
+        let timing = src_sample_buf.timing_info(0).ok()?;
+
+        cm::SampleBuf::with_image_buf(&dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+    }
+}
+
+fn get_pixel_buffer_pool_size() -> usize {
+    std::env::var("CAP_PIXEL_BUFFER_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20)
+}
+
+fn create_pixel_buffer_pool(width: usize, height: usize) -> Option<arc::R<cv::PixelBufPool>> {
+    let min_count = get_pixel_buffer_pool_size();
+
+    let min_count_num = cf::Number::from_usize(min_count);
+    let width_num = cf::Number::from_usize(width);
+    let height_num = cf::Number::from_usize(height);
+    let io_props = cf::Dictionary::new();
+
+    let pool_attr_keys: [&cf::Type; 1] =
+        [cv::pixel_buffer_pool::keys::minimum_buffer_count().as_ref()];
+    let pool_attr_values: [&cf::Type; 1] = [min_count_num.as_ref()];
+    let pool_attrs = cf::Dictionary::with_keys_values(&pool_attr_keys, &pool_attr_values)?;
+
+    let pixel_buf_attr_keys: [&cf::Type; 5] = [
+        cv::pixel_buffer::keys::pixel_format().as_ref(),
+        cv::pixel_buffer::keys::width().as_ref(),
+        cv::pixel_buffer::keys::height().as_ref(),
+        cv::pixel_buffer::keys::io_surf_props().as_ref(),
+        cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+    ];
+    let pixel_buf_attr_values: [&cf::Type; 5] = [
+        cv::PixelFormat::_420V.to_cf_number().as_ref(),
+        width_num.as_ref(),
+        height_num.as_ref(),
+        io_props.as_ref(),
+        cf::Boolean::value_true().as_ref(),
+    ];
+    let pixel_buf_attrs =
+        cf::Dictionary::with_keys_values(&pixel_buf_attr_keys, &pixel_buf_attr_values)?;
+
+    debug!(min_count, width, height, "Pixel buffer pool initialized");
+    cv::PixelBufPool::new(Some(pool_attrs.as_ref()), Some(pixel_buf_attrs.as_ref())).ok()
+}
+
+struct PixelBufferCopier {
+    session: arc::R<cidre::vt::PixelTransferSession>,
+    pool: arc::R<cv::PixelBufPool>,
+}
+
+unsafe impl Send for PixelBufferCopier {}
+
+impl PixelBufferCopier {
+    fn new(width: usize, height: usize) -> Option<Self> {
+        let mut session = cidre::vt::PixelTransferSession::new().ok()?;
+        session.set_realtime(true).ok()?;
+        let pool = create_pixel_buffer_pool(width, height)?;
+        Some(Self { session, pool })
+    }
+
+    fn copy_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+        let src_image_buf = src_sample_buf.image_buf()?;
+        let dst_buf = self.pool.pixel_buf().ok()?;
+
+        self.session.transfer(src_image_buf, &dst_buf).ok()?;
+
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&dst_buf).ok()?;
+        let timing = src_sample_buf.timing_info(0).ok()?;
+
+        cm::SampleBuf::with_image_buf(&dst_buf, true, None, ptr::null(), &format_desc, &timing).ok()
+    }
+}
 
 fn get_screen_buffer_size() -> usize {
     std::env::var("CAP_SCREEN_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(4)
+        .unwrap_or(15)
 }
 
 fn get_max_queue_depth() -> isize {
     std::env::var("CAP_MAX_QUEUE_DEPTH")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(4)
+        .unwrap_or(8)
 }
 
 #[derive(Debug)]
@@ -106,11 +206,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     continue;
                 };
 
-                if let Some(sc_window) = window
-                    .raw_handle()
-                    .as_sc(self.shareable_content.clone())
-                    .await
-                {
+                if let Some(sc_window) = window.raw_handle().as_sc(self.shareable_content.clone()) {
                     collected.push(sc_window);
                 }
             }
@@ -124,7 +220,6 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 self.shareable_content.clone(),
                 excluded_sc_windows,
             )
-            .await
             .ok_or(SourceError::AsContentFilter)?;
 
         debug!("SCK content filter: {:?}", content_filter);
@@ -184,10 +279,24 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
+        let expected_width = self.video_info.width as usize;
+        let expected_height = self.video_info.height as usize;
+        let frame_scaler: Arc<Mutex<Option<FrameScaler>>> = Arc::new(Mutex::new(None));
+        let scaling_logged = Arc::new(AtomicBool::new(false));
+        let scaled_frame_count = Arc::new(AtomicU64::new(0));
+
+        let pixel_buffer_copier: Arc<Mutex<Option<PixelBufferCopier>>> = Arc::new(Mutex::new(
+            PixelBufferCopier::new(expected_width, expected_height),
+        ));
+
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
                 let drop_counter = drop_counter.clone();
+                let frame_scaler = frame_scaler.clone();
+                let scaling_logged = scaling_logged.clone();
+                let scaled_frame_count = scaled_frame_count.clone();
+                let pixel_buffer_copier = pixel_buffer_copier.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -206,13 +315,94 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 return;
                             }
 
+                            let frame_width = image_buf.width();
+                            let frame_height = image_buf.height();
+
+                            let final_sample_buf =
+                                if frame_width != expected_width || frame_height != expected_height
+                                {
+                                    let Ok(mut scaler_guard) = frame_scaler.lock() else {
+                                        drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        return;
+                                    };
+
+                                    if scaler_guard.is_none() {
+                                        *scaler_guard =
+                                            FrameScaler::new(expected_width, expected_height);
+
+                                        if scaler_guard.is_some() {
+                                            info!(
+                                                expected_width,
+                                                expected_height,
+                                                frame_width,
+                                                frame_height,
+                                                "Display configuration changed, scaling frames to match original dimensions"
+                                            );
+                                        } else {
+                                            warn!(
+                                                "Failed to create frame scaler, dropping mismatched frames"
+                                            );
+                                        }
+                                        scaling_logged.store(true, atomic::Ordering::Relaxed);
+                                    }
+
+                                    let Some(scaler) = scaler_guard.as_ref() else {
+                                        drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        return;
+                                    };
+
+                                    let Some(scaled) = scaler.scale_frame(sample_buffer) else {
+                                        drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        return;
+                                    };
+
+                                    let count =
+                                        scaled_frame_count.fetch_add(1, atomic::Ordering::Relaxed)
+                                            + 1;
+                                    if count.is_multiple_of(300) {
+                                        debug!(scaled_frames = count, "Scaling frames");
+                                    }
+
+                                    scaled
+                                } else {
+                                    if scaling_logged.swap(false, atomic::Ordering::Relaxed) {
+                                        let count =
+                                            scaled_frame_count.swap(0, atomic::Ordering::Relaxed);
+                                        info!(
+                                            scaled_frames = count,
+                                            "Display dimensions restored, resuming direct capture"
+                                        );
+                                        if let Ok(mut guard) = frame_scaler.lock() {
+                                            *guard = None;
+                                        }
+                                    }
+
+                                    let copied = if let Ok(copier_guard) = pixel_buffer_copier.lock() {
+                                        if let Some(copier) = copier_guard.as_ref() {
+                                            copier.copy_frame(sample_buffer)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    };
+
+                                    match copied {
+                                        Some(buf) => buf,
+                                        None => {
+                                            drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                            return;
+                                        }
+                                    }
+                                };
+
                             cap_fail::fail_ret!("screen_capture video frame skip");
 
                             video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
                             if video_tx
                                 .try_send(VideoFrame {
-                                    sample_buf: sample_buffer.retained(),
+                                    sample_buf: final_sample_buf,
                                     timestamp,
                                 })
                                 .is_err()

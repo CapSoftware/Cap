@@ -325,6 +325,9 @@ pub fn target_to_display_and_crop(
                 ))
             }
         }
+        ScreenCaptureTarget::CameraOnly => {
+            return Err(anyhow!("Camera-only target has no display"));
+        }
     };
 
     Ok((display, crop_bounds))

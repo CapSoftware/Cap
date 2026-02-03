@@ -366,11 +366,16 @@ impl<'a> Iterator for FramesIter<'a> {
             match self.decoder.receive_frame(&mut frame) {
                 Ok(()) => {
                     return match &self.hw_device {
-                        Some(hw_device) => Some(Ok(hw_device.get_hwframe(&frame).unwrap_or(frame))),
+                        Some(hw_device) => {
+                            let hw_result = hw_device.get_hwframe(&frame);
+                            Some(Ok(hw_result.unwrap_or(frame)))
+                        }
                         None => Some(Ok(frame)),
                     };
                 }
-                Err(ffmpeg::Error::Eof) => return None,
+                Err(ffmpeg::Error::Eof) => {
+                    return None;
+                }
                 Err(ffmpeg::Error::Other { errno }) if errno == EAGAIN => {}
                 Err(e) => return Some(Err(e)),
             }

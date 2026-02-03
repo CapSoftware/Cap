@@ -264,6 +264,9 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
     pub fn new(data: Vec<AudioSegment>, output_info: AudioInfo) -> Self {
+        // Clamp output info for FFmpeg compatibility (max 8 channels)
+        let output_info = output_info.for_ffmpeg_output();
+
         info!(
             sample_rate = output_info.sample_rate,
             channels = output_info.channels,
@@ -391,6 +394,9 @@ pub struct AudioResampler {
 
 impl AudioResampler {
     pub fn new(output_info: AudioInfo) -> Result<Self, MediaError> {
+        // Clamp output info for FFmpeg compatibility (max 8 channels)
+        let output_info = output_info.for_ffmpeg_output();
+
         let mut options = Dictionary::new();
         options.set("filter_size", "128");
         options.set("cutoff", "0.97");
@@ -460,6 +466,10 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         output_info: AudioInfo,
         duration_secs: f64,
     ) -> Self {
+        // Clamp output info for FFmpeg compatibility (max 8 channels)
+        // The resampler will produce audio with this channel count
+        let output_info = output_info.for_ffmpeg_output();
+
         info!(
             duration_secs = duration_secs,
             sample_rate = output_info.sample_rate,
