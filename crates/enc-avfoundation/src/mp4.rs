@@ -602,6 +602,11 @@ impl MP4Encoder {
 
         let mut end_session_time = end_timestamp.saturating_sub(self.timestamp_offset);
 
+        if let Some(last_video_pts) = self.last_video_pts {
+            let min_video_end = last_video_pts.saturating_add(self.video_frame_duration());
+            end_session_time = end_session_time.max(min_video_end);
+        }
+
         if let Some(audio_end_pts) = self.last_audio_end_pts
             && let Some(timescale) = self.last_audio_timescale
             && timescale > 0

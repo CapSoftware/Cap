@@ -62,6 +62,10 @@ impl ModelID {
         let vid = unique_id[unique_id.len() - 2 * 4..unique_id.len() - 4].to_string();
         let pid = unique_id[unique_id.len() - 4..].to_string();
 
+        if vid == "0000" && pid == "0001" {
+            return None;
+        }
+
         Some(Self { vid, pid })
     }
 }
