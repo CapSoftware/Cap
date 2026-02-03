@@ -1,0 +1,15 @@
+{
+  "name": "cap-raycast",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "raycast dev",
+    "build": "raycast build",
+    "lint": "raycast lint"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.74.0",
+    "@raycast/utils": "^1.17.0"
+  }
+}
