@@ -1,0 +1,70 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recording from Raycast",
+  "icon": "raycast-icon.png",
+  "author": "daviddprtma",
+  "categories": [
+    "Productivity",
+    "Media"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a new Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume the paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause Recording",
+      "description": "Toggle pause/resume for the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "description": "Take a screenshot with Cap",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.87.0",
+    "@raycast/utils": "^1.19.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "20.8.10",
+    "@types/react": "18.3.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
