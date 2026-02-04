@@ -2,36 +2,40 @@
 
 import { useMemo } from "react";
 import { useEditorContext } from "../context";
-import { useTimelineContext } from "./context";
 
 interface PlayheadProps {
 	trackGutter?: number;
+	secsPerPixel: number;
+	timelineWidth: number | null;
 }
 
-export function Playhead({ trackGutter = 64 }: PlayheadProps) {
+export function Playhead({
+	trackGutter = 64,
+	secsPerPixel,
+	timelineWidth,
+}: PlayheadProps) {
 	const { editorState } = useEditorContext();
-	const { secsPerPixel, timelineBounds } = useTimelineContext();
 	const { position } = editorState.timeline.transform;
 
 	const playheadX = useMemo(() => {
-		if (!timelineBounds?.width) return 0;
+		if (!timelineWidth) return 0;
 		const x = (editorState.playbackTime - position) / secsPerPixel;
-		return Math.max(0, Math.min(x, timelineBounds.width));
-	}, [editorState.playbackTime, position, secsPerPixel, timelineBounds?.width]);
+		return Math.max(0, Math.min(x, timelineWidth));
+	}, [editorState.playbackTime, position, secsPerPixel, timelineWidth]);
 
 	const previewX = useMemo(() => {
-		if (!timelineBounds?.width || editorState.playing) return null;
+		if (!timelineWidth || editorState.playing) return null;
 		const time = editorState.previewTime;
 		if (time === null || time === undefined || time <= 0) return null;
 		const x = (time - position) / secsPerPixel;
-		if (x < 0 || x > timelineBounds.width) return null;
+		if (x < 0 || x > timelineWidth) return null;
 		return x;
 	}, [
 		editorState.previewTime,
 		editorState.playing,
 		position,
 		secsPerPixel,
-		timelineBounds?.width,
+		timelineWidth,
 	]);
 
 	return (

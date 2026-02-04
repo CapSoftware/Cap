@@ -1,9 +1,13 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { ArrowLeft, Download, Redo2, Undo2 } from "lucide-react";
+import type { Video } from "@cap/web-domain";
+import { ArrowLeft, Redo2, Save, Undo2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { editTitle } from "@/actions/videos/edit-title";
 import { useEditorContext } from "./context";
 
 interface HeaderProps {
@@ -12,26 +16,128 @@ interface HeaderProps {
 
 export function Header({ videoId }: HeaderProps) {
 	const { video, history, project } = useEditorContext();
-	const [isExporting, setIsExporting] = useState(false);
+	const { refresh } = useRouter();
+	const [isSavingRender, setIsSavingRender] = useState(false);
+	const [saveStatus, setSaveStatus] = useState<
+		"IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR"
+	>("IDLE");
+	const [saveError, setSaveError] = useState<string | null>(null);
+	const [isEditingTitle, setIsEditingTitle] = useState(false);
+	const [title, setTitle] = useState(video.name);
+	const [isSavingTitle, setIsSavingTitle] = useState(false);
+	const [editingTitleWidth, setEditingTitleWidth] = useState<number | null>(
+		null,
+	);
+	const titleInputRef = useRef<HTMLInputElement | null>(null);
 
-	const handleExport = useCallback(async () => {
-		setIsExporting(true);
+	useEffect(() => {
+		if (!isEditingTitle) {
+			setTitle(video.name);
+		}
+	}, [video.name, isEditingTitle]);
+
+	useEffect(() => {
+		if (isEditingTitle) {
+			titleInputRef.current?.focus();
+			titleInputRef.current?.select();
+		}
+	}, [isEditingTitle]);
+
+	useEffect(() => {
+		if (!isEditingTitle) {
+			setEditingTitleWidth(null);
+		}
+	}, [isEditingTitle]);
+
+	const fetchSaveStatus = useCallback(async () => {
 		try {
-			const response = await fetch(`/api/editor/${videoId}/export`, {
+			const response = await fetch(`/api/editor/${videoId}/save`, {
+				method: "GET",
+				cache: "no-store",
+			});
+
+			if (!response.ok) {
+				return;
+			}
+
+			const data = (await response.json()) as {
+				status?: "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
+				renderState?: { error?: string | null };
+			};
+			if (data.status) {
+				setSaveStatus(data.status);
+			}
+			setSaveError(data.renderState?.error ?? null);
+		} catch {}
+	}, [videoId]);
+
+	useEffect(() => {
+		fetchSaveStatus();
+		const interval = window.setInterval(fetchSaveStatus, 3000);
+		return () => window.clearInterval(interval);
+	}, [fetchSaveStatus]);
+
+	const handleSave = useCallback(async () => {
+		setIsSavingRender(true);
+		setSaveError(null);
+		try {
+			const response = await fetch(`/api/editor/${videoId}/save`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ config: project }),
 			});
 
 			if (!response.ok) {
-				console.error("Export failed:", response.status, response.statusText);
+				const data = (await response.json().catch(() => ({}))) as {
+					error?: string;
+				};
+				setSaveStatus("ERROR");
+				setSaveError(data.error || "Failed to save changes");
+				return;
 			}
+
+			const data = (await response.json()) as {
+				status?: "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
+				renderState?: { error?: string | null };
+			};
+			setSaveStatus(data.status ?? "QUEUED");
+			setSaveError(data.renderState?.error ?? null);
 		} catch (error) {
-			console.error("Export request failed:", error);
+			setSaveStatus("ERROR");
+			setSaveError(error instanceof Error ? error.message : "Failed to save");
 		} finally {
-			setIsExporting(false);
+			setIsSavingRender(false);
 		}
 	}, [videoId, project]);
+
+	const isSaveProcessing =
+		isSavingRender || saveStatus === "QUEUED" || saveStatus === "PROCESSING";
+
+	const saveTitle = useCallback(async () => {
+		setIsEditingTitle(false);
+		const nextTitle = title.trim();
+
+		if (nextTitle === "" || nextTitle === video.name) {
+			setTitle(video.name);
+			return;
+		}
+
+		setIsSavingTitle(true);
+		try {
+			await editTitle(videoId as Video.VideoId, nextTitle);
+			setTitle(nextTitle);
+			refresh();
+		} catch (error) {
+			setTitle(video.name);
+			if (error instanceof Error) {
+				toast.error(error.message);
+			} else {
+				toast.error("Failed to update title - please try again.");
+			}
+		} finally {
+			setIsSavingTitle(false);
+		}
+	}, [title, video.name, videoId, refresh]);
 
 	return (
 		<header className="flex items-center justify-between h-12 sm:h-14 px-2 sm:px-4 border-b border-gray-4 bg-gray-2 shrink-0">
@@ -46,12 +152,65 @@ export function Header({ videoId }: HeaderProps) {
 
 				<div className="h-5 w-px bg-gray-4 hidden sm:block" />
 
-				<h1 className="text-sm font-medium text-gray-12 truncate max-w-[120px] sm:max-w-[200px] md:max-w-[300px]">
-					{video.name}
-				</h1>
+				<div className="min-w-0 max-w-[120px] sm:max-w-[200px] md:max-w-[300px]">
+					{isEditingTitle ? (
+						<input
+							ref={titleInputRef}
+							type="text"
+							value={title}
+							onChange={(event) => setTitle(event.target.value)}
+							onBlur={() => {
+								void saveTitle();
+							}}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									event.currentTarget.blur();
+								}
+								if (event.key === "Escape") {
+									event.preventDefault();
+									setTitle(video.name);
+									setIsEditingTitle(false);
+								}
+							}}
+							disabled={isSavingTitle}
+							style={
+								editingTitleWidth == null
+									? undefined
+									: { width: `${editingTitleWidth}px` }
+							}
+							className="appearance-none bg-transparent border-0 m-0 p-0 text-sm font-medium leading-5 text-gray-12 focus:outline-none min-w-0"
+						/>
+					) : (
+						<h1 className="truncate text-sm font-medium leading-5 text-gray-12">
+							<button
+								type="button"
+								onClick={(event) => {
+									setEditingTitleWidth(
+										event.currentTarget.getBoundingClientRect().width,
+									);
+									setIsEditingTitle(true);
+								}}
+								className="w-full truncate bg-transparent border-0 m-0 p-0 text-left text-sm font-medium leading-5 text-gray-12 cursor-text focus:outline-none"
+							>
+								{title}
+							</button>
+						</h1>
+					)}
+				</div>
 			</div>
 
 			<div className="flex items-center gap-1 sm:gap-2">
+				{isSaveProcessing && (
+					<span className="hidden lg:inline text-xs text-gray-10">
+						Processing saved changes...
+					</span>
+				)}
+				{saveStatus === "ERROR" && saveError && (
+					<span className="hidden lg:inline text-xs text-red-10 max-w-56 truncate">
+						{saveError}
+					</span>
+				)}
 				<div className="flex items-center gap-1 mr-1 sm:mr-2">
 					<button
 						type="button"
@@ -76,12 +235,14 @@ export function Header({ videoId }: HeaderProps) {
 				<Button
 					variant="primary"
 					size="sm"
-					onClick={handleExport}
-					disabled={isExporting}
-					spinner={isExporting}
+					onClick={handleSave}
+					disabled={isSaveProcessing}
+					spinner={isSaveProcessing}
 				>
-					<Download className="size-4 sm:mr-1.5" />
-					<span className="hidden sm:inline">Export</span>
+					<Save className="size-4 sm:mr-1.5" />
+					<span className="hidden sm:inline">
+						{isSaveProcessing ? "Saving..." : "Save"}
+					</span>
 				</Button>
 			</div>
 		</header>

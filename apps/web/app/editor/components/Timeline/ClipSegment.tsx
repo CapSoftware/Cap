@@ -54,13 +54,9 @@ export function ClipSegment({
 		[segment.start, segment.end, secsPerPixel],
 	);
 
-	const handleClick = useCallback(
-		(e: React.MouseEvent) => {
-			e.stopPropagation();
-			onSelect?.(index);
-		},
-		[index, onSelect],
-	);
+	const handleClick = useCallback(() => {
+		onSelect?.(index);
+	}, [index, onSelect]);
 
 	const handleDoubleClick = useCallback(
 		(e: React.MouseEvent) => {

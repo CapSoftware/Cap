@@ -66,7 +66,7 @@ export default async function EditorPage(props: EditorPageProps) {
 	const videoWidth = video.width ?? 1920;
 	const videoHeight = video.height ?? 1080;
 
-	const videoUrl = `/api/playlist?videoId=${video.id}&videoType=mp4`;
+	const videoUrl = `/api/playlist?videoId=${video.id}&videoType=mp4&variant=original`;
 
 	const initialConfig = await getProjectConfig(videoId, videoDuration);
 

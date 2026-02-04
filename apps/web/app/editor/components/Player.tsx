@@ -1,11 +1,22 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
+import { getPreviewLayoutStyles } from "../utils/preview-layout";
 import { useEditorContext } from "./context";
 import { PlayerControls } from "./PlayerControls";
 
 export function Player() {
-	const { videoUrl, videoRef, setEditorState } = useEditorContext();
+	const { videoUrl, videoRef, setEditorState, project, video } =
+		useEditorContext();
+
+	const previewLayout = useMemo(
+		() =>
+			getPreviewLayoutStyles(project, {
+				width: video.width,
+				height: video.height,
+			}),
+		[project, video.width, video.height],
+	);
 
 	const handleTimeUpdate = useCallback(() => {
 		if (videoRef.current) {
@@ -25,20 +36,40 @@ export function Player() {
 	return (
 		<div className="flex-1 flex flex-col bg-gray-1 min-h-0">
 			<div className="flex-1 flex items-center justify-center p-4 min-h-0">
-				<video
-					ref={videoRef}
-					src={videoUrl}
-					className="max-w-full max-h-full rounded-lg shadow-lg object-contain"
-					onTimeUpdate={handleTimeUpdate}
-					onEnded={handleEnded}
-					onPlay={() =>
-						setEditorState((state) => ({ ...state, playing: true }))
-					}
-					onPause={() =>
-						setEditorState((state) => ({ ...state, playing: false }))
-					}
-					preload="metadata"
-				/>
+				<div className="w-full h-full flex items-center justify-center">
+					<div
+						className={`relative overflow-hidden flex items-center justify-center ${previewLayout.frameClassName}`}
+						style={previewLayout.frameStyle}
+					>
+						<div
+							className="flex items-center justify-center"
+							style={previewLayout.contentStyle}
+						>
+							<video
+								ref={videoRef}
+								src={videoUrl}
+								className="w-full h-full object-contain"
+								style={previewLayout.videoStyle}
+								onTimeUpdate={handleTimeUpdate}
+								onEnded={handleEnded}
+								onPlay={() =>
+									setEditorState((state) => ({ ...state, playing: true }))
+								}
+								onPause={() =>
+									setEditorState((state) => ({ ...state, playing: false }))
+								}
+								preload="metadata"
+							>
+								<track
+									kind="captions"
+									srcLang="en"
+									label="English"
+									src="data:text/vtt;charset=utf-8,WEBVTT%0A"
+								/>
+							</video>
+						</div>
+					</div>
+				</div>
 			</div>
 			<PlayerControls />
 		</div>

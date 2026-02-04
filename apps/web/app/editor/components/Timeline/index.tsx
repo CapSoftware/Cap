@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { formatTime } from "../../utils/time";
 import type { WaveformData } from "../../utils/waveform";
 import { useEditorContext } from "../context";
@@ -29,23 +36,35 @@ export function Timeline() {
 	const selection = editorState.timeline.selection;
 
 	const timelineRef = useRef<HTMLDivElement>(null);
-	const timelineBoundsRef = useRef<{
+	const [timelineBounds, setTimelineBounds] = useState<{
 		width: number;
 		height: number;
 		left: number;
 		top: number;
 	} | null>(null);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const updateBounds = () => {
 			if (timelineRef.current) {
 				const rect = timelineRef.current.getBoundingClientRect();
-				timelineBoundsRef.current = {
-					width: rect.width,
-					height: rect.height,
-					left: rect.left,
-					top: rect.top,
-				};
+				setTimelineBounds((previous) => {
+					if (
+						previous &&
+						previous.width === rect.width &&
+						previous.height === rect.height &&
+						previous.left === rect.left &&
+						previous.top === rect.top
+					) {
+						return previous;
+					}
+
+					return {
+						width: rect.width,
+						height: rect.height,
+						left: rect.left,
+						top: rect.top,
+					};
+				});
 			}
 		};
 
@@ -63,21 +82,19 @@ export function Timeline() {
 	}, []);
 
 	const secsPerPixel = useMemo(() => {
-		const bounds = timelineBoundsRef.current;
-		if (!bounds?.width) return 1;
-		return transform.zoom / bounds.width;
-	}, [transform.zoom]);
+		if (!timelineBounds?.width) return 1;
+		return transform.zoom / timelineBounds.width;
+	}, [transform.zoom, timelineBounds?.width]);
 
 	const handleUpdatePlayhead = useCallback(
 		(e: React.MouseEvent) => {
-			const bounds = timelineBoundsRef.current;
-			if (!bounds) return;
-			const offsetX = e.clientX - bounds.left;
+			if (!timelineBounds) return;
+			const offsetX = e.clientX - timelineBounds.left;
 			const time = transform.position + secsPerPixel * offsetX;
 			const clampedTime = Math.max(0, Math.min(duration, time));
 			actions.seekTo(clampedTime);
 		},
-		[transform.position, secsPerPixel, duration, actions],
+		[timelineBounds, transform.position, secsPerPixel, duration, actions],
 	);
 
 	const handleSelectSegment = useCallback(
@@ -155,8 +172,7 @@ export function Timeline() {
 				);
 
 				const previewTime = editorState.previewTime ?? editorState.playbackTime;
-				const bounds = timelineBoundsRef.current;
-				const ratio = bounds?.width
+				const ratio = timelineBounds?.width
 					? (previewTime - transform.position) / transform.zoom
 					: 0.5;
 				const newPosition = Math.max(
@@ -198,6 +214,7 @@ export function Timeline() {
 		transform,
 		duration,
 		secsPerPixel,
+		timelineBounds?.width,
 		editorState.previewTime,
 		editorState.playbackTime,
 		setEditorState,
@@ -205,10 +222,9 @@ export function Timeline() {
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent) => {
-			const bounds = timelineBoundsRef.current;
-			if (!bounds || editorState.playing) return;
-			const offsetX = e.clientX - bounds.left;
-			if (offsetX < 0 || offsetX > bounds.width) {
+			if (!timelineBounds || editorState.playing) return;
+			const offsetX = e.clientX - timelineBounds.left;
+			if (offsetX < 0 || offsetX > timelineBounds.width) {
 				setEditorState((state) => ({ ...state, previewTime: 0 }));
 				return;
 			}
@@ -222,6 +238,7 @@ export function Timeline() {
 			transform.position,
 			secsPerPixel,
 			duration,
+			timelineBounds,
 			editorState.playing,
 			setEditorState,
 		],
@@ -258,7 +275,11 @@ export function Timeline() {
 				</div>
 
 				<div className="relative flex-1 min-h-0">
-					<Playhead trackGutter={TRACK_GUTTER} />
+					<Playhead
+						trackGutter={TRACK_GUTTER}
+						secsPerPixel={secsPerPixel}
+						timelineWidth={timelineBounds?.width ?? null}
+					/>
 
 					<div className="flex items-stretch gap-2 h-full">
 						<div
