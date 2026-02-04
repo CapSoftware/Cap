@@ -19,6 +19,7 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
+use yuv_converter::YuvConverterPipelines;
 
 mod composite_frame;
 mod coord;
@@ -337,6 +338,7 @@ pub async fn render_video_to_channel(
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
         &constants.queue,
+        constants.is_software_adapter,
         constants.is_software_adapter,
     );
 
@@ -1891,21 +1893,42 @@ pub struct RendererLayers {
 
 impl RendererLayers {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        Self::new_with_options(device, queue, false)
+        Self::new_with_options(device, queue, false, false)
     }
 
     pub fn new_with_options(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         prefer_cpu_conversion: bool,
+        is_software_adapter: bool,
     ) -> Self {
+        let yuv_pipelines = Arc::new(YuvConverterPipelines::new(device));
+        let composite_pipeline = Arc::new(
+            crate::composite_frame::CompositeVideoFramePipeline::new(device),
+        );
+
         Self {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
-            display: DisplayLayer::new_with_options(device, prefer_cpu_conversion),
+            display: DisplayLayer::new_with_shared_pipelines(
+                device,
+                yuv_pipelines.clone(),
+                prefer_cpu_conversion,
+                is_software_adapter,
+            ),
             cursor: CursorLayer::new(device),
-            camera: CameraLayer::new(device),
-            camera_only: CameraLayer::new(device),
+            camera: CameraLayer::new_with_all_shared_pipelines(
+                device,
+                yuv_pipelines.clone(),
+                composite_pipeline.clone(),
+                is_software_adapter,
+            ),
+            camera_only: CameraLayer::new_with_all_shared_pipelines(
+                device,
+                yuv_pipelines,
+                composite_pipeline,
+                is_software_adapter,
+            ),
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),

@@ -1,0 +1,107 @@
+{
+  "aspectRatio": null,
+  "background": {
+    "source": {
+      "type": "color",
+      "value": [
+        255,
+        255,
+        255
+      ],
+      "alpha": 255
+    },
+    "blur": 0.0,
+    "padding": 0.0,
+    "rounding": 0.0,
+    "roundingType": "squircle",
+    "inset": 0,
+    "crop": null,
+    "shadow": 73.6,
+    "advancedShadow": {
+      "size": 14.4,
+      "opacity": 68.1,
+      "blur": 3.8
+    },
+    "border": null
+  },
+  "camera": {
+    "hide": false,
+    "mirror": false,
+    "position": {
+      "x": "right",
+      "y": "bottom"
+    },
+    "size": 30.0,
+    "zoomSize": 60.0,
+    "rounding": 100.0,
+    "shadow": 62.5,
+    "advancedShadow": {
+      "size": 33.9,
+      "opacity": 44.2,
+      "blur": 10.5
+    },
+    "shape": "square",
+    "roundingType": "squircle",
+    "scaleDuringZoom": 0.7
+  },
+  "audio": {
+    "mute": false,
+    "improve": false,
+    "micVolumeDb": 0.0,
+    "micStereoMode": "stereo",
+    "systemVolumeDb": 0.0
+  },
+  "cursor": {
+    "hide": false,
+    "hideWhenIdle": false,
+    "hideWhenIdleDelay": 2.0,
+    "size": 150,
+    "type": "auto",
+    "animationStyle": "mellow",
+    "tension": 470.0,
+    "mass": 3.0,
+    "friction": 70.0,
+    "raw": false,
+    "motionBlur": 0.5,
+    "useSvg": true,
+    "rotationAmount": 0.5,
+    "baseRotation": 0.0,
+    "clickSpring": null,
+    "stopMovementInLastSeconds": null
+  },
+  "hotkeys": {
+    "show": false
+  },
+  "timeline": {
+    "segments": [
+      {
+        "recordingSegment": 0,
+        "timescale": 1.0,
+        "start": 0.0,
+        "end": 61.393467
+      }
+    ],
+    "zoomSegments": [],
+    "sceneSegments": [],
+    "maskSegments": [],
+    "textSegments": []
+  },
+  "captions": null,
+  "clips": [
+    {
+      "index": 0,
+      "offsets": {
+        "camera": 0.0,
+        "mic": 0.0,
+        "system_audio": 0.0
+      }
+    }
+  ],
+  "annotations": [],
+  "screenMotionBlur": 0.0,
+  "screenMovementSpring": {
+    "stiffness": 200.0,
+    "damping": 40.0,
+    "mass": 2.25
+  }
+}

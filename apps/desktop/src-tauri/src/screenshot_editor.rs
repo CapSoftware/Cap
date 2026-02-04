@@ -315,6 +315,7 @@ impl ScreenshotEditorInstances {
                         &constants.device,
                         &constants.queue,
                         constants.is_software_adapter,
+                        constants.is_software_adapter,
                     );
                     let shutdown_token = render_shutdown_token;
 

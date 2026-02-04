@@ -7,7 +7,10 @@ use std::{
 use windows::{
     Win32::{
         Media::MediaFoundation::{IMFMediaBuffer, MFSTARTUP_FULL, MFStartup},
-        System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
+        System::{
+            Com::{COINIT_MULTITHREADED, CoInitializeEx},
+            WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
+        },
     },
     core::Result,
 };
@@ -16,8 +19,36 @@ use windows::{
 pub const MF_VERSION: u32 = 131184;
 
 pub fn thread_init() {
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
     let _ = unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) };
+}
+
+pub fn thread_uninit() {
+    let _ = unsafe { windows::Win32::Media::MediaFoundation::MFShutdown() };
+    unsafe { windows::Win32::System::WinRT::RoUninitialize() };
+    unsafe { windows::Win32::System::Com::CoUninitialize() };
+}
+
+pub struct ThreadInitGuard;
+
+impl ThreadInitGuard {
+    pub fn new() -> Self {
+        thread_init();
+        Self
+    }
+}
+
+impl Drop for ThreadInitGuard {
+    fn drop(&mut self) {
+        thread_uninit();
+    }
+}
+
+impl Default for ThreadInitGuard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub trait IMFMediaBufferExt {

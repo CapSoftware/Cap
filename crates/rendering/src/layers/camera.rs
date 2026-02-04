@@ -21,11 +21,13 @@ pub struct CameraLayer {
 }
 
 impl CameraLayer {
-    pub fn new(device: &wgpu::Device) -> Self {
+    #[allow(dead_code)]
+    pub fn new(device: &wgpu::Device, is_software_adapter: bool) -> Self {
         Self::new_with_all_shared_pipelines(
             device,
             Arc::new(YuvConverterPipelines::new(device)),
             Arc::new(CompositeVideoFramePipeline::new(device)),
+            is_software_adapter,
         )
     }
 
@@ -33,6 +35,7 @@ impl CameraLayer {
         device: &wgpu::Device,
         yuv_pipelines: Arc<YuvConverterPipelines>,
         composite_pipeline: Arc<CompositeVideoFramePipeline>,
+        is_software_adapter: bool,
     ) -> Self {
         let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
@@ -52,7 +55,11 @@ impl CameraLayer {
         let bind_group_1 =
             Some(composite_pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
 
-        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines(device, yuv_pipelines);
+        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines(
+            device,
+            yuv_pipelines,
+            is_software_adapter,
+        );
 
         Self {
             frame_textures: [frame_texture_0, frame_texture_1],

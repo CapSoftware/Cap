@@ -1,0 +1,10 @@
+{
+  "platform": "Windows",
+  "pretty_name": "Cap 2026-02-03 at 23.16.08",
+  "sharing": null,
+  "segments": [],
+  "status": {
+    "status": "Failed",
+    "error": "No recoverable segments found"
+  }
+}

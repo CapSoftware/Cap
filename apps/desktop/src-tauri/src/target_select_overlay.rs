@@ -89,18 +89,23 @@ pub async fn open_target_select_overlays(
         .or_else(|| Display::get_containing_cursor().map(|d| d.id()))
         .unwrap_or_else(|| Display::primary().id());
 
-    for (id, window) in app.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay {
-            display_id: existing_id,
-        }) = CapWindowId::from_str(&id)
-            && !display_ids
-                .iter()
-                .any(|display_id| display_id == &existing_id)
-        {
-            let _ = window.hide();
-            state.destroy(&existing_id, app.global_shortcut());
+    let app_clone = app.clone();
+    let display_ids_clone = display_ids.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = app_clone.state::<WindowFocusManager>();
+        for (id, window) in app_clone.webview_windows() {
+            if let Ok(CapWindowId::TargetSelectOverlay {
+                display_id: existing_id,
+            }) = CapWindowId::from_str(&id)
+                && !display_ids_clone
+                    .iter()
+                    .any(|display_id| display_id == &existing_id)
+            {
+                let _ = window.hide();
+                state.destroy(&existing_id, app_clone.global_shortcut());
+            }
         }
-    }
+    });
 
     for display_id in &display_ids {
         let should_focus = display_id == &focus_display_id;
@@ -289,23 +294,28 @@ pub async fn update_camera_overlay_bounds(
 
 #[specta::specta]
 #[tauri::command]
-#[instrument(skip(app, state))]
+#[instrument(skip(app, _state))]
 pub async fn close_target_select_overlays(
     app: AppHandle,
-    state: tauri::State<'_, WindowFocusManager>,
+    _state: tauri::State<'_, WindowFocusManager>,
 ) -> Result<(), String> {
-    let mut closed_display_ids = Vec::new();
+    let app_clone = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let mut closed_display_ids: Vec<DisplayId> = Vec::new();
 
-    for (id, window) in app.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id) {
-            let _ = window.hide();
-            closed_display_ids.push(display_id);
+        for (id, window) in app_clone.webview_windows() {
+            if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id)
+            {
+                let _ = window.hide();
+                closed_display_ids.push(display_id);
+            }
         }
-    }
 
-    for display_id in closed_display_ids {
-        state.destroy(&display_id, app.global_shortcut());
-    }
+        let state = app_clone.state::<WindowFocusManager>();
+        for display_id in closed_display_ids {
+            state.destroy(&display_id, app_clone.global_shortcut());
+        }
+    });
 
     Ok(())
 }
@@ -418,28 +428,52 @@ impl WindowFocusManager {
                 let mut main_window_was_seen = false;
 
                 loop {
-                    let cap_main = CapWindowId::Main.get(app);
-                    let cap_settings = CapWindowId::Settings.get(app);
+                    let app_clone = app.clone();
+                    let window_clone = window.clone();
+                    let (tx, rx) = tokio::sync::oneshot::channel();
 
-                    let main_window_available = cap_main.is_some();
-                    let settings_window_available = cap_settings.is_some();
+                    let mut main_window_was_seen_inner = main_window_was_seen;
+                    let _ = app.run_on_main_thread(move || {
+                        let cap_main = CapWindowId::Main.get(&app_clone);
+                        let cap_settings = CapWindowId::Settings.get(&app_clone);
 
-                    if main_window_available || settings_window_available {
-                        main_window_was_seen = true;
-                    }
+                        let main_window_available = cap_main.is_some();
+                        let settings_window_available = cap_settings.is_some();
 
-                    if main_window_was_seen && !main_window_available && !settings_window_available
-                    {
-                        window.hide().ok();
-                        break;
-                    }
+                        let mut should_hide = false;
+                        let mut should_refocus = false;
 
-                    #[cfg(windows)]
-                    if let Some(cap_main) = cap_main {
-                        let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
-                            || window.is_focused().unwrap_or_default();
+                        if main_window_available || settings_window_available {
+                            main_window_was_seen_inner = true;
+                        }
 
-                        if !should_refocus {
+                        if main_window_was_seen_inner
+                            && !main_window_available
+                            && !settings_window_available
+                        {
+                            should_hide = true;
+                        }
+
+                        #[cfg(windows)]
+                        if let Some(cap_main) = cap_main {
+                            let is_focused = cap_main.is_focused().ok().unwrap_or_default()
+                                || window_clone.is_focused().unwrap_or_default();
+
+                            if !is_focused {
+                                should_refocus = true;
+                            }
+                        }
+
+                        let _ = tx.send((main_window_was_seen_inner, should_hide, should_refocus));
+                    });
+
+                    if let Ok((new_main_seen, should_hide, should_refocus)) = rx.await {
+                        main_window_was_seen = new_main_seen;
+                        if should_hide {
+                            window.hide().ok();
+                            break;
+                        }
+                        if should_refocus {
                             window.set_focus().ok();
                         }
                     }

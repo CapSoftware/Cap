@@ -367,6 +367,7 @@ pub async fn generate_export_preview(
         &render_constants.device,
         &render_constants.queue,
         render_constants.is_software_adapter,
+        render_constants.is_software_adapter,
     );
 
     let frame = frame_renderer
@@ -509,6 +510,7 @@ pub async fn generate_export_preview_fast(
     let mut layers = RendererLayers::new_with_options(
         &editor.render_constants.device,
         &editor.render_constants.queue,
+        editor.render_constants.is_software_adapter,
         editor.render_constants.is_software_adapter,
     );
 
