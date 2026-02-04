@@ -15,9 +15,46 @@ pub enum CaptureMode {
     Window(String),
 }
 
+/// Response types for deeplink queries
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RecordingStatusResponse {
+    pub is_recording: bool,
+    pub is_paused: bool,
+    pub mode: Option<RecordingMode>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct DisplayInfo {
+    pub name: String,
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WindowInfo {
+    pub name: String,
+    pub owner_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AudioDeviceInfo {
+    pub label: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CameraInfo {
+    pub name: String,
+    pub id: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
+    /// Start a new recording
     StartRecording {
         capture_mode: CaptureMode,
         camera: Option<DeviceOrModelID>,
@@ -25,13 +62,44 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: RecordingMode,
     },
+    /// Stop the current recording
     StopRecording,
+    /// Pause the current recording
+    PauseRecording,
+    /// Resume a paused recording
+    ResumeRecording,
+    /// Toggle pause state of the current recording
+    TogglePause,
+    /// Switch the microphone input
+    SetMicrophone {
+        label: Option<String>,
+    },
+    /// Switch the camera input
+    SetCamera {
+        device_id: Option<String>,
+    },
+    /// Take a screenshot
+    TakeScreenshot,
+    /// Open a project in the editor
     OpenEditor {
         project_path: PathBuf,
     },
+    /// Open the settings window
     OpenSettings {
         page: Option<String>,
     },
+    /// Show the main Cap window
+    ShowMainWindow,
+    /// List available displays
+    ListDisplays,
+    /// List available windows
+    ListWindows,
+    /// List available microphones
+    ListMicrophones,
+    /// List available cameras
+    ListCameras,
+    /// Get current recording status
+    GetRecordingStatus,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -146,11 +214,114 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePause => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, label).await
+            }
+            DeepLinkAction::SetCamera { device_id } => {
+                let state = app.state::<ArcLock<App>>();
+                let camera_id = device_id.map(|id| DeviceOrModelID::DeviceID(id));
+                crate::set_camera_input(app.clone(), state, camera_id, None).await
+            }
+            DeepLinkAction::TakeScreenshot => {
+                // Take a screenshot of the primary display
+                let displays = cap_recording::screen_capture::list_displays();
+                if let Some((display, _)) = displays.into_iter().next() {
+                    let target = ScreenCaptureTarget::Display { id: display.id };
+                    crate::recording::take_screenshot(app.clone(), target)
+                        .await
+                        .map(|_| ())
+                } else {
+                    Err("No display found for screenshot".to_string())
+                }
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::ShowMainWindow => {
+                crate::show_window(app.clone(), ShowCapWindow::Main { init_target_mode: None }).await
+            }
+            DeepLinkAction::ListDisplays => {
+                let displays: Vec<DisplayInfo> = cap_recording::screen_capture::list_displays()
+                    .into_iter()
+                    .map(|(d, _)| DisplayInfo {
+                        name: d.name.clone(),
+                        id: format!("{:?}", d.id),
+                    })
+                    .collect();
+                // Log for debugging; in practice this could be returned via a different mechanism
+                trace!("Available displays: {:?}", displays);
+                Ok(())
+            }
+            DeepLinkAction::ListWindows => {
+                let windows: Vec<WindowInfo> = cap_recording::screen_capture::list_windows()
+                    .into_iter()
+                    .map(|(w, _)| WindowInfo {
+                        name: w.name.clone(),
+                        owner_name: w.owner_name.clone(),
+                    })
+                    .collect();
+                trace!("Available windows: {:?}", windows);
+                Ok(())
+            }
+            DeepLinkAction::ListMicrophones => {
+                use cap_recording::feeds::microphone::MicrophoneFeed;
+                let mics: Vec<AudioDeviceInfo> = MicrophoneFeed::list()
+                    .keys()
+                    .map(|label| AudioDeviceInfo {
+                        label: label.clone(),
+                    })
+                    .collect();
+                trace!("Available microphones: {:?}", mics);
+                Ok(())
+            }
+            DeepLinkAction::ListCameras => {
+                let cameras: Vec<CameraInfo> = cap_camera::list_cameras()
+                    .map(|c| CameraInfo {
+                        name: c.display_name().to_string(),
+                        id: c.device_id().to_string(),
+                    })
+                    .collect();
+                trace!("Available cameras: {:?}", cameras);
+                Ok(())
+            }
+            DeepLinkAction::GetRecordingStatus => {
+                let state = app.state::<ArcLock<App>>();
+                let app_state = state.read().await;
+                let status = match &app_state.recording_state {
+                    crate::RecordingState::None => RecordingStatusResponse {
+                        is_recording: false,
+                        is_paused: false,
+                        mode: None,
+                    },
+                    crate::RecordingState::Pending { mode, .. } => RecordingStatusResponse {
+                        is_recording: false,
+                        is_paused: false,
+                        mode: Some(*mode),
+                    },
+                    crate::RecordingState::Active(recording) => {
+                        let is_paused = recording.is_paused().await.unwrap_or(false);
+                        RecordingStatusResponse {
+                            is_recording: true,
+                            is_paused,
+                            mode: Some(recording.mode()),
+                        }
+                    }
+                };
+                trace!("Recording status: {:?}", status);
+                Ok(())
             }
         }
     }
