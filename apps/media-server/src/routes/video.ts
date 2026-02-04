@@ -1,9 +1,11 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import {
 	downloadVideoToTemp,
 	generateThumbnail,
 	processVideo,
+	processVideoWithTimeline,
+	type TimelineSegment,
 	uploadFileToS3,
 	uploadToS3,
 } from "../lib/ffmpeg-video";
@@ -56,12 +58,53 @@ const processSchema = z.object({
 	remuxOnly: z.boolean().optional(),
 });
 
+const editorTimelineSegmentSchema = z.object({
+	start: z.number(),
+	end: z.number(),
+	timescale: z.number(),
+});
+
+const editorProcessSchema = z.object({
+	videoId: z.string(),
+	userId: z.string(),
+	videoUrl: z.string().url(),
+	outputPresignedUrl: z.string().url(),
+	webhookUrl: z.string().url().optional(),
+	projectConfig: z
+		.object({
+			timeline: z
+				.object({
+					segments: z.array(editorTimelineSegmentSchema),
+				})
+				.nullable()
+				.optional(),
+		})
+		.passthrough(),
+});
+
 function isBusyError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("Server is busy");
 }
 
 function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("timed out");
+}
+
+function getEditorTimelineSegments(
+	projectConfig: z.infer<typeof editorProcessSchema>["projectConfig"],
+	duration: number,
+): TimelineSegment[] {
+	const segments = projectConfig.timeline?.segments;
+
+	if (!segments || segments.length === 0) {
+		return [{ start: 0, end: duration, timescale: 1 }];
+	}
+
+	return segments.map((segment) => ({
+		start: segment.start,
+		end: segment.end,
+		timescale: segment.timescale,
+	}));
 }
 
 video.get("/status", (c) => {
@@ -269,6 +312,60 @@ video.post("/process", async (c) => {
 	});
 });
 
+video.post("/editor/process", async (c) => {
+	const body = await c.req.json();
+	const result = editorProcessSchema.safeParse(body);
+
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	if (!canAcceptNewVideoProcess()) {
+		return c.json(
+			{
+				error: "Server is busy",
+				code: "SERVER_BUSY",
+				details:
+					"Too many concurrent video processing jobs, please retry later",
+			},
+			503,
+		);
+	}
+
+	const { videoId, userId, videoUrl, outputPresignedUrl, webhookUrl } =
+		result.data;
+
+	const jobId = generateJobId();
+	const job = createJob(jobId, videoId, userId, webhookUrl);
+
+	incrementActiveVideoProcesses();
+
+	processEditorVideoAsync(
+		job.jobId,
+		videoUrl,
+		outputPresignedUrl,
+		result.data.projectConfig,
+	).catch((err) => {
+		console.error(
+			`[video/editor/process] Async processing error for job ${jobId}:`,
+			err,
+		);
+	});
+
+	return c.json({
+		jobId,
+		status: "queued",
+		message: "Editor render started",
+	});
+});
+
 async function processVideoAsync(
 	jobId: string,
 	videoUrl: string,
@@ -329,7 +426,10 @@ async function processVideoAsync(
 			(progress, message) => {
 				const scaledProgress = 10 + progress * 0.7;
 				updateJob(jobId, { progress: scaledProgress, message });
-				sendWebhook(getJob(jobId)!);
+				const currentJob = getJob(jobId);
+				if (currentJob) {
+					void sendWebhook(currentJob);
+				}
 			},
 			abortController.signal,
 		);
@@ -364,7 +464,10 @@ async function processVideoAsync(
 			progress: 100,
 			message: "Processing complete",
 		});
-		await sendWebhook(getJob(jobId)!);
+		const completedJob = getJob(jobId);
+		if (completedJob) {
+			await sendWebhook(completedJob);
+		}
 
 		await inputTempFile.cleanup();
 		await outputTempFile.cleanup();
@@ -393,8 +496,126 @@ async function processVideoAsync(
 	}
 }
 
-video.get("/process/:jobId/status", async (c) => {
-	const jobId = c.req.param("jobId");
+async function processEditorVideoAsync(
+	jobId: string,
+	videoUrl: string,
+	outputPresignedUrl: string,
+	projectConfig: z.infer<typeof editorProcessSchema>["projectConfig"],
+): Promise<void> {
+	const job = getJob(jobId);
+	if (!job) {
+		decrementActiveVideoProcesses();
+		return;
+	}
+
+	const abortController = new AbortController();
+	updateJob(jobId, { abortController });
+
+	try {
+		updateJob(jobId, {
+			phase: "downloading",
+			progress: 0,
+			message: "Downloading source video...",
+		});
+		await sendWebhook(job);
+
+		const inputTempFile = await downloadVideoToTemp(
+			videoUrl,
+			abortController.signal,
+		);
+		updateJob(jobId, { inputTempFile });
+
+		updateJob(jobId, {
+			phase: "probing",
+			progress: 5,
+			message: "Analyzing source video...",
+		});
+		await sendWebhook(job);
+
+		const sourceMetadata = await probeVideo(inputTempFile.path);
+		updateJob(jobId, { metadata: sourceMetadata });
+
+		updateJob(jobId, {
+			phase: "processing",
+			progress: 10,
+			message: "Rendering saved changes...",
+		});
+		await sendWebhook(job);
+
+		const timelineSegments = getEditorTimelineSegments(
+			projectConfig,
+			sourceMetadata.duration,
+		);
+
+		const outputTempFile = await processVideoWithTimeline(
+			inputTempFile.path,
+			sourceMetadata,
+			timelineSegments,
+			projectConfig,
+			{},
+			(progress, message) => {
+				const scaledProgress = 10 + progress * 0.8;
+				updateJob(jobId, { progress: scaledProgress, message });
+				const currentJob = getJob(jobId);
+				if (currentJob) {
+					void sendWebhook(currentJob);
+				}
+			},
+			abortController.signal,
+		);
+		updateJob(jobId, { outputTempFile });
+
+		const outputMetadata = await probeVideo(outputTempFile.path);
+		updateJob(jobId, { metadata: outputMetadata });
+
+		updateJob(jobId, {
+			phase: "uploading",
+			progress: 92,
+			message: "Uploading saved video...",
+		});
+		await sendWebhook(job);
+
+		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
+
+		updateJob(jobId, {
+			phase: "complete",
+			progress: 100,
+			message: "Saved changes are ready",
+			metadata: outputMetadata,
+		});
+		const completedJob = getJob(jobId);
+		if (completedJob) {
+			await sendWebhook(completedJob);
+		}
+
+		await inputTempFile.cleanup();
+		await outputTempFile.cleanup();
+
+		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+	} catch (err) {
+		console.error(`[video/editor/process] Error processing job ${jobId}:`, err);
+
+		const updatedJob = updateJob(jobId, {
+			phase: "error",
+			error: err instanceof Error ? err.message : String(err),
+			message: "Editor render failed",
+		});
+
+		if (updatedJob) {
+			await sendWebhook(updatedJob);
+		}
+
+		const currentJob = getJob(jobId);
+		if (currentJob) {
+			await currentJob.inputTempFile?.cleanup();
+			await currentJob.outputTempFile?.cleanup();
+		}
+	} finally {
+		decrementActiveVideoProcesses();
+	}
+}
+
+async function getJobStatusResponse(c: Context, jobId: string) {
 	const job = getJob(jobId);
 
 	if (!job) {
@@ -468,10 +689,9 @@ video.get("/process/:jobId/status", async (c) => {
 	}
 
 	return c.json(getJobProgress(job));
-});
+}
 
-video.post("/process/:jobId/cancel", async (c) => {
-	const jobId = c.req.param("jobId");
+async function cancelJobResponse(c: Context, jobId: string) {
 	const job = getJob(jobId);
 
 	if (!job) {
@@ -506,12 +726,35 @@ video.post("/process/:jobId/cancel", async (c) => {
 		message: "Processing cancelled by user",
 	});
 
-	await sendWebhook(getJob(jobId)!);
+	const updatedJob = getJob(jobId);
+	if (updatedJob) {
+		await sendWebhook(updatedJob);
+	}
 
 	return c.json({
 		success: true,
 		message: "Job cancelled",
 	});
+}
+
+video.get("/process/:jobId/status", async (c) => {
+	const jobId = c.req.param("jobId");
+	return getJobStatusResponse(c, jobId);
+});
+
+video.get("/editor/process/:jobId/status", async (c) => {
+	const jobId = c.req.param("jobId");
+	return getJobStatusResponse(c, jobId);
+});
+
+video.post("/process/:jobId/cancel", async (c) => {
+	const jobId = c.req.param("jobId");
+	return cancelJobResponse(c, jobId);
+});
+
+video.post("/editor/process/:jobId/cancel", async (c) => {
+	const jobId = c.req.param("jobId");
+	return cancelJobResponse(c, jobId);
 });
 
 video.post("/cleanup", async (c) => {

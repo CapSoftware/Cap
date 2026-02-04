@@ -15,12 +15,16 @@ describe("GET /", () => {
 				"/audio/status",
 				"/audio/check",
 				"/audio/extract",
+				"/audio/convert",
 				"/video/status",
 				"/video/probe",
 				"/video/thumbnail",
 				"/video/process",
 				"/video/process/:jobId/status",
 				"/video/process/:jobId/cancel",
+				"/video/editor/process",
+				"/video/editor/process/:jobId/status",
+				"/video/editor/process/:jobId/cancel",
 			],
 		});
 	});

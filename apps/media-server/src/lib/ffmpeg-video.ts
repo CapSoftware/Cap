@@ -17,6 +17,64 @@ export interface VideoProcessingOptions {
 	remuxOnly?: boolean;
 }
 
+export interface TimelineSegment {
+	start: number;
+	end: number;
+	timescale: number;
+}
+
+const ASPECT_RATIO_VALUES = {
+	wide: [16, 9],
+	vertical: [9, 16],
+	square: [1, 1],
+	classic: [4, 3],
+	tall: [3, 4],
+} as const;
+
+type EditorAspectRatio = keyof typeof ASPECT_RATIO_VALUES;
+
+interface EditorBackgroundColorSource {
+	type: "color";
+	value: [number, number, number];
+	alpha?: number;
+}
+
+interface EditorBackgroundGradientSource {
+	type: "gradient";
+	from: [number, number, number];
+	to: [number, number, number];
+	angle?: number;
+}
+
+interface EditorBackgroundImageSource {
+	type: "image" | "wallpaper";
+	path: string | null;
+}
+
+type EditorBackgroundSource =
+	| EditorBackgroundColorSource
+	| EditorBackgroundGradientSource
+	| EditorBackgroundImageSource;
+
+interface EditorBackgroundConfiguration {
+	source?: EditorBackgroundSource;
+	padding?: number;
+}
+
+interface EditorProjectConfiguration {
+	aspectRatio?: EditorAspectRatio | null;
+	background?: EditorBackgroundConfiguration | null;
+}
+
+interface EditorRenderLayout {
+	outputWidth: number;
+	outputHeight: number;
+	innerWidth: number;
+	innerHeight: number;
+	backgroundColor: string;
+	shouldApply: boolean;
+}
+
 const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	maxWidth: 1920,
 	maxHeight: 1080,
@@ -109,6 +167,135 @@ async function readStreamWithLimit(
 		.join("");
 }
 
+function clamp(value: number, min: number, max: number): number {
+	if (value < min) return min;
+	if (value > max) return max;
+	return value;
+}
+
+function toEven(value: number): number {
+	const rounded = Math.round(value);
+	const even = rounded % 2 === 0 ? rounded : rounded + 1;
+	return Math.max(2, even);
+}
+
+function isNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
+function isRgbTuple(value: unknown): value is [number, number, number] {
+	return (
+		Array.isArray(value) &&
+		value.length === 3 &&
+		value.every((item) => isNumber(item))
+	);
+}
+
+function normalizeChannel(value: number): number {
+	return Math.round(clamp(value, 0, 255));
+}
+
+function toHexColor([r, g, b]: [number, number, number]): string {
+	const channels = [
+		normalizeChannel(r),
+		normalizeChannel(g),
+		normalizeChannel(b),
+	];
+	const hex = channels
+		.map((channel) => channel.toString(16).padStart(2, "0"))
+		.join("");
+	return `0x${hex}`;
+}
+
+function getBackgroundColor(projectConfig: unknown): string {
+	if (!projectConfig || typeof projectConfig !== "object") {
+		return "0xffffff";
+	}
+
+	const config = projectConfig as EditorProjectConfiguration;
+	const source = config.background?.source;
+	if (!source || typeof source !== "object") {
+		return "0xffffff";
+	}
+
+	if (source.type === "color" && isRgbTuple(source.value)) {
+		return toHexColor(source.value);
+	}
+
+	if (source.type === "gradient" && isRgbTuple(source.from)) {
+		return toHexColor(source.from);
+	}
+
+	return "0xffffff";
+}
+
+function getTargetAspectRatio(
+	projectConfig: unknown,
+	fallbackRatio: number,
+): number {
+	if (!projectConfig || typeof projectConfig !== "object") {
+		return fallbackRatio;
+	}
+
+	const aspectRatio = (projectConfig as EditorProjectConfiguration).aspectRatio;
+	if (!aspectRatio || !(aspectRatio in ASPECT_RATIO_VALUES)) {
+		return fallbackRatio;
+	}
+
+	const [width, height] = ASPECT_RATIO_VALUES[aspectRatio];
+	return width / height;
+}
+
+function getPaddingRatio(projectConfig: unknown): number {
+	if (!projectConfig || typeof projectConfig !== "object") {
+		return 0;
+	}
+
+	const padding = (projectConfig as EditorProjectConfiguration).background
+		?.padding;
+	if (!isNumber(padding)) {
+		return 0;
+	}
+
+	return clamp(padding, 0, 45) / 100;
+}
+
+function getEditorRenderLayout(
+	metadata: VideoMetadata,
+	projectConfig: unknown,
+): EditorRenderLayout {
+	const sourceWidth = toEven(metadata.width);
+	const sourceHeight = toEven(metadata.height);
+	const sourceRatio = sourceWidth / sourceHeight;
+	const targetRatio = getTargetAspectRatio(projectConfig, sourceRatio);
+	const ratioDiff = Math.abs(targetRatio - sourceRatio);
+
+	let outputWidth = sourceWidth;
+	let outputHeight = sourceHeight;
+
+	if (ratioDiff > 0.0001) {
+		if (targetRatio > sourceRatio) {
+			outputWidth = toEven(sourceHeight * targetRatio);
+		} else {
+			outputHeight = toEven(sourceWidth / targetRatio);
+		}
+	}
+
+	const paddingRatio = getPaddingRatio(projectConfig);
+	const innerScale = Math.max(0.05, 1 - paddingRatio * 2);
+	const innerWidth = toEven(outputWidth * innerScale);
+	const innerHeight = toEven(outputHeight * innerScale);
+
+	return {
+		outputWidth,
+		outputHeight,
+		innerWidth,
+		innerHeight,
+		backgroundColor: getBackgroundColor(projectConfig),
+		shouldApply: ratioDiff > 0.0001 || paddingRatio > 0,
+	};
+}
+
 export type ProgressCallback = (progress: number, message: string) => void;
 
 function parseProgressFromStderr(
@@ -137,6 +324,111 @@ function needsVideoTranscode(
 function needsAudioTranscode(metadata: VideoMetadata): boolean {
 	if (!metadata.audioCodec) return false;
 	return metadata.audioCodec !== "aac";
+}
+
+function formatFfmpegNumber(value: number): string {
+	return Number(value.toFixed(6)).toString();
+}
+
+function normalizeTimelineSegments(
+	segments: ReadonlyArray<TimelineSegment>,
+	duration: number,
+): TimelineSegment[] {
+	const normalized = segments
+		.map((segment) => {
+			const start = Math.max(0, Math.min(duration, segment.start));
+			const end = Math.max(0, Math.min(duration, segment.end));
+			const timescale =
+				Number.isFinite(segment.timescale) && segment.timescale > 0
+					? segment.timescale
+					: 1;
+			return {
+				start: Math.min(start, end),
+				end: Math.max(start, end),
+				timescale,
+			};
+		})
+		.filter((segment) => segment.end - segment.start >= 0.01)
+		.sort((a, b) => a.start - b.start);
+
+	if (normalized.length > 0) {
+		return normalized;
+	}
+
+	return [
+		{
+			start: 0,
+			end: Math.max(duration, 0.1),
+			timescale: 1,
+		},
+	];
+}
+
+function buildAtempoFilter(timescale: number): string {
+	let remaining = timescale;
+	const filters: string[] = [];
+
+	while (remaining > 2) {
+		filters.push("atempo=2");
+		remaining /= 2;
+	}
+
+	while (remaining < 0.5) {
+		filters.push("atempo=0.5");
+		remaining *= 2;
+	}
+
+	if (Math.abs(remaining - 1) > 0.000001) {
+		filters.push(`atempo=${formatFfmpegNumber(remaining)}`);
+	}
+
+	return filters.join(",");
+}
+
+function buildTimelineFilterGraph(
+	segments: ReadonlyArray<TimelineSegment>,
+	hasAudio: boolean,
+): {
+	filterGraph: string;
+	totalDuration: number;
+} {
+	const filters: string[] = [];
+	const concatInputs: string[] = [];
+	let totalDuration = 0;
+
+	for (const [index, segment] of segments.entries()) {
+		const segmentDuration = (segment.end - segment.start) / segment.timescale;
+		totalDuration += segmentDuration;
+
+		filters.push(
+			`[0:v]trim=start=${formatFfmpegNumber(segment.start)}:end=${formatFfmpegNumber(segment.end)},setpts=(PTS-STARTPTS)/${formatFfmpegNumber(segment.timescale)}[v${index}]`,
+		);
+		concatInputs.push(`[v${index}]`);
+
+		if (hasAudio) {
+			const atempo = buildAtempoFilter(segment.timescale);
+			const audioFilters = atempo.length > 0 ? `,${atempo}` : "";
+			filters.push(
+				`[0:a]atrim=start=${formatFfmpegNumber(segment.start)}:end=${formatFfmpegNumber(segment.end)},asetpts=PTS-STARTPTS${audioFilters}[a${index}]`,
+			);
+			concatInputs.push(`[a${index}]`);
+		}
+	}
+
+	if (hasAudio) {
+		filters.push(
+			`${concatInputs.join("")}concat=n=${segments.length}:v=1:a=1[vout][aout]`,
+		);
+	} else {
+		filters.push(
+			`${concatInputs.join("")}concat=n=${segments.length}:v=1:a=0[vout]`,
+		);
+	}
+
+	return {
+		filterGraph: filters.join(";"),
+		totalDuration,
+	};
 }
 
 export async function downloadVideoToTemp(
@@ -315,6 +607,151 @@ export async function processVideo(
 					console.error(`[processVideo] FFmpeg stderr:\n${stderrOutput}`);
 					throw new Error(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
+					);
+				}
+
+				const outputFile = file(outputTempFile.path);
+				const outputSize = await outputFile.size;
+				if (outputSize === 0) {
+					throw new Error("FFmpeg produced empty output file");
+				}
+			})(),
+			PROCESS_TIMEOUT_MS,
+			() => killProcess(proc),
+		);
+
+		return outputTempFile;
+	} catch (err) {
+		await outputTempFile.cleanup();
+		throw err;
+	} finally {
+		if (abortCleanup) {
+			abortSignal?.removeEventListener("abort", abortCleanup);
+		}
+		killProcess(proc);
+	}
+}
+
+export async function processVideoWithTimeline(
+	inputPath: string,
+	metadata: VideoMetadata,
+	segments: ReadonlyArray<TimelineSegment>,
+	projectConfig: unknown,
+	options: VideoProcessingOptions = {},
+	onProgress?: ProgressCallback,
+	abortSignal?: AbortSignal,
+): Promise<TempFileHandle> {
+	const definedOptions = Object.fromEntries(
+		Object.entries(options).filter(([, v]) => v !== undefined),
+	) as VideoProcessingOptions;
+	const opts = { ...DEFAULT_OPTIONS, ...definedOptions };
+	const normalizedSegments = normalizeTimelineSegments(
+		segments,
+		metadata.duration,
+	);
+	const outputTempFile = await createTempFile(".mp4");
+	const hasAudio = Boolean(metadata.audioCodec);
+	const { filterGraph: timelineFilterGraph, totalDuration } =
+		buildTimelineFilterGraph(normalizedSegments, hasAudio);
+	const editorLayout = getEditorRenderLayout(metadata, projectConfig);
+	const videoOutputLabel = editorLayout.shouldApply ? "[vfinal]" : "[vout]";
+	const filterGraph = editorLayout.shouldApply
+		? `${timelineFilterGraph};color=c=${editorLayout.backgroundColor}:s=${editorLayout.outputWidth}x${editorLayout.outputHeight}[bg];[vout]scale=w=${editorLayout.innerWidth}:h=${editorLayout.innerHeight}:force_original_aspect_ratio=decrease[vscaled];[bg][vscaled]overlay=(W-w)/2:(H-h)/2[vfinal]`
+		: timelineFilterGraph;
+
+	const ffmpegArgs: string[] = [
+		"ffmpeg",
+		"-threads",
+		"2",
+		"-i",
+		inputPath,
+		"-filter_complex",
+		filterGraph,
+		"-map",
+		videoOutputLabel,
+		"-c:v",
+		"libx264",
+		"-preset",
+		opts.preset,
+		"-crf",
+		opts.crf.toString(),
+	];
+
+	if (hasAudio) {
+		ffmpegArgs.push("-map", "[aout]", "-c:a", "aac", "-b:a", opts.audioBitrate);
+	} else {
+		ffmpegArgs.push("-an");
+	}
+
+	ffmpegArgs.push(
+		"-movflags",
+		"+faststart",
+		"-progress",
+		"pipe:2",
+		"-y",
+		outputTempFile.path,
+	);
+
+	const proc = spawn({
+		cmd: ffmpegArgs,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	let abortCleanup: (() => void) | undefined;
+	if (abortSignal) {
+		abortCleanup = () => {
+			killProcess(proc);
+		};
+		abortSignal.addEventListener("abort", abortCleanup, { once: true });
+	}
+
+	const stderrLines: string[] = [];
+	const MAX_STDERR_LINES = 50;
+	const totalDurationUs = Math.max(totalDuration, 0.1) * 1_000_000;
+
+	try {
+		await withTimeout(
+			(async () => {
+				drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+				const stderrReader = (
+					proc.stderr as ReadableStream<Uint8Array>
+				).getReader();
+				const decoder = new TextDecoder();
+				let stderrBuffer = "";
+
+				try {
+					while (true) {
+						const { done, value } = await stderrReader.read();
+						if (done) break;
+
+						stderrBuffer += decoder.decode(value, { stream: true });
+
+						const lines = stderrBuffer.split("\n");
+						stderrBuffer = lines.pop() ?? "";
+
+						for (const line of lines) {
+							stderrLines.push(line);
+							if (stderrLines.length > MAX_STDERR_LINES) {
+								stderrLines.shift();
+							}
+							const progress = parseProgressFromStderr(line, totalDurationUs);
+							if (progress !== null && onProgress) {
+								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
+							}
+						}
+					}
+				} finally {
+					stderrReader.releaseLock();
+				}
+
+				const exitCode = await proc.exited;
+
+				if (exitCode !== 0) {
+					const stderrOutput = stderrLines.join("\n");
+					throw new Error(
+						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrOutput}`,
 					);
 				}
 

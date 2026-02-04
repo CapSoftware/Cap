@@ -450,6 +450,76 @@ describe("GET /video/process/:jobId/status", () => {
 	});
 });
 
+describe("POST /video/editor/process", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	test("returns 400 for missing required fields", async () => {
+		const response = await app.fetch(
+			new Request("http://localhost/video/editor/process", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns jobId when editor process starts successfully", async () => {
+		mock.module("../../lib/job-manager", () => ({
+			canAcceptNewVideoProcess: () => true,
+			getActiveVideoProcessCount: () => 0,
+			getAllJobs: () => [],
+			generateJobId: () => "editor-job-id",
+			createJob: () => ({
+				jobId: "editor-job-id",
+				videoId: "test-id",
+				userId: "user-id",
+				phase: "queued",
+				progress: 0,
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			}),
+			incrementActiveVideoProcesses: () => {},
+			decrementActiveVideoProcesses: () => {},
+			getJob: () => null,
+			updateJob: () => null,
+			deleteJob: () => {},
+			sendWebhook: async () => {},
+			getJobProgress: jobManager.getJobProgress,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			new Request("http://localhost/video/editor/process", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoId: "test-id",
+					userId: "user-id",
+					videoUrl: "https://example.com/video.mp4",
+					outputPresignedUrl: "https://s3.example.com/output",
+					projectConfig: {
+						timeline: {
+							segments: [{ start: 0, end: 2, timescale: 1 }],
+						},
+					},
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = await response.json();
+		expect(data.jobId).toBe("editor-job-id");
+		expect(data.status).toBe("queued");
+	});
+});
+
 describe("POST /video/process/:jobId/cancel", () => {
 	beforeEach(() => {
 		mock.restore();
