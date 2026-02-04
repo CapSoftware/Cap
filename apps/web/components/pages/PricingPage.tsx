@@ -76,7 +76,7 @@ export const PricingPage = () => {
 							variants={fadeIn}
 							custom={1}
 						>
-							Early Adopter Pricing
+							Simple, Flexible Pricing
 						</motion.h1>
 						<motion.p
 							className="mx-auto mt-3 max-w-[800px]"

@@ -285,9 +285,9 @@ export function HLSVideoPlayer({
 			setupTracks();
 		};
 
-		// Monitor for track changes and ensure they stay hidden
 		const handleTrackChange = () => {
 			ensureTracksHidden();
+			setupTracks();
 		};
 
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -489,9 +489,9 @@ export function HLSVideoPlayer({
 						<MediaPlayerSeekForward />
 						<MediaPlayerVolume
 							expandable
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							enhancedAudioMuted={enhancedAudioMuted}
-							setEnhancedAudioMuted={setEnhancedAudioMuted}
+							// enhancedAudioEnabled={enhancedAudioEnabled}
+							// enhancedAudioMuted={enhancedAudioMuted}
+							// setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
 						<MediaPlayerTime />
 					</div>
@@ -502,15 +502,12 @@ export function HLSVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerEnhancedAudio
+						{/* <MediaPlayerEnhancedAudio
 							enhancedAudioStatus={enhancedAudioStatus}
 							enhancedAudioEnabled={enhancedAudioEnabled}
 							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/>
+						/> */}
 						<MediaPlayerSettings
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
 							captionLanguage={captionLanguage}
 							onCaptionLanguageChange={onCaptionLanguageChange}
 							availableCaptions={availableCaptions}
@@ -522,7 +519,7 @@ export function HLSVideoPlayer({
 					</div>
 				</div>
 			</MediaPlayerControls>
-			{enhancedAudioUrl && (
+			{/* {enhancedAudioUrl && (
 				<>
 					<audio
 						ref={enhancedAudioRef}
@@ -539,7 +536,7 @@ export function HLSVideoPlayer({
 						enhancedAudioMuted={enhancedAudioMuted}
 					/>
 				</>
-			)}
+			)} */}
 		</MediaPlayer>
 	);
 }

@@ -1,7 +1,9 @@
 use crate::window_exclusion::WindowExclusion;
+use scap_targets::DisplayId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::collections::BTreeMap;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use tracing::{error, instrument};
@@ -70,11 +72,13 @@ pub fn default_excluded_windows() -> Vec<WindowExclusion> {
 // When adding fields here, #[serde(default)] defines the value to use for existing configurations,
 // and `Default::default` defines the value to use for new configurations.
 // Things that affect the user experience should only be enabled by default for new configurations.
-#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowPosition {
     pub x: f64,
     pub y: f64,
+    #[serde(default)]
+    pub display_id: Option<DisplayId>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
@@ -139,6 +143,8 @@ pub struct GeneralSettingsStore {
     pub main_window_position: Option<WindowPosition>,
     #[serde(default)]
     pub camera_window_position: Option<WindowPosition>,
+    #[serde(default)]
+    pub camera_window_positions_by_monitor_name: BTreeMap<String, WindowPosition>,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -207,6 +213,7 @@ impl Default for GeneralSettingsStore {
             editor_preview_quality: EditorPreviewQuality::Half,
             main_window_position: None,
             camera_window_position: None,
+            camera_window_positions_by_monitor_name: BTreeMap::new(),
         }
     }
 }

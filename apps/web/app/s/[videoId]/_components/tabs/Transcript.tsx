@@ -18,7 +18,7 @@ import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
-} from "@/actions/videos/translate-transcript";
+} from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
@@ -533,7 +533,62 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	return (
 		<div className="flex flex-col h-full">
 			<div className="p-4 border-b border-gray-3">
-				<div className="flex gap-2 justify-between items-center">
+				<div className="flex flex-col gap-3">
+					<div className="flex gap-2 justify-end">
+						<Button
+							onClick={copyTranscriptToClipboard}
+							disabled={isCopying || transcriptData.length === 0}
+							variant="white"
+							size="xs"
+							spinner={isCopying}
+						>
+							{!copyPressed ? (
+								<Copy className="mr-1 w-3 h-3" />
+							) : (
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									className="mr-1 w-3 h-3 svgpathanimation"
+								>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							)}
+							{copyPressed ? "Copied" : "Copy Transcript"}
+						</Button>
+						<Button
+							onClick={downloadTranscriptFile}
+							disabled={transcriptData.length === 0}
+							variant="white"
+							size="xs"
+						>
+							{!downloadPressed ? (
+								<Download className="mr-1 w-3 h-3" />
+							) : (
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									className="mr-1 w-3 h-3 svgpathanimation"
+								>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							)}
+							{downloadPressed ? "Downloaded" : "Download"}
+						</Button>
+					</div>
 					<div className="relative" ref={languageMenuRef}>
 						<button
 							onClick={() => setShowLanguageMenu(!showLanguageMenu)}
@@ -589,61 +644,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								))}
 							</div>
 						)}
-					</div>
-					<div className="flex gap-2">
-						<Button
-							onClick={copyTranscriptToClipboard}
-							disabled={isCopying || transcriptData.length === 0}
-							variant="white"
-							size="xs"
-							spinner={isCopying}
-						>
-							{!copyPressed ? (
-								<Copy className="mr-1 w-3 h-3" />
-							) : (
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									width="12"
-									height="12"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="mr-1 w-3 h-3 svgpathanimation"
-								>
-									<path d="M20 6 9 17l-5-5" />
-								</svg>
-							)}
-							{copyPressed ? "Copied" : "Copy Transcript"}
-						</Button>
-						<Button
-							onClick={downloadTranscriptFile}
-							disabled={transcriptData.length === 0}
-							variant="white"
-							size="xs"
-						>
-							{!downloadPressed ? (
-								<Download className="mr-1 w-3 h-3" />
-							) : (
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									width="12"
-									height="12"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="mr-1 w-3 h-3 svgpathanimation"
-								>
-									<path d="M20 6 9 17l-5-5" />
-								</svg>
-							)}
-							{downloadPressed ? "Downloaded" : "Download"}
-						</Button>
 					</div>
 				</div>
 			</div>

@@ -63,22 +63,22 @@ export async function transcribeVideoWorkflow(
 		};
 	}
 
-	const enhancementConfigured = isAudioEnhancementConfigured();
-	const shouldEnhanceAudio = videoData.isOwnerPro && enhancementConfigured;
+	// const enhancementConfigured = isAudioEnhancementConfigured();
+	// const shouldEnhanceAudio = videoData.isOwnerPro && enhancementConfigured;
 
-	console.log(
-		`[transcribe] Audio enhancement check: isOwnerPro=${videoData.isOwnerPro}, configured=${enhancementConfigured}, shouldEnhance=${shouldEnhanceAudio}`,
-	);
+	// console.log(
+	// 	`[transcribe] Audio enhancement check: isOwnerPro=${videoData.isOwnerPro}, configured=${enhancementConfigured}, shouldEnhance=${shouldEnhanceAudio}`,
+	// );
 
-	if (shouldEnhanceAudio) {
-		await markEnhancedAudioProcessing(videoId);
-	}
+	// if (shouldEnhanceAudio) {
+	// 	await markEnhancedAudioProcessing(videoId);
+	// }
 
 	const [transcription] = await Promise.all([
 		transcribeWithDeepgram(audioUrl),
-		shouldEnhanceAudio
-			? enhanceAndSaveAudio(videoId, userId, audioUrl, videoData.bucketId)
-			: Promise.resolve(),
+		// shouldEnhanceAudio
+		// 	? enhanceAndSaveAudio(videoId, userId, audioUrl, videoData.bucketId)
+		// 	: Promise.resolve(),
 	]);
 
 	await saveTranscription(videoId, userId, videoData.bucketId, transcription);

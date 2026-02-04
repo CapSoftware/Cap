@@ -429,9 +429,9 @@ export function CapVideoPlayer({
 			setupTracks();
 		};
 
-		// Monitor for track changes and ensure they stay hidden
 		const handleTrackChange = () => {
 			ensureTracksHidden();
+			setupTracks();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
@@ -771,9 +771,9 @@ export function CapVideoPlayer({
 						<MediaPlayerSeekForward />
 						<MediaPlayerVolume
 							expandable
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							enhancedAudioMuted={enhancedAudioMuted}
-							setEnhancedAudioMuted={setEnhancedAudioMuted}
+							// enhancedAudioEnabled={enhancedAudioEnabled}
+							// enhancedAudioMuted={enhancedAudioMuted}
+							// setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
 						<MediaPlayerTime />
 					</div>
@@ -784,15 +784,12 @@ export function CapVideoPlayer({
 								toggleCaptions={toggleCaptions}
 							/>
 						)}
-						<MediaPlayerEnhancedAudio
+						{/* <MediaPlayerEnhancedAudio
 							enhancedAudioStatus={enhancedAudioStatus}
 							enhancedAudioEnabled={enhancedAudioEnabled}
 							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/>
+						/> */}
 						<MediaPlayerSettings
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
 							captionLanguage={captionLanguage}
 							onCaptionLanguageChange={onCaptionLanguageChange}
 							availableCaptions={availableCaptions}
@@ -804,7 +801,7 @@ export function CapVideoPlayer({
 					</div>
 				</div>
 			</MediaPlayerControls>
-			{enhancedAudioUrl && (
+			{/* {enhancedAudioUrl && (
 				<>
 					<audio
 						ref={enhancedAudioRef}
@@ -821,7 +818,7 @@ export function CapVideoPlayer({
 						enhancedAudioMuted={enhancedAudioMuted}
 					/>
 				</>
-			)}
+			)} */}
 		</MediaPlayer>
 	);
 }

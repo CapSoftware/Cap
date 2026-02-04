@@ -1611,7 +1611,7 @@
 				},
 				"uploaded": {
 					"name": "uploaded",
-					"type": "int",
+					"type": "bigint unsigned",
 					"primaryKey": false,
 					"notNull": true,
 					"autoincrement": false,
@@ -1619,7 +1619,7 @@
 				},
 				"total": {
 					"name": "total",
-					"type": "int",
+					"type": "bigint unsigned",
 					"primaryKey": false,
 					"notNull": true,
 					"autoincrement": false,

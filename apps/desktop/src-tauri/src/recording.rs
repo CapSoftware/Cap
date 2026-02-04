@@ -986,12 +986,13 @@ pub async fn start_recording(
                         );
                         continue;
                     }
-                    Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {
+                    Err(err) if mic_restart_attempts < 3 && mic_actor_not_running(&err) => {
                         mic_restart_attempts += 1;
                         state
                             .restart_mic_feed()
                             .await
                             .map_err(|restart_err| anyhow!(restart_err))?;
+                        tokio::time::sleep(Duration::from_millis(250)).await;
                     }
                     Err(err) => return Err(err),
                 }
