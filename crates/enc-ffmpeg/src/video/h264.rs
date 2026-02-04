@@ -590,7 +590,7 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset) -> bool {
     false
 }
 
-fn get_default_encoder_priority(config: &VideoInfo) -> &'static [&'static str] {
+fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
         &[
