@@ -616,6 +616,12 @@ pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
     }
 }
 
+fn set_tray_template_icon(tray: &tauri::tray::TrayIcon, icon: Image<'_>) {
+    let _ = tray.set_icon(Some(icon));
+    #[cfg(target_os = "macos")]
+    let _ = tray.set_icon_as_template(true);
+}
+
 pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
     if cfg!(target_os = "windows") {
         return;
@@ -626,7 +632,7 @@ pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
     };
 
     if let Ok(icon) = Image::from_bytes(get_mode_icon(mode)) {
-        let _ = tray.set_icon(Some(icon));
+        set_tray_template_icon(&tray, icon);
     }
 }
 
@@ -660,6 +666,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let _ = TrayIconBuilder::with_id("tray")
         .icon(initial_icon)
+        .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event({
@@ -886,7 +893,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             };
 
             if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png")) {
-                let _ = tray.set_icon(Some(icon));
+                set_tray_template_icon(&tray, icon);
             }
         }
     });
@@ -907,7 +914,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
             let current_mode = get_current_mode(&app_handle);
             if let Ok(icon) = Image::from_bytes(get_mode_icon(current_mode)) {
-                let _ = tray.set_icon(Some(icon));
+                set_tray_template_icon(&tray, icon);
             }
         }
     });
