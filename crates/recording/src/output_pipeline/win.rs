@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, Ordering},
         mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel},
     },
     time::Duration,
@@ -122,7 +122,7 @@ impl Muxer for WindowsMuxer {
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
-        _pause_flag: Arc<AtomicBool>,
+        pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
@@ -159,6 +159,7 @@ impl Muxer for WindowsMuxer {
 
         {
             let output = output.clone();
+            let pause_flag = pause_flag.clone();
 
             tasks.spawn_thread("windows-encoder", move || {
                 cap_mediafoundation_utils::thread_init();
@@ -323,7 +324,10 @@ impl Muxer for WindowsMuxer {
                                         return Ok(None);
                                     }
                                     Err(RecvTimeoutError::Timeout) => {
-                                        if let Some(last_ts) = last_timestamp {
+                                        if pause_flag.load(Ordering::Acquire) {
+                                            last_timestamp = None;
+                                            continue;
+                                        } else if let Some(last_ts) = last_timestamp {
                                             let new_ts = last_ts.saturating_add(frame_interval);
                                             last_timestamp = Some(new_ts);
                                             frames_reused += 1;
@@ -422,6 +426,10 @@ impl Muxer for WindowsMuxer {
                                 }
                                 Ok(None) => break,
                                 Err(RecvTimeoutError::Timeout) => {
+                                    if pause_flag.load(Ordering::Acquire) {
+                                        last_timestamp = None;
+                                        continue;
+                                    }
                                     if let Some(last_ts) = last_timestamp {
                                         let new_ts = last_ts.saturating_add(frame_interval);
                                         last_timestamp = Some(new_ts);
@@ -629,7 +637,7 @@ impl Muxer for WindowsCameraMuxer {
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
-        _pause_flag: Arc<AtomicBool>,
+        pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
@@ -686,6 +694,7 @@ impl Muxer for WindowsCameraMuxer {
 
         {
             let output = output.clone();
+            let pause_flag = pause_flag.clone();
             let encoder_preferences = config.encoder_preferences;
 
             tasks.spawn_thread("windows-camera-encoder", move || {
@@ -837,7 +846,10 @@ impl Muxer for WindowsCameraMuxer {
                                         return Ok(None);
                                     }
                                     Err(RecvTimeoutError::Timeout) => {
-                                        if let Some(last_ts) = last_timestamp {
+                                        if pause_flag.load(Ordering::Acquire) {
+                                            last_timestamp = None;
+                                            continue;
+                                        } else if let Some(last_ts) = last_timestamp {
                                             let new_ts = last_ts.saturating_add(frame_interval);
                                             last_timestamp = Some(new_ts);
                                         }
@@ -929,6 +941,10 @@ impl Muxer for WindowsCameraMuxer {
                                 }
                                 Ok(None) => break,
                                 Err(RecvTimeoutError::Timeout) => {
+                                    if pause_flag.load(Ordering::Acquire) {
+                                        last_timestamp = None;
+                                        continue;
+                                    }
                                     if let Some(last_ts) = last_timestamp {
                                         let new_ts = last_ts.saturating_add(frame_interval);
                                         last_timestamp = Some(new_ts);

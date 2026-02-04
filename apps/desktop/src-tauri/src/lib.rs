@@ -442,73 +442,90 @@ impl App {
 #[specta::specta]
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    let (mic_feed, studio_handle, current_label) = {
-        let app = state.read().await;
+    let desired_label = label;
+
+    let (mic_feed, studio_handle, previous_label) = {
+        let mut app = state.write().await;
+        if desired_label == app.selected_mic_label {
+            return Ok(());
+        }
+
         let handle = match app.current_recording() {
             Some(InProgressRecording::Studio { handle, .. }) => Some(handle.clone()),
             _ => None,
         };
-        (app.mic_feed.clone(), handle, app.selected_mic_label.clone())
+
+        let previous_label = app.selected_mic_label.clone();
+        app.selected_mic_label = desired_label.clone();
+
+        (app.mic_feed.clone(), handle, previous_label)
     };
 
-    if label == current_label {
-        return Ok(());
-    }
-
-    if let Some(handle) = &studio_handle {
-        handle.set_mic_feed(None).await.map_err(|e| e.to_string())?;
-    }
-
-    let desired_label = label.clone();
-
-    match desired_label.as_ref() {
-        None => {
-            mic_feed
-                .ask(microphone::RemoveInput)
-                .await
-                .map_err(|e| e.to_string())?;
+    let apply_result = async {
+        if let Some(handle) = &studio_handle {
+            handle.set_mic_feed(None).await.map_err(|e| e.to_string())?;
         }
-        Some(label) => {
-            mic_feed
-                .ask(feeds::microphone::SetInput {
-                    label: label.clone(),
-                })
-                .await
-                .map_err(|e| e.to_string())?
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
 
-    if let Some(handle) = studio_handle
-        && desired_label.is_some()
-    {
-        let mic_lock = mic_feed
-            .ask(microphone::Lock)
-            .await
-            .map_err(|e| e.to_string())?;
-        handle
-            .set_mic_feed(Some(Arc::new(mic_lock)))
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-
-    {
-        let mut app = state.write().await;
-        app.selected_mic_label = desired_label;
-        let cleared = app
-            .disconnected_inputs
-            .remove(&RecordingInputKind::Microphone);
-
-        if cleared {
-            let _ = RecordingEvent::InputRestored {
-                input: RecordingInputKind::Microphone,
+        match desired_label.as_ref() {
+            None => {
+                mic_feed
+                    .ask(microphone::RemoveInput)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
-            .emit(&app.handle);
+            Some(label) => {
+                mic_feed
+                    .ask(feeds::microphone::SetInput {
+                        label: label.clone(),
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        if let Some(handle) = studio_handle
+            && desired_label.is_some()
+        {
+            let mic_lock = mic_feed
+                .ask(microphone::Lock)
+                .await
+                .map_err(|e| e.to_string())?;
+            handle
+                .set_mic_feed(Some(Arc::new(mic_lock)))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match apply_result {
+        Ok(()) => {
+            let mut app = state.write().await;
+            let cleared = app
+                .disconnected_inputs
+                .remove(&RecordingInputKind::Microphone);
+
+            if cleared {
+                let _ = RecordingEvent::InputRestored {
+                    input: RecordingInputKind::Microphone,
+                }
+                .emit(&app.handle);
+            }
+
+            Ok(())
+        }
+        Err(err) => {
+            let mut app = state.write().await;
+            if app.selected_mic_label == desired_label {
+                app.selected_mic_label = previous_label;
+            }
+            Err(err)
         }
     }
-
-    Ok(())
 }
 
 #[tauri::command]
