@@ -32,6 +32,15 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SetCamera {
+        device_id: Option<DeviceOrModelID>,
+    },
+    SetMicrophone {
+        label: Option<String>,
+    },
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -151,6 +160,23 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetCamera { device_id } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state.clone(), device_id, None).await
+            }
+            DeepLinkAction::SetMicrophone { label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state.clone(), label).await
             }
         }
     }
