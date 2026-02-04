@@ -3050,7 +3050,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             trace!("Single instance invoked with args {args:?}");
 
-            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
+            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions.
             let Some(cap_file) = args
                 .iter()
                 .find(|arg| arg.ends_with(".cap"))
