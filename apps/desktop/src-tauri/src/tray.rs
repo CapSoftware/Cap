@@ -616,11 +616,16 @@ pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn set_tray_template_icon(tray: &tauri::tray::TrayIcon, icon: Image<'_>) {
     if tray.set_icon(Some(icon)).is_ok() {
-        #[cfg(target_os = "macos")]
         let _ = tray.set_icon_as_template(true);
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_tray_template_icon(tray: &tauri::tray::TrayIcon, icon: Image<'_>) {
+    let _ = tray.set_icon(Some(icon));
 }
 
 pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
