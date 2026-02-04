@@ -34,6 +34,7 @@ pnpm-lock.yaml
 .output
 .vinxi
 native-deps*
+apps/desktop/recordings-from-AppData-Roaming/
 apps/storybook/storybook-static
 .tinyb
 
