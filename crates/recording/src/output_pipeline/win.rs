@@ -313,7 +313,7 @@ impl Muxer for WindowsMuxer {
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
-                            || {
+                            || loop {
                                 match video_rx.recv_timeout(frame_interval) {
                                     Ok(Some((frame, timestamp))) => {
                                         last_texture = Some(frame.texture().clone());
@@ -346,7 +346,7 @@ impl Muxer for WindowsMuxer {
                                     }
                                 }
 
-                                if let (Some(texture), Some(ts)) = (&last_texture, last_timestamp) {
+                                break if let (Some(texture), Some(ts)) = (&last_texture, last_timestamp) {
                                     let normalized_ts = normalize_timestamp(ts, &mut first_timestamp);
                                     frame_count += 1;
                                     let frame_time = duration_to_timespan(normalized_ts);
@@ -364,7 +364,7 @@ impl Muxer for WindowsMuxer {
                                         }
                                         Ok(None) | Err(_) => Ok(None),
                                     }
-                                }
+                                };
                             },
                             |output_sample| {
                                 let Ok(mut output) = output.lock() else {
@@ -835,7 +835,7 @@ impl Muxer for WindowsCameraMuxer {
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
-                            || {
+                            || loop {
                                 match video_rx.recv_timeout(frame_interval) {
                                     Ok(Some((frame, timestamp))) => {
                                         last_frame = Some(frame);
@@ -860,7 +860,7 @@ impl Muxer for WindowsCameraMuxer {
                                     }
                                 }
 
-                                if let (Some(frame), Some(ts)) = (&last_frame, last_timestamp) {
+                                break if let (Some(frame), Some(ts)) = (&last_frame, last_timestamp) {
                                     let normalized_ts = normalize_camera_timestamp(ts, &mut first_timestamp);
                                     frame_count += 1;
                                     if frame_count.is_multiple_of(30) {
@@ -883,7 +883,7 @@ impl Muxer for WindowsCameraMuxer {
                                         }
                                         Ok(None) | Err(_) => Ok(None),
                                     }
-                                }
+                                };
                             },
                             |output_sample| {
                                 let mut output = output.lock().unwrap();
