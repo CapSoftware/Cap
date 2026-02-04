@@ -1,5 +1,4 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -50,6 +49,9 @@ export const ShareVideo = forwardRef<
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
+		savedRenderProcessing?: boolean;
+		savedRenderMessage?: string;
+		hasSavedRender?: boolean;
 	}
 >(
 	(
@@ -61,6 +63,9 @@ export const ShareVideo = forwardRef<
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
+			savedRenderProcessing,
+			savedRenderMessage,
+			hasSavedRender,
 		},
 		ref,
 	) => {
@@ -180,7 +185,9 @@ export const ShareVideo = forwardRef<
 		}, [chapters]);
 
 		const isMp4Source =
-			data.source.type === "desktopMP4" || data.source.type === "webMP4";
+			data.source.type === "desktopMP4" ||
+			data.source.type === "webMP4" ||
+			hasSavedRender === true;
 		let videoSrc: string;
 		let enableCrossOrigin = false;
 
@@ -212,6 +219,11 @@ export const ShareVideo = forwardRef<
 		return (
 			<>
 				<div className="relative h-full">
+					{savedRenderProcessing && (
+						<div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 bg-black/70 text-white text-xs rounded-full">
+							{savedRenderMessage || "Processing your saved changes..."}
+						</div>
+					)}
 					{isMp4Source ? (
 						<CapVideoPlayer
 							videoId={data.id}

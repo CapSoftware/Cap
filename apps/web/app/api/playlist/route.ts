@@ -22,6 +22,7 @@ export const dynamic = "force-dynamic";
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
 	videoType: Schema.Literal("video", "audio", "master", "mp4"),
+	variant: Schema.OptionFromUndefinedOr(Schema.Literal("auto", "original")),
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
 	fileType: Schema.OptionFromUndefinedOr(Schema.String),
 });
@@ -84,12 +85,35 @@ const getPlaylistResponse = (
 		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
 		const isMp4Source =
 			video.source.type === "desktopMP4" || video.source.type === "webMP4";
+		const metadata =
+			Option.isSome(video.metadata) && typeof video.metadata.value === "object"
+				? (video.metadata.value as Record<string, unknown>)
+				: {};
+		const maybeEditorSavedRender =
+			metadata["editorSavedRender"] &&
+			typeof metadata["editorSavedRender"] === "object"
+				? (metadata["editorSavedRender"] as {
+						status?: string;
+						outputKey?: unknown;
+					})
+				: null;
+		const useOriginalVariant =
+			Option.isSome(urlParams.variant) &&
+			urlParams.variant.value === "original";
+		const savedRenderOutputKey =
+			!useOriginalVariant &&
+			maybeEditorSavedRender?.status === "COMPLETE" &&
+			typeof maybeEditorSavedRender.outputKey === "string" &&
+			maybeEditorSavedRender.outputKey.length > 0
+				? maybeEditorSavedRender.outputKey
+				: null;
+		const mp4Key =
+			savedRenderOutputKey ?? `${video.ownerId}/${video.id}/result.mp4`;
 
 		if (Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
-			if (isMp4Source || urlParams.videoType === "mp4")
-				redirect = `${video.ownerId}/${video.id}/result.mp4`;
+			if (isMp4Source || urlParams.videoType === "mp4") redirect = mp4Key;
 			else if (video.source.type === "MediaConvert")
 				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
 
@@ -161,12 +185,10 @@ const getPlaylistResponse = (
 				return HttpServerResponse.text(playlist, {
 					headers: CACHE_CONTROL_HEADERS,
 				});
-			} else if (isMp4Source) {
-				yield* Effect.log(
-					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
-				);
+			} else if (isMp4Source || urlParams.videoType === "mp4") {
+				yield* Effect.log(`Returning path ${mp4Key}`);
 				return yield* s3
-					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
+					.getSignedObjectUrl(mp4Key)
 					.pipe(Effect.map(HttpServerResponse.redirect));
 			}
 

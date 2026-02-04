@@ -1,6 +1,7 @@
 "use client";
 
 import type { comments as commentsSchema } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -18,6 +19,7 @@ import {
 	type VideoStatusResult,
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { getEditorSavedRenderState } from "@/lib/editor-saved-render";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
@@ -168,6 +170,12 @@ const useVideoStatus = (
 			chapters?: { title: string; start: number }[] | null;
 			aiGenerationStatus?: AiGenerationStatus | null;
 		} | null;
+		editorSavedRender?: {
+			status?: "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR" | null;
+			progress?: number | null;
+			message?: string | null;
+			error?: string | null;
+		} | null;
 	},
 ) => {
 	return useQuery({
@@ -193,6 +201,13 @@ const useVideoStatus = (
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
+					editorSavedRenderStatus:
+						initialData.editorSavedRender?.status || null,
+					editorSavedRenderProgress:
+						initialData.editorSavedRender?.progress || null,
+					editorSavedRenderMessage:
+						initialData.editorSavedRender?.message || null,
+					editorSavedRenderError: initialData.editorSavedRender?.error || null,
 				}
 			: undefined,
 		refetchInterval: (query) => {
@@ -200,6 +215,13 @@ const useVideoStatus = (
 			if (!data) return 2000;
 
 			const shouldContinuePolling = () => {
+				if (
+					data.editorSavedRenderStatus === "QUEUED" ||
+					data.editorSavedRenderStatus === "PROCESSING"
+				) {
+					return true;
+				}
+
 				if (
 					!data.transcriptionStatus ||
 					data.transcriptionStatus === "PROCESSING"
@@ -261,6 +283,8 @@ export const Share = ({
 	videoSettings,
 	viewerId,
 }: ShareProps) => {
+	const metadata = (data.metadata as VideoMetadata | null) || null;
+	const initialEditorSavedRender = getEditorSavedRenderState(metadata);
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
 		: data.createdAt;
@@ -281,6 +305,14 @@ export const Share = ({
 	const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
 		transcriptionStatus: data.transcriptionStatus,
 		aiData: initialAiData,
+		editorSavedRender: initialEditorSavedRender
+			? {
+					status: initialEditorSavedRender.status,
+					progress: initialEditorSavedRender.progress,
+					message: initialEditorSavedRender.message,
+					error: initialEditorSavedRender.error,
+				}
+			: null,
 	});
 
 	const transcriptionStatus =
@@ -348,6 +380,16 @@ export const Share = ({
 	};
 
 	const aiLoading = shouldShowLoading();
+	const editorSavedRenderStatus =
+		videoStatus?.editorSavedRenderStatus ||
+		initialEditorSavedRender?.status ||
+		null;
+	const editorSavedRenderMessage =
+		videoStatus?.editorSavedRenderMessage || initialEditorSavedRender?.message;
+	const isSavedRenderProcessing =
+		editorSavedRenderStatus === "QUEUED" ||
+		editorSavedRenderStatus === "PROCESSING";
+	const hasSavedRender = editorSavedRenderStatus === "COMPLETE";
 
 	const handleSeek = useCallback((time: number) => {
 		const v =
@@ -439,6 +481,12 @@ export const Share = ({
 									areReactionStampsDisabled={areReactionStampsDisabled}
 									chapters={aiData?.chapters || []}
 									aiGenerationStatus={aiData?.aiGenerationStatus}
+									savedRenderProcessing={isSavedRenderProcessing}
+									savedRenderMessage={
+										editorSavedRenderMessage ||
+										"Processing your saved changes..."
+									}
+									hasSavedRender={hasSavedRender}
 									ref={playerRef}
 								/>
 							</div>
