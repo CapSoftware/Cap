@@ -617,9 +617,10 @@ pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
 }
 
 fn set_tray_template_icon(tray: &tauri::tray::TrayIcon, icon: Image<'_>) {
-    let _ = tray.set_icon(Some(icon));
-    #[cfg(target_os = "macos")]
-    let _ = tray.set_icon_as_template(true);
+    if tray.set_icon(Some(icon)).is_ok() {
+        #[cfg(target_os = "macos")]
+        let _ = tray.set_icon_as_template(true);
+    }
 }
 
 pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
@@ -666,7 +667,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let _ = TrayIconBuilder::with_id("tray")
         .icon(initial_icon)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event({
