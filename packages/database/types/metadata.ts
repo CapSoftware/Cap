@@ -34,6 +34,16 @@ export interface VideoMetadata {
 		| "ERROR"
 		| "SKIPPED";
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+	editorSavedRender?: {
+		status: "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
+		sourceKey: string;
+		outputKey: string | null;
+		progress: number;
+		message: string | null;
+		error: string | null;
+		requestedAt: string;
+		updatedAt: string;
+	};
 }
 
 /**
