@@ -8,6 +8,7 @@ import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
+import { getEditorSavedRenderState } from "@/lib/editor-saved-render";
 import { startAiGeneration } from "@/lib/generate-ai";
 import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "../../lib/transcribe";
@@ -27,12 +28,18 @@ type AiGenerationStatus =
 	| "ERROR"
 	| "SKIPPED";
 
+type EditorSavedRenderStatus = "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
+
 export interface VideoStatusResult {
 	transcriptionStatus: TranscriptionStatus | null;
 	aiGenerationStatus: AiGenerationStatus | null;
 	aiTitle: string | null;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
+	editorSavedRenderStatus: EditorSavedRenderStatus | null;
+	editorSavedRenderProgress: number | null;
+	editorSavedRenderMessage: string | null;
+	editorSavedRenderError: string | null;
 	error?: string;
 }
 
@@ -55,6 +62,7 @@ export async function getVideoStatus(
 	if (!video) throw new Error("Video not found");
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
+	const editorSavedRender = getEditorSavedRenderState(metadata);
 
 	if (!video.transcriptionStatus && serverEnv().DEEPGRAM_API_KEY) {
 		console.log(
@@ -75,6 +83,10 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
+				editorSavedRenderStatus: editorSavedRender?.status ?? null,
+				editorSavedRenderProgress: editorSavedRender?.progress ?? null,
+				editorSavedRenderMessage: editorSavedRender?.message ?? null,
+				editorSavedRenderError: editorSavedRender?.error ?? null,
 			};
 		} catch (error) {
 			console.error(
@@ -88,6 +100,10 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
+				editorSavedRenderStatus: editorSavedRender?.status ?? null,
+				editorSavedRenderProgress: editorSavedRender?.progress ?? null,
+				editorSavedRenderMessage: editorSavedRender?.message ?? null,
+				editorSavedRenderError: editorSavedRender?.error ?? null,
 				error: "Failed to start transcription",
 			};
 		}
@@ -101,6 +117,10 @@ export async function getVideoStatus(
 			aiTitle: metadata.aiTitle || null,
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
+			editorSavedRenderStatus: editorSavedRender?.status ?? null,
+			editorSavedRenderProgress: editorSavedRender?.progress ?? null,
+			editorSavedRenderMessage: editorSavedRender?.message ?? null,
+			editorSavedRenderError: editorSavedRender?.error ?? null,
 			error: "Transcription failed",
 		};
 	}
@@ -142,6 +162,10 @@ export async function getVideoStatus(
 					aiTitle: metadata.aiTitle || null,
 					summary: metadata.summary || null,
 					chapters: metadata.chapters || null,
+					editorSavedRenderStatus: editorSavedRender?.status ?? null,
+					editorSavedRenderProgress: editorSavedRender?.progress ?? null,
+					editorSavedRenderMessage: editorSavedRender?.message ?? null,
+					editorSavedRenderError: editorSavedRender?.error ?? null,
 				};
 			}
 		} catch (error) {
@@ -160,5 +184,9 @@ export async function getVideoStatus(
 		aiTitle: metadata.aiTitle || null,
 		summary: metadata.summary || null,
 		chapters: metadata.chapters || null,
+		editorSavedRenderStatus: editorSavedRender?.status ?? null,
+		editorSavedRenderProgress: editorSavedRender?.progress ?? null,
+		editorSavedRenderMessage: editorSavedRender?.message ?? null,
+		editorSavedRenderError: editorSavedRender?.error ?? null,
 	};
 }
