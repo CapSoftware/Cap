@@ -83,6 +83,75 @@ Portions of this software are licensed as follows:
 - All third party components are licensed under the original license provided by the owner of the applicable component
 - All other content not mentioned above is available under the AGPLv3 license as defined in [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE)
   
+# Deeplinks
+
+Cap Desktop supports deeplinks via the `cap-desktop://` scheme (Tauri deep link). Actions are passed as a JSON payload in the `value` query param.
+
+**Format**
+
+```
+cap-desktop://action?value={JSON}
+```
+
+**Examples**
+
+Start recording (screen capture):
+```
+cap-desktop://action?value={"start_recording":{"capture_mode":{"screen":"Built-in Display"},"camera":null,"mic_label":null,"capture_system_audio":true,"mode":"instant"}}
+```
+
+Start recording (window capture):
+```
+cap-desktop://action?value={"start_recording":{"capture_mode":{"window":"My App"},"camera":null,"mic_label":null,"capture_system_audio":true,"mode":"instant"}}
+```
+
+Stop recording (URL-encoded JSON string):
+```
+cap-desktop://action?value=%22stop_recording%22
+```
+
+Pause recording (URL-encoded JSON string):
+```
+cap-desktop://action?value=%22pause_recording%22
+```
+
+Resume recording (URL-encoded JSON string):
+```
+cap-desktop://action?value=%22resume_recording%22
+```
+
+Switch microphone (by label):
+```
+cap-desktop://action?value={"set_microphone":{"mic_label":"MacBook Pro Microphone"}}
+```
+
+Switch camera (by device id or model id):
+```
+cap-desktop://action?value={"set_camera":{"camera":{"DeviceID":"<device-id>"}}}
+```
+
+Open settings:
+```
+cap-desktop://action?value={"open_settings":{"page":"general"}}
+```
+
+Open editor (macOS file deeplink):
+```
+file:///path/to/project
+```
+
+## Raycast Extension
+A minimal Raycast extension is available under `apps/raycast`. It triggers the same deeplinks above.
+
+Commands included:
+- Start Recording (Screen)
+- Start Recording (Window)
+- Stop Recording
+- Pause Recording
+- Resume Recording
+- Switch Microphone (by label)
+- Switch Camera (by device id or model id)
+
 # Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This guide is a work in progress, and is updated regularly as the app matures.

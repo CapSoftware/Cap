@@ -1,0 +1,53 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap Desktop via deeplinks",
+  "icon": "icon.png",
+  "author": "CapSoftware",
+  "categories": ["Productivity"],
+  "commands": [
+    {
+      "name": "start-recording-screen",
+      "title": "Start Recording (Screen)",
+      "description": "Start a screen recording in Cap",
+      "mode": "view"
+    },
+    {
+      "name": "start-recording-window",
+      "title": "Start Recording (Window)",
+      "description": "Start a window recording in Cap",
+      "mode": "view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "description": "Switch microphone by label",
+      "mode": "view"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch camera by device id or model id",
+      "mode": "view"
+    }
+  ]
+}
