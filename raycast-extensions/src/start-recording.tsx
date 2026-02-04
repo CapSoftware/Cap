@@ -12,7 +12,7 @@ export default async function Command(){
   }
 
   const action = {
-    open_settings: { page: "recording" }
+    start_recording: { page: "recording" }
   };
 
   const deeplink = `cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`;

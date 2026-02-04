@@ -32,7 +32,6 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
-    // add Pause Recording, Resume Recording, Toggle Pause Recording, Take Screenshot, SetCamera, & SetMicrophone
     PauseRecording,
     ResumeRecording, 
     TogglePauseRecording,
@@ -165,29 +164,23 @@ impl DeepLinkAction {
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
-            // Pause Recording
             DeepLinkAction::PauseRecording => {
                 crate::recording::pause_recording(app.clone(), app.state()).await
             }
-            // Resume Recording
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
             }
-            // Toggle Pause Recording
             DeepLinkAction::TogglePauseRecording => {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
-            // Take Screenshot
             DeepLinkAction::TakeScreenshot{ target } => {
                 crate::recording::take_screenshot(app.clone(), app.state(), target).await.map(|_| ())
             }
-            // Set Camera
             DeepLinkAction::SetCamera{ camera_id } => {
                 let camera_id = camera_id.ok_or_else(|| "camera_id is required".to_string())?;
                 let state = app.state::<ArcLock<App>>();
                 crate::set_camera_input(app.clone(), state.clone(), Some(camera_id), None).await
             }
-            // Set Microphone
             DeepLinkAction::SetMicrophone{ mic_label } => {
                 let label = mic_label.ok_or_else(|| "mic_label is required".to_string())?;
                 let state = app.state::<ArcLock<App>>();
