@@ -3,6 +3,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { Editor } from "../components/Editor";
 import type { ProjectConfiguration } from "../types/project-config";
@@ -17,12 +18,13 @@ async function getProjectConfig(
 	duration: number,
 ): Promise<ProjectConfiguration> {
 	try {
+		const cookieStore = await cookies();
 		const response = await fetch(
 			`${process.env.NEXT_PUBLIC_WEB_URL || ""}/api/editor/${videoId}`,
 			{
 				cache: "no-store",
 				headers: {
-					Cookie: (await import("next/headers")).cookies().toString(),
+					Cookie: cookieStore.toString(),
 				},
 			},
 		);

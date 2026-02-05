@@ -8,10 +8,49 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { editTitle } from "@/actions/videos/edit-title";
+import type { ProjectConfiguration } from "../types/project-config";
+import { resolveBackgroundAssetPath } from "../utils/backgrounds";
 import { useEditorContext } from "./context";
 
 interface HeaderProps {
 	videoId: string;
+}
+
+function normalizeProjectForSave(
+	project: ProjectConfiguration,
+): ProjectConfiguration {
+	const source = project.background.source;
+	if (
+		(source.type !== "wallpaper" && source.type !== "image") ||
+		!source.path
+	) {
+		return project;
+	}
+
+	const normalizedPath = resolveBackgroundAssetPath(source.path);
+	if (
+		normalizedPath.startsWith("http://") ||
+		normalizedPath.startsWith("https://") ||
+		normalizedPath.startsWith("data:")
+	) {
+		return project;
+	}
+
+	const absolutePath =
+		typeof window === "undefined"
+			? normalizedPath
+			: new URL(normalizedPath, window.location.origin).toString();
+
+	return {
+		...project,
+		background: {
+			...project.background,
+			source: {
+				...source,
+				path: absolutePath,
+			},
+		},
+	};
 }
 
 export function Header({ videoId }: HeaderProps) {
@@ -77,41 +116,60 @@ export function Header({ videoId }: HeaderProps) {
 		return () => window.clearInterval(interval);
 	}, [fetchSaveStatus]);
 
-	const handleSave = useCallback(async () => {
-		setIsSavingRender(true);
-		setSaveError(null);
-		try {
-			const response = await fetch(`/api/editor/${videoId}/save`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ config: project }),
-			});
+	const handleSave = useCallback(
+		async (force = false) => {
+			setIsSavingRender(true);
+			setSaveError(null);
+			const configToSave = normalizeProjectForSave(project);
+			try {
+				const response = await fetch(`/api/editor/${videoId}/save`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ config: configToSave, force }),
+				});
 
-			if (!response.ok) {
-				const data = (await response.json().catch(() => ({}))) as {
-					error?: string;
+				if (!response.ok) {
+					const data = (await response.json().catch(() => ({}))) as {
+						error?: string;
+					};
+					setSaveStatus("ERROR");
+					setSaveError(data.error || "Failed to save changes");
+					return;
+				}
+
+				const data = (await response.json()) as {
+					status?: "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
+					renderState?: { error?: string | null };
 				};
+				setSaveStatus(data.status ?? "QUEUED");
+				setSaveError(data.renderState?.error ?? null);
+			} catch (error) {
 				setSaveStatus("ERROR");
-				setSaveError(data.error || "Failed to save changes");
+				setSaveError(error instanceof Error ? error.message : "Failed to save");
+			} finally {
+				setIsSavingRender(false);
+			}
+		},
+		[videoId, project],
+	);
+
+	const isRenderBusy = saveStatus === "QUEUED" || saveStatus === "PROCESSING";
+	const isSaveProcessing = isSavingRender || isRenderBusy;
+
+	const handleSaveClick = useCallback(() => {
+		if (isRenderBusy) {
+			const shouldRetry = window.confirm(
+				"A previous save is still marked as processing. Start a new save anyway?",
+			);
+			if (!shouldRetry) {
 				return;
 			}
-
-			const data = (await response.json()) as {
-				status?: "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
-				renderState?: { error?: string | null };
-			};
-			setSaveStatus(data.status ?? "QUEUED");
-			setSaveError(data.renderState?.error ?? null);
-		} catch (error) {
-			setSaveStatus("ERROR");
-			setSaveError(error instanceof Error ? error.message : "Failed to save");
-		} finally {
-			setIsSavingRender(false);
+			void handleSave(true);
+			return;
 		}
-	}, [videoId, project]);
 
-	const isSaveProcessing =
-		isSavingRender || saveStatus === "QUEUED" || saveStatus === "PROCESSING";
+		void handleSave();
+	}, [handleSave, isRenderBusy]);
 
 	const saveTitle = useCallback(async () => {
 		setIsEditingTitle(false);
@@ -235,13 +293,17 @@ export function Header({ videoId }: HeaderProps) {
 				<Button
 					variant="primary"
 					size="sm"
-					onClick={handleSave}
-					disabled={isSaveProcessing}
-					spinner={isSaveProcessing}
+					onClick={handleSaveClick}
+					disabled={isSavingRender}
+					spinner={isSavingRender}
 				>
 					<Save className="size-4 sm:mr-1.5" />
 					<span className="hidden sm:inline">
-						{isSaveProcessing ? "Saving..." : "Save"}
+						{isSavingRender
+							? "Saving..."
+							: isRenderBusy
+								? "Retry Save"
+								: "Save"}
 					</span>
 				</Button>
 			</div>

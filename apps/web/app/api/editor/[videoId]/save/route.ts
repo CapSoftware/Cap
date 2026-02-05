@@ -26,6 +26,7 @@ interface RouteContext {
 
 const SaveBody = Schema.Struct({
 	config: ProjectConfiguration,
+	force: Schema.optional(Schema.Boolean),
 });
 
 export async function GET(_request: NextRequest, context: RouteContext) {
@@ -88,6 +89,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 	}
 
 	const config = parsedBody.right.config as ProjectConfigurationType;
+	const force = parsedBody.right.force === true;
 
 	const [video] = await db()
 		.select({
@@ -114,12 +116,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
 		currentRenderState?.status === "PROCESSING" &&
 		currentRenderState.message === "Preparing saved changes...";
 
-	if (
-		currentRenderState &&
-		(currentRenderState.status === "QUEUED" ||
-			currentRenderState.status === "PROCESSING") &&
-		!isLegacyStuckPreparingState
-	) {
+	const isRenderBusy =
+		currentRenderState?.status === "QUEUED" ||
+		currentRenderState?.status === "PROCESSING";
+
+	if (isRenderBusy && !isLegacyStuckPreparingState && !force) {
 		return Response.json(
 			{
 				success: true,
