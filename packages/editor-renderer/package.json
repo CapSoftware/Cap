@@ -12,6 +12,7 @@
 		"@cap/editor-render-spec": "workspace:*"
 	},
 	"devDependencies": {
+		"@napi-rs/canvas": "^0.1.70",
 		"tsconfig": "workspace:*",
 		"typescript": "^5.8.3",
 		"vitest": "^3.2.0"

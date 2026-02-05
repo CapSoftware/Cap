@@ -1,3 +1,5 @@
+export type { VideoFrameSource } from "./compose-frame";
+export { composeFrame } from "./compose-frame";
 export { drawBackground } from "./draw-background";
 export { clipMask } from "./draw-mask";
 export { drawShadow } from "./draw-shadow";

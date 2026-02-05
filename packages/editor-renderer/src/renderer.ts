@@ -1,7 +1,5 @@
 import type { RenderSpec } from "@cap/editor-render-spec";
-import { drawBackground } from "./draw-background";
-import { clipMask } from "./draw-mask";
-import { drawShadow } from "./draw-shadow";
+import { composeFrame } from "./compose-frame";
 import { ImageCache } from "./image-cache";
 import type { RendererOptions, RendererState } from "./types";
 
@@ -77,7 +75,7 @@ export class EditorRenderer {
 	render(): void {
 		if (this.destroyed) return;
 
-		const { ctx } = this;
+		const ctx = this.ctx;
 		const { spec, video, scaleFactor } = this.state;
 
 		ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -85,39 +83,27 @@ export class EditorRenderer {
 		ctx.save();
 		ctx.setTransform(scaleFactor, 0, 0, scaleFactor, 0, 0);
 
-		drawBackground(ctx, spec, this.imageCache, this.resolveBackgroundPath);
+		const videoFrame =
+			video && video.readyState >= 2
+				? { source: video, width: video.videoWidth, height: video.videoHeight }
+				: null;
 
-		drawShadow(ctx, spec.innerRect, spec.maskSpec, spec.shadowSpec);
-
-		ctx.save();
-		clipMask(ctx, spec.innerRect, spec.maskSpec);
-
-		if (video && video.readyState >= 2) {
-			const { x, y, width, height } = spec.innerRect;
-			const videoRatio = video.videoWidth / video.videoHeight;
-			const rectRatio = width / height;
-
-			let drawW: number;
-			let drawH: number;
-			let drawX: number;
-			let drawY: number;
-
-			if (videoRatio > rectRatio) {
-				drawW = width;
-				drawH = width / videoRatio;
-				drawX = x;
-				drawY = y + (height - drawH) / 2;
-			} else {
-				drawH = height;
-				drawW = height * videoRatio;
-				drawX = x + (width - drawW) / 2;
-				drawY = y;
+		const bg = spec.backgroundSpec;
+		let bgImage: unknown = null;
+		let bgImageWidth = 0;
+		let bgImageHeight = 0;
+		if ((bg.type === "image" || bg.type === "wallpaper") && bg.path) {
+			const resolved = this.resolveBackgroundPath(bg.path);
+			const img = this.imageCache.get(resolved);
+			if (img) {
+				bgImage = img;
+				bgImageWidth = img.naturalWidth;
+				bgImageHeight = img.naturalHeight;
 			}
-
-			ctx.drawImage(video, drawX, drawY, drawW, drawH);
 		}
 
-		ctx.restore();
+		composeFrame(ctx, spec, videoFrame, bgImage, bgImageWidth, bgImageHeight);
+
 		ctx.restore();
 	}
 
