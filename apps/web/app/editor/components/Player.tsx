@@ -122,9 +122,11 @@ export function Player() {
 			};
 			vid.requestVideoFrameCallback(onFrame);
 		} else {
+			let lastTime = -1;
 			const onFrame = () => {
 				if (!running) return;
-				if (videoEl.readyState >= 2) {
+				if (videoEl.readyState >= 2 && videoEl.currentTime !== lastTime) {
+					lastTime = videoEl.currentTime;
 					rendererRef.current?.render();
 				}
 				rafIdRef.current = requestAnimationFrame(onFrame);
@@ -186,6 +188,7 @@ export function Player() {
 							setEditorState((state) => ({ ...state, playing: false }))
 						}
 						preload="auto"
+						playsInline
 					>
 						<track
 							kind="captions"
