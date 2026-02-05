@@ -6,11 +6,9 @@ import {
 	downloadVideoToTemp,
 	generateThumbnail,
 	processVideo,
-	processVideoWithTimeline,
 	type TimelineSegment,
 	uploadFileToS3,
 	uploadToS3,
-	useCanvasRenderer,
 } from "../lib/ffmpeg-video";
 import {
 	canAcceptNewProbeProcess,
@@ -569,11 +567,7 @@ async function processEditorVideoAsync(
 			sourceMetadata.duration,
 		);
 
-		const processFunc = useCanvasRenderer()
-			? processVideoWithCanvasPipeline
-			: processVideoWithTimeline;
-
-		const outputTempFile = await processFunc(
+		const outputTempFile = await processVideoWithCanvasPipeline(
 			inputTempFile.path,
 			sourceMetadata,
 			timelineSegments,
