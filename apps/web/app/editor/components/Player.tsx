@@ -47,6 +47,13 @@ export function Player() {
 
 	useEffect(() => {
 		rendererRef.current?.updateSpec(spec);
+		const container = containerRef.current;
+		if (container) {
+			const { width, height } = container.getBoundingClientRect();
+			if (width > 0 && height > 0) {
+				rendererRef.current?.resize(width, height);
+			}
+		}
 		rendererRef.current?.render();
 	}, [spec]);
 
@@ -56,6 +63,14 @@ export function Player() {
 
 		rendererRef.current?.setVideoSource(videoEl);
 		rendererRef.current?.render();
+
+		const onLoaded = () => {
+			rendererRef.current?.render();
+		};
+		videoEl.addEventListener("loadeddata", onLoaded);
+		return () => {
+			videoEl.removeEventListener("loadeddata", onLoaded);
+		};
 	}, [videoRef]);
 
 	useEffect(() => {
@@ -170,7 +185,7 @@ export function Player() {
 						onPause={() =>
 							setEditorState((state) => ({ ...state, playing: false }))
 						}
-						preload="metadata"
+						preload="auto"
 					>
 						<track
 							kind="captions"
