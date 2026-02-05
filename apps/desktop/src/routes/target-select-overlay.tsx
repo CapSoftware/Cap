@@ -73,6 +73,11 @@ const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
+const formatDimension = (value: number) => Math.floor(value);
+
+const formatDimensions = (width: number, height: number) =>
+	`${formatDimension(width)}x${formatDimension(height)}`;
+
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
 	if (!id) return undefined;
 	return cameras.find((camera) =>
@@ -308,7 +313,7 @@ function Inner() {
 									<Show when={display.physical_size}>
 										{(size) => (
 											<span class="mb-2 text-xs">
-												{`${size().width}x${size().height} · ${
+												{`${formatDimensions(size().width, size().height)} · ${
 													display.refresh_rate
 												}FPS`}
 											</span>
@@ -388,7 +393,10 @@ function Inner() {
 										{windowUnderCursor.app_name}
 									</span>
 									<span class="mb-2 text-xs">
-										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
+										{formatDimensions(
+											windowUnderCursor.bounds.size.width,
+											windowUnderCursor.bounds.size.height,
+										)}
 									</span>
 								</div>
 								<div onClick={(e) => e.stopPropagation()}>
