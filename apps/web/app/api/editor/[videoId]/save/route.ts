@@ -3,6 +3,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { normalizeConfigForRender } from "@cap/editor-render-spec";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import { Schema } from "effect";
@@ -90,6 +91,21 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
 	const config = parsedBody.right.config as ProjectConfigurationType;
 	const force = parsedBody.right.force === true;
+
+	const normalized = normalizeConfigForRender(config);
+	const errors = normalized.issues.filter(
+		(issue) => issue.severity === "error",
+	);
+	if (errors.length > 0) {
+		return Response.json(
+			{
+				error: "Unsupported editor config",
+				code: "UNSUPPORTED_CONFIG",
+				issues: errors,
+			},
+			{ status: 400 },
+		);
+	}
 
 	const [video] = await db()
 		.select({

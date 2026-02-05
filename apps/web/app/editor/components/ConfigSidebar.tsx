@@ -133,6 +133,8 @@ function Field({ label, children, icon, action }: FieldProps) {
 function BackgroundPanel() {
 	const { project, setProject } = useEditorContext();
 	const background = project.background;
+	const gradientAngle =
+		background.source.type === "gradient" ? background.source.angle : undefined;
 	const [backgroundTheme, setBackgroundTheme] =
 		useState<keyof typeof BACKGROUND_THEMES>("macOS");
 
@@ -315,12 +317,12 @@ function BackgroundPanel() {
 										type: "gradient",
 										from: [fromR, fromG, fromB],
 										to: [toR, toG, toB],
-										angle: background.source.angle ?? 90,
+										angle: gradientAngle ?? 90,
 									});
 								}}
 								className="aspect-square rounded-lg border border-gray-4 hover:border-gray-6 transition-colors"
 								style={{
-									background: `linear-gradient(${background.source.angle ?? 90}deg, rgb(${gradient.from.join(",")}), rgb(${gradient.to.join(",")}))`,
+									background: `linear-gradient(${gradientAngle ?? 90}deg, rgb(${gradient.from.join(",")}), rgb(${gradient.to.join(",")}))`,
 								}}
 							/>
 						))}

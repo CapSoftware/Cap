@@ -41,6 +41,7 @@
 	"exclude": ["node_modules"],
 	"references": [
 		{ "path": "../../packages/database" },
+		{ "path": "../../packages/editor-render-spec" },
 		{ "path": "../../packages/env" },
 		{ "path": "../../packages/ui" },
 		{ "path": "../../packages/utils" },
