@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { file, type Subprocess, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { createTempFile, type TempFileHandle } from "./temp-files";
@@ -6,6 +8,15 @@ const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDERR_BYTES = 64 * 1024;
+const PROGRESS_STALL_TIMEOUT_MS = 180_000;
+const PROGRESS_STALL_NEAR_COMPLETE_TIMEOUT_MS = 60_000;
+const DOCKER_HOSTNAME = "host.docker.internal";
+const RUNNING_IN_DOCKER = existsSync("/.dockerenv");
+
+interface BridgedUrl {
+	url: string;
+	hostHeader?: string;
+}
 
 export interface VideoProcessingOptions {
 	maxWidth?: number;
@@ -59,6 +70,14 @@ type EditorBackgroundSource =
 interface EditorBackgroundConfiguration {
 	source?: EditorBackgroundSource;
 	padding?: number;
+	rounding?: number;
+	roundingType?: "rounded" | "squircle";
+	shadow?: number;
+	advancedShadow?: {
+		size?: number;
+		opacity?: number;
+		blur?: number;
+	} | null;
 }
 
 interface EditorProjectConfiguration {
@@ -71,9 +90,23 @@ interface EditorRenderLayout {
 	outputHeight: number;
 	innerWidth: number;
 	innerHeight: number;
+	borderRadius: number;
+	shadow: {
+		enabled: boolean;
+		offsetY: number;
+		blur: number;
+		opacity: number;
+	};
+	backgroundImagePath: string | null;
+	backgroundGradient: {
+		from: [number, number, number];
+		to: [number, number, number];
+	} | null;
 	backgroundColor: string;
 	shouldApply: boolean;
 }
+
+const WEB_PUBLIC_DIR = resolve(import.meta.dir, "../../../web/public");
 
 const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	maxWidth: 1920,
@@ -103,6 +136,98 @@ function killProcess(proc: Subprocess): void {
 	try {
 		proc.kill();
 	} catch {}
+}
+
+function createProgressWatchdog(proc: Subprocess): {
+	touch: (timeoutMs?: number) => void;
+	clear: () => void;
+	isStalled: () => boolean;
+} {
+	let stalled = false;
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+	const schedule = (timeoutMs: number) => {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+
+		timeoutId = setTimeout(() => {
+			stalled = true;
+			killProcess(proc);
+		}, timeoutMs);
+	};
+
+	schedule(PROGRESS_STALL_TIMEOUT_MS);
+
+	return {
+		touch: (timeoutMs = PROGRESS_STALL_TIMEOUT_MS) => {
+			if (!stalled) {
+				schedule(timeoutMs);
+			}
+		},
+		clear: () => {
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+				timeoutId = undefined;
+			}
+		},
+		isStalled: () => stalled,
+	};
+}
+
+function bridgeLoopbackUrl(url: string): BridgedUrl {
+	if (!RUNNING_IN_DOCKER) {
+		return { url };
+	}
+
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return { url };
+	}
+
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		return { url };
+	}
+
+	if (
+		parsed.hostname !== "localhost" &&
+		parsed.hostname !== "127.0.0.1" &&
+		parsed.hostname !== "::1"
+	) {
+		return { url };
+	}
+
+	const hostHeader = parsed.host;
+	parsed.hostname = DOCKER_HOSTNAME;
+	return {
+		url: parsed.toString(),
+		hostHeader,
+	};
+}
+
+function withHostHeader(
+	headers: HeadersInit | undefined,
+	hostHeader: string | undefined,
+): Headers {
+	const resolved = new Headers(headers);
+	if (hostHeader) {
+		resolved.set("Host", hostHeader);
+	}
+	return resolved;
+}
+
+async function fetchWithLoopbackBridge(
+	url: string,
+	init: RequestInit,
+): Promise<Response> {
+	const bridged = bridgeLoopbackUrl(url);
+
+	return fetch(bridged.url, {
+		...init,
+		headers: withHostHeader(init.headers, bridged.hostHeader),
+	});
 }
 
 async function withTimeout<T>(
@@ -183,6 +308,10 @@ function isNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object";
+}
+
 function isRgbTuple(value: unknown): value is [number, number, number] {
 	return (
 		Array.isArray(value) &&
@@ -207,28 +336,6 @@ function toHexColor([r, g, b]: [number, number, number]): string {
 	return `0x${hex}`;
 }
 
-function getBackgroundColor(projectConfig: unknown): string {
-	if (!projectConfig || typeof projectConfig !== "object") {
-		return "0xffffff";
-	}
-
-	const config = projectConfig as EditorProjectConfiguration;
-	const source = config.background?.source;
-	if (!source || typeof source !== "object") {
-		return "0xffffff";
-	}
-
-	if (source.type === "color" && isRgbTuple(source.value)) {
-		return toHexColor(source.value);
-	}
-
-	if (source.type === "gradient" && isRgbTuple(source.from)) {
-		return toHexColor(source.from);
-	}
-
-	return "0xffffff";
-}
-
 function getTargetAspectRatio(
 	projectConfig: unknown,
 	fallbackRatio: number,
@@ -246,28 +353,188 @@ function getTargetAspectRatio(
 	return width / height;
 }
 
-function getPaddingRatio(projectConfig: unknown): number {
-	if (!projectConfig || typeof projectConfig !== "object") {
-		return 0;
+function getPaddingRatio(config: EditorProjectConfiguration): number {
+	const padding = config.background?.padding;
+	if (!isNumber(padding)) return 0;
+	return clamp(padding, 0, 40) / 100;
+}
+
+function getRoundingRadius(
+	config: EditorProjectConfiguration,
+	innerWidth: number,
+	innerHeight: number,
+): number {
+	const rounding = config.background?.rounding;
+	if (!isNumber(rounding)) return 0;
+	const type = config.background?.roundingType ?? "squircle";
+	const multiplier = type === "rounded" ? 1 : 0.8;
+	return Math.round(
+		(Math.min(innerWidth, innerHeight) / 2) *
+			(clamp(rounding, 0, 100) / 100) *
+			multiplier,
+	);
+}
+
+function getShadowLayout(config: EditorProjectConfiguration): {
+	enabled: boolean;
+	offsetY: number;
+	blur: number;
+	opacity: number;
+} {
+	const amount = config.background?.shadow;
+	if (!isNumber(amount) || amount <= 0) {
+		return {
+			enabled: false,
+			offsetY: 0,
+			blur: 0,
+			opacity: 0,
+		};
 	}
 
-	const padding = (projectConfig as EditorProjectConfiguration).background
-		?.padding;
-	if (!isNumber(padding)) {
-		return 0;
+	const shadowAmount = clamp(amount, 0, 100);
+	const advanced = config.background?.advancedShadow;
+	const size = clamp(isNumber(advanced?.size) ? advanced.size : 50, 0, 100);
+	const blur = clamp(isNumber(advanced?.blur) ? advanced.blur : 50, 0, 100);
+	const opacity = clamp(
+		isNumber(advanced?.opacity) ? advanced.opacity : 18,
+		0,
+		100,
+	);
+
+	return {
+		enabled: true,
+		offsetY: Number((2 + size * 0.14).toFixed(2)),
+		blur: Number((4 + blur * 0.78 + shadowAmount * 0.22).toFixed(2)),
+		opacity: Number(
+			Math.max(
+				0,
+				Math.min(0.95, (opacity / 100) * (shadowAmount / 100) * 0.9),
+			).toFixed(4),
+		),
+	};
+}
+
+function resolveBackgroundImagePath(path: string): string | null {
+	const trimmed = path.trim();
+	if (trimmed.length === 0) return null;
+
+	if (
+		trimmed.startsWith("http://") ||
+		trimmed.startsWith("https://") ||
+		trimmed.startsWith("file://")
+	) {
+		return bridgeLoopbackUrl(trimmed).url;
 	}
 
-	return clamp(padding, 0, 45) / 100;
+	if (trimmed.startsWith("/backgrounds/")) {
+		const localPath = join(WEB_PUBLIC_DIR, trimmed.slice(1));
+		if (existsSync(localPath)) {
+			return localPath;
+		}
+		return trimmed;
+	}
+
+	if (trimmed.startsWith("backgrounds/")) {
+		const localPath = join(WEB_PUBLIC_DIR, trimmed);
+		if (existsSync(localPath)) {
+			return localPath;
+		}
+		return trimmed;
+	}
+
+	if (trimmed.startsWith("/")) {
+		if (existsSync(trimmed)) {
+			return trimmed;
+		}
+
+		const localPath = join(WEB_PUBLIC_DIR, trimmed.slice(1));
+		if (existsSync(localPath)) {
+			return localPath;
+		}
+		return trimmed;
+	}
+
+	if (existsSync(trimmed)) {
+		return resolve(trimmed);
+	}
+
+	const localPath = join(WEB_PUBLIC_DIR, "backgrounds", trimmed);
+	if (existsSync(localPath)) {
+		return localPath;
+	}
+
+	return trimmed;
+}
+
+function getBackgroundSource(config: EditorProjectConfiguration): {
+	backgroundColor: string;
+	backgroundGradient: {
+		from: [number, number, number];
+		to: [number, number, number];
+	} | null;
+	backgroundImagePath: string | null;
+} {
+	const source = config.background?.source;
+	if (!isObject(source) || typeof source.type !== "string") {
+		return {
+			backgroundColor: "0xffffff",
+			backgroundGradient: null,
+			backgroundImagePath: null,
+		};
+	}
+
+	if (source.type === "color" && isRgbTuple(source.value)) {
+		return {
+			backgroundColor: toHexColor(source.value),
+			backgroundGradient: null,
+			backgroundImagePath: null,
+		};
+	}
+
+	if (
+		source.type === "gradient" &&
+		isRgbTuple(source.from) &&
+		isRgbTuple(source.to)
+	) {
+		return {
+			backgroundColor: toHexColor(source.from),
+			backgroundGradient: {
+				from: source.from,
+				to: source.to,
+			},
+			backgroundImagePath: null,
+		};
+	}
+
+	if (
+		(source.type === "image" || source.type === "wallpaper") &&
+		typeof source.path === "string"
+	) {
+		return {
+			backgroundColor: "0xffffff",
+			backgroundGradient: null,
+			backgroundImagePath: resolveBackgroundImagePath(source.path),
+		};
+	}
+
+	return {
+		backgroundColor: "0xffffff",
+		backgroundGradient: null,
+		backgroundImagePath: null,
+	};
 }
 
 function getEditorRenderLayout(
 	metadata: VideoMetadata,
 	projectConfig: unknown,
 ): EditorRenderLayout {
+	const config: EditorProjectConfiguration = isObject(projectConfig)
+		? (projectConfig as EditorProjectConfiguration)
+		: {};
 	const sourceWidth = toEven(metadata.width);
 	const sourceHeight = toEven(metadata.height);
 	const sourceRatio = sourceWidth / sourceHeight;
-	const targetRatio = getTargetAspectRatio(projectConfig, sourceRatio);
+	const targetRatio = getTargetAspectRatio(config, sourceRatio);
 	const ratioDiff = Math.abs(targetRatio - sourceRatio);
 
 	let outputWidth = sourceWidth;
@@ -281,18 +548,30 @@ function getEditorRenderLayout(
 		}
 	}
 
-	const paddingRatio = getPaddingRatio(projectConfig);
+	const paddingRatio = getPaddingRatio(config);
 	const innerScale = Math.max(0.05, 1 - paddingRatio * 2);
 	const innerWidth = toEven(outputWidth * innerScale);
 	const innerHeight = toEven(outputHeight * innerScale);
+	const borderRadius = getRoundingRadius(config, innerWidth, innerHeight);
+	const shadow = getShadowLayout(config);
+	const background = getBackgroundSource(config);
+	const shouldApply =
+		ratioDiff > 0.0001 ||
+		paddingRatio > 0 ||
+		borderRadius > 0 ||
+		shadow.enabled;
 
 	return {
 		outputWidth,
 		outputHeight,
 		innerWidth,
 		innerHeight,
-		backgroundColor: getBackgroundColor(projectConfig),
-		shouldApply: ratioDiff > 0.0001 || paddingRatio > 0,
+		borderRadius,
+		shadow,
+		backgroundColor: background.backgroundColor,
+		backgroundGradient: background.backgroundGradient,
+		backgroundImagePath: background.backgroundImagePath,
+		shouldApply,
 	};
 }
 
@@ -436,13 +715,14 @@ export async function downloadVideoToTemp(
 	abortSignal?: AbortSignal,
 ): Promise<TempFileHandle> {
 	const tempFile = await createTempFile(".mp4");
+	const bridgedVideoUrl = bridgeLoopbackUrl(videoUrl);
 
 	console.log(
-		`[downloadVideoToTemp] Downloading from URL: ${videoUrl.substring(0, 100)}...`,
+		`[downloadVideoToTemp] Downloading from URL: ${bridgedVideoUrl.url.substring(0, 100)}...`,
 	);
 
 	try {
-		const response = await fetch(videoUrl, {
+		const response = await fetchWithLoopbackBridge(videoUrl, {
 			signal: abortSignal ?? AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
 		});
 
@@ -550,6 +830,9 @@ export async function processVideo(
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	const progressWatchdog = createProgressWatchdog(proc);
+	let watchdogTimeoutMs = PROGRESS_STALL_TIMEOUT_MS;
+	let reachedNearCompleteProgress = false;
 
 	const totalDurationUs = metadata.duration * 1_000_000;
 
@@ -591,6 +874,14 @@ export async function processVideo(
 								stderrLines.shift();
 							}
 							const progress = parseProgressFromStderr(line, totalDurationUs);
+							if (progress !== null && progress >= 98) {
+								reachedNearCompleteProgress = true;
+							}
+							const timeoutMs = reachedNearCompleteProgress
+								? PROGRESS_STALL_NEAR_COMPLETE_TIMEOUT_MS
+								: PROGRESS_STALL_TIMEOUT_MS;
+							watchdogTimeoutMs = timeoutMs;
+							progressWatchdog.touch(timeoutMs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
 							}
@@ -603,6 +894,11 @@ export async function processVideo(
 				const exitCode = await proc.exited;
 
 				if (exitCode !== 0) {
+					if (progressWatchdog.isStalled()) {
+						throw new Error(
+							`FFmpeg progress stalled for ${watchdogTimeoutMs}ms`,
+						);
+					}
 					const stderrOutput = stderrLines.join("\n");
 					console.error(`[processVideo] FFmpeg stderr:\n${stderrOutput}`);
 					throw new Error(
@@ -625,6 +921,7 @@ export async function processVideo(
 		await outputTempFile.cleanup();
 		throw err;
 	} finally {
+		progressWatchdog.clear();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
@@ -653,18 +950,123 @@ export async function processVideoWithTimeline(
 	const hasAudio = Boolean(metadata.audioCodec);
 	const { filterGraph: timelineFilterGraph, totalDuration } =
 		buildTimelineFilterGraph(normalizedSegments, hasAudio);
+	const targetDuration = Math.max(totalDuration, 0.1);
 	const editorLayout = getEditorRenderLayout(metadata, projectConfig);
-	const videoOutputLabel = editorLayout.shouldApply ? "[vfinal]" : "[vout]";
-	const filterGraph = editorLayout.shouldApply
-		? `${timelineFilterGraph};color=c=${editorLayout.backgroundColor}:s=${editorLayout.outputWidth}x${editorLayout.outputHeight}[bg];[vout]scale=w=${editorLayout.innerWidth}:h=${editorLayout.innerHeight}:force_original_aspect_ratio=decrease[vscaled];[bg][vscaled]overlay=(W-w)/2:(H-h)/2[vfinal]`
-		: timelineFilterGraph;
+	const useBackgroundImage =
+		editorLayout.shouldApply && editorLayout.backgroundImagePath !== null;
+	let backgroundImagePath = editorLayout.backgroundImagePath;
+	let bgImageTempFile: TempFileHandle | null = null;
 
-	const ffmpegArgs: string[] = [
-		"ffmpeg",
-		"-threads",
-		"2",
-		"-i",
-		inputPath,
+	if (
+		useBackgroundImage &&
+		backgroundImagePath &&
+		(backgroundImagePath.startsWith("http://") ||
+			backgroundImagePath.startsWith("https://"))
+	) {
+		try {
+			const ext =
+				backgroundImagePath.match(/\.(jpe?g|png|webp|bmp)/i)?.[0] ?? ".jpg";
+			bgImageTempFile = await createTempFile(ext);
+			const imgResponse = await fetchWithLoopbackBridge(backgroundImagePath, {
+				signal: abortSignal ?? AbortSignal.timeout(60_000),
+			});
+			if (!imgResponse.ok) {
+				throw new Error(`HTTP ${imgResponse.status}`);
+			}
+			const imgData = await imgResponse.arrayBuffer();
+			await Bun.write(bgImageTempFile.path, imgData);
+			console.log(
+				`[processVideoWithTimeline] Downloaded background image (${imgData.byteLength} bytes) to ${bgImageTempFile.path}`,
+			);
+			backgroundImagePath = bgImageTempFile.path;
+		} catch (err) {
+			console.error(
+				"[processVideoWithTimeline] Failed to download background image:",
+				err,
+			);
+			await bgImageTempFile?.cleanup();
+			bgImageTempFile = null;
+		}
+	}
+
+	const ffmpegArgs: string[] = ["ffmpeg", "-threads", "2", "-i", inputPath];
+
+	if (useBackgroundImage && backgroundImagePath) {
+		ffmpegArgs.push(
+			"-loop",
+			"1",
+			"-t",
+			formatFfmpegNumber(targetDuration + 1),
+			"-i",
+			backgroundImagePath,
+		);
+	}
+
+	const videoOutputLabel = editorLayout.shouldApply ? "[vfinal]" : "[vout]";
+	const filterGraph = (() => {
+		if (!editorLayout.shouldApply) return timelineFilterGraph;
+
+		const filters: string[] = [timelineFilterGraph];
+
+		if (useBackgroundImage) {
+			filters.push(
+				`[1:v]scale=${editorLayout.outputWidth}:${editorLayout.outputHeight}:force_original_aspect_ratio=increase,crop=${editorLayout.outputWidth}:${editorLayout.outputHeight}[bg]`,
+			);
+		} else if (editorLayout.backgroundGradient) {
+			const [fromR, fromG, fromB] = editorLayout.backgroundGradient.from;
+			const [toR, toG, toB] = editorLayout.backgroundGradient.to;
+			filters.push(
+				`nullsrc=s=${editorLayout.outputWidth}x${editorLayout.outputHeight}:d=${formatFfmpegNumber(targetDuration + 1)},format=rgb24,geq=r='${normalizeChannel(fromR)}+(${normalizeChannel(toR)}-${normalizeChannel(fromR)})*Y/H':g='${normalizeChannel(fromG)}+(${normalizeChannel(toG)}-${normalizeChannel(fromG)})*Y/H':b='${normalizeChannel(fromB)}+(${normalizeChannel(toB)}-${normalizeChannel(fromB)})*Y/H'[bg]`,
+			);
+		} else {
+			filters.push(
+				`color=c=${editorLayout.backgroundColor}:s=${editorLayout.outputWidth}x${editorLayout.outputHeight}:d=${formatFfmpegNumber(targetDuration + 1)}[bg]`,
+			);
+		}
+
+		filters.push(
+			`[vout]scale=w=${editorLayout.innerWidth}:h=${editorLayout.innerHeight}:force_original_aspect_ratio=decrease,format=yuva420p[vscaled]`,
+		);
+
+		if (editorLayout.borderRadius > 0) {
+			const maxRadius = Math.max(
+				1,
+				Math.floor(
+					Math.min(editorLayout.innerWidth, editorLayout.innerHeight) / 2,
+				) - 1,
+			);
+			const radius = Math.min(editorLayout.borderRadius, maxRadius);
+			filters.push(
+				`[vscaled]geq=lum='p(X,Y)':a='if(gt(abs(W/2-X),W/2-${radius})*gt(abs(H/2-Y),H/2-${radius}),if(lte(hypot((W/2-${radius})-abs(W/2-X),(H/2-${radius})-abs(H/2-Y)),${radius}),255,0),255)'[vcard]`,
+			);
+		} else {
+			filters.push("[vscaled]null[vcard]");
+		}
+
+		if (editorLayout.shadow.enabled) {
+			const blurRadius = Math.max(1, Math.round(editorLayout.shadow.blur / 4));
+			filters.push("[vcard]split[vcard-main][vcard-shadow]");
+			filters.push(
+				`[vcard-shadow]alphaextract,boxblur=${blurRadius}:1[shadow-alpha]`,
+			);
+			filters.push(
+				`color=c=black@${editorLayout.shadow.opacity}:s=${editorLayout.innerWidth}x${editorLayout.innerHeight}:d=${formatFfmpegNumber(targetDuration + 1)},format=yuva420p[shadow-color]`,
+			);
+			filters.push("[shadow-color][shadow-alpha]alphamerge[shadow]");
+			filters.push(
+				`[bg][shadow]overlay=(W-w)/2:(H-h)/2+${editorLayout.shadow.offsetY}:shortest=1[bg-shadow]`,
+			);
+			filters.push(
+				"[bg-shadow][vcard-main]overlay=(W-w)/2:(H-h)/2:shortest=1[vfinal]",
+			);
+		} else {
+			filters.push("[bg][vcard]overlay=(W-w)/2:(H-h)/2:shortest=1[vfinal]");
+		}
+
+		return filters.join(";");
+	})();
+
+	ffmpegArgs.push(
 		"-filter_complex",
 		filterGraph,
 		"-map",
@@ -675,7 +1077,7 @@ export async function processVideoWithTimeline(
 		opts.preset,
 		"-crf",
 		opts.crf.toString(),
-	];
+	);
 
 	if (hasAudio) {
 		ffmpegArgs.push("-map", "[aout]", "-c:a", "aac", "-b:a", opts.audioBitrate);
@@ -686,10 +1088,16 @@ export async function processVideoWithTimeline(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
+		"-t",
+		formatFfmpegNumber(targetDuration),
 		"-progress",
 		"pipe:2",
 		"-y",
 		outputTempFile.path,
+	);
+
+	console.log(
+		`[processVideoWithTimeline] Running FFmpeg: ${ffmpegArgs.join(" ")}`,
 	);
 
 	const proc = spawn({
@@ -697,6 +1105,9 @@ export async function processVideoWithTimeline(
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	const progressWatchdog = createProgressWatchdog(proc);
+	let watchdogTimeoutMs = PROGRESS_STALL_TIMEOUT_MS;
+	let reachedNearCompleteProgress = false;
 
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
@@ -708,7 +1119,7 @@ export async function processVideoWithTimeline(
 
 	const stderrLines: string[] = [];
 	const MAX_STDERR_LINES = 50;
-	const totalDurationUs = Math.max(totalDuration, 0.1) * 1_000_000;
+	const totalDurationUs = targetDuration * 1_000_000;
 
 	try {
 		await withTimeout(
@@ -737,6 +1148,14 @@ export async function processVideoWithTimeline(
 								stderrLines.shift();
 							}
 							const progress = parseProgressFromStderr(line, totalDurationUs);
+							if (progress !== null && progress >= 98) {
+								reachedNearCompleteProgress = true;
+							}
+							const timeoutMs = reachedNearCompleteProgress
+								? PROGRESS_STALL_NEAR_COMPLETE_TIMEOUT_MS
+								: PROGRESS_STALL_TIMEOUT_MS;
+							watchdogTimeoutMs = timeoutMs;
+							progressWatchdog.touch(timeoutMs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
 							}
@@ -746,9 +1165,22 @@ export async function processVideoWithTimeline(
 					stderrReader.releaseLock();
 				}
 
+				console.log(
+					`[processVideoWithTimeline] FFmpeg stderr closed, waiting for exit. Last progress: ${reachedNearCompleteProgress ? ">=98%" : "<98%"}`,
+				);
+
 				const exitCode = await proc.exited;
 
+				console.log(
+					`[processVideoWithTimeline] FFmpeg exited with code ${exitCode}`,
+				);
+
 				if (exitCode !== 0) {
+					if (progressWatchdog.isStalled()) {
+						throw new Error(
+							`FFmpeg progress stalled for ${watchdogTimeoutMs}ms`,
+						);
+					}
 					const stderrOutput = stderrLines.join("\n");
 					throw new Error(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrOutput}`,
@@ -770,10 +1202,12 @@ export async function processVideoWithTimeline(
 		await outputTempFile.cleanup();
 		throw err;
 	} finally {
+		progressWatchdog.clear();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
 		killProcess(proc);
+		await bgImageTempFile?.cleanup();
 	}
 }
 
@@ -879,7 +1313,7 @@ export async function uploadToS3(
 		data instanceof Blob
 			? data
 			: new Blob([data.buffer as ArrayBuffer], { type: contentType });
-	const response = await fetch(presignedUrl, {
+	const response = await fetchWithLoopbackBridge(presignedUrl, {
 		method: "PUT",
 		headers: {
 			"Content-Type": contentType,
@@ -903,7 +1337,7 @@ export async function uploadFileToS3(
 	const fileHandle = file(filePath);
 	const arrayBuffer = await fileHandle.arrayBuffer();
 
-	const response = await fetch(presignedUrl, {
+	const response = await fetchWithLoopbackBridge(presignedUrl, {
 		method: "PUT",
 		headers: {
 			"Content-Type": contentType,
