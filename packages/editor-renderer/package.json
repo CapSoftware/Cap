@@ -1,0 +1,22 @@
+{
+	"name": "@cap/editor-renderer",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -b",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@cap/editor-render-spec": "workspace:*"
+	},
+	"devDependencies": {
+		"tsconfig": "workspace:*",
+		"typescript": "^5.8.3",
+		"vitest": "^3.2.0"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}
