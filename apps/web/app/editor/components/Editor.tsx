@@ -26,7 +26,7 @@ function EditorContent({ videoId }: { videoId: string }) {
 	useEditorShortcuts();
 
 	return (
-		<div className="flex flex-col h-screen bg-gray-3 overflow-hidden">
+		<div className="flex flex-col h-screen h-dvh bg-gray-3 overflow-hidden">
 			<Header videoId={videoId} />
 			<div className="flex flex-col lg:flex-row flex-1 gap-3 p-3 min-h-0 overflow-auto lg:overflow-hidden">
 				<div className="flex flex-col flex-1 gap-3 min-h-0 min-w-0">

@@ -838,7 +838,7 @@ export function ConfigSidebar() {
 	};
 
 	return (
-		<div className="flex flex-col min-h-0 shrink-0 w-full lg:flex-1 lg:max-w-[24rem] max-h-[50vh] lg:max-h-none overflow-hidden rounded-xl bg-gray-1 border border-gray-4">
+		<div className="flex flex-col min-h-0 shrink-0 w-full lg:flex-1 lg:max-w-[24rem] max-h-[50vh] max-h-[60dvh] lg:max-h-none overflow-hidden rounded-xl bg-gray-1 border border-gray-4">
 			<div className="flex items-center h-12 sm:h-14 border-b border-gray-4 shrink-0">
 				{TABS.map(({ id, icon: Icon, label }) => (
 					<button

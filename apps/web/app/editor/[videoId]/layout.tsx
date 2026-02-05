@@ -4,7 +4,7 @@ export default function EditorLayout({
 	children: React.ReactNode;
 }) {
 	return (
-		<div className="h-screen w-screen overflow-hidden bg-gray-1 flex flex-col">
+		<div className="h-screen h-dvh w-screen w-dvw overflow-hidden bg-gray-1 flex flex-col">
 			{children}
 		</div>
 	);
