@@ -92,6 +92,52 @@ interface MediaServerProcessResult {
 	};
 }
 
+async function readMediaServerErrorMessage(
+	response: Response,
+	fallbackMessage: string,
+): Promise<string> {
+	const statusLabel = `status ${response.status}${
+		response.statusText ? ` ${response.statusText}` : ""
+	}`;
+	const responseText = await response.text().catch(() => "");
+
+	if (responseText) {
+		try {
+			const parsed = JSON.parse(responseText) as {
+				error?: unknown;
+				details?: unknown;
+				code?: unknown;
+			};
+			const error =
+				typeof parsed.error === "string" ? parsed.error.trim() : undefined;
+			const details =
+				typeof parsed.details === "string" ? parsed.details.trim() : undefined;
+			const code =
+				typeof parsed.code === "string" ? parsed.code.trim() : undefined;
+
+			if (error && details && code) {
+				return `${fallbackMessage} (${statusLabel}, code ${code}): ${error} (${details})`;
+			}
+
+			if (error && details) {
+				return `${fallbackMessage} (${statusLabel}): ${error} (${details})`;
+			}
+
+			if (error && code) {
+				return `${fallbackMessage} (${statusLabel}, code ${code}): ${error}`;
+			}
+
+			if (error) {
+				return `${fallbackMessage} (${statusLabel}): ${error}`;
+			}
+		} catch {}
+
+		return `${fallbackMessage} (${statusLabel}): ${responseText.slice(0, 500)}`;
+	}
+
+	return `${fallbackMessage} (${statusLabel})`;
+}
+
 async function processVideoOnMediaServer(
 	videoId: string,
 	userId: string,
@@ -143,10 +189,11 @@ async function processVideoOnMediaServer(
 	});
 
 	if (!response.ok) {
-		const errorData = await response.json().catch(() => ({}));
 		throw new Error(
-			(errorData as { error?: string }).error ||
+			await readMediaServerErrorMessage(
+				response,
 				"Video processing failed to start",
+			),
 		);
 	}
 
