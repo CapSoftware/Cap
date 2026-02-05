@@ -3,21 +3,32 @@
 import { Switch } from "@cap/ui";
 import {
 	Camera,
-	Image,
+	Image as ImageIcon,
 	MessageSquare,
 	MousePointer2,
 	Volume2,
 } from "lucide-react";
+import NextImage from "next/image";
 import { useCallback, useState } from "react";
 import type {
 	AspectRatio,
 	BackgroundSource,
 	CursorAnimationStyle,
 } from "../types/project-config";
+import {
+	BACKGROUND_COLORS,
+	BACKGROUND_GRADIENTS,
+	BACKGROUND_THEMES,
+	getWallpaperPath,
+	resolveBackgroundAssetPath,
+	resolveBackgroundSourcePath,
+	rgbHexToTuple,
+	WALLPAPER_NAMES,
+} from "../utils/backgrounds";
 import { useEditorContext } from "./context";
 
 const TABS = [
-	{ id: "background", icon: Image, label: "Background" },
+	{ id: "background", icon: ImageIcon, label: "Background" },
 	{ id: "camera", icon: Camera, label: "Camera" },
 	{ id: "audio", icon: Volume2, label: "Audio" },
 	{ id: "cursor", icon: MousePointer2, label: "Cursor" },
@@ -32,17 +43,6 @@ const ASPECT_RATIOS: Array<{ value: AspectRatio; label: string }> = [
 	{ value: "square", label: "1:1" },
 	{ value: "classic", label: "4:3" },
 	{ value: "tall", label: "3:4" },
-];
-
-const BACKGROUND_COLORS = [
-	"#FFFFFF",
-	"#000000",
-	"#FF0000",
-	"#FF8C00",
-	"#FFD700",
-	"#32CD32",
-	"#4785FF",
-	"#800080",
 ];
 
 const CURSOR_STYLES: Array<{
@@ -133,53 +133,104 @@ function Field({ label, children, icon, action }: FieldProps) {
 function BackgroundPanel() {
 	const { project, setProject } = useEditorContext();
 	const background = project.background;
+	const [backgroundTheme, setBackgroundTheme] =
+		useState<keyof typeof BACKGROUND_THEMES>("macOS");
 
-	const handleSourceTypeChange = useCallback(
-		(type: BackgroundSource["type"]) => {
-			let newSource: BackgroundSource;
-			switch (type) {
-				case "color":
-					newSource = { type: "color", value: [255, 255, 255] };
-					break;
-				case "gradient":
-					newSource = {
-						type: "gradient",
-						from: [69, 104, 220],
-						to: [176, 106, 179],
-					};
-					break;
-				case "wallpaper":
-					newSource = { type: "wallpaper", path: null };
-					break;
-				case "image":
-					newSource = { type: "image", path: null };
-					break;
-				default:
-					return;
-			}
-			setProject({
-				...project,
-				background: { ...background, source: newSource },
-			});
-		},
-		[project, background, setProject],
-	);
+	const toAbsoluteAssetUrl = useCallback((path: string) => {
+		if (typeof window === "undefined") return path;
+		return new URL(path, window.location.origin).toString();
+	}, []);
 
-	const handleColorChange = useCallback(
-		(hex: string) => {
-			const r = parseInt(hex.slice(1, 3), 16);
-			const g = parseInt(hex.slice(3, 5), 16);
-			const b = parseInt(hex.slice(5, 7), 16);
+	const updateBackground = useCallback(
+		(nextSource: BackgroundSource, options?: { ensurePadding?: boolean }) => {
+			const nextPadding =
+				options?.ensurePadding && background.padding === 0
+					? 10
+					: background.padding;
 			setProject({
 				...project,
 				background: {
 					...background,
-					source: { type: "color", value: [r, g, b] },
+					padding: nextPadding,
+					source: nextSource,
 				},
 			});
 		},
 		[project, background, setProject],
 	);
+
+	const handleSourceTypeChange = useCallback(
+		(type: BackgroundSource["type"]) => {
+			if (type === "wallpaper") {
+				const firstWallpaper = WALLPAPER_NAMES[0];
+				updateBackground(
+					{
+						type: "wallpaper",
+						path: firstWallpaper
+							? toAbsoluteAssetUrl(getWallpaperPath(firstWallpaper))
+							: null,
+					},
+					{ ensurePadding: true },
+				);
+				return;
+			}
+
+			if (type === "image") {
+				updateBackground(
+					{
+						type: "image",
+						path: null,
+					},
+					{ ensurePadding: true },
+				);
+				return;
+			}
+
+			if (type === "color") {
+				updateBackground({
+					type: "color",
+					value: [255, 255, 255],
+				});
+				return;
+			}
+
+			updateBackground(
+				{
+					type: "gradient",
+					from: [69, 104, 220],
+					to: [176, 106, 179],
+					angle: 90,
+				},
+				{ ensurePadding: true },
+			);
+		},
+		[toAbsoluteAssetUrl, updateBackground],
+	);
+
+	const handleColorChange = useCallback(
+		(hex: string) => {
+			const value = rgbHexToTuple(hex);
+			const alpha =
+				hex.length === 9
+					? Number.parseInt(hex.slice(7, 9), 16) / 255
+					: undefined;
+			updateBackground({
+				type: "color",
+				value,
+				alpha,
+			});
+		},
+		[updateBackground],
+	);
+
+	const filteredWallpapers = WALLPAPER_NAMES.filter((wallpaper) =>
+		wallpaper.startsWith(`${backgroundTheme}/`),
+	);
+
+	const selectedWallpaperPath =
+		background.source.type === "wallpaper"
+			? resolveBackgroundSourcePath(background.source)
+			: null;
 
 	return (
 		<div className="flex flex-col gap-6">
@@ -247,6 +298,112 @@ function BackgroundPanel() {
 							/>
 						))}
 					</div>
+				</Field>
+			)}
+
+			{background.source.type === "gradient" && (
+				<Field label="Gradients">
+					<div className="grid grid-cols-6 gap-2">
+						{BACKGROUND_GRADIENTS.map((gradient) => (
+							<button
+								type="button"
+								key={`${gradient.from.join(",")}-${gradient.to.join(",")}`}
+								onClick={() => {
+									const [fromR, fromG, fromB] = gradient.from;
+									const [toR, toG, toB] = gradient.to;
+									updateBackground({
+										type: "gradient",
+										from: [fromR, fromG, fromB],
+										to: [toR, toG, toB],
+										angle: background.source.angle ?? 90,
+									});
+								}}
+								className="aspect-square rounded-lg border border-gray-4 hover:border-gray-6 transition-colors"
+								style={{
+									background: `linear-gradient(${background.source.angle ?? 90}deg, rgb(${gradient.from.join(",")}), rgb(${gradient.to.join(",")}))`,
+								}}
+							/>
+						))}
+					</div>
+				</Field>
+			)}
+
+			{background.source.type === "wallpaper" && (
+				<Field label="Wallpapers">
+					<div className="flex flex-wrap gap-2">
+						{Object.entries(BACKGROUND_THEMES).map(([key, label]) => (
+							<button
+								type="button"
+								key={key}
+								onClick={() =>
+									setBackgroundTheme(key as keyof typeof BACKGROUND_THEMES)
+								}
+								className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+									backgroundTheme === key
+										? "border-blue-8 bg-blue-3 text-blue-11"
+										: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+								}`}
+							>
+								{label}
+							</button>
+						))}
+					</div>
+					<div className="grid grid-cols-5 gap-2">
+						{filteredWallpapers.map((name) => {
+							const path = getWallpaperPath(name);
+							const resolvedPath = resolveBackgroundAssetPath(path);
+							const selected = selectedWallpaperPath?.endsWith(path);
+							return (
+								<button
+									type="button"
+									key={name}
+									onClick={() =>
+										updateBackground(
+											{
+												type: "wallpaper",
+												path: toAbsoluteAssetUrl(path),
+											},
+											{ ensurePadding: true },
+										)
+									}
+									className={`relative aspect-square overflow-hidden rounded-lg border transition-colors ${
+										selected
+											? "border-blue-8 ring-1 ring-blue-8"
+											: "border-gray-4 hover:border-gray-6"
+									}`}
+								>
+									<NextImage
+										src={resolvedPath}
+										alt={name}
+										fill
+										className="object-cover"
+										sizes="(max-width: 1024px) 20vw, 10vw"
+									/>
+								</button>
+							);
+						})}
+					</div>
+				</Field>
+			)}
+
+			{background.source.type === "image" && (
+				<Field label="Image URL">
+					<input
+						type="url"
+						value={background.source.path ?? ""}
+						placeholder="https://example.com/background.jpg"
+						onChange={(event) => {
+							const value = event.target.value.trim();
+							updateBackground(
+								{
+									type: "image",
+									path: value.length > 0 ? value : null,
+								},
+								{ ensurePadding: true },
+							);
+						}}
+						className="w-full h-10 px-3 rounded-lg border border-gray-4 bg-gray-2 text-sm text-gray-12 focus:outline-none focus:ring-1 focus:ring-blue-8"
+					/>
 				</Field>
 			)}
 

@@ -40,16 +40,19 @@ export function Player() {
 					<div
 						className={`relative overflow-hidden flex items-center justify-center ${previewLayout.frameClassName}`}
 						style={previewLayout.frameStyle}
+						data-testid="editor-preview-frame"
 					>
 						<div
 							className="flex items-center justify-center"
 							style={previewLayout.contentStyle}
+							data-testid="editor-preview-content"
 						>
 							<video
 								ref={videoRef}
 								src={videoUrl}
 								className="w-full h-full object-contain"
 								style={previewLayout.videoStyle}
+								data-testid="editor-preview-video"
 								onTimeUpdate={handleTimeUpdate}
 								onEnded={handleEnded}
 								onPlay={() =>
