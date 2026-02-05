@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { processVideoWithCanvasPipeline } from "../../lib/canvas-pipeline";
-import { processVideoWithTimeline } from "../../lib/ffmpeg-video";
 import { probeVideo } from "../../lib/ffprobe";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
@@ -213,43 +212,4 @@ describe("processVideoWithCanvasPipeline integration tests", () => {
 			),
 		).rejects.toThrow();
 	}, 30000);
-
-	test("legacy fallback with CAP_CANVAS_RENDERER=false", async () => {
-		const originalEnv = process.env.CAP_CANVAS_RENDERER;
-		process.env.CAP_CANVAS_RENDERER = "false";
-
-		try {
-			const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
-
-			const output = await processVideoWithTimeline(
-				TEST_VIDEO_WITH_AUDIO,
-				metadata,
-				[{ start: 0, end: metadata.duration, timescale: 1 }],
-				{
-					background: {
-						source: {
-							type: "color",
-							value: [250, 0, 250],
-						},
-						padding: 12,
-						rounding: 0,
-						shadow: 0,
-					},
-				},
-			);
-			tempFiles.push(output.path);
-
-			const outputMetadata = await probeVideo(`file://${output.path}`);
-			expect(outputMetadata.width).toBe(320);
-			expect(outputMetadata.height).toBe(240);
-
-			await output.cleanup();
-		} finally {
-			if (originalEnv === undefined) {
-				delete process.env.CAP_CANVAS_RENDERER;
-			} else {
-				process.env.CAP_CANVAS_RENDERER = originalEnv;
-			}
-		}
-	}, 60000);
 });

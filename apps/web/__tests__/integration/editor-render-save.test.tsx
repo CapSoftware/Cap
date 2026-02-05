@@ -37,8 +37,14 @@ vi.mock("@/actions/videos/edit-title", () => ({
 	editTitle: vi.fn(),
 }));
 
-vi.mock("@/app/editor/utils/renderer-mode", () => ({
-	useRendererMode: () => "legacy" as const,
+vi.mock("@cap/editor-renderer", () => ({
+	EditorRenderer: vi.fn().mockImplementation(() => ({
+		render: vi.fn(),
+		resize: vi.fn(),
+		updateSpec: vi.fn(),
+		setVideoSource: vi.fn(),
+		destroy: vi.fn(),
+	})),
 }));
 
 vi.mock("@/app/editor/utils/waveform", () => ({
@@ -111,6 +117,11 @@ describe("web editor render and save integration", () => {
 		globalThis.MutationObserver = dom.window.MutationObserver;
 		globalThis.HTMLElement = dom.window.HTMLElement;
 		globalThis.HTMLVideoElement = dom.window.HTMLVideoElement;
+		globalThis.ResizeObserver = vi.fn().mockImplementation(() => ({
+			observe: vi.fn(),
+			unobserve: vi.fn(),
+			disconnect: vi.fn(),
+		}));
 		globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) =>
 			setTimeout(() => cb(Date.now()), 16)) as typeof requestAnimationFrame;
 		globalThis.cancelAnimationFrame = ((id: number) =>
@@ -167,7 +178,7 @@ describe("web editor render and save integration", () => {
 		dom.window.close();
 	});
 
-	it("renders live preview styles from project background config", async () => {
+	it("renders canvas player with EditorRenderer", async () => {
 		const config = createProjectConfig();
 
 		await act(async () => {
@@ -188,20 +199,16 @@ describe("web editor render and save integration", () => {
 			);
 		});
 
-		const frame = container.querySelector(
-			"[data-testid='editor-preview-frame']",
-		) as HTMLElement | null;
-		const content = container.querySelector(
-			"[data-testid='editor-preview-content']",
-		) as HTMLElement | null;
+		const canvas = container.querySelector(
+			"[data-testid='editor-preview-canvas']",
+		) as HTMLCanvasElement | null;
+		const video = container.querySelector(
+			"[data-testid='editor-preview-video']",
+		) as HTMLVideoElement | null;
 
-		expect(frame).not.toBeNull();
-		expect(content).not.toBeNull();
-		expect(frame?.style.backgroundImage).toContain("/backgrounds/blue/1.jpg");
-		expect(content?.style.width).toBe("80%");
-		expect(content?.style.height).toBe("80%");
-		expect(content?.style.borderRadius).not.toBe("0%");
-		expect(content?.style.boxShadow).not.toBe("none");
+		expect(canvas).not.toBeNull();
+		expect(video).not.toBeNull();
+		expect(video?.className).toContain("hidden");
 	});
 
 	it("sends normalized background paths through the save workflow", async () => {
