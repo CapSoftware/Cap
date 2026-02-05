@@ -1,0 +1,136 @@
+import { describe, expect, it } from "vitest";
+import { computeRenderSpec } from "../compute";
+import { normalizeConfigForRender } from "../normalize";
+import type { NormalizedRenderConfig } from "../types";
+
+function baseConfig(
+	overrides: Partial<NormalizedRenderConfig> = {},
+): NormalizedRenderConfig {
+	return {
+		aspectRatio: null,
+		background: {
+			source: { type: "color", value: [255, 255, 255], alpha: 1 },
+			padding: 0,
+			rounding: 0,
+			roundingType: "squircle",
+			shadow: 0,
+			advancedShadow: { size: 50, opacity: 18, blur: 50 },
+		},
+		timeline: null,
+		...overrides,
+	};
+}
+
+describe("computeRenderSpec", () => {
+	it("selects aspect ratio from config", () => {
+		const spec = computeRenderSpec(
+			baseConfig({ aspectRatio: "square" }),
+			1280,
+			720,
+		);
+		expect(spec.outputWidth).toBe(1280);
+		expect(spec.outputHeight).toBe(1280);
+	});
+
+	it("falls back to source aspect ratio when config aspect ratio is null", () => {
+		const spec = computeRenderSpec(baseConfig(), 1280, 720);
+		expect(spec.outputWidth).toBe(1280);
+		expect(spec.outputHeight).toBe(720);
+	});
+
+	it("computes inner rect based on padding", () => {
+		const spec = computeRenderSpec(
+			baseConfig({ background: { ...baseConfig().background, padding: 10 } }),
+			100,
+			100,
+		);
+		expect(spec.innerRect.width).toBe(80);
+		expect(spec.innerRect.height).toBe(80);
+		expect(spec.innerRect.x).toBe(10);
+		expect(spec.innerRect.y).toBe(10);
+	});
+
+	it("maps rounding type to radius multiplier", () => {
+		const rounded = computeRenderSpec(
+			baseConfig({
+				background: {
+					...baseConfig().background,
+					rounding: 100,
+					roundingType: "rounded",
+				},
+			}),
+			100,
+			100,
+		);
+		const squircle = computeRenderSpec(
+			baseConfig({
+				background: {
+					...baseConfig().background,
+					rounding: 100,
+					roundingType: "squircle",
+				},
+			}),
+			100,
+			100,
+		);
+		expect(rounded.maskSpec.radiusPx).toBe(50);
+		expect(squircle.maskSpec.radiusPx).toBe(40);
+	});
+
+	it("computes shadow semantics including spread", () => {
+		const spec = computeRenderSpec(
+			baseConfig({
+				background: {
+					...baseConfig().background,
+					shadow: 100,
+					advancedShadow: { size: 50, opacity: 50, blur: 50 },
+				},
+			}),
+			100,
+			100,
+		);
+		expect(spec.shadowSpec.enabled).toBe(true);
+		expect(spec.shadowSpec.offsetY).toBe(9);
+		expect(spec.shadowSpec.blurPx).toBe(65);
+		expect(spec.shadowSpec.spreadPx).toBe(6);
+		expect(spec.shadowSpec.alpha).toBe(0.45);
+	});
+});
+
+describe("normalizeConfigForRender", () => {
+	it("normalizes background color alpha and gradient angle", () => {
+		const result = normalizeConfigForRender({
+			background: {
+				source: {
+					type: "color",
+					value: [0, 0, 0],
+					alpha: 0.5,
+				},
+			},
+		});
+
+		expect(result.config.background.source.type).toBe("color");
+		if (result.config.background.source.type === "color") {
+			expect(result.config.background.source.alpha).toBe(0.5);
+		}
+		expect(
+			result.issues.some((i) => i.code === "BACKGROUND_ALPHA_UNSUPPORTED"),
+		).toBe(true);
+
+		const result2 = normalizeConfigForRender({
+			background: {
+				source: {
+					type: "gradient",
+					from: [0, 0, 0],
+					to: [255, 255, 255],
+					angle: 450,
+				},
+			},
+		});
+
+		expect(result2.config.background.source.type).toBe("gradient");
+		if (result2.config.background.source.type === "gradient") {
+			expect(result2.config.background.source.angle).toBe(360);
+		}
+	});
+});
