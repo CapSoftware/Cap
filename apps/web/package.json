@@ -23,6 +23,7 @@
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
 		"@cap/database": "workspace:*",
 		"@cap/editor-render-spec": "workspace:*",
+		"@cap/editor-renderer": "workspace:*",
 		"@cap/env": "workspace:*",
 		"@cap/ui": "workspace:*",
 		"@cap/utils": "workspace:*",

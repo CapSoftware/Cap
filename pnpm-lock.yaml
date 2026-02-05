@@ -405,6 +405,9 @@ importers:
       '@cap/editor-render-spec':
         specifier: workspace:*
         version: link:../../packages/editor-render-spec
+      '@cap/editor-renderer':
+        specifier: workspace:*
+        version: link:../../packages/editor-renderer
       '@cap/env':
         specifier: workspace:*
         version: link:../../packages/env
@@ -1076,6 +1079,22 @@ importers:
       zod:
         specifier: ^3
         version: 3.25.76
+    devDependencies:
+      tsconfig:
+        specifier: workspace:*
+        version: link:../tsconfig
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.15.17)(@vitest/ui@3.2.4)(jiti@2.6.1)(jsdom@26.1.0)(terser@5.44.0)(yaml@2.8.1)
+
+  packages/editor-renderer:
+    dependencies:
+      '@cap/editor-render-spec':
+        specifier: workspace:*
+        version: link:../editor-render-spec
     devDependencies:
       tsconfig:
         specifier: workspace:*

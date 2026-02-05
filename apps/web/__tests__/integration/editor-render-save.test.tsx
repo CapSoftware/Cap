@@ -37,6 +37,10 @@ vi.mock("@/actions/videos/edit-title", () => ({
 	editTitle: vi.fn(),
 }));
 
+vi.mock("@/app/editor/utils/renderer-mode", () => ({
+	useRendererMode: () => "legacy" as const,
+}));
+
 vi.mock("@/app/editor/utils/waveform", () => ({
 	createEmptyWaveform: (duration: number) => ({
 		peaks: new Array(100).fill(0),

@@ -1,11 +1,18 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import {
+	computeRenderSpec,
+	normalizeConfigForRender,
+} from "@cap/editor-render-spec";
+import { EditorRenderer } from "@cap/editor-renderer";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { resolveBackgroundAssetPath } from "../utils/backgrounds";
 import { getPreviewLayoutStyles } from "../utils/preview-layout";
+import { useRendererMode } from "../utils/renderer-mode";
 import { useEditorContext } from "./context";
 import { PlayerControls } from "./PlayerControls";
 
-export function Player() {
+function LegacyPlayer() {
 	const { videoUrl, videoRef, setEditorState, project, video } =
 		useEditorContext();
 
@@ -34,46 +41,227 @@ export function Player() {
 	}, [setEditorState]);
 
 	return (
-		<div className="flex-1 flex flex-col bg-gray-1 min-h-0">
-			<div className="flex-1 flex items-center justify-center p-4 min-h-0">
-				<div className="w-full h-full flex items-center justify-center">
+		<div className="flex-1 flex items-center justify-center p-4 min-h-0">
+			<div className="w-full h-full flex items-center justify-center">
+				<div
+					className={`relative overflow-hidden flex items-center justify-center ${previewLayout.frameClassName}`}
+					style={previewLayout.frameStyle}
+					data-testid="editor-preview-frame"
+				>
 					<div
-						className={`relative overflow-hidden flex items-center justify-center ${previewLayout.frameClassName}`}
-						style={previewLayout.frameStyle}
-						data-testid="editor-preview-frame"
+						className="flex items-center justify-center"
+						style={previewLayout.contentStyle}
+						data-testid="editor-preview-content"
 					>
-						<div
-							className="flex items-center justify-center"
-							style={previewLayout.contentStyle}
-							data-testid="editor-preview-content"
+						<video
+							ref={videoRef}
+							src={videoUrl}
+							className="w-full h-full object-contain"
+							style={previewLayout.videoStyle}
+							data-testid="editor-preview-video"
+							onTimeUpdate={handleTimeUpdate}
+							onEnded={handleEnded}
+							onPlay={() =>
+								setEditorState((state) => ({ ...state, playing: true }))
+							}
+							onPause={() =>
+								setEditorState((state) => ({ ...state, playing: false }))
+							}
+							preload="metadata"
 						>
-							<video
-								ref={videoRef}
-								src={videoUrl}
-								className="w-full h-full object-contain"
-								style={previewLayout.videoStyle}
-								data-testid="editor-preview-video"
-								onTimeUpdate={handleTimeUpdate}
-								onEnded={handleEnded}
-								onPlay={() =>
-									setEditorState((state) => ({ ...state, playing: true }))
-								}
-								onPause={() =>
-									setEditorState((state) => ({ ...state, playing: false }))
-								}
-								preload="metadata"
-							>
-								<track
-									kind="captions"
-									srcLang="en"
-									label="English"
-									src="data:text/vtt;charset=utf-8,WEBVTT%0A"
-								/>
-							</video>
-						</div>
+							<track
+								kind="captions"
+								srcLang="en"
+								label="English"
+								src="data:text/vtt;charset=utf-8,WEBVTT%0A"
+							/>
+						</video>
 					</div>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+function CanvasPlayer() {
+	const { videoUrl, videoRef, setEditorState, project, video, editorState } =
+		useEditorContext();
+
+	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const containerRef = useRef<HTMLDivElement>(null);
+	const rendererRef = useRef<EditorRenderer | null>(null);
+	const rafIdRef = useRef<number>(0);
+
+	const spec = useMemo(() => {
+		const normalized = normalizeConfigForRender(project);
+		return computeRenderSpec(normalized.config, video.width, video.height);
+	}, [project, video.width, video.height]);
+
+	const specRef = useRef(spec);
+	specRef.current = spec;
+
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+
+		const renderer = new EditorRenderer({
+			canvas,
+			spec: specRef.current,
+			resolveBackgroundPath: resolveBackgroundAssetPath,
+		});
+
+		rendererRef.current = renderer;
+
+		return () => {
+			renderer.destroy();
+			rendererRef.current = null;
+		};
+	}, []);
+
+	useEffect(() => {
+		rendererRef.current?.updateSpec(spec);
+		rendererRef.current?.render();
+	}, [spec]);
+
+	useEffect(() => {
+		const videoEl = videoRef.current;
+		if (!videoEl) return;
+
+		rendererRef.current?.setVideoSource(videoEl);
+		rendererRef.current?.render();
+	}, [videoRef]);
+
+	useEffect(() => {
+		const container = containerRef.current;
+		if (!container) return;
+
+		const observer = new ResizeObserver((entries) => {
+			const entry = entries[0];
+			if (!entry) return;
+			const { width, height } = entry.contentRect;
+			if (width > 0 && height > 0) {
+				rendererRef.current?.resize(width, height);
+				rendererRef.current?.render();
+			}
+		});
+
+		observer.observe(container);
+
+		return () => {
+			observer.disconnect();
+		};
+	}, []);
+
+	useEffect(() => {
+		const videoEl = videoRef.current;
+		if (!videoEl) return;
+
+		if (!editorState.playing) {
+			rendererRef.current?.render();
+			return;
+		}
+
+		let running = true;
+
+		type VideoWithRVFC = HTMLVideoElement & {
+			requestVideoFrameCallback: (cb: () => void) => number;
+		};
+
+		const supportsRVFC =
+			typeof (videoEl as VideoWithRVFC).requestVideoFrameCallback ===
+			"function";
+
+		if (supportsRVFC) {
+			const vid = videoEl as VideoWithRVFC;
+			const onFrame = () => {
+				if (!running) return;
+				rendererRef.current?.render();
+				vid.requestVideoFrameCallback(onFrame);
+			};
+			vid.requestVideoFrameCallback(onFrame);
+		} else {
+			const onFrame = () => {
+				if (!running) return;
+				if (videoEl.readyState >= 2) {
+					rendererRef.current?.render();
+				}
+				rafIdRef.current = requestAnimationFrame(onFrame);
+			};
+			rafIdRef.current = requestAnimationFrame(onFrame);
+		}
+
+		return () => {
+			running = false;
+			if (rafIdRef.current) {
+				cancelAnimationFrame(rafIdRef.current);
+				rafIdRef.current = 0;
+			}
+		};
+	}, [editorState.playing, videoRef]);
+
+	const previewTime = editorState.previewTime;
+	useEffect(() => {
+		if (!editorState.playing && previewTime >= 0) {
+			rendererRef.current?.render();
+		}
+	}, [previewTime, editorState.playing]);
+
+	const handleTimeUpdate = useCallback(() => {
+		if (videoRef.current) {
+			const currentTime = videoRef.current.currentTime;
+			setEditorState((state) => ({
+				...state,
+				playbackTime: currentTime,
+				previewTime: currentTime,
+			}));
+		}
+	}, [setEditorState, videoRef]);
+
+	const handleEnded = useCallback(() => {
+		setEditorState((state) => ({ ...state, playing: false }));
+	}, [setEditorState]);
+
+	return (
+		<div className="flex-1 flex items-center justify-center p-4 min-h-0">
+			<div
+				ref={containerRef}
+				className="w-full h-full flex items-center justify-center"
+				data-testid="editor-preview-container"
+			>
+				<canvas ref={canvasRef} data-testid="editor-preview-canvas" />
+				<video
+					ref={videoRef}
+					src={videoUrl}
+					className="hidden"
+					data-testid="editor-preview-video"
+					onTimeUpdate={handleTimeUpdate}
+					onEnded={handleEnded}
+					onPlay={() =>
+						setEditorState((state) => ({ ...state, playing: true }))
+					}
+					onPause={() =>
+						setEditorState((state) => ({ ...state, playing: false }))
+					}
+					preload="metadata"
+				>
+					<track
+						kind="captions"
+						srcLang="en"
+						label="English"
+						src="data:text/vtt;charset=utf-8,WEBVTT%0A"
+					/>
+				</video>
+			</div>
+		</div>
+	);
+}
+
+export function Player() {
+	const rendererMode = useRendererMode();
+
+	return (
+		<div className="flex-1 flex flex-col bg-gray-1 min-h-0">
+			{rendererMode === "canvas" ? <CanvasPlayer /> : <LegacyPlayer />}
 			<PlayerControls />
 		</div>
 	);
