@@ -886,7 +886,7 @@ export async function processVideoWithTimeline(
 		}
 
 		filters.push(
-			`[vout]scale=w=${editorLayout.innerWidth}:h=${editorLayout.innerHeight}:force_original_aspect_ratio=decrease,format=yuva420p[vscaled]`,
+			`[vout]scale=w=${editorLayout.innerWidth}:h=${editorLayout.innerHeight}:force_original_aspect_ratio=decrease,format=yuva420p,pad=w=${editorLayout.innerWidth}:h=${editorLayout.innerHeight}:x=(ow-iw)/2:y=(oh-ih)/2:color=black@0[vscaled]`,
 		);
 
 		if (editorLayout.borderRadius > 0) {
