@@ -274,7 +274,9 @@ export function EditorProvider({
 			}
 		}
 
-		videoRef.current.play();
+		videoRef.current.play().catch(() => {
+			setEditorState((state) => ({ ...state, playing: false }));
+		});
 		setEditorState((state) => ({ ...state, playing: true }));
 	}, [project.timeline?.segments, video.duration]);
 
