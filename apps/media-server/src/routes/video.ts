@@ -1,3 +1,4 @@
+import { normalizeConfigForRender } from "@cap/editor-render-spec";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import {
@@ -336,6 +337,25 @@ video.post("/editor/process", async (c) => {
 					"Too many concurrent video processing jobs, please retry later",
 			},
 			503,
+		);
+	}
+
+	const normalized = normalizeConfigForRender(result.data.projectConfig);
+	const errors = normalized.issues.filter(
+		(issue) => issue.severity === "error",
+	);
+	if (errors.length > 0) {
+		return c.json(
+			{
+				error: "Unsupported editor config",
+				code: "UNSUPPORTED_CONFIG",
+				details: errors
+					.slice(0, 5)
+					.map((issue) => `${issue.path}: ${issue.code}`)
+					.join("; "),
+				issues: errors,
+			},
+			400,
 		);
 	}
 

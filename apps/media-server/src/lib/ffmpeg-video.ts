@@ -1,5 +1,10 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { RgbTuple } from "@cap/editor-render-spec";
+import {
+	computeRenderSpec,
+	normalizeConfigForRender,
+} from "@cap/editor-render-spec";
 import { file, type Subprocess, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { createTempFile, type TempFileHandle } from "./temp-files";
@@ -34,57 +39,6 @@ export interface TimelineSegment {
 	timescale: number;
 }
 
-const ASPECT_RATIO_VALUES = {
-	wide: [16, 9],
-	vertical: [9, 16],
-	square: [1, 1],
-	classic: [4, 3],
-	tall: [3, 4],
-} as const;
-
-type EditorAspectRatio = keyof typeof ASPECT_RATIO_VALUES;
-
-interface EditorBackgroundColorSource {
-	type: "color";
-	value: [number, number, number];
-	alpha?: number;
-}
-
-interface EditorBackgroundGradientSource {
-	type: "gradient";
-	from: [number, number, number];
-	to: [number, number, number];
-	angle?: number;
-}
-
-interface EditorBackgroundImageSource {
-	type: "image" | "wallpaper";
-	path: string | null;
-}
-
-type EditorBackgroundSource =
-	| EditorBackgroundColorSource
-	| EditorBackgroundGradientSource
-	| EditorBackgroundImageSource;
-
-interface EditorBackgroundConfiguration {
-	source?: EditorBackgroundSource;
-	padding?: number;
-	rounding?: number;
-	roundingType?: "rounded" | "squircle";
-	shadow?: number;
-	advancedShadow?: {
-		size?: number;
-		opacity?: number;
-		blur?: number;
-	} | null;
-}
-
-interface EditorProjectConfiguration {
-	aspectRatio?: EditorAspectRatio | null;
-	background?: EditorBackgroundConfiguration | null;
-}
-
 interface EditorRenderLayout {
 	outputWidth: number;
 	outputHeight: number;
@@ -95,14 +49,17 @@ interface EditorRenderLayout {
 		enabled: boolean;
 		offsetY: number;
 		blur: number;
+		spread: number;
 		opacity: number;
 	};
 	backgroundImagePath: string | null;
 	backgroundGradient: {
-		from: [number, number, number];
-		to: [number, number, number];
+		from: RgbTuple;
+		to: RgbTuple;
+		angle: number;
 	} | null;
 	backgroundColor: string;
+	backgroundColorAlpha: number;
 	shouldApply: boolean;
 }
 
@@ -298,33 +255,11 @@ function clamp(value: number, min: number, max: number): number {
 	return value;
 }
 
-function toEven(value: number): number {
-	const rounded = Math.round(value);
-	const even = rounded % 2 === 0 ? rounded : rounded + 1;
-	return Math.max(2, even);
-}
-
-function isNumber(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value);
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-	return Boolean(value) && typeof value === "object";
-}
-
-function isRgbTuple(value: unknown): value is [number, number, number] {
-	return (
-		Array.isArray(value) &&
-		value.length === 3 &&
-		value.every((item) => isNumber(item))
-	);
-}
-
 function normalizeChannel(value: number): number {
 	return Math.round(clamp(value, 0, 255));
 }
 
-function toHexColor([r, g, b]: [number, number, number]): string {
+function toHexColor([r, g, b]: RgbTuple): string {
 	const channels = [
 		normalizeChannel(r),
 		normalizeChannel(g),
@@ -336,81 +271,46 @@ function toHexColor([r, g, b]: [number, number, number]): string {
 	return `0x${hex}`;
 }
 
-function getTargetAspectRatio(
-	projectConfig: unknown,
-	fallbackRatio: number,
-): number {
-	if (!projectConfig || typeof projectConfig !== "object") {
-		return fallbackRatio;
-	}
+function buildLinearGradientGeq(options: {
+	from: RgbTuple;
+	to: RgbTuple;
+	angle: number;
+	width: number;
+	height: number;
+}): { r: string; g: string; b: string } {
+	const theta = (options.angle * Math.PI) / 180;
+	const dx = Math.sin(theta);
+	const dy = -Math.cos(theta);
+	const halfW = (options.width - 1) / 2;
+	const halfH = (options.height - 1) / 2;
 
-	const aspectRatio = (projectConfig as EditorProjectConfiguration).aspectRatio;
-	if (!aspectRatio || !(aspectRatio in ASPECT_RATIO_VALUES)) {
-		return fallbackRatio;
-	}
+	const projections = [
+		[-halfW, -halfH],
+		[halfW, -halfH],
+		[-halfW, halfH],
+		[halfW, halfH],
+	].map(([x, y]) => x * dx + y * dy);
 
-	const [width, height] = ASPECT_RATIO_VALUES[aspectRatio];
-	return width / height;
-}
+	const min = Math.min(...projections);
+	const max = Math.max(...projections);
+	const denom = Math.abs(max - min) > 1e-9 ? max - min : 1;
 
-function getPaddingRatio(config: EditorProjectConfiguration): number {
-	const padding = config.background?.padding;
-	if (!isNumber(padding)) return 0;
-	return clamp(padding, 0, 40) / 100;
-}
+	const dxExpr = formatFfmpegNumber(dx);
+	const dyExpr = formatFfmpegNumber(dy);
+	const halfWExpr = formatFfmpegNumber(halfW);
+	const halfHExpr = formatFfmpegNumber(halfH);
+	const minExpr = formatFfmpegNumber(min);
+	const denomExpr = formatFfmpegNumber(denom);
 
-function getRoundingRadius(
-	config: EditorProjectConfiguration,
-	innerWidth: number,
-	innerHeight: number,
-): number {
-	const rounding = config.background?.rounding;
-	if (!isNumber(rounding)) return 0;
-	const type = config.background?.roundingType ?? "squircle";
-	const multiplier = type === "rounded" ? 1 : 0.8;
-	return Math.round(
-		(Math.min(innerWidth, innerHeight) / 2) *
-			(clamp(rounding, 0, 100) / 100) *
-			multiplier,
-	);
-}
+	const t = `max(0,min(1,(((X-${halfWExpr})*${dxExpr})+((Y-${halfHExpr})*${dyExpr})-${minExpr})/${denomExpr}))`;
 
-function getShadowLayout(config: EditorProjectConfiguration): {
-	enabled: boolean;
-	offsetY: number;
-	blur: number;
-	opacity: number;
-} {
-	const amount = config.background?.shadow;
-	if (!isNumber(amount) || amount <= 0) {
-		return {
-			enabled: false,
-			offsetY: 0,
-			blur: 0,
-			opacity: 0,
-		};
-	}
-
-	const shadowAmount = clamp(amount, 0, 100);
-	const advanced = config.background?.advancedShadow;
-	const size = clamp(isNumber(advanced?.size) ? advanced.size : 50, 0, 100);
-	const blur = clamp(isNumber(advanced?.blur) ? advanced.blur : 50, 0, 100);
-	const opacity = clamp(
-		isNumber(advanced?.opacity) ? advanced.opacity : 18,
-		0,
-		100,
-	);
+	const [fromR, fromG, fromB] = options.from;
+	const [toR, toG, toB] = options.to;
 
 	return {
-		enabled: true,
-		offsetY: Number((2 + size * 0.14).toFixed(2)),
-		blur: Number((4 + blur * 0.78 + shadowAmount * 0.22).toFixed(2)),
-		opacity: Number(
-			Math.max(
-				0,
-				Math.min(0.95, (opacity / 100) * (shadowAmount / 100) * 0.9),
-			).toFixed(4),
-		),
+		r: `${normalizeChannel(fromR)}+(${normalizeChannel(toR)}-${normalizeChannel(fromR)})*${t}`,
+		g: `${normalizeChannel(fromG)}+(${normalizeChannel(toG)}-${normalizeChannel(fromG)})*${t}`,
+		b: `${normalizeChannel(fromB)}+(${normalizeChannel(toB)}-${normalizeChannel(fromB)})*${t}`,
 	};
 }
 
@@ -466,111 +366,63 @@ function resolveBackgroundImagePath(path: string): string | null {
 	return trimmed;
 }
 
-function getBackgroundSource(config: EditorProjectConfiguration): {
-	backgroundColor: string;
-	backgroundGradient: {
-		from: [number, number, number];
-		to: [number, number, number];
-	} | null;
-	backgroundImagePath: string | null;
-} {
-	const source = config.background?.source;
-	if (!isObject(source) || typeof source.type !== "string") {
-		return {
-			backgroundColor: "0xffffff",
-			backgroundGradient: null,
-			backgroundImagePath: null,
-		};
-	}
-
-	if (source.type === "color" && isRgbTuple(source.value)) {
-		return {
-			backgroundColor: toHexColor(source.value),
-			backgroundGradient: null,
-			backgroundImagePath: null,
-		};
-	}
-
-	if (
-		source.type === "gradient" &&
-		isRgbTuple(source.from) &&
-		isRgbTuple(source.to)
-	) {
-		return {
-			backgroundColor: toHexColor(source.from),
-			backgroundGradient: {
-				from: source.from,
-				to: source.to,
-			},
-			backgroundImagePath: null,
-		};
-	}
-
-	if (
-		(source.type === "image" || source.type === "wallpaper") &&
-		typeof source.path === "string"
-	) {
-		return {
-			backgroundColor: "0xffffff",
-			backgroundGradient: null,
-			backgroundImagePath: resolveBackgroundImagePath(source.path),
-		};
-	}
-
-	return {
-		backgroundColor: "0xffffff",
-		backgroundGradient: null,
-		backgroundImagePath: null,
-	};
-}
-
 function getEditorRenderLayout(
 	metadata: VideoMetadata,
 	projectConfig: unknown,
 ): EditorRenderLayout {
-	const config: EditorProjectConfiguration = isObject(projectConfig)
-		? (projectConfig as EditorProjectConfiguration)
-		: {};
-	const sourceWidth = toEven(metadata.width);
-	const sourceHeight = toEven(metadata.height);
-	const sourceRatio = sourceWidth / sourceHeight;
-	const targetRatio = getTargetAspectRatio(config, sourceRatio);
-	const ratioDiff = Math.abs(targetRatio - sourceRatio);
+	const normalized = normalizeConfigForRender(projectConfig);
+	const spec = computeRenderSpec(
+		normalized.config,
+		metadata.width,
+		metadata.height,
+	);
 
-	let outputWidth = sourceWidth;
-	let outputHeight = sourceHeight;
+	let backgroundColor = "0xffffff";
+	let backgroundColorAlpha = 1;
+	let backgroundGradient: EditorRenderLayout["backgroundGradient"] = null;
+	let backgroundImagePath: string | null = null;
 
-	if (ratioDiff > 0.0001) {
-		if (targetRatio > sourceRatio) {
-			outputWidth = toEven(sourceHeight * targetRatio);
-		} else {
-			outputHeight = toEven(sourceWidth / targetRatio);
-		}
+	const background = spec.backgroundSpec;
+	if (background.type === "color") {
+		backgroundColor = toHexColor(background.value);
+		backgroundColorAlpha = background.alpha;
+	} else if (background.type === "gradient") {
+		backgroundColor = toHexColor(background.from);
+		backgroundGradient = {
+			from: background.from,
+			to: background.to,
+			angle: background.angle,
+		};
+	} else if (background.path) {
+		backgroundImagePath = resolveBackgroundImagePath(background.path);
 	}
 
-	const paddingRatio = getPaddingRatio(config);
-	const innerScale = Math.max(0.05, 1 - paddingRatio * 2);
-	const innerWidth = toEven(outputWidth * innerScale);
-	const innerHeight = toEven(outputHeight * innerScale);
-	const borderRadius = getRoundingRadius(config, innerWidth, innerHeight);
-	const shadow = getShadowLayout(config);
-	const background = getBackgroundSource(config);
+	const shadow = spec.shadowSpec;
 	const shouldApply =
-		ratioDiff > 0.0001 ||
-		paddingRatio > 0 ||
-		borderRadius > 0 ||
+		spec.outputWidth !== metadata.width ||
+		spec.outputHeight !== metadata.height ||
+		spec.innerRect.width !== spec.outputWidth ||
+		spec.innerRect.height !== spec.outputHeight ||
+		spec.maskSpec.radiusPx > 0 ||
 		shadow.enabled;
 
 	return {
-		outputWidth,
-		outputHeight,
-		innerWidth,
-		innerHeight,
-		borderRadius,
-		shadow,
-		backgroundColor: background.backgroundColor,
-		backgroundGradient: background.backgroundGradient,
-		backgroundImagePath: background.backgroundImagePath,
+		outputWidth: spec.outputWidth,
+		outputHeight: spec.outputHeight,
+		innerWidth: spec.innerRect.width,
+		innerHeight: spec.innerRect.height,
+		borderRadius: spec.maskSpec.radiusPx,
+		shadow: {
+			enabled: shadow.enabled,
+			offsetY: shadow.offsetY,
+			blur: shadow.blurPx,
+			spread: shadow.spreadPx,
+			opacity: shadow.alpha,
+		},
+		backgroundColor,
+		backgroundColorAlpha,
+		backgroundGradient,
+		backgroundImagePath,
 		shouldApply,
 	};
 }
@@ -1013,14 +865,23 @@ export async function processVideoWithTimeline(
 				`[1:v]scale=${editorLayout.outputWidth}:${editorLayout.outputHeight}:force_original_aspect_ratio=increase,crop=${editorLayout.outputWidth}:${editorLayout.outputHeight}[bg]`,
 			);
 		} else if (editorLayout.backgroundGradient) {
-			const [fromR, fromG, fromB] = editorLayout.backgroundGradient.from;
-			const [toR, toG, toB] = editorLayout.backgroundGradient.to;
+			const geq = buildLinearGradientGeq({
+				from: editorLayout.backgroundGradient.from,
+				to: editorLayout.backgroundGradient.to,
+				angle: editorLayout.backgroundGradient.angle,
+				width: editorLayout.outputWidth,
+				height: editorLayout.outputHeight,
+			});
 			filters.push(
-				`nullsrc=s=${editorLayout.outputWidth}x${editorLayout.outputHeight}:d=${formatFfmpegNumber(targetDuration + 1)},format=rgb24,geq=r='${normalizeChannel(fromR)}+(${normalizeChannel(toR)}-${normalizeChannel(fromR)})*Y/H':g='${normalizeChannel(fromG)}+(${normalizeChannel(toG)}-${normalizeChannel(fromG)})*Y/H':b='${normalizeChannel(fromB)}+(${normalizeChannel(toB)}-${normalizeChannel(fromB)})*Y/H'[bg]`,
+				`nullsrc=s=${editorLayout.outputWidth}x${editorLayout.outputHeight}:d=${formatFfmpegNumber(targetDuration + 1)},format=rgb24,geq=r='${geq.r}':g='${geq.g}':b='${geq.b}'[bg]`,
 			);
 		} else {
+			const backgroundColor =
+				editorLayout.backgroundColorAlpha === 1
+					? editorLayout.backgroundColor
+					: `${editorLayout.backgroundColor}@${Number(editorLayout.backgroundColorAlpha.toFixed(6))}`;
 			filters.push(
-				`color=c=${editorLayout.backgroundColor}:s=${editorLayout.outputWidth}x${editorLayout.outputHeight}:d=${formatFfmpegNumber(targetDuration + 1)}[bg]`,
+				`color=c=${backgroundColor}:s=${editorLayout.outputWidth}x${editorLayout.outputHeight}:d=${formatFfmpegNumber(targetDuration + 1)}[bg]`,
 			);
 		}
 
@@ -1045,14 +906,25 @@ export async function processVideoWithTimeline(
 
 		if (editorLayout.shadow.enabled) {
 			const blurRadius = Math.max(1, Math.round(editorLayout.shadow.blur / 4));
+			const spreadRadius = Math.max(0, Math.round(editorLayout.shadow.spread));
+			const padPx = spreadRadius + blurRadius * 2;
+			const paddedWidth = editorLayout.innerWidth + padPx * 2;
+			const paddedHeight = editorLayout.innerHeight + padPx * 2;
+			const dilationFilters =
+				spreadRadius > 0
+					? `${Array.from({ length: spreadRadius }, () => "dilation").join(",")},`
+					: "";
 			filters.push("[vcard]split[vcard-main][vcard-shadow]");
 			filters.push(
-				`[vcard-shadow]alphaextract,boxblur=${blurRadius}:1[shadow-alpha]`,
+				`[vcard-shadow]pad=w=iw+${padPx * 2}:h=ih+${padPx * 2}:x=${padPx}:y=${padPx}:color=0x00000000,alphaextract,${dilationFilters}boxblur=${blurRadius}:1[shadow-alpha]`,
 			);
 			filters.push(
-				`color=c=black@${editorLayout.shadow.opacity}:s=${editorLayout.innerWidth}x${editorLayout.innerHeight}:d=${formatFfmpegNumber(targetDuration + 1)},format=yuva420p[shadow-color]`,
+				`color=c=black:s=${paddedWidth}x${paddedHeight}:d=${formatFfmpegNumber(targetDuration + 1)},format=yuva420p[shadow-color]`,
 			);
-			filters.push("[shadow-color][shadow-alpha]alphamerge[shadow]");
+			filters.push("[shadow-color][shadow-alpha]alphamerge[shadow-pre]");
+			filters.push(
+				`[shadow-pre]colorchannelmixer=aa=${editorLayout.shadow.opacity}[shadow]`,
+			);
 			filters.push(
 				`[bg][shadow]overlay=(W-w)/2:(H-h)/2+${editorLayout.shadow.offsetY}:shortest=1[bg-shadow]`,
 			);
