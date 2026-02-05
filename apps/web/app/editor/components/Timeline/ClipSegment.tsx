@@ -66,10 +66,11 @@ export function ClipSegment({
 		[segment.start, actions],
 	);
 
-	const handleTrimMouseDown = useCallback(
-		(e: React.MouseEvent, edge: "start" | "end") => {
+	const handleTrimPointerDown = useCallback(
+		(e: React.PointerEvent, edge: "start" | "end") => {
 			e.stopPropagation();
 			e.preventDefault();
+			(e.target as HTMLElement).setPointerCapture(e.pointerId);
 			onTrimBegin?.();
 			setIsDragging(edge);
 
@@ -77,7 +78,7 @@ export function ClipSegment({
 			const originalStart = segment.start;
 			const originalEnd = segment.end;
 
-			const handleMouseMove = (moveEvent: MouseEvent) => {
+			const handlePointerMove = (moveEvent: PointerEvent) => {
 				const deltaX = moveEvent.clientX - startClientX;
 				const deltaTime = deltaX * secsPerPixel;
 
@@ -99,15 +100,15 @@ export function ClipSegment({
 				}
 			};
 
-			const handleMouseUp = () => {
+			const handlePointerUp = () => {
 				setIsDragging(null);
-				document.removeEventListener("mousemove", handleMouseMove);
-				document.removeEventListener("mouseup", handleMouseUp);
+				document.removeEventListener("pointermove", handlePointerMove);
+				document.removeEventListener("pointerup", handlePointerUp);
 				onTrimCommit?.();
 			};
 
-			document.addEventListener("mousemove", handleMouseMove);
-			document.addEventListener("mouseup", handleMouseUp);
+			document.addEventListener("pointermove", handlePointerMove);
+			document.addEventListener("pointerup", handlePointerUp);
 		},
 		[
 			segment.start,
@@ -158,7 +159,7 @@ export function ClipSegment({
 				<TrimHandle
 					edge="start"
 					isDragging={isDragging === "start"}
-					onMouseDown={(e) => handleTrimMouseDown(e, "start")}
+					onPointerDown={(e) => handleTrimPointerDown(e, "start")}
 				/>
 
 				<div className="absolute inset-0 overflow-hidden">
@@ -185,7 +186,7 @@ export function ClipSegment({
 				<TrimHandle
 					edge="end"
 					isDragging={isDragging === "end"}
-					onMouseDown={(e) => handleTrimMouseDown(e, "end")}
+					onPointerDown={(e) => handleTrimPointerDown(e, "end")}
 				/>
 			</button>
 		</SegmentContextProvider>
@@ -195,17 +196,18 @@ export function ClipSegment({
 interface TrimHandleProps {
 	edge: "start" | "end";
 	isDragging: boolean;
-	onMouseDown: (e: React.MouseEvent) => void;
+	onPointerDown: (e: React.PointerEvent) => void;
 }
 
-function TrimHandle({ edge, isDragging, onMouseDown }: TrimHandleProps) {
+function TrimHandle({ edge, isDragging, onPointerDown }: TrimHandleProps) {
 	return (
 		<div
 			aria-hidden="true"
 			className={`absolute top-0 bottom-0 w-2 cursor-ew-resize group ${
 				edge === "start" ? "left-0" : "right-0"
 			}`}
-			onMouseDown={onMouseDown}
+			style={{ touchAction: "none" }}
+			onPointerDown={onPointerDown}
 		>
 			<div
 				className={`absolute top-1/2 -translate-y-1/2 h-6 w-1 rounded-full transition-colors ${isDragging ? "bg-blue-300" : "bg-blue-400/50 group-hover:bg-blue-300"} ${edge === "start" ? "left-1" : "right-1"}`}

@@ -220,8 +220,71 @@ export function Timeline() {
 		setEditorState,
 	]);
 
-	const handleMouseMove = useCallback(
-		(e: React.MouseEvent) => {
+	useEffect(() => {
+		const container = containerRef.current;
+		if (!container) return;
+
+		let initialDistance = 0;
+		let initialZoom = transform.zoom;
+
+		const getDistance = (t1: Touch, t2: Touch) =>
+			Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+
+		const handleTouchStart = (e: TouchEvent) => {
+			if (e.touches.length === 2) {
+				const touch1 = e.touches[0];
+				const touch2 = e.touches[1];
+				if (touch1 && touch2) {
+					initialDistance = getDistance(touch1, touch2);
+					initialZoom = transform.zoom;
+				}
+			}
+		};
+
+		const handleTouchMove = (e: TouchEvent) => {
+			if (e.touches.length === 2) {
+				e.preventDefault();
+				const touch1 = e.touches[0];
+				const touch2 = e.touches[1];
+				if (!touch1 || !touch2 || initialDistance === 0) return;
+				const currentDistance = getDistance(touch1, touch2);
+				const scale = initialDistance / currentDistance;
+				const newZoom = Math.max(1, Math.min(duration, initialZoom * scale));
+
+				const midX =
+					(touch1.clientX + touch2.clientX) / 2 - (timelineBounds?.left ?? 0);
+				const ratio = timelineBounds?.width ? midX / timelineBounds.width : 0.5;
+				const anchor = transform.position + ratio * transform.zoom;
+				const newPosition = Math.max(
+					0,
+					Math.min(duration - newZoom, anchor - ratio * newZoom),
+				);
+
+				setEditorState((state) => ({
+					...state,
+					timeline: {
+						...state.timeline,
+						transform: { position: newPosition, zoom: newZoom },
+					},
+				}));
+			}
+		};
+
+		container.addEventListener("touchstart", handleTouchStart, {
+			passive: true,
+		});
+		container.addEventListener("touchmove", handleTouchMove, {
+			passive: false,
+		});
+
+		return () => {
+			container.removeEventListener("touchstart", handleTouchStart);
+			container.removeEventListener("touchmove", handleTouchMove);
+		};
+	}, [transform, duration, timelineBounds, setEditorState]);
+
+	const handlePointerMove = useCallback(
+		(e: React.PointerEvent) => {
 			if (!timelineBounds || editorState.playing) return;
 			const offsetX = e.clientX - timelineBounds.left;
 			if (offsetX < 0 || offsetX > timelineBounds.width) {
@@ -256,9 +319,10 @@ export function Timeline() {
 				style={{
 					paddingLeft: TIMELINE_PADDING,
 					paddingRight: TIMELINE_PADDING,
+					touchAction: "pan-x",
 				}}
-				onMouseMove={handleMouseMove}
-				onMouseLeave={() =>
+				onPointerMove={handlePointerMove}
+				onPointerLeave={() =>
 					setEditorState((state) => ({ ...state, previewTime: 0 }))
 				}
 			>
