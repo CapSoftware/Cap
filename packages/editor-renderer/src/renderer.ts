@@ -75,8 +75,11 @@ export class EditorRenderer {
 	render(): void {
 		if (this.destroyed) return;
 
-		const ctx = this.ctx;
 		const { spec, video, scaleFactor } = this.state;
+
+		if (!video || video.readyState < 2) return;
+
+		const ctx = this.ctx;
 
 		ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
