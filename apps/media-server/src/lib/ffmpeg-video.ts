@@ -175,7 +175,11 @@ function withHostHeader(
 	return resolved;
 }
 
-async function fetchWithLoopbackBridge(
+export function useCanvasRenderer(): boolean {
+	return process.env.CAP_CANVAS_RENDERER !== "false";
+}
+
+export async function fetchWithLoopbackBridge(
 	url: string,
 	init: RequestInit,
 ): Promise<Response> {
@@ -314,7 +318,7 @@ function buildLinearGradientGeq(options: {
 	};
 }
 
-function resolveBackgroundImagePath(path: string): string | null {
+export function resolveBackgroundImagePath(path: string): string | null {
 	const trimmed = path.trim();
 	if (trimmed.length === 0) return null;
 
@@ -366,7 +370,7 @@ function resolveBackgroundImagePath(path: string): string | null {
 	return trimmed;
 }
 
-function getEditorRenderLayout(
+export function getEditorRenderLayout(
 	metadata: VideoMetadata,
 	projectConfig: unknown,
 ): EditorRenderLayout {
@@ -457,11 +461,11 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 	return metadata.audioCodec !== "aac";
 }
 
-function formatFfmpegNumber(value: number): string {
+export function formatFfmpegNumber(value: number): string {
 	return Number(value.toFixed(6)).toString();
 }
 
-function normalizeTimelineSegments(
+export function normalizeTimelineSegments(
 	segments: ReadonlyArray<TimelineSegment>,
 	duration: number,
 ): TimelineSegment[] {
@@ -495,7 +499,7 @@ function normalizeTimelineSegments(
 	];
 }
 
-function buildAtempoFilter(timescale: number): string {
+export function buildAtempoFilter(timescale: number): string {
 	let remaining = timescale;
 	const filters: string[] = [];
 
@@ -516,9 +520,8 @@ function buildAtempoFilter(timescale: number): string {
 	return filters.join(",");
 }
 
-function buildTimelineFilterGraph(
+export function buildVideoTimelineFilterGraph(
 	segments: ReadonlyArray<TimelineSegment>,
-	hasAudio: boolean,
 ): {
 	filterGraph: string;
 	totalDuration: number;
@@ -535,29 +538,58 @@ function buildTimelineFilterGraph(
 			`[0:v]trim=start=${formatFfmpegNumber(segment.start)}:end=${formatFfmpegNumber(segment.end)},setpts=(PTS-STARTPTS)/${formatFfmpegNumber(segment.timescale)}[v${index}]`,
 		);
 		concatInputs.push(`[v${index}]`);
-
-		if (hasAudio) {
-			const atempo = buildAtempoFilter(segment.timescale);
-			const audioFilters = atempo.length > 0 ? `,${atempo}` : "";
-			filters.push(
-				`[0:a]atrim=start=${formatFfmpegNumber(segment.start)}:end=${formatFfmpegNumber(segment.end)},asetpts=PTS-STARTPTS${audioFilters}[a${index}]`,
-			);
-			concatInputs.push(`[a${index}]`);
-		}
 	}
 
-	if (hasAudio) {
-		filters.push(
-			`${concatInputs.join("")}concat=n=${segments.length}:v=1:a=1[vout][aout]`,
-		);
-	} else {
-		filters.push(
-			`${concatInputs.join("")}concat=n=${segments.length}:v=1:a=0[vout]`,
-		);
-	}
+	filters.push(
+		`${concatInputs.join("")}concat=n=${segments.length}:v=1:a=0[vout]`,
+	);
 
 	return {
 		filterGraph: filters.join(";"),
+		totalDuration,
+	};
+}
+
+export function buildAudioTimelineFilterGraph(
+	segments: ReadonlyArray<TimelineSegment>,
+	inputIndex = 0,
+): string {
+	const filters: string[] = [];
+	const concatInputs: string[] = [];
+
+	for (const [index, segment] of segments.entries()) {
+		const atempo = buildAtempoFilter(segment.timescale);
+		const audioFilters = atempo.length > 0 ? `,${atempo}` : "";
+		filters.push(
+			`[${inputIndex}:a]atrim=start=${formatFfmpegNumber(segment.start)}:end=${formatFfmpegNumber(segment.end)},asetpts=PTS-STARTPTS${audioFilters}[a${index}]`,
+		);
+		concatInputs.push(`[a${index}]`);
+	}
+
+	filters.push(
+		`${concatInputs.join("")}concat=n=${segments.length}:v=0:a=1[aout]`,
+	);
+
+	return filters.join(";");
+}
+
+function buildTimelineFilterGraph(
+	segments: ReadonlyArray<TimelineSegment>,
+	hasAudio: boolean,
+): {
+	filterGraph: string;
+	totalDuration: number;
+} {
+	const { filterGraph: videoGraph, totalDuration } =
+		buildVideoTimelineFilterGraph(segments);
+
+	if (!hasAudio) {
+		return { filterGraph: videoGraph, totalDuration };
+	}
+
+	const audioGraph = buildAudioTimelineFilterGraph(segments);
+	return {
+		filterGraph: `${videoGraph};${audioGraph}`,
 		totalDuration,
 	};
 }

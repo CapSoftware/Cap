@@ -1,8 +1,14 @@
 FROM oven/bun:1-alpine
 
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache ffmpeg cairo pango libjpeg-turbo giflib librsvg pixman
 
 WORKDIR /app
+
+COPY packages/editor-render-spec/package.json ./packages/editor-render-spec/package.json
+COPY packages/editor-render-spec/src ./packages/editor-render-spec/src
+
+COPY packages/editor-renderer/package.json ./packages/editor-renderer/package.json
+COPY packages/editor-renderer/src ./packages/editor-renderer/src
 
 COPY package.json ./
 RUN bun install --production
@@ -10,6 +16,7 @@ RUN bun install --production
 COPY src ./src
 
 ENV PORT=3456
+ENV CAP_CANVAS_RENDERER=true
 EXPOSE 3456
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

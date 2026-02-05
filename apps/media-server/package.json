@@ -11,6 +11,8 @@
 	},
 	"dependencies": {
 		"@cap/editor-render-spec": "workspace:*",
+		"@cap/editor-renderer": "workspace:*",
+		"@napi-rs/canvas": "^0.1.68",
 		"hono": "^4.7.1",
 		"zod": "^3.24.2"
 	},

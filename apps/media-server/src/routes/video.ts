@@ -1,6 +1,7 @@
 import { normalizeConfigForRender } from "@cap/editor-render-spec";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
+import { processVideoWithCanvasPipeline } from "../lib/canvas-pipeline";
 import {
 	downloadVideoToTemp,
 	generateThumbnail,
@@ -9,6 +10,7 @@ import {
 	type TimelineSegment,
 	uploadFileToS3,
 	uploadToS3,
+	useCanvasRenderer,
 } from "../lib/ffmpeg-video";
 import {
 	canAcceptNewProbeProcess,
@@ -567,7 +569,11 @@ async function processEditorVideoAsync(
 			sourceMetadata.duration,
 		);
 
-		const outputTempFile = await processVideoWithTimeline(
+		const processFunc = useCanvasRenderer()
+			? processVideoWithCanvasPipeline
+			: processVideoWithTimeline;
+
+		const outputTempFile = await processFunc(
 			inputTempFile.path,
 			sourceMetadata,
 			timelineSegments,
