@@ -5,7 +5,7 @@
 	"types": "./src/index.tsx",
 	"scripts": {
 		"dev": "pnpm docker:up",
-		"docker:up": "docker compose up",
+		"docker:up": "docker compose up --build",
 		"docker:stop": "docker compose stop",
 		"docker:clean": "docker compose down -v"
 	},
