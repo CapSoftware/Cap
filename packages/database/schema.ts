@@ -321,6 +321,7 @@ export const videos = mysqlTable(
 				| { type: "local" }
 				| { type: "desktopMP4" }
 				| { type: "webMP4" }
+				| { type: "webStudio" }
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),

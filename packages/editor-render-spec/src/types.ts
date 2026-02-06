@@ -68,6 +68,7 @@ export type NormalizedRenderConfig = {
 	aspectRatio: AspectRatioKey | null;
 	background: BackgroundConfigSpec;
 	timeline: NormalizedTimelineConfig | null;
+	camera?: NormalizedCameraConfig;
 };
 
 export type RenderConfigIssue = {
@@ -106,6 +107,29 @@ export type RenderShadowSpec = {
 	alpha: number;
 };
 
+export type CameraPositionX = "left" | "center" | "right";
+export type CameraPositionY = "top" | "bottom";
+
+export type RenderCameraSpec = {
+	position: { x: CameraPositionX; y: CameraPositionY };
+	rect: RenderInnerRect;
+	rounding: number;
+	roundingType: "rounded" | "squircle";
+	shadow: RenderShadowSpec;
+	mirror: boolean;
+};
+
+export type NormalizedCameraConfig = {
+	hide: boolean;
+	mirror: boolean;
+	position: { x: CameraPositionX; y: CameraPositionY };
+	size: number;
+	rounding: number;
+	roundingType: "rounded" | "squircle";
+	shadow: number;
+	advancedShadow: AdvancedShadowSpec;
+};
+
 export type RenderSpec = {
 	outputWidth: number;
 	outputHeight: number;
@@ -113,4 +137,5 @@ export type RenderSpec = {
 	backgroundSpec: RenderBackgroundSpec;
 	maskSpec: RenderMaskSpec;
 	shadowSpec: RenderShadowSpec;
+	cameraSpec?: RenderCameraSpec;
 };
