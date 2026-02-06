@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
-	videoType: Schema.Literal("video", "audio", "master", "mp4"),
+	videoType: Schema.Literal("video", "audio", "master", "mp4", "camera"),
 	variant: Schema.OptionFromUndefinedOr(Schema.Literal("auto", "original")),
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
 	fileType: Schema.OptionFromUndefinedOr(Schema.String),
@@ -84,7 +84,10 @@ const getPlaylistResponse = (
 	Effect.gen(function* () {
 		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
 		const isMp4Source =
-			video.source.type === "desktopMP4" || video.source.type === "webMP4";
+			video.source.type === "desktopMP4" ||
+			video.source.type === "webMP4" ||
+			video.source.type === "webStudio";
+		const isWebStudio = video.source.type === "webStudio";
 		const metadata =
 			Option.isSome(video.metadata) && typeof video.metadata.value === "object"
 				? (video.metadata.value as Record<string, unknown>)
@@ -107,8 +110,19 @@ const getPlaylistResponse = (
 			maybeEditorSavedRender.outputKey.length > 0
 				? maybeEditorSavedRender.outputKey
 				: null;
-		const mp4Key =
-			savedRenderOutputKey ?? `${video.ownerId}/${video.id}/result.mp4`;
+		const defaultMp4Key = isWebStudio
+			? `${video.ownerId}/${video.id}/display.mp4`
+			: `${video.ownerId}/${video.id}/result.mp4`;
+		const mp4Key = savedRenderOutputKey ?? defaultMp4Key;
+		const cameraKey = `${video.ownerId}/${video.id}/camera.mp4`;
+
+		if (urlParams.videoType === "camera") {
+			if (!isWebStudio)
+				return yield* new HttpApiError.BadRequest();
+			return HttpServerResponse.redirect(
+				yield* s3.getSignedObjectUrl(cameraKey),
+			);
+		}
 
 		if (Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;

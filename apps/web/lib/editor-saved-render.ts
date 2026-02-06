@@ -50,7 +50,14 @@ export function createEditorSavedRenderState(input: {
 	};
 }
 
-export function getOriginalVideoKey(videoId: string, ownerId: string): string {
+export function getOriginalVideoKey(
+	videoId: string,
+	ownerId: string,
+	sourceType?: string,
+): string {
+	if (sourceType === "webStudio") {
+		return `${ownerId}/${videoId}/display.mp4`;
+	}
 	return `${ownerId}/${videoId}/result.mp4`;
 }
 
@@ -59,4 +66,8 @@ export function getSavedRenderOutputKey(
 	ownerId: string,
 ): string {
 	return `${ownerId}/${videoId}/editor/saved.mp4`;
+}
+
+export function getCameraVideoKey(videoId: string, ownerId: string): string {
+	return `${ownerId}/${videoId}/camera.mp4`;
 }

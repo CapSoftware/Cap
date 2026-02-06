@@ -25,6 +25,12 @@ import { runPromise } from "@/lib/server";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { parseVideoIdOrFileKey } from "../utils";
 
+const ALLOWED_SUBPATHS = ["result.mp4", "display.mp4", "camera.mp4"] as const;
+const resolveSubpath = (subpath?: string): string =>
+	subpath && (ALLOWED_SUBPATHS as readonly string[]).includes(subpath)
+		? subpath
+		: "result.mp4";
+
 export const app = new Hono().use(withAuth);
 
 const runPromiseAnyEnv = runPromise as <A, E>(
@@ -34,11 +40,11 @@ const runPromiseAnyEnv = runPromise as <A, E>(
 const abortRequestSchema = z
 	.object({
 		uploadId: z.string(),
+		subpath: z.string().optional(),
 	})
 	.and(
 		z.union([
 			z.object({ videoId: z.string() }),
-			// deprecated
 			z.object({ fileKey: z.string() }),
 		]),
 	);
@@ -59,21 +65,26 @@ app.post(
 	"/initiate",
 	zValidator(
 		"json",
-		z.object({ contentType: z.string() }).and(
-			z.union([
-				z.object({ videoId: z.string() }),
-				// deprecated
-				z.object({ fileKey: z.string() }),
-			]),
-		),
+		z
+			.object({
+				contentType: z.string(),
+				subpath: z.string().optional(),
+			})
+			.and(
+				z.union([
+					z.object({ videoId: z.string() }),
+					z.object({ fileKey: z.string() }),
+				]),
+			),
 	),
 	async (c) => {
-		const { contentType, ...body } = c.req.valid("json");
+		const { contentType, subpath: rawSubpath, ...body } = c.req.valid("json");
 		const user = c.get("user");
+		const subpath = resolveSubpath(rawSubpath);
 
 		const fileKey = parseVideoIdOrFileKey(user.id, {
 			...body,
-			subpath: "result.mp4",
+			subpath,
 		});
 
 		const videoIdFromFileKey = fileKey.split("/")[1];
@@ -176,13 +187,12 @@ app.post(
 			.object({
 				uploadId: z.string(),
 				partNumber: z.number(),
-				// deprecated
 				md5Sum: z.string().optional(),
+				subpath: z.string().optional(),
 			})
 			.and(
 				z.union([
 					z.object({ videoId: z.string() }),
-					// deprecated
 					z.object({ fileKey: z.string() }),
 				]),
 			),
@@ -190,10 +200,11 @@ app.post(
 	async (c) => {
 		const { uploadId, partNumber, ...body } = c.req.valid("json");
 		const user = c.get("user");
+		const subpath = resolveSubpath(body.subpath);
 
 		const fileKey = parseVideoIdOrFileKey(user.id, {
 			...body,
-			subpath: "result.mp4",
+			subpath,
 		});
 
 		try {
@@ -256,11 +267,11 @@ app.post(
 				width: stringOrNumberOptional,
 				height: stringOrNumberOptional,
 				fps: stringOrNumberOptional,
+				subpath: z.string().optional(),
 			})
 			.and(
 				z.union([
 					z.object({ videoId: z.string() }),
-					// deprecated
 					z.object({ fileKey: z.string() }),
 				]),
 			),
@@ -268,6 +279,7 @@ app.post(
 	(c) => {
 		const { uploadId, parts, ...body } = c.req.valid("json");
 		const user = c.get("user");
+		const subpath = resolveSubpath(body.subpath);
 
 		return Effect.gen(function* () {
 			const repo = yield* VideosRepo;
@@ -276,7 +288,7 @@ app.post(
 
 			const fileKey = parseVideoIdOrFileKey(user.id, {
 				...body,
-				subpath: "result.mp4",
+				subpath,
 			});
 
 			const videoIdFromFileKey = fileKey.split("/")[1];
@@ -566,10 +578,11 @@ app.post(
 app.post("/abort", abortRequestValidator, (c) => {
 	const { uploadId, ...body } = c.req.valid("json");
 	const user = c.get("user");
+	const subpath = resolveSubpath(body.subpath);
 
 	const fileKey = parseVideoIdOrFileKey(user.id, {
 		...body,
-		subpath: "result.mp4",
+		subpath,
 	});
 
 	const videoIdFromFileKey = fileKey.split("/")[1];

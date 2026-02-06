@@ -15,6 +15,7 @@ import {
 } from "@/app/editor/types/project-config";
 import {
 	createEditorSavedRenderState,
+	getCameraVideoKey,
 	getEditorSavedRenderState,
 	getOriginalVideoKey,
 	getSavedRenderOutputKey,
@@ -113,6 +114,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 			ownerId: videos.ownerId,
 			bucket: videos.bucket,
 			metadata: videos.metadata,
+			source: videos.source,
 		})
 		.from(videos)
 		.where(eq(videos.id, videoId as Video.VideoId))
@@ -155,8 +157,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
 			updatedAt = NOW()
 	`);
 
-	const sourceKey = getOriginalVideoKey(video.id, user.id);
+	const sourceType = (video.source as { type: string } | null)?.type;
+	const sourceKey = getOriginalVideoKey(video.id, user.id, sourceType);
 	const outputKey = getSavedRenderOutputKey(video.id, user.id);
+	const cameraKey =
+		sourceType === "webStudio"
+			? getCameraVideoKey(video.id, user.id)
+			: undefined;
 
 	const queuedState = createEditorSavedRenderState({
 		status: "QUEUED",
@@ -188,6 +195,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 				sourceKey,
 				outputKey,
 				config,
+				...(cameraKey ? { cameraKey } : {}),
 			},
 		]);
 	} catch (error) {

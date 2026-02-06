@@ -21,6 +21,7 @@ interface SaveEditorVideoWorkflowPayload {
 	sourceKey: string;
 	outputKey: string;
 	config: ProjectConfiguration;
+	cameraKey?: string;
 }
 
 interface MediaServerProcessResult {
@@ -44,6 +45,7 @@ interface MediaServerEditorProcessPayload {
 	videoId: string;
 	userId: string;
 	videoUrl: string;
+	cameraUrl?: string;
 	outputPresignedUrl: string;
 	projectConfig: ProjectConfiguration;
 }
@@ -399,10 +401,25 @@ async function processOnMediaServer(
 		})
 		.pipe(runPromise);
 
+	let cameraUrl: string | undefined;
+	if (payload.cameraKey) {
+		try {
+			cameraUrl = await bucket
+				.getInternalSignedObjectUrl(payload.cameraKey)
+				.pipe(runPromise);
+		} catch (err) {
+			console.error(
+				"[saveEditorVideo] Failed to get camera URL, rendering without camera:",
+				err,
+			);
+		}
+	}
+
 	const processPayload: MediaServerEditorProcessPayload = {
 		videoId: payload.videoId,
 		userId: payload.userId,
 		videoUrl: sourceUrl,
+		...(cameraUrl ? { cameraUrl } : {}),
 		outputPresignedUrl,
 		projectConfig: payload.config,
 	};
