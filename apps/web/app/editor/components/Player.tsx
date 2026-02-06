@@ -11,8 +11,16 @@ import { useEditorContext } from "./context";
 import { PlayerControls } from "./PlayerControls";
 
 export function Player() {
-	const { videoUrl, videoRef, setEditorState, project, video, editorState } =
-		useEditorContext();
+	const {
+		videoUrl,
+		videoRef,
+		cameraUrl,
+		cameraVideoRef,
+		setEditorState,
+		project,
+		video,
+		editorState,
+	} = useEditorContext();
 
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -72,6 +80,23 @@ export function Player() {
 			videoEl.removeEventListener("loadeddata", onLoaded);
 		};
 	}, [videoRef]);
+
+	useEffect(() => {
+		if (!cameraUrl) return;
+		const cameraEl = cameraVideoRef.current;
+		if (!cameraEl) return;
+
+		rendererRef.current?.setCameraSource(cameraEl);
+		rendererRef.current?.render();
+
+		const onLoaded = () => {
+			rendererRef.current?.render();
+		};
+		cameraEl.addEventListener("loadeddata", onLoaded);
+		return () => {
+			cameraEl.removeEventListener("loadeddata", onLoaded);
+		};
+	}, [cameraVideoRef, cameraUrl]);
 
 	useEffect(() => {
 		const container = containerRef.current;
@@ -197,6 +222,23 @@ export function Player() {
 							src="data:text/vtt;charset=utf-8,WEBVTT%0A"
 						/>
 					</video>
+					{cameraUrl && (
+						<video
+							ref={cameraVideoRef}
+							src={cameraUrl}
+							className="hidden"
+							data-testid="editor-camera-video"
+							preload="auto"
+							playsInline
+						>
+							<track
+								kind="captions"
+								srcLang="en"
+								label="English"
+								src="data:text/vtt;charset=utf-8,WEBVTT%0A"
+							/>
+						</video>
+					)}
 				</div>
 			</div>
 			<PlayerControls />

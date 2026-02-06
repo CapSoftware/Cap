@@ -19,6 +19,7 @@ interface VideoData {
 interface EditorProps {
 	video: VideoData;
 	videoUrl: string;
+	cameraUrl?: string | null;
 	initialConfig?: ProjectConfiguration;
 }
 
@@ -41,11 +42,17 @@ function EditorContent({ videoId }: { videoId: string }) {
 	);
 }
 
-export function Editor({ video, videoUrl, initialConfig }: EditorProps) {
+export function Editor({
+	video,
+	videoUrl,
+	cameraUrl,
+	initialConfig,
+}: EditorProps) {
 	return (
 		<EditorProvider
 			video={video}
 			videoUrl={videoUrl}
+			cameraUrl={cameraUrl ?? null}
 			initialConfig={initialConfig}
 		>
 			<EditorContent videoId={video.id} />

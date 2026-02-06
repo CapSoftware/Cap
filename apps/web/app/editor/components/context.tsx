@@ -95,6 +95,7 @@ interface VideoData {
 interface EditorContextValue {
 	video: VideoData;
 	videoUrl: string;
+	cameraUrl: string | null;
 	editorState: EditorState;
 	setEditorState: React.Dispatch<React.SetStateAction<EditorState>>;
 	project: ProjectConfiguration;
@@ -111,6 +112,7 @@ interface EditorContextValue {
 	};
 	waveformData: WaveformData | null;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
+	cameraVideoRef: React.RefObject<HTMLVideoElement | null>;
 	actions: {
 		play: () => void;
 		pause: () => void;
@@ -133,6 +135,7 @@ interface EditorProviderProps {
 	children: React.ReactNode;
 	video: VideoData;
 	videoUrl: string;
+	cameraUrl: string | null;
 	initialConfig?: ProjectConfiguration;
 }
 
@@ -140,9 +143,11 @@ export function EditorProvider({
 	children,
 	video,
 	videoUrl,
+	cameraUrl,
 	initialConfig,
 }: EditorProviderProps) {
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const cameraVideoRef = useRef<HTMLVideoElement>(null);
 	const [editorState, setEditorState] = useState<EditorState>(() => {
 		const persisted = loadPersistedState(video.id);
 		const defaultZoom = Math.max(2, Math.min(video.duration, 30));
@@ -277,17 +282,25 @@ export function EditorProvider({
 		videoRef.current.play().catch(() => {
 			setEditorState((state) => ({ ...state, playing: false }));
 		});
+		if (cameraVideoRef.current) {
+			cameraVideoRef.current.currentTime = videoRef.current.currentTime;
+			cameraVideoRef.current.play().catch(() => {});
+		}
 		setEditorState((state) => ({ ...state, playing: true }));
 	}, [project.timeline?.segments, video.duration]);
 
 	const pause = useCallback(() => {
 		videoRef.current?.pause();
+		cameraVideoRef.current?.pause();
 		setEditorState((state) => ({ ...state, playing: false }));
 	}, []);
 
 	const seekTo = useCallback((time: number) => {
 		if (videoRef.current) {
 			videoRef.current.currentTime = time;
+		}
+		if (cameraVideoRef.current) {
+			cameraVideoRef.current.currentTime = time;
 		}
 		setEditorState((state) => ({
 			...state,
@@ -313,6 +326,14 @@ export function EditorProvider({
 		const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
 		let animationFrameId: number;
 
+		const syncCamera = (time: number) => {
+			const cam = cameraVideoRef.current;
+			if (!cam) return;
+			if (Math.abs(cam.currentTime - time) > 0.1) {
+				cam.currentTime = time;
+			}
+		};
+
 		const updatePlayhead = () => {
 			if (videoRef.current) {
 				const currentTime = videoRef.current.currentTime;
@@ -326,8 +347,10 @@ export function EditorProvider({
 						const nextSegment = findNextSegment(sortedSegments, currentTime);
 						if (nextSegment) {
 							videoRef.current.currentTime = nextSegment.start;
+							syncCamera(nextSegment.start);
 						} else {
 							videoRef.current.pause();
+							cameraVideoRef.current?.pause();
 							setEditorState((state) => ({
 								...state,
 								playing: false,
@@ -340,8 +363,10 @@ export function EditorProvider({
 					const nextSegment = findNextSegment(sortedSegments, currentTime);
 					if (nextSegment) {
 						videoRef.current.currentTime = nextSegment.start;
+						syncCamera(nextSegment.start);
 					} else {
 						videoRef.current.pause();
+						cameraVideoRef.current?.pause();
 						setEditorState((state) => ({
 							...state,
 							playing: false,
@@ -350,6 +375,8 @@ export function EditorProvider({
 						return;
 					}
 				}
+
+				syncCamera(videoRef.current.currentTime);
 
 				setEditorState((state) => ({
 					...state,
@@ -367,6 +394,7 @@ export function EditorProvider({
 	const value: EditorContextValue = {
 		video,
 		videoUrl,
+		cameraUrl,
 		editorState,
 		setEditorState,
 		project,
@@ -383,6 +411,7 @@ export function EditorProvider({
 		},
 		waveformData,
 		videoRef,
+		cameraVideoRef,
 		actions: {
 			play,
 			pause,

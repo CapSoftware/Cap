@@ -55,6 +55,7 @@ export default async function EditorPage(props: EditorPageProps) {
 			duration: videos.duration,
 			width: videos.width,
 			height: videos.height,
+			source: videos.source,
 		})
 		.from(videos)
 		.where(eq(videos.id, videoId))
@@ -67,10 +68,22 @@ export default async function EditorPage(props: EditorPageProps) {
 	const videoDuration = video.duration ?? 0;
 	const videoWidth = video.width ?? 1920;
 	const videoHeight = video.height ?? 1080;
+	const sourceType = (video.source as { type: string } | null)?.type;
+	const isWebStudio = sourceType === "webStudio";
 
 	const videoUrl = `/api/playlist?videoId=${video.id}&videoType=mp4&variant=original`;
+	const cameraUrl = isWebStudio
+		? `/api/playlist?videoId=${video.id}&videoType=camera&variant=original`
+		: null;
 
-	const initialConfig = await getProjectConfig(videoId, videoDuration);
+	let initialConfig = await getProjectConfig(videoId, videoDuration);
+
+	if (isWebStudio && initialConfig.camera?.hide) {
+		initialConfig = {
+			...initialConfig,
+			camera: { ...initialConfig.camera, hide: false },
+		};
+	}
 
 	const videoData = {
 		id: video.id,
@@ -84,6 +97,7 @@ export default async function EditorPage(props: EditorPageProps) {
 		<Editor
 			video={videoData}
 			videoUrl={videoUrl}
+			cameraUrl={cameraUrl}
 			initialConfig={initialConfig}
 		/>
 	);
