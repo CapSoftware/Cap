@@ -184,9 +184,13 @@ export const ShareVideo = forwardRef<
 			});
 		}, [chapters]);
 
+		const isWebStudio = data.source.type === "webStudio";
+		const studioNeedsRender = isWebStudio && !hasSavedRender;
+
 		const isMp4Source =
 			data.source.type === "desktopMP4" ||
 			data.source.type === "webMP4" ||
+			data.source.type === "webStudio" ||
 			hasSavedRender === true;
 		let videoSrc: string;
 		let enableCrossOrigin = false;
@@ -224,7 +228,19 @@ export const ShareVideo = forwardRef<
 							{savedRenderMessage || "Processing your saved changes..."}
 						</div>
 					)}
-					{isMp4Source ? (
+					{studioNeedsRender ? (
+						<div className="flex flex-col items-center justify-center w-full h-full bg-gray-2 rounded-xl">
+							<p className="text-gray-11 text-sm mb-3">
+								This recording was made in Studio Mode
+							</p>
+							<a
+								href={`/editor/${data.id}`}
+								className="px-4 py-2 bg-gray-12 text-gray-1 text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+							>
+								Open Editor
+							</a>
+						</div>
+					) : isMp4Source ? (
 						<CapVideoPlayer
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl overflow-visible"

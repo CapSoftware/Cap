@@ -192,6 +192,7 @@ describe("web editor render and save integration", () => {
 						height: 240,
 					}}
 					videoUrl="/video.mp4"
+					cameraUrl={null}
 					initialConfig={config}
 				>
 					<Player />
@@ -225,6 +226,7 @@ describe("web editor render and save integration", () => {
 						height: 240,
 					}}
 					videoUrl="/video.mp4"
+					cameraUrl={null}
 					initialConfig={config}
 				>
 					<Header videoId="video-1" />
@@ -335,6 +337,7 @@ describe("web editor render and save integration", () => {
 						height: 240,
 					}}
 					videoUrl="/video.mp4"
+					cameraUrl={null}
 					initialConfig={config}
 				>
 					<Header videoId="video-1" />
