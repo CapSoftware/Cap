@@ -15,6 +15,7 @@ import {
 	type TimelineSegment,
 	type VideoProcessingOptions,
 } from "./ffmpeg-video";
+import { probeVideo } from "./ffprobe";
 import type { VideoMetadata } from "./job-manager";
 import { createTempFile, type TempFileHandle } from "./temp-files";
 
@@ -94,6 +95,11 @@ async function collectStderr(
 	return chunks.join("");
 }
 
+function toEven(n: number): number {
+	const rounded = Math.round(n);
+	return rounded % 2 === 0 ? rounded : rounded + 1;
+}
+
 export async function processVideoWithCanvasPipeline(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -102,6 +108,7 @@ export async function processVideoWithCanvasPipeline(
 	options: VideoProcessingOptions = {},
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
+	cameraInputPath?: string,
 ): Promise<TempFileHandle> {
 	const definedOptions = Object.fromEntries(
 		Object.entries(options).filter(([, v]) => v !== undefined),
@@ -161,6 +168,29 @@ export async function processVideoWithCanvasPipeline(
 		}
 	}
 
+	let cameraConfig: { width: number; height: number } | null = null;
+	if (cameraInputPath && renderSpec.cameraSpec) {
+		try {
+			const cameraMeta = await probeVideo(cameraInputPath);
+			if (cameraMeta.width <= 0 || cameraMeta.height <= 0) {
+				throw new Error(
+					`Invalid camera dimensions: ${cameraMeta.width}x${cameraMeta.height}`,
+				);
+			}
+			const camScaleW = metadata.width;
+			const camScaleH = toEven(
+				(metadata.width * cameraMeta.height) / cameraMeta.width,
+			);
+			cameraConfig = { width: camScaleW, height: camScaleH };
+		} catch (err) {
+			console.error(
+				"[canvasPipeline] Failed to probe camera, rendering without camera:",
+				err,
+			);
+			cameraInputPath = undefined;
+		}
+	}
+
 	const configTempFile = await createTempFile(".json");
 	await Bun.write(
 		configTempFile.path,
@@ -169,27 +199,52 @@ export async function processVideoWithCanvasPipeline(
 			sourceHeight: metadata.height,
 			renderSpec,
 			backgroundImagePath,
+			camera: cameraConfig,
 		}),
 	);
 
 	const outputTempFile = await createTempFile(".mp4");
 
-	const decoderArgs = [
-		"ffmpeg",
-		"-threads",
-		"2",
-		"-i",
-		inputPath,
-		"-filter_complex",
-		`${videoFilterGraph};[vout]format=rgba[rgbaout]`,
-		"-map",
-		"[rgbaout]",
-		"-f",
-		"rawvideo",
-		"-pix_fmt",
-		"rgba",
-		"pipe:1",
-	];
+	let decoderArgs: string[];
+	if (cameraInputPath && cameraConfig) {
+		const camScaleFilter = `[1:v]fps=${formatFfmpegNumber(metadata.fps)},scale=${cameraConfig.width}:${cameraConfig.height},format=rgba[camrgba]`;
+		const vstackFilter = `${videoFilterGraph};[vout]format=rgba[disprgba];${camScaleFilter};[disprgba][camrgba]vstack=inputs=2[stacked]`;
+		decoderArgs = [
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			inputPath,
+			"-i",
+			cameraInputPath,
+			"-filter_complex",
+			vstackFilter,
+			"-map",
+			"[stacked]",
+			"-f",
+			"rawvideo",
+			"-pix_fmt",
+			"rgba",
+			"pipe:1",
+		];
+	} else {
+		decoderArgs = [
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			inputPath,
+			"-filter_complex",
+			`${videoFilterGraph};[vout]format=rgba[rgbaout]`,
+			"-map",
+			"[rgbaout]",
+			"-f",
+			"rawvideo",
+			"-pix_fmt",
+			"rgba",
+			"pipe:1",
+		];
+	}
 
 	const encoderArgs = [
 		"ffmpeg",

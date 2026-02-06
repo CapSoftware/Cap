@@ -69,6 +69,7 @@ const editorProcessSchema = z.object({
 	videoId: z.string(),
 	userId: z.string(),
 	videoUrl: z.string().url(),
+	cameraUrl: z.string().url().optional(),
 	outputPresignedUrl: z.string().url(),
 	webhookUrl: z.string().url().optional(),
 	projectConfig: z
@@ -372,6 +373,7 @@ video.post("/editor/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		result.data.projectConfig,
+		result.data.cameraUrl,
 	).catch((err) => {
 		console.error(
 			`[video/editor/process] Async processing error for job ${jobId}:`,
@@ -521,6 +523,7 @@ async function processEditorVideoAsync(
 	videoUrl: string,
 	outputPresignedUrl: string,
 	projectConfig: z.infer<typeof editorProcessSchema>["projectConfig"],
+	cameraUrl?: string,
 ): Promise<void> {
 	const job = getJob(jobId);
 	if (!job) {
@@ -530,6 +533,9 @@ async function processEditorVideoAsync(
 
 	const abortController = new AbortController();
 	updateJob(jobId, { abortController });
+
+	let cameraTempFile: Awaited<ReturnType<typeof downloadVideoToTemp>> | null =
+		null;
 
 	try {
 		updateJob(jobId, {
@@ -544,6 +550,20 @@ async function processEditorVideoAsync(
 			abortController.signal,
 		);
 		updateJob(jobId, { inputTempFile });
+
+		if (cameraUrl) {
+			try {
+				cameraTempFile = await downloadVideoToTemp(
+					cameraUrl,
+					abortController.signal,
+				);
+			} catch (err) {
+				console.error(
+					`[video/editor/process] Failed to download camera, continuing without:`,
+					err,
+				);
+			}
+		}
 
 		updateJob(jobId, {
 			phase: "probing",
@@ -582,6 +602,7 @@ async function processEditorVideoAsync(
 				}
 			},
 			abortController.signal,
+			cameraTempFile?.path,
 		);
 		updateJob(jobId, { outputTempFile });
 
@@ -610,6 +631,7 @@ async function processEditorVideoAsync(
 
 		await inputTempFile.cleanup();
 		await outputTempFile.cleanup();
+		await cameraTempFile?.cleanup();
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
@@ -630,6 +652,7 @@ async function processEditorVideoAsync(
 			await currentJob.inputTempFile?.cleanup();
 			await currentJob.outputTempFile?.cleanup();
 		}
+		await cameraTempFile?.cleanup();
 	} finally {
 		decrementActiveVideoProcesses();
 	}

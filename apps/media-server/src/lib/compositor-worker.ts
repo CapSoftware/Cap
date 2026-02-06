@@ -7,6 +7,7 @@ interface CompositorConfig {
 	sourceHeight: number;
 	renderSpec: RenderSpec;
 	backgroundImagePath: string | null;
+	camera: { width: number; height: number } | null;
 }
 
 const configPath = process.argv[2];
@@ -19,7 +20,11 @@ const configText = await Bun.file(configPath).text();
 const config: CompositorConfig = JSON.parse(configText);
 
 const { sourceWidth, sourceHeight, renderSpec } = config;
-const frameByteSize = sourceWidth * sourceHeight * 4;
+const displayFrameBytes = sourceWidth * sourceHeight * 4;
+const cameraFrameBytes = config.camera
+	? config.camera.width * config.camera.height * 4
+	: 0;
+const frameByteSize = displayFrameBytes + cameraFrameBytes;
 
 const outputCanvas = createCanvas(
 	renderSpec.outputWidth,
@@ -29,6 +34,15 @@ const outputCtx = outputCanvas.getContext("2d");
 
 const sourceCanvas = createCanvas(sourceWidth, sourceHeight);
 const sourceCtx = sourceCanvas.getContext("2d");
+
+let cameraCanvas: ReturnType<typeof createCanvas> | null = null;
+let cameraCtx: ReturnType<
+	ReturnType<typeof createCanvas>["getContext"]
+> | null = null;
+if (config.camera) {
+	cameraCanvas = createCanvas(config.camera.width, config.camera.height);
+	cameraCtx = cameraCanvas.getContext("2d");
+}
 
 let backgroundImage: InstanceType<
 	typeof import("@napi-rs/canvas").Image
@@ -61,45 +75,31 @@ function appendToBuffer(chunk: Uint8Array): void {
 	buffer = newBuffer;
 }
 
-while (true) {
-	while (buffer.length >= frameByteSize) {
-		const frameData = buffer.slice(0, frameByteSize);
-		buffer = buffer.slice(frameByteSize);
-
-		const imageData = sourceCtx.createImageData(sourceWidth, sourceHeight);
-		imageData.data.set(frameData);
-		sourceCtx.putImageData(imageData, 0, 0);
-
-		composeFrame(
-			outputCtx as unknown as CanvasRenderingContext2D,
-			renderSpec,
-			{ source: sourceCanvas, width: sourceWidth, height: sourceHeight },
-			backgroundImage,
-			bgImageWidth,
-			bgImageHeight,
-		);
-
-		const outputImageData = outputCtx.getImageData(
-			0,
-			0,
-			renderSpec.outputWidth,
-			renderSpec.outputHeight,
-		);
-
-		stdout.write(outputImageData.data as unknown as Uint8Array);
-	}
-
-	const { done, value } = await reader.read();
-	if (done) break;
-	appendToBuffer(value);
-}
-
-if (buffer.length >= frameByteSize) {
-	const frameData = buffer.slice(0, frameByteSize);
-
+function processFrame(combinedData: Uint8Array): void {
+	const displayData = combinedData.slice(0, displayFrameBytes);
 	const imageData = sourceCtx.createImageData(sourceWidth, sourceHeight);
-	imageData.data.set(frameData);
+	imageData.data.set(displayData);
 	sourceCtx.putImageData(imageData, 0, 0);
+
+	let cameraFrameArg: {
+		source: typeof cameraCanvas;
+		width: number;
+		height: number;
+	} | null = null;
+	if (config.camera && cameraCtx && cameraCanvas) {
+		const camData = combinedData.slice(displayFrameBytes);
+		const camImageData = cameraCtx.createImageData(
+			config.camera.width,
+			config.camera.height,
+		);
+		camImageData.data.set(camData);
+		cameraCtx.putImageData(camImageData, 0, 0);
+		cameraFrameArg = {
+			source: cameraCanvas,
+			width: config.camera.width,
+			height: config.camera.height,
+		};
+	}
 
 	composeFrame(
 		outputCtx as unknown as CanvasRenderingContext2D,
@@ -108,6 +108,7 @@ if (buffer.length >= frameByteSize) {
 		backgroundImage,
 		bgImageWidth,
 		bgImageHeight,
+		cameraFrameArg as unknown as Parameters<typeof composeFrame>[6],
 	);
 
 	const outputImageData = outputCtx.getImageData(
@@ -118,6 +119,22 @@ if (buffer.length >= frameByteSize) {
 	);
 
 	stdout.write(outputImageData.data as unknown as Uint8Array);
+}
+
+while (true) {
+	while (buffer.length >= frameByteSize) {
+		const combinedData = buffer.slice(0, frameByteSize);
+		buffer = buffer.slice(frameByteSize);
+		processFrame(combinedData);
+	}
+
+	const { done, value } = await reader.read();
+	if (done) break;
+	appendToBuffer(value);
+}
+
+if (buffer.length >= frameByteSize) {
+	processFrame(buffer.slice(0, frameByteSize));
 }
 
 await stdout.flush();
