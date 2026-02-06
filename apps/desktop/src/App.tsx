@@ -15,6 +15,7 @@ import "./styles/theme.css";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
+import { initDeepLinkCommands } from "./utils/deep-link-commands";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
@@ -102,6 +103,7 @@ function Inner() {
 
 	onMount(() => {
 		initAnonymousUser();
+		initDeepLinkCommands();
 	});
 
 	return (
