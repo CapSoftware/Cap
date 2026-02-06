@@ -1,4 +1,4 @@
-import type { RenderSpec } from "@cap/editor-render-spec";
+import type { RenderCameraSpec, RenderSpec } from "@cap/editor-render-spec";
 import { clipMask } from "./draw-mask";
 import { drawShadow } from "./draw-shadow";
 
@@ -118,6 +118,7 @@ export function composeFrame(
 	backgroundImage: unknown | null,
 	backgroundImageWidth = 0,
 	backgroundImageHeight = 0,
+	cameraFrame: VideoFrameSource | null = null,
 ): void {
 	ctx.clearRect(0, 0, spec.outputWidth, spec.outputHeight);
 
@@ -164,6 +165,58 @@ export function composeFrame(
 			drawH,
 		);
 	}
+
+	ctx.restore();
+
+	if (cameraFrame && spec.cameraSpec) {
+		drawCameraOverlay(ctx, spec.cameraSpec, cameraFrame);
+	}
+}
+
+function drawCameraOverlay(
+	ctx: CanvasRenderingContext2D,
+	cameraSpec: RenderCameraSpec,
+	cameraFrame: VideoFrameSource,
+): void {
+	if (
+		cameraFrame.width <= 0 ||
+		cameraFrame.height <= 0 ||
+		cameraSpec.rect.width <= 0 ||
+		cameraSpec.rect.height <= 0
+	)
+		return;
+
+	const { rect, shadow, mirror } = cameraSpec;
+
+	const camMask = {
+		shape: "roundedRect" as const,
+		roundingType: cameraSpec.roundingType,
+		radiusPx: cameraSpec.rounding,
+	};
+
+	drawShadow(ctx, rect, camMask, shadow);
+
+	ctx.save();
+	clipMask(ctx, rect, camMask);
+
+	if (mirror) {
+		ctx.translate(rect.x + rect.width, rect.y);
+		ctx.scale(-1, 1);
+	}
+
+	const drawX = mirror ? 0 : rect.x;
+	const drawY = mirror ? 0 : rect.y;
+
+	drawImageCover(
+		ctx,
+		cameraFrame.source,
+		cameraFrame.width,
+		cameraFrame.height,
+		drawX,
+		drawY,
+		rect.width,
+		rect.height,
+	);
 
 	ctx.restore();
 }

@@ -23,6 +23,7 @@ export class EditorRenderer {
 		this.state = {
 			spec: options.spec,
 			video: null,
+			camera: null,
 			scaleFactor: 1,
 			displayWidth: options.spec.outputWidth,
 			displayHeight: options.spec.outputHeight,
@@ -38,6 +39,10 @@ export class EditorRenderer {
 
 	setVideoSource(video: HTMLVideoElement): void {
 		this.state = { ...this.state, video };
+	}
+
+	setCameraSource(camera: HTMLVideoElement): void {
+		this.state = { ...this.state, camera };
 	}
 
 	resize(containerWidth: number, containerHeight: number): void {
@@ -75,7 +80,7 @@ export class EditorRenderer {
 	render(): void {
 		if (this.destroyed) return;
 
-		const { spec, video, scaleFactor } = this.state;
+		const { spec, video, camera, scaleFactor } = this.state;
 
 		if (!video || video.readyState < 2) return;
 
@@ -89,6 +94,15 @@ export class EditorRenderer {
 		const videoFrame =
 			video && video.readyState >= 2
 				? { source: video, width: video.videoWidth, height: video.videoHeight }
+				: null;
+
+		const cameraFrame =
+			camera && camera.readyState >= 2
+				? {
+						source: camera,
+						width: camera.videoWidth,
+						height: camera.videoHeight,
+					}
 				: null;
 
 		const bg = spec.backgroundSpec;
@@ -105,7 +119,15 @@ export class EditorRenderer {
 			}
 		}
 
-		composeFrame(ctx, spec, videoFrame, bgImage, bgImageWidth, bgImageHeight);
+		composeFrame(
+			ctx,
+			spec,
+			videoFrame,
+			bgImage,
+			bgImageWidth,
+			bgImageHeight,
+			cameraFrame,
+		);
 
 		ctx.restore();
 	}
