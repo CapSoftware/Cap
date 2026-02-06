@@ -49,6 +49,15 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
 				),
 
+			VideoStudioCreate: (input) =>
+				videos.createStudioRecording(input).pipe(
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+				),
+
 			VideoUploadProgressUpdate: (input) =>
 				videos
 					.updateUploadProgress(input)

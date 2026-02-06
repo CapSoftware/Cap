@@ -20,7 +20,13 @@ export class Video extends Schema.Class<Video>("Video")({
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
-		type: Schema.Literal("MediaConvert", "local", "desktopMP4", "webMP4"),
+		type: Schema.Literal(
+			"MediaConvert",
+			"local",
+			"desktopMP4",
+			"webMP4",
+			"webStudio",
+		),
 	}),
 	metadata: Schema.OptionFromNullOr(
 		Schema.Record({ key: Schema.String, value: Schema.Any }),
@@ -55,6 +61,12 @@ export class Video extends Schema.Class<Video>("Video")({
 
 		if (self.source.type === "desktopMP4" || self.source.type === "webMP4")
 			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
+
+		if (self.source.type === "webStudio")
+			return new WebStudioSource({
+				videoId: self.id,
+				ownerId: self.ownerId,
+			});
 	}
 }
 
@@ -110,6 +122,27 @@ export const InstantRecordingCreateSuccess = Schema.Struct({
 	upload: PresignedPost,
 });
 
+export const StudioRecordingCreateInput = Schema.Struct({
+	orgId: OrganisationId,
+	folderId: Schema.OptionFromUndefinedOr(FolderId),
+	durationSeconds: Schema.optional(Schema.Number),
+	resolution: Schema.optional(Schema.String),
+	width: Schema.optional(Schema.Number),
+	height: Schema.optional(Schema.Number),
+	cameraWidth: Schema.optional(Schema.Number),
+	cameraHeight: Schema.optional(Schema.Number),
+	videoCodec: Schema.optional(Schema.String),
+	audioCodec: Schema.optional(Schema.String),
+	supportsUploadProgress: Schema.optional(Schema.Boolean),
+});
+
+export const StudioRecordingCreateSuccess = Schema.Struct({
+	id: VideoId,
+	shareUrl: Schema.String,
+	displayUpload: PresignedPost,
+	cameraUpload: PresignedPost,
+});
+
 export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
 	source: Schema.Literal("loom"),
 	id: Schema.String,
@@ -121,6 +154,21 @@ export class Mp4Source extends Schema.TaggedClass<Mp4Source>()("Mp4Source", {
 }) {
 	getFileKey() {
 		return `${this.ownerId}/${this.videoId}/result.mp4`;
+	}
+}
+
+export class WebStudioSource extends Schema.TaggedClass<WebStudioSource>()(
+	"WebStudioSource",
+	{
+		videoId: Schema.String,
+		ownerId: Schema.String,
+	},
+) {
+	getDisplayFileKey() {
+		return `${this.ownerId}/${this.videoId}/display.mp4`;
+	}
+	getCameraFileKey() {
+		return `${this.ownerId}/${this.videoId}/camera.mp4`;
 	}
 }
 
@@ -203,6 +251,11 @@ export class VideoRpcs extends RpcGroup.make(
 	Rpc.make("VideoInstantCreate", {
 		payload: InstantRecordingCreateInput,
 		success: InstantRecordingCreateSuccess,
+		error: Schema.Union(InternalError, PolicyDeniedError),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("VideoStudioCreate", {
+		payload: StudioRecordingCreateInput,
+		success: StudioRecordingCreateSuccess,
 		error: Schema.Union(InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("VideoUploadProgressUpdate", {

@@ -26,6 +26,9 @@ type UploadProgressUpdateInput = Schema.Type<
 type InstantRecordingCreateInput = Schema.Type<
 	typeof Video.InstantRecordingCreateInput
 >;
+type StudioRecordingCreateInput = Schema.Type<
+	typeof Video.StudioRecordingCreateInput
+>;
 type OptionValue<T> = T extends Option.Option<infer Value> ? Value : never;
 type RepoMetadataValue = OptionValue<RepoCreateVideoInput["metadata"]>;
 type RepoTranscriptionStatusValue = OptionValue<
@@ -461,6 +464,124 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						upload: {
 							url: presignedPostData.url,
 							fields: presignedPostData.fields,
+						},
+					};
+				},
+			),
+
+			createStudioRecording: Effect.fn("Videos.createStudioRecording")(
+				function* (input: StudioRecordingCreateInput) {
+					const user = yield* CurrentUser;
+
+					if (user.activeOrganizationId !== input.orgId)
+						return yield* Effect.fail(new Policy.PolicyDeniedError());
+
+					const [customBucket] = yield* db.use((db) =>
+						db
+							.select()
+							.from(Db.s3Buckets)
+							.where(Dz.eq(Db.s3Buckets.ownerId, user.id)),
+					);
+
+					const bucketId: RepoCreateVideoInput["bucketId"] =
+						Option.fromNullable(customBucket?.id);
+					const folderId: RepoCreateVideoInput["folderId"] =
+						input.folderId ?? Option.none<Folder.FolderId>();
+					const width: RepoCreateVideoInput["width"] = Option.fromNullable(
+						input.width,
+					);
+					const height: RepoCreateVideoInput["height"] = Option.fromNullable(
+						input.height,
+					);
+					const duration: RepoCreateVideoInput["duration"] =
+						Option.fromNullable(input.durationSeconds);
+
+					const now = new Date();
+					const formattedDate = `${now.getDate()} ${now.toLocaleString(
+						"default",
+						{
+							month: "long",
+						},
+					)} ${now.getFullYear()}`;
+
+					const createData: RepoCreateVideoInput = {
+						ownerId: user.id,
+						orgId: input.orgId,
+						name: `Cap Recording - ${formattedDate}`,
+						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						source: { type: "webStudio" },
+						bucketId,
+						folderId,
+						width,
+						height,
+						duration,
+						metadata: Option.none<RepoMetadataValue>(),
+						transcriptionStatus: Option.none<RepoTranscriptionStatusValue>(),
+					};
+					const videoId = yield* repo.create(createData);
+
+					if (input.supportsUploadProgress ?? true)
+						yield* db.use((db) =>
+							db.insert(Db.videoUploads).values({
+								videoId,
+								mode: "singlepart",
+							}),
+						);
+
+					const displayKey = `${user.id}/${videoId}/display.mp4`;
+					const cameraKey = `${user.id}/${videoId}/camera.mp4`;
+					const [bucket] = yield* s3Buckets.getBucketAccess(bucketId);
+
+					const presignFields = {
+						"Content-Type": "video/mp4",
+						"x-amz-meta-userid": user.id,
+						"x-amz-meta-duration": input.durationSeconds
+							? input.durationSeconds.toString()
+							: "",
+						"x-amz-meta-resolution": input.resolution ?? "",
+						"x-amz-meta-videocodec": input.videoCodec ?? "",
+						"x-amz-meta-audiocodec": input.audioCodec ?? "",
+					};
+
+					const [displayPresigned, cameraPresigned] = yield* Effect.all([
+						bucket.getPresignedPostUrl(displayKey, {
+							Fields: presignFields,
+							Expires: 1800,
+						}),
+						bucket.getPresignedPostUrl(cameraKey, {
+							Fields: {
+								"Content-Type": "video/mp4",
+								"x-amz-meta-userid": user.id,
+							},
+							Expires: 1800,
+						}),
+					]);
+
+					const shareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
+
+					if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
+						yield* Effect.tryPromise(() =>
+							dub().links.create({
+								url: shareUrl,
+								domain: "cap.link",
+								key: videoId,
+							}),
+						).pipe(
+							Effect.catchAll((error) =>
+								Effect.logWarning(`Dub link create failed: ${String(error)}`),
+							),
+						);
+
+					return {
+						id: videoId,
+						shareUrl,
+						displayUpload: {
+							url: displayPresigned.url,
+							fields: displayPresigned.fields,
+						},
+						cameraUpload: {
+							url: cameraPresigned.url,
+							fields: cameraPresigned.fields,
 						},
 					};
 				},
