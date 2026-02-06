@@ -2,6 +2,7 @@ import { clamp, isFiniteNumber, normalizeChannel } from "./math";
 import type {
 	AspectRatioKey,
 	BackgroundSourceSpec,
+	NormalizedCameraConfig,
 	NormalizedRenderConfig,
 	NormalizedTimelineConfig,
 	NormalizeRenderConfigResult,
@@ -363,6 +364,8 @@ export function normalizeConfigForRender(
 
 	const timeline = normalizeTimeline(record?.timeline, issues);
 
+	const camera = normalizeCamera(record?.camera);
+
 	const config: NormalizedRenderConfig = {
 		aspectRatio,
 		background: {
@@ -374,7 +377,56 @@ export function normalizeConfigForRender(
 			advancedShadow,
 		},
 		timeline,
+		camera: camera ?? undefined,
 	};
 
 	return { config, issues };
+}
+
+function normalizeCamera(value: unknown): NormalizedCameraConfig | null {
+	if (!isRecord(value)) return null;
+
+	const hide = typeof value.hide === "boolean" ? value.hide : true;
+	const mirror = typeof value.mirror === "boolean" ? value.mirror : false;
+
+	const posRaw = isRecord(value.position) ? value.position : null;
+	const xRaw = posRaw?.x;
+	const yRaw = posRaw?.y;
+	const x =
+		xRaw === "left" || xRaw === "center" || xRaw === "right" ? xRaw : "right";
+	const y = yRaw === "top" || yRaw === "bottom" ? yRaw : "bottom";
+
+	const size = isFiniteNumber(value.size) ? clamp(value.size, 5, 50) : 30;
+	const roundingVal = isFiniteNumber(value.rounding)
+		? clamp(value.rounding, 0, 100)
+		: 50;
+	const roundingType =
+		value.roundingType === "rounded" ? "rounded" : "squircle";
+
+	const shadowVal = isFiniteNumber(value.shadow)
+		? clamp(value.shadow, 0, 100)
+		: 0;
+
+	const advRaw =
+		value.advancedShadow && isRecord(value.advancedShadow)
+			? value.advancedShadow
+			: null;
+	const advancedShadow = {
+		size: isFiniteNumber(advRaw?.size) ? clamp(advRaw.size, 0, 100) : 50,
+		opacity: isFiniteNumber(advRaw?.opacity)
+			? clamp(advRaw.opacity, 0, 100)
+			: 18,
+		blur: isFiniteNumber(advRaw?.blur) ? clamp(advRaw.blur, 0, 100) : 50,
+	};
+
+	return {
+		hide,
+		mirror,
+		position: { x, y },
+		size,
+		rounding: roundingVal,
+		roundingType,
+		shadow: shadowVal,
+		advancedShadow,
+	};
 }

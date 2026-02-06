@@ -1,5 +1,9 @@
 import { clamp, isFiniteNumber, toEven } from "./math";
-import type { NormalizedRenderConfig, RenderSpec } from "./types";
+import type {
+	NormalizedRenderConfig,
+	RenderCameraSpec,
+	RenderSpec,
+} from "./types";
 import { ASPECT_RATIO_VALUES } from "./types";
 
 export function computeRenderSpec(
@@ -71,6 +75,11 @@ export function computeRenderSpec(
 			)
 		: 0;
 
+	let cameraSpec: RenderCameraSpec | undefined;
+	if (config.camera && !config.camera.hide) {
+		cameraSpec = computeCameraSpec(config.camera, outputWidth, outputHeight);
+	}
+
 	return {
 		outputWidth,
 		outputHeight,
@@ -94,5 +103,80 @@ export function computeRenderSpec(
 			spreadPx,
 			alpha,
 		},
+		cameraSpec,
+	};
+}
+
+function computeCameraSpec(
+	cam: NonNullable<NormalizedRenderConfig["camera"]>,
+	outputWidth: number,
+	outputHeight: number,
+): RenderCameraSpec {
+	const sizePercent = cam.size / 100;
+	const camSize = Math.round(Math.min(outputWidth, outputHeight) * sizePercent);
+	const margin = Math.round(outputWidth * 0.03);
+
+	let camX: number;
+	if (cam.position.x === "left") {
+		camX = margin;
+	} else if (cam.position.x === "center") {
+		camX = Math.round((outputWidth - camSize) / 2);
+	} else {
+		camX = outputWidth - camSize - margin;
+	}
+
+	let camY: number;
+	if (cam.position.y === "top") {
+		camY = margin;
+	} else {
+		camY = outputHeight - camSize - margin;
+	}
+
+	const roundingMultiplier = cam.roundingType === "rounded" ? 1 : 0.8;
+	const camRadius = Math.round(
+		(camSize / 2) * (cam.rounding / 100) * roundingMultiplier,
+	);
+
+	const camShadowAmount = clamp(cam.shadow, 0, 100);
+	const camShadowEnabled = camShadowAmount > 0;
+	const camShadowSize = clamp(cam.advancedShadow.size, 0, 100);
+	const camShadowBlur = clamp(cam.advancedShadow.blur, 0, 100);
+	const camShadowOpacity = clamp(cam.advancedShadow.opacity, 0, 100);
+
+	const camOffsetY = camShadowEnabled
+		? Number((2 + camShadowSize * 0.14).toFixed(2))
+		: 0;
+	const camBlurPx = camShadowEnabled
+		? Number((4 + camShadowBlur * 0.78 + camShadowAmount * 0.22).toFixed(2))
+		: 0;
+	const camSpreadPx = camShadowEnabled
+		? Number((camShadowSize * 0.12).toFixed(2))
+		: 0;
+	const camAlpha = camShadowEnabled
+		? Number(
+				Math.max(
+					0,
+					Math.min(
+						0.95,
+						(camShadowOpacity / 100) * (camShadowAmount / 100) * 0.9,
+					),
+				).toFixed(4),
+			)
+		: 0;
+
+	return {
+		position: cam.position,
+		rect: { x: camX, y: camY, width: camSize, height: camSize },
+		rounding: camRadius,
+		roundingType: cam.roundingType,
+		shadow: {
+			enabled: camShadowEnabled,
+			offsetX: 0,
+			offsetY: camOffsetY,
+			blurPx: camBlurPx,
+			spreadPx: camSpreadPx,
+			alpha: camAlpha,
+		},
+		mirror: cam.mirror,
 	};
 }
