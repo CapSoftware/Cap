@@ -10,6 +10,7 @@ export type RecorderCapabilities = {
 	hasMediaRecorder: boolean;
 	hasUserMedia: boolean;
 	hasDisplayMedia: boolean;
+	hasMp4MediaRecorder: boolean;
 };
 
 export const detectCapabilities = (): RecorderCapabilities => {
@@ -19,16 +20,27 @@ export const detectCapabilities = (): RecorderCapabilities => {
 			hasMediaRecorder: false,
 			hasUserMedia: false,
 			hasDisplayMedia: false,
+			hasMp4MediaRecorder: false,
 		};
 	}
 
 	const mediaDevices = navigator.mediaDevices;
+	const hasMediaRecorder = typeof MediaRecorder !== "undefined";
+
+	let hasMp4MediaRecorder = false;
+	if (hasMediaRecorder) {
+		hasMp4MediaRecorder =
+			MediaRecorder.isTypeSupported("video/mp4") ||
+			MediaRecorder.isTypeSupported('video/mp4;codecs="avc1.42E01E"') ||
+			MediaRecorder.isTypeSupported('video/mp4;codecs="avc1.4d401e"');
+	}
 
 	return {
 		assessed: true,
-		hasMediaRecorder: typeof MediaRecorder !== "undefined",
+		hasMediaRecorder,
 		hasUserMedia: typeof mediaDevices?.getUserMedia === "function",
 		hasDisplayMedia: typeof mediaDevices?.getDisplayMedia === "function",
+		hasMp4MediaRecorder,
 	};
 };
 

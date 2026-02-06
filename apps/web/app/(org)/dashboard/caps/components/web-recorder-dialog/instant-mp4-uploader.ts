@@ -39,10 +39,13 @@ const postJson = async <TResponse>(
 	return (await response.json()) as TResponse;
 };
 
-export const initiateMultipartUpload = async (videoId: VideoId) => {
+export const initiateMultipartUpload = async (
+	videoId: VideoId,
+	subpath?: string,
+) => {
 	const result = await postJson<{ uploadId: string }>(
 		"/api/upload/multipart/initiate",
-		{ videoId, contentType: "video/mp4" },
+		{ videoId, contentType: "video/mp4", subpath },
 	);
 
 	if (!result.uploadId)
@@ -55,10 +58,11 @@ const presignMultipartPart = async (
 	videoId: VideoId,
 	uploadId: string,
 	partNumber: number,
+	subpath?: string,
 ): Promise<string> => {
 	const result = await postJson<{ presignedUrl: string }>(
 		"/api/upload/multipart/presign-part",
-		{ videoId, uploadId, partNumber },
+		{ videoId, uploadId, partNumber, subpath },
 	);
 
 	if (!result.presignedUrl) {
@@ -73,6 +77,7 @@ const completeMultipartUpload = async (
 	uploadId: string,
 	parts: UploadedPartPayload[],
 	meta: MultipartCompletePayload,
+	subpath?: string,
 ) => {
 	await postJson<{ success: boolean }>("/api/upload/multipart/complete", {
 		videoId,
@@ -82,13 +87,19 @@ const completeMultipartUpload = async (
 		width: meta.width,
 		height: meta.height,
 		fps: meta.fps,
+		subpath,
 	});
 };
 
-const abortMultipartUpload = async (videoId: VideoId, uploadId: string) => {
+const abortMultipartUpload = async (
+	videoId: VideoId,
+	uploadId: string,
+	subpath?: string,
+) => {
 	await postJson<{ success: boolean }>("/api/upload/multipart/abort", {
 		videoId,
 		uploadId,
+		subpath,
 	});
 };
 
@@ -101,6 +112,7 @@ export class InstantMp4Uploader {
 	private readonly videoId: VideoId;
 	private readonly uploadId: string;
 	private readonly mimeType: string;
+	private readonly subpath: string | undefined;
 	private readonly setUploadStatus: SetUploadStatus;
 	private readonly sendProgressUpdate: ProgressUpdater;
 	private readonly onChunkStateChange?: (chunks: ChunkUploadState[]) => void;
@@ -121,6 +133,7 @@ export class InstantMp4Uploader {
 		videoId: VideoId;
 		uploadId: string;
 		mimeType: string;
+		subpath?: string;
 		setUploadStatus: SetUploadStatus;
 		sendProgressUpdate: ProgressUpdater;
 		onChunkStateChange?: (chunks: ChunkUploadState[]) => void;
@@ -128,6 +141,7 @@ export class InstantMp4Uploader {
 		this.videoId = options.videoId;
 		this.uploadId = options.uploadId;
 		this.mimeType = options.mimeType;
+		this.subpath = options.subpath;
 		this.setUploadStatus = options.setUploadStatus;
 		this.sendProgressUpdate = options.sendProgressUpdate;
 		this.onChunkStateChange = options.onChunkStateChange;
@@ -233,6 +247,7 @@ export class InstantMp4Uploader {
 			this.videoId,
 			this.uploadId,
 			partNumber,
+			this.subpath,
 		);
 
 		const etag = await this.uploadBlobWithProgress({
@@ -354,12 +369,18 @@ export class InstantMp4Uploader {
 			await this.uploadPromise;
 		}
 
-		await completeMultipartUpload(this.videoId, this.uploadId, this.parts, {
-			durationSeconds: options.durationSeconds,
-			width: options.width,
-			height: options.height,
-			fps: options.fps,
-		});
+		await completeMultipartUpload(
+			this.videoId,
+			this.uploadId,
+			this.parts,
+			{
+				durationSeconds: options.durationSeconds,
+				width: options.width,
+				height: options.height,
+				fps: options.fps,
+			},
+			this.subpath,
+		);
 
 		this.finished = true;
 		this.uploadedBytes = this.finalTotalBytes ?? this.uploadedBytes;
@@ -382,7 +403,7 @@ export class InstantMp4Uploader {
 			// Swallow errors during cancellation cleanup.
 		});
 		try {
-			await abortMultipartUpload(this.videoId, this.uploadId);
+			await abortMultipartUpload(this.videoId, this.uploadId, this.subpath);
 		} catch (error) {
 			console.error("Failed to abort multipart upload", error);
 		}

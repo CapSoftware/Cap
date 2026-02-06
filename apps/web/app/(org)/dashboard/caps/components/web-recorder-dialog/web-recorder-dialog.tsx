@@ -29,6 +29,7 @@ import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
 import { useMicrophoneDevices } from "./useMicrophoneDevices";
+import { useStudioRecorder } from "./useStudioRecorder";
 import { useWebRecorder } from "./useWebRecorder";
 import {
 	dialogVariants,
@@ -36,8 +37,49 @@ import {
 } from "./web-recorder-constants";
 import { WebRecorderDialogHeader } from "./web-recorder-dialog-header";
 
+type CaptureMode = "instant" | "studio";
+
+type RecorderDialogHostProps = {
+	open: boolean;
+	setOpen: (open: boolean) => void;
+	captureMode: CaptureMode;
+	setCaptureMode: (mode: CaptureMode) => void;
+};
+
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
+	const [captureMode, setCaptureMode] = useState<CaptureMode>("instant");
+
+	const hostProps: RecorderDialogHostProps = {
+		open,
+		setOpen,
+		captureMode,
+		setCaptureMode,
+	};
+
+	if (captureMode === "studio") {
+		return <StudioRecorderDialog key="studio" {...hostProps} />;
+	}
+	return <InstantRecorderDialog key="instant" {...hostProps} />;
+};
+
+function InstantRecorderDialog(props: RecorderDialogHostProps) {
+	return <RecorderDialogInner {...props} useRecorder={useWebRecorder} />;
+}
+
+function StudioRecorderDialog(props: RecorderDialogHostProps) {
+	return <RecorderDialogInner {...props} useRecorder={useStudioRecorder} />;
+}
+
+function RecorderDialogInner({
+	open,
+	setOpen,
+	captureMode,
+	setCaptureMode,
+	useRecorder,
+}: RecorderDialogHostProps & {
+	useRecorder: typeof useWebRecorder;
+}) {
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [howItWorksOpen, setHowItWorksOpen] = useState(false);
 	const [recordingMode, setRecordingMode] =
@@ -120,6 +162,16 @@ export const WebRecorderDialog = () => {
 		}
 	}, [recordingMode, selectedCameraId, availableCameras, setSelectedCameraId]);
 
+	useEffect(() => {
+		if (
+			captureMode === "studio" &&
+			!selectedCameraId &&
+			availableCameras.length > 0
+		) {
+			setSelectedCameraId(availableCameras[0]?.deviceId ?? null);
+		}
+	}, [captureMode, selectedCameraId, availableCameras, setSelectedCameraId]);
+
 	const {
 		phase,
 		durationMs,
@@ -141,7 +193,7 @@ export const WebRecorderDialog = () => {
 		stopRecording,
 		restartRecording,
 		resetState,
-	} = useWebRecorder({
+	} = useRecorder({
 		organisationId,
 		selectedMicId,
 		micEnabled,
@@ -164,8 +216,15 @@ export const WebRecorderDialog = () => {
 			return;
 		}
 
-		setRecordingMode("camera");
-	}, [supportCheckCompleted, supportsDisplayRecording, recordingMode]);
+		if (captureMode === "instant") {
+			setRecordingMode("camera");
+		}
+	}, [
+		supportCheckCompleted,
+		supportsDisplayRecording,
+		recordingMode,
+		captureMode,
+	]);
 
 	const {
 		handlePointerDownOutside,
@@ -194,6 +253,7 @@ export const WebRecorderDialog = () => {
 			resetState();
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
+			setCaptureMode("instant");
 			setSettingsOpen(false);
 			setHowItWorksOpen(false);
 		}
@@ -243,7 +303,11 @@ export const WebRecorderDialog = () => {
 					onFocusOutside={handleFocusOutside}
 					onInteractOutside={handleInteractOutside}
 				>
-					<DialogTitle className="sr-only">Instant Mode Recorder</DialogTitle>
+					<DialogTitle className="sr-only">
+						{captureMode === "studio"
+							? "Studio Mode Recorder"
+							: "Instant Mode Recorder"}
+					</DialogTitle>
 					<AnimatePresence mode="wait">
 						{open && (
 							<motion.div
@@ -271,11 +335,44 @@ export const WebRecorderDialog = () => {
 									isBusy={isBusy}
 									onClose={handleClose}
 								/>
-								<RecordingModeSelector
-									mode={recordingMode}
-									disabled={isBusy}
-									onModeChange={setRecordingMode}
-								/>
+								<div className="flex rounded-lg border border-gray-3 p-0.5 gap-0.5">
+									<button
+										type="button"
+										disabled={isBusy}
+										className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+											captureMode === "instant"
+												? "bg-gray-12 text-gray-1"
+												: "text-gray-11 hover:text-gray-12"
+										} disabled:opacity-50`}
+										onClick={() => setCaptureMode("instant")}
+									>
+										Instant
+									</button>
+									<button
+										type="button"
+										disabled={isBusy}
+										className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+											captureMode === "studio"
+												? "bg-gray-12 text-gray-1"
+												: "text-gray-11 hover:text-gray-12"
+										} disabled:opacity-50`}
+										onClick={() => setCaptureMode("studio")}
+									>
+										Studio
+									</button>
+								</div>
+								{captureMode === "studio" && !selectedCameraId && (
+									<div className="rounded-md border border-amber-6 bg-amber-3/60 px-3 py-2 text-xs leading-snug text-amber-12">
+										Camera is required for Studio Mode. Select a camera below.
+									</div>
+								)}
+								{captureMode === "instant" && (
+									<RecordingModeSelector
+										mode={recordingMode}
+										disabled={isBusy}
+										onModeChange={setRecordingMode}
+									/>
+								)}
 								{screenCaptureWarning && (
 									<div className="rounded-md border border-amber-6 bg-amber-3/60 px-3 py-2 text-xs leading-snug text-amber-12">
 										{screenCaptureWarning}
@@ -342,7 +439,7 @@ export const WebRecorderDialog = () => {
 					isRestarting={isRestarting}
 				/>
 			)}
-			{selectedCameraId && (
+			{selectedCameraId && captureMode === "instant" && (
 				<CameraPreviewWindow
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
@@ -350,4 +447,4 @@ export const WebRecorderDialog = () => {
 			)}
 		</>
 	);
-};
+}
