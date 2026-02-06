@@ -2,6 +2,7 @@
 
 import { Switch } from "@cap/ui";
 import {
+	ArrowLeft,
 	Camera,
 	Image as ImageIcon,
 	MessageSquare,
@@ -807,7 +808,14 @@ function CaptionsPanel() {
 
 export function ConfigSidebar() {
 	const [activeTab, setActiveTab] = useState<TabId>("background");
-	const { editorState } = useEditorContext();
+	const { editorState, setEditorState } = useEditorContext();
+
+	const clearSelection = useCallback(() => {
+		setEditorState((state) => ({
+			...state,
+			timeline: { ...state.timeline, selection: null },
+		}));
+	}, [setEditorState]);
 
 	const renderPanel = () => {
 		if (editorState.timeline.selection) {
@@ -817,6 +825,14 @@ export function ConfigSidebar() {
 					<p className="text-xs text-gray-10 mt-1">
 						Click away to edit project settings
 					</p>
+					<button
+						type="button"
+						onClick={clearSelection}
+						className="flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs text-gray-11 hover:text-gray-12 bg-gray-3 hover:bg-gray-4 rounded-md transition-colors"
+					>
+						<ArrowLeft className="size-3" />
+						Back to settings
+					</button>
 				</div>
 			);
 		}
@@ -844,7 +860,12 @@ export function ConfigSidebar() {
 					<button
 						type="button"
 						key={id}
-						onClick={() => setActiveTab(id)}
+						onClick={() => {
+							if (editorState.timeline.selection) {
+								clearSelection();
+							}
+							setActiveTab(id);
+						}}
 						className={`flex flex-1 justify-center items-center h-full transition-colors ${
 							activeTab === id && !editorState.timeline.selection
 								? "text-gray-12"
