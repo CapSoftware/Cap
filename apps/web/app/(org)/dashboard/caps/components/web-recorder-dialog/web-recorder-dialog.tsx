@@ -208,6 +208,12 @@ function RecorderDialogInner({
 	});
 
 	useEffect(() => {
+		if (phase === "completed") {
+			setOpen(false);
+		}
+	}, [phase, setOpen]);
+
+	useEffect(() => {
 		if (
 			!supportCheckCompleted ||
 			supportsDisplayRecording ||
@@ -439,7 +445,7 @@ function RecorderDialogInner({
 					isRestarting={isRestarting}
 				/>
 			)}
-			{selectedCameraId && captureMode === "instant" && (
+			{selectedCameraId && (
 				<CameraPreviewWindow
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
