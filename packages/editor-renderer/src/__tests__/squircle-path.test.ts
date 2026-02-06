@@ -24,7 +24,7 @@ describe("squirclePath", () => {
 		}
 	});
 
-	it("handles zero radius producing an elliptical shape", () => {
+	it("handles zero radius producing a near-rectangular shape", () => {
 		const points = squirclePath(0, 0, 50, 50, 0);
 		expect(points.length).toBe(201);
 
@@ -34,7 +34,7 @@ describe("squirclePath", () => {
 		expect(maxY).toBeCloseTo(50, 0);
 	});
 
-	it("handles max radius producing a more square shape", () => {
+	it("handles max radius producing a smooth squircle shape", () => {
 		const points = squirclePath(0, 0, 50, 50, 50);
 		expect(points.length).toBe(201);
 

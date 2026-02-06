@@ -1,4 +1,11 @@
 const STEPS = 200;
+const EPS = 1e-10;
+
+function superellipseComponent(v: number, exp: number): number {
+	const abs = Math.abs(v);
+	if (abs < EPS) return 0;
+	return abs ** exp * Math.sign(v);
+}
 
 export function squirclePath(
 	cx: number,
@@ -10,15 +17,14 @@ export function squirclePath(
 	const maxRadius = Math.min(halfW, halfH);
 	const clampedRadius = Math.min(radiusPx, maxRadius);
 	const t = maxRadius > 0 ? clampedRadius / maxRadius : 0;
-	const n = 2 + t * 3;
+	const n = 4 + (1 - t) * 46;
+	const exp = 2 / n;
 
 	const points: { x: number; y: number }[] = [];
 	for (let i = 0; i <= STEPS; i++) {
 		const angle = (i / STEPS) * 2 * Math.PI;
-		const cosA = Math.cos(angle);
-		const sinA = Math.sin(angle);
-		const x = cx + Math.abs(cosA) ** (2 / n) * Math.sign(cosA) * halfW;
-		const y = cy + Math.abs(sinA) ** (2 / n) * Math.sign(sinA) * halfH;
+		const x = cx + superellipseComponent(Math.cos(angle), exp) * halfW;
+		const y = cy + superellipseComponent(Math.sin(angle), exp) * halfH;
 		points.push({ x, y });
 	}
 
