@@ -4,7 +4,7 @@ export default async function Command() {
 	try {
 		await open("cap://stop");
 		await showHUD("Stopping Cap recording...");
-	} catch (error) {
+	} catch (_error) {
 		await showHUD("Failed to open Cap");
 	}
 }
