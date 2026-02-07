@@ -5,6 +5,7 @@ use crate::{
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
     yuv_converter::YuvToRgbaConverter,
 };
+use std::sync::Arc;
 
 struct PendingTextureCopy {
     width: u32,
@@ -27,11 +28,30 @@ pub struct DisplayLayer {
 
 impl DisplayLayer {
     #[allow(dead_code)]
-    pub fn new(device: &wgpu::Device) -> Self {
-        Self::new_with_options(device, false)
+    pub fn new(device: &wgpu::Device, is_software_adapter: bool) -> Self {
+        Self::new_with_options(device, false, is_software_adapter)
     }
 
-    pub fn new_with_options(device: &wgpu::Device, prefer_cpu_conversion: bool) -> Self {
+    pub fn new_with_options(
+        device: &wgpu::Device,
+        prefer_cpu_conversion: bool,
+        is_software_adapter: bool,
+    ) -> Self {
+        let pipelines = Arc::new(crate::yuv_converter::YuvConverterPipelines::new(device));
+        Self::new_with_shared_pipelines(
+            device,
+            pipelines,
+            prefer_cpu_conversion,
+            is_software_adapter,
+        )
+    }
+
+    pub fn new_with_shared_pipelines(
+        device: &wgpu::Device,
+        yuv_pipelines: Arc<crate::yuv_converter::YuvConverterPipelines>,
+        prefer_cpu_conversion: bool,
+        is_software_adapter: bool,
+    ) -> Self {
         let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_view_0 = frame_texture_0.create_view(&Default::default());
@@ -44,7 +64,11 @@ impl DisplayLayer {
         let bind_group_1 =
             Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
 
-        let yuv_converter = YuvToRgbaConverter::new(device);
+        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines(
+            device,
+            yuv_pipelines,
+            is_software_adapter,
+        );
 
         if prefer_cpu_conversion {
             tracing::info!("DisplayLayer initialized with CPU YUV conversion preference");

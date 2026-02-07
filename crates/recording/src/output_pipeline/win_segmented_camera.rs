@@ -499,7 +499,7 @@ impl WindowsSegmentedCameraMuxer {
                     }
                 };
 
-                match encoder {
+                let res = match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         info!(
                             "Camera segment encoder started (hardware): {:?} {}x{} -> NV12 {}x{} @ {}fps",
@@ -535,7 +535,7 @@ impl WindowsSegmentedCameraMuxer {
                             |output_sample| {
                                 let mut output = output_clone.lock().map_err(|e| {
                                     windows::core::Error::new(
-                                        windows::core::HRESULT(-1),
+                                        windows::Win32::Foundation::E_FAIL,
                                         format!("Mutex poisoned: {e}"),
                                     )
                                 })?;
@@ -543,7 +543,7 @@ impl WindowsSegmentedCameraMuxer {
                                     .write_sample(&output_sample, &mut output)
                                     .map_err(|e| {
                                         windows::core::Error::new(
-                                            windows::core::HRESULT(-1),
+                                            windows::Win32::Foundation::E_FAIL,
                                             format!("WriteSample: {e}"),
                                         )
                                     })
@@ -617,7 +617,10 @@ impl WindowsSegmentedCameraMuxer {
 
                         Ok(())
                     }
-                }
+                };
+
+                cap_mediafoundation_utils::thread_uninit();
+                res
             })?;
 
         ready_rx

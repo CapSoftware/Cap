@@ -279,11 +279,14 @@ impl App {
     }
 
     fn close_occluder_windows(&self) {
-        for window in self.handle.webview_windows() {
-            if window.0.starts_with("window-capture-occluder-") {
-                let _ = window.1.close();
+        let handle = self.handle.clone();
+        let _ = handle.clone().run_on_main_thread(move || {
+            for (label, window) in handle.webview_windows() {
+                if label.starts_with("window-capture-occluder-") {
+                    let _ = window.destroy();
+                }
             }
-        }
+        });
     }
 
     async fn restart_mic_feed(&mut self) -> Result<(), String> {
@@ -891,9 +894,15 @@ async fn cleanup_camera_window(app: AppHandle, session_id: u64) {
     app_state.camera_preview.pause();
 
     if !app_state.is_recording_active_or_pending() {
-        let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
-            label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+        let app_clone = app.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = app.run_on_main_thread(move || {
+            let has_visible = app_clone.webview_windows().iter().any(|(label, window)| {
+                label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+            });
+            let _ = tx.send(has_visible);
         });
+        let has_visible_target_overlay = rx.await.unwrap_or(false);
 
         let is_camera_only_mode = recording_settings::RecordingSettingsStore::get(&app)
             .ok()
@@ -945,9 +954,16 @@ async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id:
             return;
         }
 
-        let has_visible_target_overlay = app.webview_windows().iter().any(|(label, window)| {
-            label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+        let app_clone = app.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = app.run_on_main_thread(move || {
+            let has_visible = app_clone.webview_windows().iter().any(|(label, window)| {
+                label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
+            });
+            let _ = tx.send(has_visible);
         });
+        let has_visible_target_overlay = rx.await.unwrap_or(false);
+
         if has_visible_target_overlay {
             return;
         }
@@ -3394,36 +3410,46 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         }
                         match window_id {
                             CapWindowId::Main => {
-                                let app = app.clone();
+                                let app_handle = app.clone();
 
-                                for (id, window) in app.webview_windows() {
-                                    if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
-                                        CapWindowId::from_str(&id)
-                                    {
-                                        let _ = window.hide();
-                                    }
+                                {
+                                    let app = app_handle.clone();
+                                    let _ = app.clone().run_on_main_thread(move || {
+                                        for (id, window) in app.webview_windows() {
+                                            if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+                                                CapWindowId::from_str(&id)
+                                            {
+                                                let _ = window.hide();
+                                            }
+                                        }
+                                    });
                                 }
 
-                                tokio::spawn(async move {
-                                    let state = app.state::<ArcLock<App>>();
-                                    let app_state = &mut *state.write().await;
+                                tokio::spawn({
+                                    let app = app_handle.clone();
+                                    async move {
+                                        let state = app.state::<ArcLock<App>>();
+                                        let mut app_state = state.write().await;
 
-                                    let camera_window_open =
-                                        CapWindowId::Camera.get(&app).is_some();
+                                        let camera_window_open =
+                                            CapWindowId::Camera.get(&app).is_some();
 
-                                    if !app_state.is_recording_active_or_pending()
-                                        && !camera_window_open
-                                        && !app_state.camera_in_use
-                                    {
-                                        let _ =
-                                            app_state.mic_feed.ask(microphone::RemoveInput).await;
-                                        let _ = app_state
-                                            .camera_feed
-                                            .ask(feeds::camera::RemoveInput)
-                                            .await;
+                                        if !app_state.is_recording_active_or_pending()
+                                            && !camera_window_open
+                                            && !app_state.camera_in_use
+                                        {
+                                            let _ = app_state
+                                                .mic_feed
+                                                .ask(microphone::RemoveInput)
+                                                .await;
+                                            let _ = app_state
+                                                .camera_feed
+                                                .ask(feeds::camera::RemoveInput)
+                                                .await;
 
-                                        app_state.selected_mic_label = None;
-                                        app_state.selected_camera_id = None;
+                                            app_state.selected_mic_label = None;
+                                            app_state.selected_camera_id = None;
+                                        }
                                     }
                                 });
                             }
@@ -3433,7 +3459,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
 
-                                restore_main_windows_if_no_editors(app);
+                                let app_handle = app.clone();
+                                let _ = app_handle.clone().run_on_main_thread(move || {
+                                    restore_main_windows_if_no_editors(&app_handle);
+                                });
                             }
                             CapWindowId::ScreenshotEditor { id } => {
                                 let window_ids =
@@ -3442,42 +3471,51 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
-                                restore_main_windows_if_no_editors(app);
+                                let app_handle = app.clone();
+                                let _ = app_handle.clone().run_on_main_thread(move || {
+                                    restore_main_windows_if_no_editors(&app_handle);
+                                });
                             }
                             CapWindowId::Settings => {
-                                for (label, window) in app.webview_windows() {
-                                    if let Ok(id) = CapWindowId::from_str(&label)
-                                        && matches!(
-                                            id,
-                                            CapWindowId::TargetSelectOverlay { .. }
-                                                | CapWindowId::Main
-                                                | CapWindowId::Camera
-                                        )
-                                    {
-                                        let _ = window.show();
+                                let app_handle = app.clone();
+                                let _ = app_handle.clone().run_on_main_thread(move || {
+                                    for (label, window) in app_handle.webview_windows() {
+                                        if let Ok(id) = CapWindowId::from_str(&label)
+                                            && matches!(
+                                                id,
+                                                CapWindowId::TargetSelectOverlay { .. }
+                                                    | CapWindowId::Main
+                                                    | CapWindowId::Camera
+                                            )
+                                        {
+                                            let _ = window.show();
+                                        }
                                     }
-                                }
 
-                                #[cfg(target_os = "windows")]
-                                if !has_open_editor_window(app) {
-                                    reopen_main_window(app);
-                                }
+                                    #[cfg(target_os = "windows")]
+                                    if !has_open_editor_window(&app_handle) {
+                                        reopen_main_window(&app_handle);
+                                    }
+                                });
 
                                 return;
                             }
                             CapWindowId::Upgrade | CapWindowId::ModeSelect => {
-                                for (label, window) in app.webview_windows() {
-                                    if let Ok(id) = CapWindowId::from_str(&label)
-                                        && matches!(
-                                            id,
-                                            CapWindowId::TargetSelectOverlay { .. }
-                                                | CapWindowId::Main
-                                                | CapWindowId::Camera
-                                        )
-                                    {
-                                        let _ = window.show();
+                                let app_handle = app.clone();
+                                let _ = app_handle.clone().run_on_main_thread(move || {
+                                    for (label, window) in app_handle.webview_windows() {
+                                        if let Ok(id) = CapWindowId::from_str(&label)
+                                            && matches!(
+                                                id,
+                                                CapWindowId::TargetSelectOverlay { .. }
+                                                    | CapWindowId::Main
+                                                    | CapWindowId::Camera
+                                            )
+                                        {
+                                            let _ = window.show();
+                                        }
                                     }
-                                }
+                                });
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
@@ -3513,16 +3551,26 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         };
                     }
 
-                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
-                        && settings.hide_dock_icon
-                        && app
-                            .webview_windows()
-                            .keys()
-                            .all(|label| !CapWindowId::from_str(label).unwrap().activates_dock())
+                    #[cfg(target_os = "macos")]
                     {
-                        #[cfg(target_os = "macos")]
-                        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .ok();
+                        if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
+                            && settings.hide_dock_icon
+                        {
+                            let app_handle = app.clone();
+                            let _ = app_handle.clone().run_on_main_thread(move || {
+                                let windows = app_handle.webview_windows();
+                                let no_dock_windows = windows.keys().all(|label| {
+                                    CapWindowId::from_str(label)
+                                        .map(|id| !id.activates_dock())
+                                        .unwrap_or(true)
+                                });
+
+                                if no_dock_windows {
+                                    let _ = app_handle
+                                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                                }
+                            });
+                        }
                     }
                 }
                 #[cfg(target_os = "macos")]
@@ -3530,13 +3578,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     let window_id = CapWindowId::from_str(label);
 
                     if matches!(window_id, Ok(CapWindowId::Upgrade)) {
-                        for (label, window) in app.webview_windows() {
-                            if let Ok(id) = CapWindowId::from_str(&label)
-                                && matches!(id, CapWindowId::TargetSelectOverlay { .. })
-                            {
-                                let _ = window.hide();
+                        let app_handle = app.clone();
+                        let _ = app_handle.clone().run_on_main_thread(move || {
+                            for (label, window) in app_handle.webview_windows() {
+                                if let Ok(id) = CapWindowId::from_str(&label)
+                                    && matches!(id, CapWindowId::TargetSelectOverlay { .. })
+                                {
+                                    let _ = window.hide();
+                                }
                             }
-                        }
+                        });
                     }
 
                     if *focused

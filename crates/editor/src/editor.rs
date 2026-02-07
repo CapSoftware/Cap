@@ -76,6 +76,7 @@ impl Renderer {
             &self.render_constants.device,
             &self.render_constants.queue,
             self.render_constants.is_software_adapter,
+            self.render_constants.is_software_adapter,
         );
 
         struct PendingFrame {

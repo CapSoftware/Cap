@@ -301,7 +301,7 @@ impl Muxer for WindowsMuxer {
                     }
                 }
 
-                match encoder {
+                let res = match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder with frame pacing");
                         let frame_interval = Duration::from_secs_f64(1.0 / config.frame_rate as f64);
@@ -470,7 +470,10 @@ impl Muxer for WindowsMuxer {
 
                         Ok(())
                     }
-                }
+                };
+
+                cap_mediafoundation_utils::thread_uninit();
+                res
             });
         }
 
@@ -817,7 +820,7 @@ impl Muxer for WindowsCameraMuxer {
                     }
                 }
 
-                match encoder {
+                let res = match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         info!(
                             "Windows camera encoder started (hardware) with frame pacing: {:?} {}x{} -> NV12 {}x{} @ {}fps",
@@ -1018,7 +1021,10 @@ impl Muxer for WindowsCameraMuxer {
                         );
                         Ok(())
                     }
-                }
+                };
+
+                cap_mediafoundation_utils::thread_uninit();
+                res
             });
         }
 
@@ -1610,7 +1616,7 @@ pub fn upload_mf_buffer_to_texture(
     let buffer_guard = frame
         .buffer
         .lock()
-        .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?;
+        .map_err(|_| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
     let lock = buffer_guard.lock()?;
     let original_data = &*lock;
 

@@ -331,7 +331,7 @@ fn get_current_mode(app: &AppHandle) -> RecordingMode {
 }
 
 fn is_setup_window_open(app: &AppHandle) -> bool {
-    app.webview_windows().contains_key("setup")
+    app.get_webview_window("setup").is_some()
 }
 
 fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {

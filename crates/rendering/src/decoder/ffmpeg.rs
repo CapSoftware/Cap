@@ -20,6 +20,9 @@ use super::{
     frame_converter::FrameConverter, pts_to_frame,
 };
 
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+
 #[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
@@ -199,6 +202,12 @@ impl FfmpegDecoder {
         let (continue_tx, continue_rx) = mpsc::channel::<Result<(u32, u32, bool), String>>();
 
         std::thread::spawn(move || {
+            #[cfg(target_os = "windows")]
+            let com_initialized = unsafe {
+                let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+                hr.is_ok()
+            };
+
             let hw_device_type = if use_hw_acceleration {
                 #[cfg(target_os = "windows")]
                 {
@@ -811,6 +820,13 @@ impl FfmpegDecoder {
                             }
                         }
                     }
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            if com_initialized {
+                unsafe {
+                    CoUninitialize();
                 }
             }
         });

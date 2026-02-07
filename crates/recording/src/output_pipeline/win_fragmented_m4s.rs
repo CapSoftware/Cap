@@ -247,7 +247,8 @@ impl WindowsFragmentedM4SMuxer {
 
         let (video_tx, video_rx) =
             sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(buffer_size);
-        let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
+        let (ready_tx, ready_rx) =
+            sync_channel::<anyhow::Result<Arc<Mutex<SegmentedVideoEncoder>>>>(1);
 
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
@@ -256,21 +257,33 @@ impl WindowsFragmentedM4SMuxer {
             output_size: self.output_size,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
-        if let Some(callback) = &self.disk_space_callback {
-            encoder.set_disk_space_callback(callback.clone());
-        }
-        let encoder = Arc::new(Mutex::new(encoder));
-        let encoder_clone = encoder.clone();
-
+        let base_path = self.base_path.clone();
         let video_config = self.video_config;
+        let disk_space_callback = self.disk_space_callback.clone();
+
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
                 cap_mediafoundation_utils::thread_init();
 
-                if ready_tx.send(Ok(())).is_err() {
+                let mut encoder_inst =
+                    match SegmentedVideoEncoder::init(base_path, video_config, encoder_config) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            let err = anyhow!(e);
+                            let _ = ready_tx.send(Err(anyhow!(err.to_string())));
+                            return Err(err);
+                        }
+                    };
+
+                if let Some(callback) = disk_space_callback {
+                    encoder_inst.set_disk_space_callback(callback);
+                }
+
+                let encoder = Arc::new(Mutex::new(encoder_inst));
+                let encoder_clone = encoder.clone();
+
+                if ready_tx.send(Ok(encoder)).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
 
@@ -467,10 +480,11 @@ impl WindowsFragmentedM4SMuxer {
                     );
                 }
 
+                cap_mediafoundation_utils::thread_uninit();
                 Ok(())
             })?;
 
-        ready_rx
+        let encoder = ready_rx
             .recv()
             .map_err(|_| anyhow!("Windows M4S encoder thread ended unexpectedly"))??;
 
@@ -723,7 +737,8 @@ impl WindowsFragmentedM4SCameraMuxer {
 
         let (video_tx, video_rx) =
             sync_channel::<Option<(NativeCameraFrame, Duration)>>(buffer_size);
-        let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
+        let (ready_tx, ready_rx) =
+            sync_channel::<anyhow::Result<Arc<Mutex<SegmentedVideoEncoder>>>>(1);
 
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
@@ -732,21 +747,36 @@ impl WindowsFragmentedM4SCameraMuxer {
             output_size: self.output_size,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
-        if let Some(callback) = &self.disk_space_callback {
-            encoder.set_disk_space_callback(callback.clone());
-        }
-        let encoder = Arc::new(Mutex::new(encoder));
-        let encoder_clone = encoder.clone();
-
+        let base_path = self.base_path.clone();
         let video_config = self.video_config;
+        let disk_space_callback = self.disk_space_callback.clone();
+
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-camera-segment-encoder".to_string())
             .spawn(move || {
                 cap_mediafoundation_utils::thread_init();
 
-                if ready_tx.send(Ok(())).is_err() {
+                let mut encoder_inst = match SegmentedVideoEncoder::init(
+                    base_path,
+                    video_config,
+                    encoder_config,
+                ) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        let err = anyhow!(e);
+                        let _ = ready_tx.send(Err(anyhow!(err.to_string())));
+                        return Err(err);
+                    }
+                };
+
+                if let Some(callback) = disk_space_callback {
+                    encoder_inst.set_disk_space_callback(callback);
+                }
+
+                let encoder = Arc::new(Mutex::new(encoder_inst));
+                let encoder_clone = encoder.clone();
+
+                if ready_tx.send(Ok(encoder)).is_err() {
                     return Err(anyhow!(
                         "Failed to send ready signal - camera receiver dropped"
                     ));
@@ -943,10 +973,11 @@ impl WindowsFragmentedM4SCameraMuxer {
                     );
                 }
 
+                cap_mediafoundation_utils::thread_uninit();
                 Ok(())
             })?;
 
-        ready_rx
+        let encoder = ready_rx
             .recv()
             .map_err(|_| anyhow!("Windows M4S camera encoder thread ended unexpectedly"))??;
 

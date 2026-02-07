@@ -86,7 +86,7 @@ const MAX_TEXTURE_WIDTH: u32 = 7680;
 const MAX_TEXTURE_HEIGHT: u32 = 4320;
 
 const INITIAL_TEXTURE_WIDTH: u32 = 1920;
-const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
+const INITIAL_TEXTURE_HEIGHT: u32 = 1088;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
 
@@ -420,17 +420,19 @@ pub struct YuvToRgbaConverter {
     d3d11_staging_height: u32,
     #[cfg(target_os = "windows")]
     zero_copy_failed: bool,
+    is_software_adapter: bool,
 }
 
 impl YuvToRgbaConverter {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, is_software_adapter: bool) -> Self {
         let pipelines = Arc::new(YuvConverterPipelines::new(device));
-        Self::new_with_shared_pipelines(device, pipelines)
+        Self::new_with_shared_pipelines(device, pipelines, is_software_adapter)
     }
 
     pub fn new_with_shared_pipelines(
         device: &wgpu::Device,
         pipelines: Arc<YuvConverterPipelines>,
+        is_software_adapter: bool,
     ) -> Self {
         let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
 
@@ -476,6 +478,7 @@ impl YuvToRgbaConverter {
             d3d11_staging_height: 0,
             #[cfg(target_os = "windows")]
             zero_copy_failed: false,
+            is_software_adapter,
         }
     }
 
@@ -1206,6 +1209,7 @@ impl YuvToRgbaConverter {
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
         if !self.zero_copy_failed
+            && !self.is_software_adapter
             && let (Some(y_h), Some(uv_h)) = (y_handle, uv_handle)
         {
             match self.convert_nv12_from_d3d11_shared_handles(

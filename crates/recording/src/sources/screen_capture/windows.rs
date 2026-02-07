@@ -310,6 +310,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
             drop(drop_guard);
 
+            cap_mediafoundation_utils::thread_uninit();
             Ok(())
         });
 

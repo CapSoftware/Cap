@@ -45,7 +45,7 @@ wgpu-core.workspace = true
 foreign-types = "0.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu-hal = { workspace = true, features = ["dx12"] }
+wgpu-hal = { workspace = true }
 wgpu-core.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
@@ -55,6 +55,8 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_System_Threading",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
 ] }
 windows_0_58 = { package = "windows", version = "0.58", features = [
     "Win32_Foundation",

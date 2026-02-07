@@ -513,7 +513,7 @@ impl WindowsSegmentedMuxer {
                     }
                 };
 
-                match encoder {
+                let res = match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder for segment");
                         let mut first_timestamp: Option<Duration> = None;
@@ -541,7 +541,7 @@ impl WindowsSegmentedMuxer {
                                     Err(e) => {
                                         error!("Failed to lock output mutex: {e}");
                                         return Err(windows::core::Error::new(
-                                            windows::core::HRESULT(0x80004005u32 as i32),
+                                            windows::Win32::Foundation::E_FAIL,
                                             format!("Mutex poisoned: {e}"),
                                         ));
                                     }
@@ -595,7 +595,10 @@ impl WindowsSegmentedMuxer {
 
                         Ok(())
                     }
-                }
+                };
+
+                cap_mediafoundation_utils::thread_uninit();
+                res
             })?;
 
         ready_rx

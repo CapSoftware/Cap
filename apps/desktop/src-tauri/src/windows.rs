@@ -84,16 +84,21 @@ fn is_system_dark_mode() -> bool {
 }
 
 fn hide_recording_windows(app: &AppHandle) {
-    for (label, window) in app.webview_windows() {
-        if let Ok(id) = CapWindowId::from_str(&label)
-            && matches!(
-                id,
-                CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main | CapWindowId::Camera
-            )
-        {
-            let _ = window.hide();
+    let app_clone = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        for (label, window) in app_clone.webview_windows() {
+            if let Ok(id) = CapWindowId::from_str(&label)
+                && matches!(
+                    id,
+                    CapWindowId::TargetSelectOverlay { .. }
+                        | CapWindowId::Main
+                        | CapWindowId::Camera
+                )
+            {
+                let _ = window.hide();
+            }
         }
-    }
+    });
 }
 
 async fn cleanup_camera_window(
@@ -464,6 +469,7 @@ impl CapWindowId {
         }
     }
 
+    #[allow(dead_code)]
     pub fn activates_dock(&self) -> bool {
         matches!(
             self,
@@ -2185,14 +2191,15 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
 #[specta::specta]
 #[instrument(skip(app))]
 pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
-    for (label, window) in app.webview_windows() {
-        if let Ok(id) = CapWindowId::from_str(&label) {
-            let title = id.title();
-            window
-                .set_content_protected(should_protect_window(&app, &title))
-                .map_err(|e| e.to_string())?;
+    let app_clone = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        for (label, window) in app_clone.webview_windows() {
+            if let Ok(id) = CapWindowId::from_str(&label) {
+                let title = id.title();
+                let _ = window.set_content_protected(should_protect_window(&app_clone, &title));
+            }
         }
-    }
+    });
 
     Ok(())
 }

@@ -49,41 +49,85 @@ static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 
 pub async fn get_shared_gpu() -> Option<&'static SharedGpuContext> {
     GPU.get_or_init(|| async {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default()
+                | wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
+            ..Default::default()
+        });
 
-        let hardware_adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .ok();
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all());
 
-        let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
+        for adapter in &adapters {
+            let info = adapter.get_info();
             tracing::info!(
-                adapter_name = adapter.get_info().name,
-                adapter_backend = ?adapter.get_info().backend,
+                "Found GPU adapter: {} (Vendor: 0x{:04X}, Backend: {:?}, Type: {:?}, LUID: {:?})",
+                info.name,
+                info.vendor,
+                info.backend,
+                info.device_type,
+                info.device
+            );
+        }
+
+        let (adapter, is_software_adapter) = if let Some(hardware_adapter) = adapters
+            .iter()
+            .find(|a| {
+                let info = a.get_info();
+                // Prefer discrete GPU on Dx12 if available for zero-copy
+                info.device_type == wgpu::DeviceType::DiscreteGpu
+                    && info.backend == wgpu::Backend::Dx12
+                    && info.name != "Microsoft Basic Render Driver"
+            })
+            .or_else(|| {
+                // Secondary check for any hardware GPU on Dx12
+                adapters.iter().find(|a| {
+                    let info = a.get_info();
+                    info.device_type != wgpu::DeviceType::Cpu
+                        && info.backend == wgpu::Backend::Dx12
+                        && info.name != "Microsoft Basic Render Driver"
+                })
+            })
+            .or_else(|| {
+                // Tertiary: try hardware on any backend (might have been missed by Dx12)
+                adapters.iter().find(|a| {
+                    let info = a.get_info();
+                    info.device_type != wgpu::DeviceType::Cpu
+                        && info.name != "Microsoft Basic Render Driver"
+                        && !info.name.contains("WARP")
+                })
+            }) {
+            let info = hardware_adapter.get_info();
+            tracing::info!(
+                adapter_name = info.name,
+                adapter_backend = ?info.backend,
                 "Using hardware GPU adapter for shared context"
             );
-            (adapter, false)
+            (hardware_adapter.clone(), false)
         } else {
-            tracing::warn!("No hardware GPU adapter found, attempting software fallback for shared context");
-            let software_adapter = instance
+            tracing::warn!(
+                "No clear hardware GPU adapter found via enumeration, attempting fallback"
+            );
+            let fallback_adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    force_fallback_adapter: true,
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
                     compatible_surface: None,
                 })
                 .await
                 .ok()?;
 
+            let info = fallback_adapter.get_info();
+            let is_software = info.device_type == wgpu::DeviceType::Cpu
+                || info.name == "Microsoft Basic Render Driver";
+
             tracing::info!(
-                adapter_name = software_adapter.get_info().name,
-                adapter_backend = ?software_adapter.get_info().backend,
-                "Using software adapter for shared context (CPU rendering - performance may be reduced)"
+                adapter_name = info.name,
+                adapter_backend = ?info.backend,
+                is_software = is_software,
+                "Using fallback GPU adapter for shared context"
             );
-            (software_adapter, true)
+            (fallback_adapter, is_software)
         };
 
         let (device, queue) = adapter
