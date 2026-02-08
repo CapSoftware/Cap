@@ -77,10 +77,10 @@ export function VerifyOTPForm({
 
 			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(next || "/dashboard")}`,
 			);
-
-			if (!res.url.includes("/login-success")) {
+			
+			if (!res.url.includes(next || "/dashboard")) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
 				throw "Invalid code. Please try again.";
