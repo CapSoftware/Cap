@@ -38,9 +38,6 @@ export default function SwitchMicrophone() {
           }
         }
       }
-      if (devices.length === 0) {
-        devices.push("MacBook Pro Microphone");
-      }
       return devices;
     },
   });
