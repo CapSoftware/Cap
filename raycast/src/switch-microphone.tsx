@@ -3,18 +3,6 @@ import { useExec } from "@raycast/utils";
 
 const DEEPLINK_SCHEME = "cap-desktop";
 
-function parseMicrophones(output: string): string[] {
-  const devices: string[] = [];
-  const lines = output.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.length > 0 && trimmed !== "None") {
-      devices.push(trimmed);
-    }
-  }
-  return devices;
-}
-
 async function switchMicrophone(label: string) {
   const action = { set_microphone: { mic_label: label } };
   const encodedValue = encodeURIComponent(JSON.stringify(action));
