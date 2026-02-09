@@ -1,32 +1,19 @@
-import { Action, ActionPanel, List, showHUD, open } from "@raycast/api";
+import { Action, ActionPanel, List } from "@raycast/api";
 import { useExec } from "@raycast/utils";
-
-const DEEPLINK_SCHEME = "cap-desktop";
+import { executeDeepLink } from "./utils";
 
 async function switchMicrophone(label: string) {
-  const action = { set_microphone: { mic_label: label } };
-  const encodedValue = encodeURIComponent(JSON.stringify(action));
-  const url = `${DEEPLINK_SCHEME}://action?value=${encodedValue}`;
-
-  try {
-    await open(url);
-    await showHUD(`Switching microphone to "${label}" in Cap`);
-  } catch {
-    await showHUD("Failed to communicate with Cap. Is Cap running?");
-  }
+  await executeDeepLink(
+    { set_microphone: { mic_label: label } },
+    `Switching microphone to "${label}" in Cap`,
+  );
 }
 
 async function disableMicrophone() {
-  const action = { set_microphone: { mic_label: null } };
-  const encodedValue = encodeURIComponent(JSON.stringify(action));
-  const url = `${DEEPLINK_SCHEME}://action?value=${encodedValue}`;
-
-  try {
-    await open(url);
-    await showHUD("Disabling microphone in Cap");
-  } catch {
-    await showHUD("Failed to communicate with Cap. Is Cap running?");
-  }
+  await executeDeepLink(
+    { set_microphone: { mic_label: null } },
+    "Disabling microphone in Cap",
+  );
 }
 
 export default function SwitchMicrophone() {

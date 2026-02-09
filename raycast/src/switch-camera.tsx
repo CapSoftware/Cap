@@ -1,49 +1,61 @@
-import { Action, ActionPanel, List, showHUD, open } from "@raycast/api";
+import { Action, ActionPanel, List } from "@raycast/api";
 import { useExec } from "@raycast/utils";
+import { executeDeepLink } from "./utils";
 
-const DEEPLINK_SCHEME = "cap-desktop";
+interface Camera {
+  name: string;
+  uniqueId: string;
+}
 
-async function switchCamera(name: string) {
-  const action = { set_camera: { camera: { DeviceID: name } } };
-  const encodedValue = encodeURIComponent(JSON.stringify(action));
-  const url = `${DEEPLINK_SCHEME}://action?value=${encodedValue}`;
-
-  try {
-    await open(url);
-    await showHUD(`Switching camera to "${name}" in Cap`);
-  } catch {
-    await showHUD("Failed to communicate with Cap. Is Cap running?");
-  }
+async function switchCamera(camera: Camera) {
+  await executeDeepLink(
+    { set_camera: { camera: { DeviceID: camera.uniqueId } } },
+    `Switching camera to "${camera.name}" in Cap`,
+  );
 }
 
 async function disableCamera() {
-  const action = { set_camera: { camera: null } };
-  const encodedValue = encodeURIComponent(JSON.stringify(action));
-  const url = `${DEEPLINK_SCHEME}://action?value=${encodedValue}`;
-
-  try {
-    await open(url);
-    await showHUD("Disabling camera in Cap");
-  } catch {
-    await showHUD("Failed to communicate with Cap. Is Cap running?");
-  }
+  await executeDeepLink(
+    { set_camera: { camera: null } },
+    "Disabling camera in Cap",
+  );
 }
 
 export default function SwitchCamera() {
   const { data, isLoading } = useExec("system_profiler", ["SPCameraDataType", "-detailLevel", "mini"], {
     parseOutput: ({ stdout }) => {
-      const cameras: string[] = [];
+      const cameras: Camera[] = [];
       const lines = stdout.split("\n");
+      let currentName: string | null = null;
+      let currentUniqueId: string | null = null;
+
       for (const line of lines) {
         if (line.match(/^\s{4}\S/) && line.includes(":")) {
+          if (currentName && currentUniqueId) {
+            cameras.push({ name: currentName, uniqueId: currentUniqueId });
+          }
           const name = line.trim().replace(/:$/, "");
           if (name.length > 0 && name !== "Camera") {
-            cameras.push(name);
+            currentName = name;
+            currentUniqueId = null;
+          } else {
+            currentName = null;
+            currentUniqueId = null;
           }
         }
+
+        const uniqueIdMatch = line.match(/^\s+Unique ID:\s*(.+)/);
+        if (uniqueIdMatch && currentName) {
+          currentUniqueId = uniqueIdMatch[1].trim();
+        }
       }
+
+      if (currentName && currentUniqueId) {
+        cameras.push({ name: currentName, uniqueId: currentUniqueId });
+      }
+
       if (cameras.length === 0) {
-        cameras.push("FaceTime HD Camera");
+        cameras.push({ name: "FaceTime HD Camera", uniqueId: "FaceTime HD Camera" });
       }
       return cameras;
     },
@@ -65,11 +77,11 @@ export default function SwitchCamera() {
       />
       {cameras.map((cam) => (
         <List.Item
-          key={cam}
-          title={cam}
+          key={cam.uniqueId}
+          title={cam.name}
           actions={
             <ActionPanel>
-              <Action title={`Switch to ${cam}`} onAction={() => switchCamera(cam)} />
+              <Action title={`Switch to ${cam.name}`} onAction={() => switchCamera(cam)} />
             </ActionPanel>
           }
         />
