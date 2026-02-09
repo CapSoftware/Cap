@@ -13,7 +13,7 @@
       "title": "Start Recording",
       "subtitle": "Cap",
       "description": "Start a new screen recording in Cap",
-      "mode": "no-view"
+      "mode": "view"
     },
     {
       "name": "stop-recording",
@@ -62,7 +62,7 @@
       "title": "Take Screenshot",
       "subtitle": "Cap",
       "description": "Take a screenshot with Cap",
-      "mode": "no-view"
+      "mode": "view"
     },
     {
       "name": "open-settings",

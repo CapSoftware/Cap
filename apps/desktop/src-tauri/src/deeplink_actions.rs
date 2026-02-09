@@ -119,14 +119,14 @@ fn resolve_capture_target(capture_mode: &CaptureMode) -> Result<ScreenCaptureTar
     match capture_mode {
         CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
             .into_iter()
-            .find(|(s, _)| s.name == *name)
+            .find(|(s, _)| s.name == name.as_str())
             .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-            .ok_or(format!("No screen with name \"{}\"", name)),
+            .ok_or_else(|| format!("No screen with name \"{}\"", name)),
         CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
             .into_iter()
-            .find(|(w, _)| w.name == *name)
+            .find(|(w, _)| w.name == name.as_str())
             .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-            .ok_or(format!("No window with name \"{}\"", name)),
+            .ok_or_else(|| format!("No window with name \"{}\"", name)),
     }
 }
 
