@@ -54,9 +54,6 @@ export default function SwitchCamera() {
         cameras.push({ name: currentName, uniqueId: currentUniqueId });
       }
 
-      if (cameras.length === 0) {
-        cameras.push({ name: "FaceTime HD Camera", uniqueId: "FaceTime HD Camera" });
-      }
       return cameras;
     },
   });

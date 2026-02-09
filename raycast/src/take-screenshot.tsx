@@ -11,9 +11,6 @@ function parseDisplays(stdout: string): string[] {
       displays.push(match[1]);
     }
   }
-  if (displays.length === 0) {
-    displays.push("Main Display");
-  }
   return displays;
 }
 
