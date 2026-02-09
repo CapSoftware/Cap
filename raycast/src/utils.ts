@@ -2,7 +2,13 @@ import { open, showHUD } from "@raycast/api";
 
 const DEEPLINK_SCHEME = "cap-desktop";
 
-type DeepLinkAction = string | Record<string, unknown>;
+type UnitDeepLinkAction =
+  | "stop_recording"
+  | "pause_recording"
+  | "resume_recording"
+  | "toggle_pause_recording";
+
+type DeepLinkAction = UnitDeepLinkAction | Record<string, unknown>;
 
 export async function executeDeepLink(action: DeepLinkAction, hudMessage: string) {
   const encodedValue = encodeURIComponent(JSON.stringify(action));
