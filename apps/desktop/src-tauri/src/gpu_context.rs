@@ -47,61 +47,85 @@ pub struct SharedGpuContext {
 
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 
-pub async fn get_shared_gpu() -> Option<&'static SharedGpuContext> {
-    GPU.get_or_init(|| async {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+async fn init_gpu_inner() -> Option<SharedGpuContext> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
-        let hardware_adapter = instance
+    let hardware_adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .ok();
+
+    let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
+        tracing::info!(
+            adapter_name = adapter.get_info().name,
+            adapter_backend = ?adapter.get_info().backend,
+            "Using hardware GPU adapter for shared context"
+        );
+        (adapter, false)
+    } else {
+        tracing::warn!(
+            "No hardware GPU adapter found, attempting software fallback for shared context"
+        );
+        let software_adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
+                power_preference: wgpu::PowerPreference::LowPower,
+                force_fallback_adapter: true,
                 compatible_surface: None,
-            })
-            .await
-            .ok();
-
-        let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
-            tracing::info!(
-                adapter_name = adapter.get_info().name,
-                adapter_backend = ?adapter.get_info().backend,
-                "Using hardware GPU adapter for shared context"
-            );
-            (adapter, false)
-        } else {
-            tracing::warn!("No hardware GPU adapter found, attempting software fallback for shared context");
-            let software_adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    force_fallback_adapter: true,
-                    compatible_surface: None,
-                })
-                .await
-                .ok()?;
-
-            tracing::info!(
-                adapter_name = software_adapter.get_info().name,
-                adapter_backend = ?software_adapter.get_info().backend,
-                "Using software adapter for shared context (CPU rendering - performance may be reduced)"
-            );
-            (software_adapter, true)
-        };
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("cap-shared-gpu-device"),
-                required_features: wgpu::Features::empty(),
-                ..Default::default()
             })
             .await
             .ok()?;
 
-        Some(SharedGpuContext {
-            device: Arc::new(device),
-            queue: Arc::new(queue),
-            adapter: Arc::new(adapter),
-            instance: Arc::new(instance),
-            is_software_adapter,
+        tracing::info!(
+            adapter_name = software_adapter.get_info().name,
+            adapter_backend = ?software_adapter.get_info().backend,
+            "Using software adapter for shared context (CPU rendering - performance may be reduced)"
+        );
+        (software_adapter, true)
+    };
+
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("cap-shared-gpu-device"),
+            required_features: wgpu::Features::empty(),
+            ..Default::default()
         })
+        .await
+        .ok()?;
+
+    Some(SharedGpuContext {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+        adapter: Arc::new(adapter),
+        instance: Arc::new(instance),
+        is_software_adapter,
+    })
+}
+
+pub async fn get_shared_gpu() -> Option<&'static SharedGpuContext> {
+    GPU.get_or_init(|| async {
+        let result = tokio::spawn(init_gpu_inner()).await;
+
+        match result {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                if e.is_panic() {
+                    tracing::error!(
+                        "GPU initialization panicked (wgpu internal error). \
+                         The app will continue without GPU acceleration."
+                    );
+                } else {
+                    tracing::error!(
+                        error = %e,
+                        "GPU initialization task failed"
+                    );
+                }
+                None
+            }
+        }
     })
     .await
     .as_ref()

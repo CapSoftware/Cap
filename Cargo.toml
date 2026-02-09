@@ -96,7 +96,7 @@ manual_clamp = "deny"
 
 # Optimize for smaller binary size
 [profile.release]
-panic = "abort"   # Strip expensive panic clean-up logic
+panic = "unwind"
 codegen-units = 1 # Compile crates one after another so the compiler can optimize better
 lto = true        # Enables link to optimizations
 opt-level = "s"   # Optimize for binary size
