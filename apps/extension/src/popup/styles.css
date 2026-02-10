@@ -1,0 +1,43 @@
+@import "@radix-ui/colors/red.css";
+@import "@radix-ui/colors/red-dark.css";
+@import "@radix-ui/colors/gray.css";
+@import "@radix-ui/colors/gray-alpha.css";
+@import "@radix-ui/colors/gray-dark.css";
+@import "@radix-ui/colors/blue.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+	--primary: #005cb1;
+	--primary-2: #004c93;
+	--primary-3: #003b73;
+	--secondary: #2eb4ff;
+	--secondary-2: #1696e0;
+	--secondary-3: #117ebd;
+	--tertiary: #c5eaff;
+	--tertiary-2: #d3e5ff;
+	--tertiary-3: #e0edff;
+	--filler: #efefef;
+	--filler-2: #e4e4e4;
+	--filler-3: #e2e2e2;
+	--filler-txt: #b3b3b3;
+	--text-primary: #0d1b2a;
+	--text-secondary: #ffffff;
+	--shadow-gray-11: hsl(0, 0%, 13%);
+}
+
+html,
+body {
+	height: 100%;
+	width: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--gray-2);
+	color: var(--text-primary);
+	min-width: 340px;
+	min-height: 520px;
+}

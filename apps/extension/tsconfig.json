@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["DOM", "DOM.Iterable", "ES2022"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"jsx": "react-jsx",
+		"strict": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"baseUrl": ".",
+		"paths": {
+			"@/*": ["src/*"]
+		},
+		"types": ["vite/client"]
+	},
+	"include": ["src"]
+}
