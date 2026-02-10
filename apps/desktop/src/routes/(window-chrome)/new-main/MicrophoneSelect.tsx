@@ -3,7 +3,6 @@ import { cx } from "cva";
 import {
 	type Component,
 	type ComponentProps,
-	createEffect,
 	createSignal,
 	Show,
 } from "solid-js";
@@ -30,7 +29,6 @@ export default function MicrophoneSelect(props: {
 	const requestPermission = useRequestPermission();
 
 	const [dbs, setDbs] = createSignal<number | undefined>();
-	const [isInitialized, setIsInitialized] = createSignal(false);
 
 	const permissionGranted = () =>
 		props.permissions?.microphone === "granted" ||
@@ -54,13 +52,6 @@ export default function MicrophoneSelect(props: {
 
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
-
-	createEffect(() => {
-		if (!props.value || !permissionGranted() || isInitialized()) return;
-
-		setIsInitialized(true);
-		void handleMicrophoneChange(props.value);
-	});
 
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
@@ -98,7 +89,7 @@ export default function MicrophoneSelect(props: {
 					onClick={(e) => {
 						if (props.value !== null) {
 							e.stopPropagation();
-							props.onChange(null);
+							void handleMicrophoneChange(null);
 						}
 					}}
 				/>
@@ -125,7 +116,6 @@ export function MicrophoneSelectBase(props: {
 	const currentRecording = createCurrentRecordingQuery();
 
 	const [dbs, setDbs] = createSignal<number | undefined>();
-	const [isInitialized, setIsInitialized] = createSignal(false);
 
 	const requestPermission = useRequestPermission();
 
@@ -153,13 +143,6 @@ export function MicrophoneSelectBase(props: {
 
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
-
-	createEffect(() => {
-		if (!props.value || !permissionGranted() || isInitialized()) return;
-
-		setIsInitialized(true);
-		void handleMicrophoneChange({ name: props.value });
-	});
 
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
