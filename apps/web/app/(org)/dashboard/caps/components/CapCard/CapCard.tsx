@@ -41,7 +41,12 @@ import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
-import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import {
+	useEffectMutation,
+	useEffectQuery,
+	useRpcClient,
+} from "@/lib/EffectRuntime";
+import { HoverPreviewRequest } from "@/lib/Requests/HoverPreviewRequest";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { usePublicEnv } from "@/utils/public-env";
 
@@ -216,6 +221,56 @@ export const CapCard = ({
 	);
 	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
 	const prevUploadProgressRef = useRef(uploadProgress);
+	const [isHoveringThumbnail, setIsHoveringThumbnail] = useState(false);
+	const [isPreviewReady, setIsPreviewReady] = useState(false);
+	const [isPreviewErrored, setIsPreviewErrored] = useState(false);
+	const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+
+	const hasActiveUpload =
+		uploadProgress !== null &&
+		uploadProgress.status !== "fetching" &&
+		uploadProgress.status !== "failed" &&
+		uploadProgress.status !== "error";
+
+	const hoverPreviewUrlQuery = useEffectQuery({
+		queryKey: HoverPreviewRequest.queryKey(cap.id),
+		queryFn: Effect.fn(function* () {
+			return yield* Effect.request(
+				new HoverPreviewRequest.HoverPreviewRequest({ videoId: cap.id }),
+				yield* HoverPreviewRequest.DataLoaderResolver,
+			);
+		}),
+		enabled: !hasActiveUpload && !isPreviewErrored,
+		refetchOnWindowFocus: false,
+		refetchOnMount: false,
+	});
+
+	const hoverPreviewUrl = hoverPreviewUrlQuery.data ?? null;
+	const hoverPreviewEnabled =
+		!anyCapSelected && !isDropdownOpen && !hasActiveUpload && !isPreviewErrored;
+	const hoverPreviewActive =
+		hoverPreviewEnabled && isHoveringThumbnail && !!hoverPreviewUrl;
+	const hoverPreviewVisible = hoverPreviewActive && isPreviewReady;
+
+	useEffect(() => {
+		const video = previewVideoRef.current;
+		if (!video) return;
+
+		if (!hoverPreviewActive) {
+			video.pause();
+			if (video.currentTime !== 0) {
+				try {
+					video.currentTime = 0;
+				} catch {}
+			}
+			return;
+		}
+
+		const playPromise = video.play();
+		if (playPromise) {
+			playPromise.catch(() => {});
+		}
+	}, [hoverPreviewActive, hoverPreviewUrl]);
 
 	useEffect(() => {
 		const prev = prevUploadProgressRef.current;
@@ -235,6 +290,10 @@ export const CapCard = ({
 
 		prevUploadProgressRef.current = uploadProgress;
 	}, [uploadProgress, queryClient, cap.id]);
+
+	useEffect(() => {
+		setIsPreviewReady(false);
+	}, [hoverPreviewUrl]);
 
 	// Helper function to create a drag preview element
 	const createDragPreview = (text: string): HTMLElement => {
@@ -608,6 +667,10 @@ export const CapCard = ({
 							// "block group",
 							anyCapSelected && "cursor-pointer pointer-events-none",
 						)}
+						onMouseEnter={() => setIsHoveringThumbnail(true)}
+						onMouseLeave={() => setIsHoveringThumbnail(false)}
+						onFocus={() => setIsHoveringThumbnail(true)}
+						onBlur={() => setIsHoveringThumbnail(false)}
 						onClick={(e) => {
 							if (isDeleting) e.preventDefault();
 						}}
@@ -708,11 +771,13 @@ export const CapCard = ({
 						<VideoThumbnail
 							videoDuration={cap.duration}
 							imageClass={clsx(
-								anyCapSelected
-									? "opacity-50"
-									: isDropdownOpen
-										? "opacity-30"
-										: "group-hover:opacity-30",
+								hoverPreviewVisible
+									? "opacity-0"
+									: anyCapSelected
+										? "opacity-50"
+										: isDropdownOpen
+											? "opacity-30"
+											: "group-hover:opacity-30",
 								"transition-opacity duration-200",
 							)}
 							containerClass="absolute inset-0"
@@ -720,13 +785,27 @@ export const CapCard = ({
 							alt={`${cap.name} Thumbnail`}
 							imageStatus={imageStatus}
 							setImageStatus={setImageStatus}
-							hasActiveUpload={
-								uploadProgress !== null &&
-								uploadProgress.status !== "fetching" &&
-								uploadProgress.status !== "failed" &&
-								uploadProgress.status !== "error"
-							}
+							hasActiveUpload={hasActiveUpload}
 						/>
+						{hoverPreviewUrl && (
+							<video
+								ref={previewVideoRef}
+								src={hoverPreviewUrl}
+								muted
+								playsInline
+								loop
+								preload="none"
+								className={clsx(
+									"absolute inset-0 w-full h-full object-cover rounded-t-xl pointer-events-none transition-opacity duration-200",
+									hoverPreviewVisible ? "opacity-100" : "opacity-0",
+								)}
+								onLoadedData={() => setIsPreviewReady(true)}
+								onError={() => {
+									setIsPreviewReady(false);
+									setIsPreviewErrored(true);
+								}}
+							/>
+						)}
 					</Link>
 				</div>
 				<div
