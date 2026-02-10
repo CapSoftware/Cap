@@ -152,23 +152,7 @@ export function EditorProvider({
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const cameraVideoRef = useRef<HTMLVideoElement>(null);
 	const [editorState, setEditorState] = useState<EditorState>(() => {
-		const persisted = loadPersistedState(video.id);
 		const defaultZoom = Math.max(2, Math.min(video.duration, 30));
-		if (persisted) {
-			return {
-				...DEFAULT_EDITOR_STATE,
-				previewTime: Math.min(persisted.previewTime, video.duration),
-				playbackTime: Math.min(persisted.previewTime, video.duration),
-				timeline: {
-					...DEFAULT_EDITOR_STATE.timeline,
-					interactMode: persisted.timeline.interactMode,
-					transform: {
-						position: persisted.timeline.transform.position,
-						zoom: persisted.timeline.transform.zoom,
-					},
-				},
-			};
-		}
 		return {
 			...DEFAULT_EDITOR_STATE,
 			timeline: {
@@ -195,8 +179,36 @@ export function EditorProvider({
 	} = useHistory(initialConfig ?? createDefaultConfig(video.duration));
 
 	const [waveformData, setWaveformData] = useState<WaveformData | null>(null);
-	const initialTimeRef = useRef(editorState.previewTime);
+	const initialTimeRef = useRef(0);
 	const hasRestoredTimeRef = useRef(false);
+	const loadedPersistedForVideoIdRef = useRef<string | null>(null);
+
+	useEffect(() => {
+		if (loadedPersistedForVideoIdRef.current === video.id) return;
+		loadedPersistedForVideoIdRef.current = video.id;
+		hasRestoredTimeRef.current = false;
+		initialTimeRef.current = 0;
+
+		const persisted = loadPersistedState(video.id);
+		if (!persisted) return;
+
+		const time = Math.min(persisted.previewTime, video.duration);
+		initialTimeRef.current = time;
+
+		setEditorState((state) => ({
+			...state,
+			previewTime: time,
+			playbackTime: time,
+			timeline: {
+				...state.timeline,
+				interactMode: persisted.timeline.interactMode,
+				transform: {
+					position: persisted.timeline.transform.position,
+					zoom: persisted.timeline.transform.zoom,
+				},
+			},
+		}));
+	}, [video.id, video.duration]);
 
 	useEffect(() => {
 		let cancelled = false;
