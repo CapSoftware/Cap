@@ -160,6 +160,7 @@ async function processVideoOnMediaServer(
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
+	const previewKey = `${userId}/${videoId}/preview/hover.mp4`;
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(outputKey, {
@@ -170,6 +171,12 @@ async function processVideoOnMediaServer(
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(thumbnailKey, {
 			ContentType: "image/jpeg",
+		})
+		.pipe(runPromise);
+
+	const previewPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(previewKey, {
+			ContentType: "video/mp4",
 		})
 		.pipe(runPromise);
 
@@ -184,6 +191,7 @@ async function processVideoOnMediaServer(
 			videoUrl: rawVideoUrl,
 			outputPresignedUrl,
 			thumbnailPresignedUrl,
+			previewPresignedUrl,
 			webhookUrl,
 		}),
 	});
