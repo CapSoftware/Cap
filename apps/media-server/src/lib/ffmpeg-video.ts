@@ -6,6 +6,7 @@ import { createTempFile, type TempFileHandle } from "./temp-files";
 
 const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
+const PREVIEW_TIMEOUT_MS = 120_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDERR_BYTES = 64 * 1024;
 const PROGRESS_STALL_TIMEOUT_MS = 180_000;
@@ -58,6 +59,26 @@ const DEFAULT_THUMBNAIL_OPTIONS: Required<ThumbnailOptions> = {
 	width: 1280,
 	height: 720,
 	quality: 85,
+};
+
+export interface PreviewVideoOptions {
+	start?: number;
+	duration?: number;
+	maxWidth?: number;
+	maxHeight?: number;
+	fps?: number;
+	crf?: number;
+	preset?: "ultrafast" | "fast" | "medium" | "slow";
+}
+
+const DEFAULT_PREVIEW_VIDEO_OPTIONS: Required<PreviewVideoOptions> = {
+	start: -1,
+	duration: 3,
+	maxWidth: 480,
+	maxHeight: 480,
+	fps: 12,
+	crf: 32,
+	preset: "fast",
 };
 
 function killProcess(proc: Subprocess): void {
@@ -721,6 +742,106 @@ export async function generateThumbnail(
 		);
 
 		return result;
+	} finally {
+		killProcess(proc);
+	}
+}
+
+export async function generatePreviewVideo(
+	inputPath: string,
+	sourceDuration: number,
+	options: PreviewVideoOptions = {},
+): Promise<TempFileHandle> {
+	const opts = { ...DEFAULT_PREVIEW_VIDEO_OPTIONS, ...options };
+	const outputTempFile = await createTempFile(".mp4");
+
+	const clipDuration = Math.max(0.2, opts.duration);
+	let start = opts.start;
+
+	if (start === undefined || start < 0) {
+		start = Math.min(1, Math.max(0, sourceDuration - clipDuration - 0.1));
+	}
+
+	start = Math.min(Math.max(0, start), Math.max(0, sourceDuration - 0.1));
+
+	const fps = Math.max(1, Math.min(60, Math.round(opts.fps)));
+	const maxWidth = Math.max(64, Math.min(1920, Math.round(opts.maxWidth)));
+	const maxHeight = Math.max(64, Math.min(1920, Math.round(opts.maxHeight)));
+	const crf = Math.max(0, Math.min(51, Math.round(opts.crf)));
+
+	const vf = `fps=${fps},scale='min(${maxWidth},iw)':'min(${maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
+
+	const ffmpegArgs = [
+		"ffmpeg",
+		"-hide_banner",
+		"-loglevel",
+		"error",
+		"-threads",
+		"2",
+		"-ss",
+		start.toString(),
+		"-i",
+		inputPath,
+		"-t",
+		clipDuration.toString(),
+		"-an",
+		"-c:v",
+		"libx264",
+		"-preset",
+		opts.preset,
+		"-crf",
+		crf.toString(),
+		"-vf",
+		vf,
+		"-pix_fmt",
+		"yuv420p",
+		"-profile:v",
+		"baseline",
+		"-level",
+		"3.0",
+		"-movflags",
+		"+faststart",
+		"-y",
+		outputTempFile.path,
+	];
+
+	const proc = spawn({
+		cmd: ffmpegArgs,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	try {
+		await withTimeout(
+			(async () => {
+				drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+				const stderrOutput = await readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
+				const exitCode = await proc.exited;
+
+				if (exitCode !== 0) {
+					throw new Error(
+						`FFmpeg preview exited with code ${exitCode}. Stderr: ${stderrOutput}`,
+					);
+				}
+
+				const outputFile = file(outputTempFile.path);
+				const outputSize = await outputFile.size;
+				if (outputSize === 0) {
+					throw new Error("FFmpeg produced empty preview file");
+				}
+			})(),
+			PREVIEW_TIMEOUT_MS,
+			() => killProcess(proc),
+		);
+
+		return outputTempFile;
+	} catch (err) {
+		await outputTempFile.cleanup();
+		throw err;
 	} finally {
 		killProcess(proc);
 	}
