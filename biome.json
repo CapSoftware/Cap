@@ -41,6 +41,16 @@
 	},
 	"overrides": [
 		{
+			"includes": ["**/*.css"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noUnknownAtRules": "off"
+					}
+				}
+			}
+		},
+		{
 			"includes": ["apps/desktop/**/*"],
 			"linter": {
 				"rules": { "a11y": "off" }
