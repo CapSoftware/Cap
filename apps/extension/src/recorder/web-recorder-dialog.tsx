@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { CAP_WEB_ORIGIN } from "@/lib/cap-web";
-import { CameraPreviewWindow } from "./CameraPreviewWindow";
+import type { CameraState } from "@/lib/messages";
 import { CameraSelector } from "./CameraSelector";
 import { HowItWorksButton } from "./HowItWorksButton";
 import { HowItWorksPanel } from "./HowItWorksPanel";
@@ -263,6 +263,32 @@ function RecorderPanelInner({
 		setSettingsOpen(false);
 	};
 
+	useEffect(() => {
+		if (selectedCameraId) {
+			const state: CameraState = {
+				deviceId: selectedCameraId,
+				size: "sm",
+				shape: "round",
+				mirrored: false,
+			};
+			chrome.runtime.sendMessage({ type: "SHOW_CAMERA", state });
+		} else {
+			chrome.runtime.sendMessage({ type: "HIDE_CAMERA" });
+		}
+	}, [selectedCameraId]);
+
+	useEffect(() => {
+		chrome.runtime.sendMessage(
+			{ type: "GET_CAMERA_STATE" },
+			(response: unknown) => {
+				const res = response as { state?: CameraState | null } | null;
+				if (res?.state?.deviceId) {
+					setSelectedCameraId(res.state.deviceId);
+				}
+			},
+		);
+	}, [setSelectedCameraId]);
+
 	const showInProgressBar = isRecording || isBusy || phase === "error";
 	const recordingTimerDisplayMs = isProUser
 		? durationMs
@@ -396,12 +422,6 @@ function RecorderPanelInner({
 					onResume={resumeRecording}
 					onRestart={restartRecording}
 					isRestarting={isRestarting}
-				/>
-			)}
-			{selectedCameraId && (
-				<CameraPreviewWindow
-					cameraId={selectedCameraId}
-					onClose={() => handleCameraChange(null)}
 				/>
 			)}
 		</>
