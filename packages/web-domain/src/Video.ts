@@ -292,6 +292,23 @@ export class VideoRpcs extends RpcGroup.make(
 		),
 		error: InternalError,
 	}),
+	Rpc.make("VideosGetHoverPreviews", {
+		payload: Schema.Array(VideoId).pipe(
+			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
+		),
+		success: Schema.Array(
+			Schema.Exit({
+				success: Schema.Option(Schema.String),
+				failure: Schema.Union(
+					NotFoundError,
+					PolicyDeniedError,
+					VerifyVideoPasswordError,
+				),
+				defect: Schema.Unknown,
+			}),
+		),
+		error: InternalError,
+	}),
 	Rpc.make("VideosGetAnalytics", {
 		payload: Schema.Array(VideoId).pipe(
 			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
