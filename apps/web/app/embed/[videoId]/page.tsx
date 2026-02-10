@@ -37,6 +37,13 @@ export async function generateMetadata(
 					title: `${video.name} | Cap Recording`,
 					description: "Watch this video on Cap",
 					openGraph: {
+						title: `${video.name} | Cap Recording`,
+						description: "Watch this video on Cap",
+						type: "video.other",
+						url: new URL(
+							`/s/${videoId}`,
+							buildEnv.NEXT_PUBLIC_WEB_URL,
+						).toString(),
 						images: [
 							{
 								url: new URL(
@@ -50,7 +57,7 @@ export async function generateMetadata(
 						videos: [
 							{
 								url: new URL(
-									`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+									`/api/playlist?videoId=${video.id}&videoType=mp4`,
 									buildEnv.NEXT_PUBLIC_WEB_URL,
 								).toString(),
 								width: 1280,
@@ -71,11 +78,11 @@ export async function generateMetadata(
 						],
 						players: {
 							playerUrl: new URL(
-								`/embed/${videoId}`,
+								`/embed/${videoId}?autoplay=1`,
 								buildEnv.NEXT_PUBLIC_WEB_URL,
 							).toString(),
 							streamUrl: new URL(
-								`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+								`/api/playlist?videoId=${video.id}&videoType=mp4`,
 								buildEnv.NEXT_PUBLIC_WEB_URL,
 							).toString(),
 							width: 1280,

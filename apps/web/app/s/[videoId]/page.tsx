@@ -158,6 +158,13 @@ export async function generateMetadata(
 					title: `${video.name} | Cap Recording`,
 					description: "Watch this video on Cap",
 					openGraph: {
+						title: `${video.name} | Cap Recording`,
+						description: "Watch this video on Cap",
+						type: "video.other",
+						url: new URL(
+							`/s/${videoId}`,
+							buildEnv.NEXT_PUBLIC_WEB_URL,
+						).toString(),
 						images: [
 							{
 								url: new URL(
@@ -171,7 +178,7 @@ export async function generateMetadata(
 						videos: [
 							{
 								url: new URL(
-									`/api/playlist?videoId=${video.id}`,
+									`/api/playlist?videoId=${video.id}&videoType=mp4`,
 									buildEnv.NEXT_PUBLIC_WEB_URL,
 								).toString(),
 								width: 1280,
@@ -192,11 +199,11 @@ export async function generateMetadata(
 						],
 						players: {
 							playerUrl: new URL(
-								`/s/${videoId}`,
+								`/embed/${videoId}?autoplay=1`,
 								buildEnv.NEXT_PUBLIC_WEB_URL,
 							).toString(),
 							streamUrl: new URL(
-								`/api/playlist?videoId=${video.id}`,
+								`/api/playlist?videoId=${video.id}&videoType=mp4`,
 								buildEnv.NEXT_PUBLIC_WEB_URL,
 							).toString(),
 							width: 1280,
@@ -213,6 +220,7 @@ export async function generateMetadata(
 					title: "Cap: This video is private",
 					description: "This video is private and cannot be shared.",
 					openGraph: {
+						type: "website",
 						images: [
 							{
 								url: new URL(
@@ -226,7 +234,7 @@ export async function generateMetadata(
 						videos: [
 							{
 								url: new URL(
-									`/api/playlist?videoId=${videoId}`,
+									`/api/playlist?videoId=${videoId}&videoType=mp4`,
 									buildEnv.NEXT_PUBLIC_WEB_URL,
 								).toString(),
 								width: 1280,

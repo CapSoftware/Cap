@@ -117,8 +117,7 @@ const getPlaylistResponse = (
 		const cameraKey = `${video.ownerId}/${video.id}/camera.mp4`;
 
 		if (urlParams.videoType === "camera") {
-			if (!isWebStudio)
-				return yield* new HttpApiError.BadRequest();
+			if (!isWebStudio) return yield* new HttpApiError.BadRequest();
 			return HttpServerResponse.redirect(
 				yield* s3.getSignedObjectUrl(cameraKey),
 			);
