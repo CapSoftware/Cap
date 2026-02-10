@@ -78,9 +78,11 @@ export const MicrophoneSelector = ({
 				}
 			} catch (error) {
 				console.error("Microphone permission request failed", error);
-				toast.error(
-					"Unable to access your microphone. Check browser permissions.",
-				);
+				if (error instanceof DOMException) {
+					toast.error(
+						"Unable to access your microphone. Check browser permissions.",
+					);
+				}
 			}
 
 			return;

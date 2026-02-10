@@ -71,7 +71,11 @@ export const CameraSelector = ({
 				}
 			} catch (error) {
 				console.error("Camera permission request failed", error);
-				toast.error("Unable to access your camera. Check browser permissions.");
+				if (error instanceof DOMException) {
+					toast.error(
+						"Unable to access your camera. Check browser permissions.",
+					);
+				}
 			}
 
 			return;
