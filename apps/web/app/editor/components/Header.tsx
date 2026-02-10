@@ -20,6 +20,7 @@ export function Header({ videoId }: HeaderProps) {
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
 	const [title, setTitle] = useState(video.name);
 	const [isSavingTitle, setIsSavingTitle] = useState(false);
+	const [isNavigatingToExport, setIsNavigatingToExport] = useState(false);
 	const [editingTitleWidth, setEditingTitleWidth] = useState<number | null>(
 		null,
 	);
@@ -95,15 +96,20 @@ export function Header({ videoId }: HeaderProps) {
 		buttonLabel = "Retry Save";
 	}
 
-	const handleExportClick = useCallback(() => {
-		fetch(`/api/editor/${videoId}`, {
-			method: "PUT",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ config: project }),
-		}).catch(() => undefined);
+	const handleExportClick = useCallback(async () => {
+		if (isNavigatingToExport) return;
+		setIsNavigatingToExport(true);
 
-		router.push(`/editor/${videoId}/export`);
-	}, [router, videoId, project]);
+		try {
+			await fetch(`/api/editor/${videoId}`, {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ config: project }),
+			}).catch(() => undefined);
+		} finally {
+			router.push(`/editor/${videoId}/export`);
+		}
+	}, [router, videoId, project, isNavigatingToExport]);
 
 	return (
 		<header className="flex items-center justify-between h-12 sm:h-14 px-2 sm:px-4 border-b border-gray-4 bg-gray-2 shrink-0">
@@ -197,7 +203,8 @@ export function Header({ videoId }: HeaderProps) {
 					variant="gray"
 					size="sm"
 					onClick={handleExportClick}
-					disabled={isBusy}
+					disabled={isBusy || isNavigatingToExport}
+					spinner={isNavigatingToExport}
 				>
 					<Upload className="size-4 sm:mr-1.5" />
 					<span className="hidden sm:inline">Export</span>
@@ -207,7 +214,7 @@ export function Header({ videoId }: HeaderProps) {
 					variant="primary"
 					size="sm"
 					onClick={handleSaveClick}
-					disabled={isBusy || showComplete}
+					disabled={isBusy || showComplete || isNavigatingToExport}
 					spinner={isBusy}
 				>
 					{showComplete ? (
