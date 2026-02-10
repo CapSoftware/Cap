@@ -5,11 +5,13 @@ import {
 	makeUseEffectQuery,
 } from "./effect-react-query";
 import { AnalyticsRequest } from "./Requests/AnalyticsRequest";
+import { HoverPreviewRequest } from "./Requests/HoverPreviewRequest";
 import { ThumbnailRequest } from "./Requests/ThumbnailRequest";
 import { Rpc } from "./Rpcs";
 
 export const RuntimeLayer = Layer.mergeAll(
 	ThumbnailRequest.DataLoaderResolver.Default,
+	HoverPreviewRequest.DataLoaderResolver.Default,
 	AnalyticsRequest.DataLoaderResolver.Default,
 	Rpc.Default,
 	FetchHttpClient.layer,
