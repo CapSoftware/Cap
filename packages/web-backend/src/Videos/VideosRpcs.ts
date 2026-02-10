@@ -117,6 +117,41 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					),
 				),
 
+			VideosGetHoverPreviews: (videoIds) =>
+				Effect.all(
+					videoIds.map((id) =>
+						videos.getHoverPreviewURL(id).pipe(
+							Effect.catchTag(
+								"DatabaseError",
+								() => new InternalError({ type: "database" }),
+							),
+							Effect.catchTag(
+								"S3Error",
+								() => new InternalError({ type: "s3" }),
+							),
+							Effect.matchEffect({
+								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
+								onFailure: (e) =>
+									Schema.is(InternalError)(e)
+										? Effect.fail(e)
+										: Effect.succeed(Exit.fail(e)),
+							}),
+							Effect.map((v) => Unify.unify(v)),
+						),
+					),
+					{ concurrency: 10 },
+				).pipe(
+					provideOptionalAuth,
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag(
+						"UnknownException",
+						() => new InternalError({ type: "unknown" }),
+					),
+				),
+
 			VideosGetAnalytics: (videoIds) =>
 				videos.getAnalyticsBulk(videoIds).pipe(
 					Effect.map(
