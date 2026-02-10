@@ -14,7 +14,7 @@ const Tooltip = ({
 	delayDuration,
 }: {
 	children: React.ReactNode;
-	content: string;
+	content: React.ReactNode;
 	className?: string;
 	position?: "top" | "bottom" | "left" | "right";
 	kbd?: string[];
