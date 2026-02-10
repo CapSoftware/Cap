@@ -54,9 +54,8 @@ pub struct UploadProgressEvent {
     total: String,
 }
 
-// The size of each S3 multipart upload chunk
-const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
-const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
+const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5 MB - S3 multipart minimum
+const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024; // 15 MB
 
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
@@ -552,10 +551,10 @@ pub fn from_pending_file_to_chunks(
                 }
 
                 if total_read > 0 {
-                    // Remember first chunk size for later re-emission with updated header
                     if last_read_position == 0 {
                         first_chunk_size = Some(total_read as u64);
                     }
+
 
                     yield Chunk {
                         total_size: file_size,
@@ -608,7 +607,7 @@ fn multipart_uploader(
     upload_id: String,
     stream: impl Stream<Item = io::Result<Chunk>> + Send + 'static,
 ) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> + 'static {
-    const MAX_CONCURRENT_UPLOADS: usize = 3;
+    const MAX_CONCURRENT_UPLOADS: usize = 5;
 
     debug!("Initializing multipart uploader for video {video_id:?}");
     let start = Instant::now();
