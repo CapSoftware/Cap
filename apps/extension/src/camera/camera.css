@@ -1,0 +1,27 @@
+@import "@radix-ui/colors/gray.css";
+@import "@radix-ui/colors/gray-alpha.css";
+@import "@radix-ui/colors/gray-dark.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+	--text-primary: #0d1b2a;
+	--shadow-gray-11: hsl(0, 0%, 13%);
+}
+
+html,
+body {
+	height: 100%;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	overflow: hidden;
+}
+
+#root {
+	height: 100%;
+	width: 100%;
+}
