@@ -208,7 +208,7 @@ export function CapVideoPlayer({
 								: `${videoSrc}?_t=${timestamp}`;
 							return {
 								url: fallbackUrl,
-								supportsCrossOrigin: enableCrossOrigin,
+								supportsCrossOrigin: false,
 							};
 						}
 					},

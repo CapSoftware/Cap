@@ -71,6 +71,21 @@ export const ShareHeader = ({
 		setTitle(data.name);
 	}, [data.name]);
 
+	const maxTitleLength = 56;
+	const isTitleTruncated = title.length > maxTitleLength;
+	const displayTitle = isTitleTruncated
+		? `${title.slice(0, maxTitleLength - 3)}...`
+		: title;
+
+	const handleCopyTitle = async () => {
+		try {
+			await navigator.clipboard.writeText(title);
+			toast.success("Copied to clipboard");
+		} catch {
+			toast.error("Failed to copy to clipboard");
+		}
+	};
+
 	const handleBlur = async () => {
 		setIsEditing(false);
 		const next = title.trim();
@@ -220,16 +235,32 @@ export const ShareHeader = ({
 										onKeyDown={handleKeyDown}
 										className="w-full text-xl sm:text-2xl"
 									/>
+								) : isOwner ? (
+									<h1 className="text-xl sm:text-2xl">
+										<button
+											type="button"
+											onClick={() => setIsEditing(true)}
+											className="w-full bg-transparent border-0 m-0 p-0 text-left text-xl sm:text-2xl text-gray-12 cursor-text focus:outline-none"
+										>
+											{title}
+										</button>
+									</h1>
 								) : (
-									<h1
-										className="text-xl sm:text-2xl"
-										onClick={() => {
-											if (isOwner) {
-												setIsEditing(true);
-											}
-										}}
-									>
-										{title}
+									<h1 className="text-xl sm:text-2xl">
+										<Tooltip
+											content={title}
+											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+											delayDuration={100}
+											disable={!isTitleTruncated}
+										>
+											<button
+												type="button"
+												onClick={handleCopyTitle}
+												className="w-full bg-transparent border-0 m-0 p-0 text-left text-xl sm:text-2xl text-gray-12 cursor-pointer focus:outline-none"
+											>
+												{displayTitle}
+											</button>
+										</Tooltip>
 									</h1>
 								)}
 							</div>
@@ -250,7 +281,32 @@ export const ShareHeader = ({
 										</p>
 									</div>
 								</div>
-								{user && renderSharedStatus()}
+								{user && (
+									<div className="flex gap-2 items-center">
+										{renderSharedStatus()}
+										{isOwner && (
+											<Tooltip
+												content="View analytics"
+												className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+												delayDuration={100}
+											>
+												<Button
+													variant="gray"
+													size="xs"
+													className="px-3 w-fit"
+													onClick={() => {
+														push(`/dashboard/analytics?capId=${data.id}`);
+													}}
+												>
+													<FontAwesomeIcon
+														className="size-4 text-gray-12"
+														icon={faChartSimple}
+													/>
+												</Button>
+											</Tooltip>
+										)}
+									</div>
+								)}
 							</div>
 						</div>
 					</div>
@@ -295,26 +351,6 @@ export const ShareHeader = ({
 							</div>
 							{user !== null && (
 								<div className="hidden md:flex gap-2">
-									{isOwner && (
-										<Tooltip
-											content="View analytics"
-											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-											delayDuration={100}
-										>
-											<Button
-												variant="gray"
-												className="rounded-full flex items-center justify-center"
-												onClick={() => {
-													push(`/dashboard/analytics?capId=${data.id}`);
-												}}
-											>
-												<FontAwesomeIcon
-													className="size-4 text-gray-12"
-													icon={faChartSimple}
-												/>
-											</Button>
-										</Tooltip>
-									)}
 									<Button
 										onClick={() => {
 											push("/dashboard/caps?page=1");
