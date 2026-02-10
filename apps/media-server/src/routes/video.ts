@@ -4,6 +4,7 @@ import { z } from "zod";
 import { processVideoWithCanvasPipeline } from "../lib/canvas-pipeline";
 import {
 	downloadVideoToTemp,
+	generatePreviewVideo,
 	generateThumbnail,
 	processVideo,
 	type TimelineSegment,
@@ -51,6 +52,7 @@ const processSchema = z.object({
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	previewPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	maxWidth: z.number().max(4096).optional(),
 	maxHeight: z.number().max(4096).optional(),
@@ -286,6 +288,7 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewPresignedUrl,
 		webhookUrl,
 	} = result.data;
 
@@ -299,6 +302,7 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewPresignedUrl,
 		result.data,
 	).catch((err) => {
 		console.error(
@@ -393,6 +397,7 @@ async function processVideoAsync(
 	videoUrl: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	previewPresignedUrl: string | undefined,
 	options: z.infer<typeof processSchema>,
 ): Promise<void> {
 	const job = getJob(jobId);
@@ -479,6 +484,37 @@ async function processVideoAsync(
 				metadata.duration,
 			);
 			await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
+		}
+
+		if (previewPresignedUrl) {
+			updateJob(jobId, {
+				phase: "generating_thumbnail",
+				progress: thumbnailPresignedUrl ? 94 : 90,
+				message: "Generating preview...",
+			});
+			await sendWebhook(job);
+
+			const previewTempFile = await generatePreviewVideo(
+				outputTempFile.path,
+				metadata.duration,
+			);
+
+			updateJob(jobId, {
+				phase: "generating_thumbnail",
+				progress: thumbnailPresignedUrl ? 97 : 95,
+				message: "Uploading preview...",
+			});
+			await sendWebhook(job);
+
+			try {
+				await uploadFileToS3(
+					previewTempFile.path,
+					previewPresignedUrl,
+					"video/mp4",
+				);
+			} finally {
+				await previewTempFile.cleanup();
+			}
 		}
 
 		updateJob(jobId, {
