@@ -16,7 +16,7 @@ interface ExportPageProps {
 async function getEditorProject(
 	videoId: string,
 	duration: number,
-): Promise<{ config: ProjectConfiguration; updatedAt: string }> {
+): Promise<ProjectConfiguration> {
 	try {
 		const cookieStore = await cookies();
 		const response = await fetch(
@@ -31,19 +31,15 @@ async function getEditorProject(
 		if (response.ok) {
 			const data = (await response.json()) as {
 				config?: ProjectConfiguration;
-				updatedAt?: string;
 			};
 
-			if (data.config && data.updatedAt) {
-				return { config: data.config, updatedAt: data.updatedAt };
+			if (data.config) {
+				return data.config;
 			}
 		}
 	} catch {}
 
-	return {
-		config: createDefaultConfig(duration),
-		updatedAt: new Date().toISOString(),
-	};
+	return createDefaultConfig(duration);
 }
 
 export default async function ExportPage(props: ExportPageProps) {
@@ -63,6 +59,7 @@ export default async function ExportPage(props: ExportPageProps) {
 			duration: videos.duration,
 			width: videos.width,
 			height: videos.height,
+			fps: videos.fps,
 			source: videos.source,
 		})
 		.from(videos)
@@ -84,7 +81,7 @@ export default async function ExportPage(props: ExportPageProps) {
 		? `/api/playlist?videoId=${video.id}&videoType=camera&variant=original`
 		: null;
 
-	const project = await getEditorProject(videoId, videoDuration);
+	const projectConfig = await getEditorProject(videoId, videoDuration);
 
 	return (
 		<ExportClient
@@ -94,11 +91,11 @@ export default async function ExportPage(props: ExportPageProps) {
 				duration: videoDuration,
 				width: videoWidth,
 				height: videoHeight,
+				fps: video.fps ?? null,
 			}}
 			videoUrl={videoUrl}
 			cameraUrl={cameraUrl}
-			projectConfig={project.config}
-			projectUpdatedAt={project.updatedAt}
+			projectConfig={projectConfig}
 		/>
 	);
 }
