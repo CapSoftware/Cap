@@ -20,6 +20,20 @@ const mediaConstraintsMap: Record<MediaPermissionKind, MediaStreamConstraints> =
 		microphone: { audio: true, video: false },
 	};
 
+function isExtensionPopup(): boolean {
+	return (
+		typeof chrome !== "undefined" &&
+		typeof chrome.runtime?.getURL === "function" &&
+		typeof chrome.tabs?.create === "function"
+	);
+}
+
+function openPermissionsTab(): void {
+	chrome.tabs.create({
+		url: chrome.runtime.getURL("permissions.html"),
+	});
+}
+
 export const useMediaPermission = (
 	kind: MediaPermissionKind,
 	enabled: boolean,
@@ -75,6 +89,11 @@ export const useMediaPermission = (
 	}, [enabled, refreshPermission]);
 
 	const requestPermission = useCallback(async () => {
+		if (isExtensionPopup()) {
+			openPermissionsTab();
+			return false;
+		}
+
 		if (
 			typeof navigator === "undefined" ||
 			!navigator.mediaDevices?.getUserMedia
