@@ -631,6 +631,35 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				return Option.some(url);
 			}),
 
+			getHoverPreviewURL: Effect.fn("Videos.getHoverPreviewURL")(function* (
+				videoId: Video.VideoId,
+			) {
+				const maybeVideo = yield* repo
+					.getById(videoId)
+					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				if (Option.isNone(maybeVideo)) return Option.none();
+				const [video] = maybeVideo.value;
+
+				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const previewKey = `${video.ownerId}/${video.id}/preview/hover.mp4`;
+
+				const exists = yield* bucket.headObject(previewKey).pipe(
+					Effect.as(true),
+					Effect.catchTag("S3Error", (error) => {
+						const statusCode = (error.cause as any)?.$metadata?.httpStatusCode;
+						const name = (error.cause as any)?.name;
+						if (statusCode === 404) return Effect.succeed(false);
+						if (name === "NotFound" || name === "NoSuchKey")
+							return Effect.succeed(false);
+						return Effect.fail(error);
+					}),
+				);
+				if (!exists) return Option.none();
+
+				const url = yield* bucket.getSignedObjectUrl(previewKey);
+				return Option.some(url);
+			}),
+
 			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (
 				videoId: Video.VideoId,
 			) {
