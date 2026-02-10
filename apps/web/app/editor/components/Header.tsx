@@ -2,65 +2,21 @@
 
 import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { ArrowLeft, Redo2, Save, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, Link2, Redo2, Undo2, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { editTitle } from "@/actions/videos/edit-title";
-import type { ProjectConfiguration } from "../types/project-config";
-import { resolveBackgroundAssetPath } from "../utils/backgrounds";
 import { useEditorContext } from "./context";
 
 interface HeaderProps {
 	videoId: string;
 }
 
-function normalizeProjectForSave(
-	project: ProjectConfiguration,
-): ProjectConfiguration {
-	const source = project.background.source;
-	if (
-		(source.type !== "wallpaper" && source.type !== "image") ||
-		!source.path
-	) {
-		return project;
-	}
-
-	const normalizedPath = resolveBackgroundAssetPath(source.path);
-	if (
-		normalizedPath.startsWith("http://") ||
-		normalizedPath.startsWith("https://") ||
-		normalizedPath.startsWith("data:")
-	) {
-		return project;
-	}
-
-	const absolutePath =
-		typeof window === "undefined"
-			? normalizedPath
-			: new URL(normalizedPath, window.location.origin).toString();
-
-	return {
-		...project,
-		background: {
-			...project.background,
-			source: {
-				...source,
-				path: absolutePath,
-			},
-		},
-	};
-}
-
 export function Header({ videoId }: HeaderProps) {
-	const { video, history, project } = useEditorContext();
-	const { refresh } = useRouter();
-	const [isSavingRender, setIsSavingRender] = useState(false);
-	const [saveStatus, setSaveStatus] = useState<
-		"IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR"
-	>("IDLE");
-	const [saveError, setSaveError] = useState<string | null>(null);
+	const { video, history, project, saveRender } = useEditorContext();
+	const router = useRouter();
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
 	const [title, setTitle] = useState(video.name);
 	const [isSavingTitle, setIsSavingTitle] = useState(false);
@@ -68,6 +24,9 @@ export function Header({ videoId }: HeaderProps) {
 		null,
 	);
 	const titleInputRef = useRef<HTMLInputElement | null>(null);
+
+	const { saveState, isSaving, isSubmitting, canRetry, save, hasSavedRender } =
+		saveRender;
 
 	useEffect(() => {
 		if (!isEditingTitle) {
@@ -88,88 +47,13 @@ export function Header({ videoId }: HeaderProps) {
 		}
 	}, [isEditingTitle]);
 
-	const fetchSaveStatus = useCallback(async () => {
-		try {
-			const response = await fetch(`/api/editor/${videoId}/save`, {
-				method: "GET",
-				cache: "no-store",
-			});
-
-			if (!response.ok) {
-				return;
-			}
-
-			const data = (await response.json()) as {
-				status?: "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
-				renderState?: { error?: string | null };
-			};
-			if (data.status) {
-				setSaveStatus(data.status);
-			}
-			setSaveError(data.renderState?.error ?? null);
-		} catch {}
-	}, [videoId]);
-
-	useEffect(() => {
-		fetchSaveStatus();
-		const interval = window.setInterval(fetchSaveStatus, 3000);
-		return () => window.clearInterval(interval);
-	}, [fetchSaveStatus]);
-
-	const handleSave = useCallback(
-		async (force = false) => {
-			setIsSavingRender(true);
-			setSaveError(null);
-			const configToSave = normalizeProjectForSave(project);
-			try {
-				const response = await fetch(`/api/editor/${videoId}/save`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ config: configToSave, force }),
-				});
-
-				if (!response.ok) {
-					const data = (await response.json().catch(() => ({}))) as {
-						error?: string;
-					};
-					setSaveStatus("ERROR");
-					setSaveError(data.error || "Failed to save changes");
-					return;
-				}
-
-				const data = (await response.json()) as {
-					status?: "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETE" | "ERROR";
-					renderState?: { error?: string | null };
-				};
-				setSaveStatus(data.status ?? "QUEUED");
-				setSaveError(data.renderState?.error ?? null);
-			} catch (error) {
-				setSaveStatus("ERROR");
-				setSaveError(error instanceof Error ? error.message : "Failed to save");
-			} finally {
-				setIsSavingRender(false);
-			}
-		},
-		[videoId, project],
-	);
-
-	const isRenderBusy = saveStatus === "QUEUED" || saveStatus === "PROCESSING";
-	const isSaveProcessing = isSavingRender || isRenderBusy;
-
 	const handleSaveClick = useCallback(() => {
-		if (isRenderBusy) {
-			const shouldRetry = window.confirm(
-				"A previous save is still marked as processing. Start a new save anyway?",
-			);
-			if (!shouldRetry) {
-				return;
-			}
-			void handleSave(true);
+		if (canRetry) {
+			save(project, true);
 			return;
 		}
-
-		void handleSave();
-	}, [handleSave, isRenderBusy]);
+		save(project);
+	}, [save, project, canRetry]);
 
 	const saveTitle = useCallback(async () => {
 		setIsEditingTitle(false);
@@ -184,7 +68,7 @@ export function Header({ videoId }: HeaderProps) {
 		try {
 			await editTitle(videoId as Video.VideoId, nextTitle);
 			setTitle(nextTitle);
-			refresh();
+			router.refresh();
 		} catch (error) {
 			setTitle(video.name);
 			if (error instanceof Error) {
@@ -195,7 +79,31 @@ export function Header({ videoId }: HeaderProps) {
 		} finally {
 			setIsSavingTitle(false);
 		}
-	}, [title, video.name, videoId, refresh]);
+	}, [title, video.name, videoId, router]);
+
+	const isBusy = isSubmitting || (isSaving && !canRetry);
+	const showComplete = saveState.status === "COMPLETE";
+
+	let buttonLabel = hasSavedRender ? "Re-save" : "Create shareable link";
+	if (isSubmitting) {
+		buttonLabel = "Saving...";
+	} else if (isSaving && !canRetry) {
+		buttonLabel = "Saving...";
+	} else if (showComplete) {
+		buttonLabel = "Saved!";
+	} else if (canRetry) {
+		buttonLabel = "Retry Save";
+	}
+
+	const handleExportClick = useCallback(() => {
+		fetch(`/api/editor/${videoId}`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ config: project }),
+		}).catch(() => undefined);
+
+		router.push(`/editor/${videoId}/export`);
+	}, [router, videoId, project]);
 
 	return (
 		<header className="flex items-center justify-between h-12 sm:h-14 px-2 sm:px-4 border-b border-gray-4 bg-gray-2 shrink-0">
@@ -259,21 +167,16 @@ export function Header({ videoId }: HeaderProps) {
 			</div>
 
 			<div className="flex items-center gap-1 sm:gap-2">
-				{isSaveProcessing && (
-					<span className="hidden lg:inline text-xs text-gray-10">
-						Processing saved changes...
-					</span>
-				)}
-				{saveStatus === "ERROR" && saveError && (
+				{saveState.status === "ERROR" && saveState.error && (
 					<span className="hidden lg:inline text-xs text-red-10 max-w-56 truncate">
-						{saveError}
+						{saveState.error}
 					</span>
 				)}
 				<div className="flex items-center gap-1 mr-1 sm:mr-2">
 					<button
 						type="button"
 						onClick={history.undo}
-						disabled={!history.canUndo}
+						disabled={!history.canUndo || isSaving}
 						className="flex items-center justify-center size-8 rounded-lg text-gray-11 hover:text-gray-12 hover:bg-gray-3 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
 						title="Undo (Cmd+Z)"
 					>
@@ -282,7 +185,7 @@ export function Header({ videoId }: HeaderProps) {
 					<button
 						type="button"
 						onClick={history.redo}
-						disabled={!history.canRedo}
+						disabled={!history.canRedo || isSaving}
 						className="flex items-center justify-center size-8 rounded-lg text-gray-11 hover:text-gray-12 hover:bg-gray-3 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
 						title="Redo (Cmd+Shift+Z)"
 					>
@@ -291,20 +194,28 @@ export function Header({ videoId }: HeaderProps) {
 				</div>
 
 				<Button
+					variant="gray"
+					size="sm"
+					onClick={handleExportClick}
+					disabled={isBusy}
+				>
+					<Upload className="size-4 sm:mr-1.5" />
+					<span className="hidden sm:inline">Export</span>
+				</Button>
+
+				<Button
 					variant="primary"
 					size="sm"
 					onClick={handleSaveClick}
-					disabled={isSavingRender}
-					spinner={isSavingRender}
+					disabled={isBusy || showComplete}
+					spinner={isBusy}
 				>
-					<Save className="size-4 sm:mr-1.5" />
-					<span className="hidden sm:inline">
-						{isSavingRender
-							? "Saving..."
-							: isRenderBusy
-								? "Retry Save"
-								: "Save"}
-					</span>
+					{showComplete ? (
+						<Check className="size-4 sm:mr-1.5" />
+					) : (
+						<Link2 className="size-4 sm:mr-1.5" />
+					)}
+					<span className="hidden sm:inline">{buttonLabel}</span>
 				</Button>
 			</div>
 		</header>

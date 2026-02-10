@@ -808,7 +808,8 @@ function CaptionsPanel() {
 
 export function ConfigSidebar() {
 	const [activeTab, setActiveTab] = useState<TabId>("background");
-	const { editorState, setEditorState } = useEditorContext();
+	const { editorState, setEditorState, saveRender } = useEditorContext();
+	const isSaving = saveRender.isSaving;
 
 	const clearSelection = useCallback(() => {
 		setEditorState((state) => ({
@@ -860,13 +861,14 @@ export function ConfigSidebar() {
 					<button
 						type="button"
 						key={id}
+						disabled={isSaving}
 						onClick={() => {
 							if (editorState.timeline.selection) {
 								clearSelection();
 							}
 							setActiveTab(id);
 						}}
-						className={`flex flex-1 justify-center items-center h-full transition-colors ${
+						className={`flex flex-1 justify-center items-center h-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
 							activeTab === id && !editorState.timeline.selection
 								? "text-gray-12"
 								: "text-gray-10 hover:text-gray-11"
@@ -886,7 +888,11 @@ export function ConfigSidebar() {
 				))}
 			</div>
 
-			<div className="flex-1 overflow-y-auto p-3 sm:p-4">{renderPanel()}</div>
+			<div
+				className={`flex-1 overflow-y-auto p-3 sm:p-4 transition-opacity ${isSaving ? "pointer-events-none opacity-50" : ""}`}
+			>
+				{renderPanel()}
+			</div>
 		</div>
 	);
 }

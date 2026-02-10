@@ -30,6 +30,7 @@ export function Timeline() {
 		setProjectWithoutHistory,
 		waveformData,
 		history,
+		saveRender,
 	} = useEditorContext();
 	const duration = video.duration;
 	const transform = editorState.timeline.transform;
@@ -315,7 +316,7 @@ export function Timeline() {
 		<TimelineContextProvider duration={duration}>
 			<div
 				ref={containerRef}
-				className="relative flex flex-col h-full bg-gray-2 border-t border-gray-4 overflow-hidden"
+				className={`relative flex flex-col h-full bg-gray-2 border-t border-gray-4 overflow-hidden transition-opacity ${saveRender.isSaving ? "pointer-events-none opacity-50" : ""}`}
 				style={{
 					paddingLeft: TIMELINE_PADDING,
 					paddingRight: TIMELINE_PADDING,

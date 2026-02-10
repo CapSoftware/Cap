@@ -22,6 +22,7 @@ import {
 	type WaveformData,
 } from "../utils/waveform";
 import { useHistory } from "./useHistory";
+import { type SaveRender, useSaveRender } from "./useSaveRender";
 
 interface PersistedEditorState {
 	previewTime: number;
@@ -119,6 +120,7 @@ interface EditorContextValue {
 		seekTo: (time: number) => void;
 		togglePlayback: () => void;
 	};
+	saveRender: SaveRender;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -146,6 +148,7 @@ export function EditorProvider({
 	cameraUrl,
 	initialConfig,
 }: EditorProviderProps) {
+	const saveRender = useSaveRender(video.id);
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const cameraVideoRef = useRef<HTMLVideoElement>(null);
 	const [editorState, setEditorState] = useState<EditorState>(() => {
@@ -418,6 +421,7 @@ export function EditorProvider({
 			seekTo,
 			togglePlayback,
 		},
+		saveRender,
 	};
 
 	return (

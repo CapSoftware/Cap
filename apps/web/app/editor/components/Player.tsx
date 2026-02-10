@@ -5,6 +5,7 @@ import {
 	normalizeConfigForRender,
 } from "@cap/editor-render-spec";
 import { EditorRenderer } from "@cap/editor-renderer";
+import { Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { resolveBackgroundAssetPath } from "../utils/backgrounds";
 import { useEditorContext } from "./context";
@@ -20,6 +21,7 @@ export function Player() {
 		project,
 		video,
 		editorState,
+		saveRender,
 	} = useEditorContext();
 
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -192,7 +194,7 @@ export function Player() {
 
 	return (
 		<div className="flex-1 flex flex-col bg-gray-1 min-h-0">
-			<div className="flex-1 flex items-center justify-center p-4 min-h-0">
+			<div className="flex-1 flex items-center justify-center p-4 min-h-0 relative">
 				<div
 					ref={containerRef}
 					className="w-full h-full flex items-center justify-center"
@@ -240,8 +242,53 @@ export function Player() {
 						</video>
 					)}
 				</div>
+				{saveRender.isSaving && (
+					<SaveProgressOverlay
+						progress={saveRender.saveState.progress}
+						message={saveRender.saveState.message}
+						onCancel={saveRender.cancel}
+					/>
+				)}
 			</div>
 			<PlayerControls />
+		</div>
+	);
+}
+
+function SaveProgressOverlay({
+	progress,
+	message,
+	onCancel,
+}: {
+	progress: number;
+	message: string | null;
+	onCancel: () => void;
+}) {
+	return (
+		<div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded-lg">
+			<div className="flex flex-col items-center gap-4 max-w-xs px-6">
+				<Loader2 className="size-8 text-white animate-spin" />
+				<p className="text-sm text-white/90 text-center">
+					{message || "Saving your changes..."}
+				</p>
+				<div className="w-full flex flex-col items-center gap-1.5">
+					<div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
+						<div
+							className="h-full bg-blue-9 rounded-full transition-all duration-500 ease-out"
+							style={{ width: `${Math.max(2, progress)}%` }}
+						/>
+					</div>
+					<span className="text-xs text-white/70">{Math.round(progress)}%</span>
+				</div>
+				<button
+					type="button"
+					onClick={onCancel}
+					className="flex items-center gap-1.5 text-xs text-white/50 hover:text-white/80 transition-colors mt-1"
+				>
+					<X className="size-3" />
+					Cancel
+				</button>
+			</div>
 		</div>
 	);
 }
