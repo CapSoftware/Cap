@@ -237,18 +237,33 @@ export const ShareHeader = ({
 									/>
 								) : isOwner ? (
 									<h1 className="text-xl sm:text-2xl">
-										<button
-											type="button"
-											onClick={() => setIsEditing(true)}
-											className="w-full bg-transparent border-0 m-0 p-0 text-left text-xl sm:text-2xl text-gray-12 cursor-text focus:outline-none"
+										<Tooltip
+											content={title}
+											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+											delayDuration={100}
+											disable={!isTitleTruncated}
 										>
-											{title}
-										</button>
+											<button
+												type="button"
+												onClick={() => setIsEditing(true)}
+												className="w-full bg-transparent border-0 m-0 p-0 text-left text-xl sm:text-2xl text-gray-12 cursor-text focus:outline-none"
+											>
+												{displayTitle}
+											</button>
+										</Tooltip>
 									</h1>
 								) : (
 									<h1 className="text-xl sm:text-2xl">
 										<Tooltip
-											content={title}
+											content={
+												<button
+													type="button"
+													onClick={handleCopyTitle}
+													className="block -mx-3 -my-2 px-3 py-2 w-full bg-transparent border-0 text-left text-gray-1 cursor-pointer focus:outline-none"
+												>
+													{title}
+												</button>
+											}
 											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 											delayDuration={100}
 											disable={!isTitleTruncated}
