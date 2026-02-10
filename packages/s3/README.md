@@ -2,6 +2,7 @@
 /{userId}/{videoId}
   /transcription.vtt - Transcription file
   /screenshot/screen-capture.jpg - Screen capture
+  /preview/hover.mp4 - Hover preview clip
   /output
 	 	/video_recording_000.m3u8 - Master playlist
 	 	/video_recording_000_output.m3u8 - MediaConvert playlist
