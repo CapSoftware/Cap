@@ -19,11 +19,11 @@ use std::{
 };
 use tracing::*;
 
-fn get_mp4_muxer_buffer_size() -> usize {
+fn get_mp4_muxer_buffer_size(instant_mode: bool) -> usize {
     std::env::var("CAP_MP4_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(60)
+        .unwrap_or(if instant_mode { 120 } else { 60 })
 }
 
 struct FrameDropTracker {
@@ -130,6 +130,7 @@ pub struct AVFoundationMp4Muxer {
 #[derive(Default)]
 pub struct AVFoundationMp4MuxerConfig {
     pub output_height: Option<u32>,
+    pub instant_mode: bool,
 }
 
 impl Muxer for AVFoundationMp4Muxer {
@@ -146,18 +147,31 @@ impl Muxer for AVFoundationMp4Muxer {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
-        let buffer_size = get_mp4_muxer_buffer_size();
-        debug!(buffer_size, "MP4 muxer encoder channel buffer size");
+        let buffer_size = get_mp4_muxer_buffer_size(config.instant_mode);
+        debug!(
+            buffer_size,
+            instant_mode = config.instant_mode,
+            "MP4 muxer encoder channel buffer size"
+        );
 
         let (video_tx, video_rx) = sync_channel::<Option<VideoFrameMessage>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
-        let encoder = cap_enc_avfoundation::MP4Encoder::init(
-            output_path.clone(),
-            video_config,
-            audio_config,
-            config.output_height,
-        )
+        let encoder = if config.instant_mode {
+            cap_enc_avfoundation::MP4Encoder::init_instant_mode(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+            )
+        } else {
+            cap_enc_avfoundation::MP4Encoder::init(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+            )
+        }
         .map_err(|e| anyhow!("{e}"))?;
 
         let encoder = Arc::new(Mutex::new(encoder));
@@ -524,7 +538,7 @@ impl Muxer for AVFoundationCameraMuxer {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
-        let buffer_size = get_mp4_muxer_buffer_size();
+        let buffer_size = get_mp4_muxer_buffer_size(false);
         debug!(buffer_size, "Camera MP4 muxer encoder channel buffer size");
 
         let (video_tx, video_rx) = sync_channel::<Option<CameraFrameMessage>>(buffer_size);

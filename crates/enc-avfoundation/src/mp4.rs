@@ -89,6 +89,25 @@ impl MP4Encoder {
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
+        Self::init_with_options(output, video_config, audio_config, output_height, false)
+    }
+
+    pub fn init_instant_mode(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(output, video_config, audio_config, output_height, true)
+    }
+
+    fn init_with_options(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+        instant_mode: bool,
+    ) -> Result<Self, InitError> {
         info!(
             width = video_config.width,
             height = video_config.height,
@@ -96,6 +115,7 @@ impl MP4Encoder {
             frame_rate = ?video_config.frame_rate,
             output_height = ?output_height,
             has_audio = audio_config.is_some(),
+            instant_mode,
             "Initializing AVFoundation MP4 encoder (VideoToolbox hardware encoding)"
         );
         debug!("{video_config:#?}");
@@ -140,11 +160,20 @@ impl MP4Encoder {
                 ns::Number::with_u32(output_height).as_id_ref(),
             );
 
-            let bitrate = get_average_bitrate(output_width as f32, output_height as f32, fps);
+            let bitrate = if instant_mode {
+                get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
+            } else {
+                get_average_bitrate(output_width as f32, output_height as f32, fps)
+            };
 
-            debug!("recording bitrate: {bitrate}");
 
-            let keyframe_interval = (fps * 2.0) as i32;
+            debug!(instant_mode, "recording bitrate: {bitrate}");
+
+            let keyframe_interval = if instant_mode {
+                fps as i32
+            } else {
+                (fps * 2.0) as i32
+            };
 
             output_settings.insert(
                 av::video_settings_keys::compression_props(),
@@ -679,6 +708,12 @@ fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     5_000_000.0
         + width * height / (1920.0 * 1080.0) * 2_000_000.0
         + fps.min(60.0) / 30.0 * 5_000_000.0
+}
+
+fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixel_ratio = width * height / (1920.0 * 1080.0);
+    let fps_ratio = fps.min(60.0) / 30.0;
+    1_500_000.0 + pixel_ratio * 1_500_000.0 + fps_ratio * 500_000.0
 }
 
 // #[cfg(test)]
