@@ -451,6 +451,18 @@ app.post(
 								},
 							},
 						);
+						const previewPresignedUrl =
+							yield* bucket.getInternalPresignedPutUrl(
+								`${user.id}/${videoId}/preview/hover.mp4`,
+								{
+									ContentType: "video/mp4",
+									CacheControl: "max-age=31536000",
+									Metadata: {
+										userId: user.id,
+										source: "cap-multipart-upload",
+									},
+								},
+							);
 
 						yield* Effect.tryPromise({
 							try: async () => {
@@ -465,6 +477,7 @@ app.post(
 											videoUrl: inputUrl,
 											outputPresignedUrl,
 											remuxOnly: true,
+											previewPresignedUrl,
 										}),
 									},
 								);
