@@ -9,6 +9,11 @@ type ChromeStorageArea = {
 
 type ChromeRuntime = {
 	lastError?: { message: string };
+	getURL: (path: string) => string;
+};
+
+type ChromeTabs = {
+	create: (properties: { url: string; active?: boolean }) => void;
 };
 
 type ChromeIdentity = {
@@ -22,7 +27,8 @@ type ChromeIdentity = {
 declare const chrome: {
 	storage: { local: ChromeStorageArea };
 	identity: ChromeIdentity;
-	runtime?: ChromeRuntime;
+	runtime: ChromeRuntime;
+	tabs: ChromeTabs;
 };
 
 interface ImportMetaEnv {
