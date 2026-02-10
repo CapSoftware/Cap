@@ -25,6 +25,7 @@ export interface SaveRender {
 	saveState: SaveState;
 	isSaving: boolean;
 	isSubmitting: boolean;
+	hasSavedRender: boolean;
 	canRetry: boolean;
 	save: (config: ProjectConfiguration, force?: boolean) => void;
 	cancel: () => void;
@@ -33,6 +34,7 @@ export interface SaveRender {
 export function useSaveRender(videoId: string): SaveRender {
 	const [saveState, setSaveState] = useState<SaveState>(IDLE_STATE);
 	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [hasSavedRender, setHasSavedRender] = useState(false);
 	const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const wasCancelledRef = useRef(false);
 	const processingStartRef = useRef<number | null>(null);
@@ -81,6 +83,7 @@ export function useSaveRender(videoId: string): SaveRender {
 			}
 
 			if (status === "COMPLETE") {
+				setHasSavedRender(true);
 				stopPolling();
 				setSaveState({
 					status: "COMPLETE",
@@ -242,6 +245,7 @@ export function useSaveRender(videoId: string): SaveRender {
 		saveState,
 		isSaving,
 		isSubmitting,
+		hasSavedRender,
 		canRetry,
 		save,
 		cancel,
