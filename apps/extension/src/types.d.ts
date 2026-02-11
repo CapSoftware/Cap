@@ -16,6 +16,11 @@ type ChromeMessageSender = {
 
 type ChromeMessageResponse = (response: unknown) => void;
 
+type ChromeExtensionContext = {
+	contextType: string;
+	documentUrl?: string;
+};
+
 type ChromeRuntime = {
 	lastError?: { message: string };
 	getURL: (path: string) => string;
@@ -32,6 +37,9 @@ type ChromeRuntime = {
 			) => boolean | undefined,
 		) => void;
 	};
+	getContexts: (filter: {
+		contextTypes: string[];
+	}) => Promise<ChromeExtensionContext[]>;
 };
 
 type ChromeTab = {
@@ -78,6 +86,22 @@ type ChromeIdentity = {
 	) => void;
 };
 
+type ChromeOffscreen = {
+	createDocument: (params: {
+		url: string;
+		reasons: string[];
+		justification: string;
+	}) => Promise<void>;
+	closeDocument: () => Promise<void>;
+};
+
+type ChromeWindows = {
+	WINDOW_ID_NONE: number;
+	onFocusChanged: {
+		addListener: (callback: (windowId: number) => void) => void;
+	};
+};
+
 declare const chrome: {
 	storage: {
 		local: ChromeStorageArea;
@@ -87,6 +111,8 @@ declare const chrome: {
 	runtime: ChromeRuntime;
 	tabs: ChromeTabs;
 	scripting: ChromeScripting;
+	offscreen: ChromeOffscreen;
+	windows: ChromeWindows;
 };
 
 interface ImportMetaEnv {
