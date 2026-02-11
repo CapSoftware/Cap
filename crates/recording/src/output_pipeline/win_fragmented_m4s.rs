@@ -9,7 +9,6 @@ use cap_enc_ffmpeg::segmented_stream::{
     DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
 use cap_media_info::{AudioInfo, Pixel, VideoInfo};
-use scap_ffmpeg::AsFFmpeg;
 use std::{
     path::PathBuf,
     sync::{
@@ -94,7 +93,7 @@ impl FrameDropTracker {
 }
 
 struct EncoderState {
-    video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
+    video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
     encoder: Arc<Mutex<SegmentedVideoEncoder>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -246,7 +245,7 @@ impl WindowsFragmentedM4SMuxer {
         );
 
         let (video_tx, video_rx) =
-            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(buffer_size);
+            sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
         let encoder_config = SegmentedVideoEncoderConfig {
