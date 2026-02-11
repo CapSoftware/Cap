@@ -259,6 +259,9 @@ pub struct TimestampAnomalyTracker {
     accumulated_compensation_secs: f64,
     resync_count: u64,
     did_resync: bool,
+    wall_clock_start: Option<Instant>,
+    last_valid_wall_clock: Option<Instant>,
+    wall_clock_confirmed_jumps: u64,
 }
 
 impl TimestampAnomalyTracker {
@@ -276,6 +279,9 @@ impl TimestampAnomalyTracker {
             accumulated_compensation_secs: 0.0,
             resync_count: 0,
             did_resync: false,
+            wall_clock_start: None,
+            last_valid_wall_clock: None,
+            wall_clock_confirmed_jumps: 0,
         }
     }
 
@@ -284,6 +290,12 @@ impl TimestampAnomalyTracker {
         timestamp: Timestamp,
         timestamps: Timestamps,
     ) -> Result<Duration, TimestampAnomalyError> {
+        let now = Instant::now();
+
+        if self.wall_clock_start.is_none() {
+            self.wall_clock_start = Some(now);
+        }
+
         let signed_secs = timestamp.signed_duration_since_secs(timestamps);
 
         if signed_secs < 0.0 {
@@ -302,7 +314,9 @@ impl TimestampAnomalyTracker {
         {
             let jump_secs = forward_jump.as_secs_f64();
             if jump_secs > LARGE_FORWARD_JUMP_SECS {
-                return self.handle_forward_jump(last, adjusted, jump_secs);
+                let result = self.handle_forward_jump(last, adjusted, jump_secs, now);
+                self.last_valid_wall_clock = Some(now);
+                return result;
             }
         }
 
@@ -317,6 +331,7 @@ impl TimestampAnomalyTracker {
             self.consecutive_anomalies = 0;
         }
         self.last_valid_duration = Some(adjusted);
+        self.last_valid_wall_clock = Some(now);
         Ok(adjusted)
     }
 
@@ -381,8 +396,13 @@ impl TimestampAnomalyTracker {
         last: Duration,
         current: Duration,
         jump_secs: f64,
+        now: Instant,
     ) -> Result<Duration, TimestampAnomalyError> {
-        self.anomaly_count += 1;
+        let wall_clock_confirmed = self.last_valid_wall_clock.map_or(false, |last_wc| {
+            let wall_clock_gap_secs = now.duration_since(last_wc).as_secs_f64();
+            wall_clock_gap_secs >= jump_secs * 0.5
+        });
+
         self.total_forward_skew_secs += jump_secs;
         if jump_secs > self.max_forward_skew_secs {
             self.max_forward_skew_secs = jump_secs;
@@ -396,17 +416,46 @@ impl TimestampAnomalyTracker {
         self.resync_count += 1;
         self.did_resync = true;
 
-        warn!(
-            stream = self.stream_name,
-            forward_secs = jump_secs,
-            last_valid_ms = last.as_millis(),
-            current_ms = current.as_millis(),
-            total_anomalies = self.anomaly_count,
-            resync_count = self.resync_count,
-            compensation_applied_secs = format!("{:.3}", compensation_secs),
-            accumulated_compensation_secs = format!("{:.3}", self.accumulated_compensation_secs),
-            "Large forward timestamp jump detected (source restart/system event), resyncing timeline"
-        );
+        if wall_clock_confirmed {
+            let wall_clock_gap_secs = self
+                .last_valid_wall_clock
+                .map(|wc| now.duration_since(wc).as_secs_f64())
+                .unwrap_or(0.0);
+
+            self.wall_clock_confirmed_jumps += 1;
+
+            info!(
+                stream = self.stream_name,
+                forward_secs = jump_secs,
+                wall_clock_gap_secs = format!("{:.3}", wall_clock_gap_secs),
+                last_valid_ms = last.as_millis(),
+                current_ms = current.as_millis(),
+                resync_count = self.resync_count,
+                confirmed_jumps = self.wall_clock_confirmed_jumps,
+                "Wall-clock-confirmed forward jump (system sleep/wake), accepting new baseline"
+            );
+        } else {
+            self.anomaly_count += 1;
+
+            let wall_clock_gap_secs = self
+                .last_valid_wall_clock
+                .map(|wc| now.duration_since(wc).as_secs_f64())
+                .unwrap_or(0.0);
+
+            warn!(
+                stream = self.stream_name,
+                forward_secs = jump_secs,
+                wall_clock_gap_secs = format!("{:.3}", wall_clock_gap_secs),
+                last_valid_ms = last.as_millis(),
+                current_ms = current.as_millis(),
+                total_anomalies = self.anomaly_count,
+                resync_count = self.resync_count,
+                compensation_applied_secs = format!("{:.3}", compensation_secs),
+                accumulated_compensation_secs =
+                    format!("{:.3}", self.accumulated_compensation_secs),
+                "Spurious forward timestamp jump (source clock glitch), resyncing timeline"
+            );
+        }
 
         self.last_valid_duration = Some(adjusted);
         self.consecutive_anomalies = 0;
@@ -415,13 +464,14 @@ impl TimestampAnomalyTracker {
     }
 
     pub fn log_stats_if_notable(&self) {
-        if self.anomaly_count == 0 {
+        if self.anomaly_count == 0 && self.wall_clock_confirmed_jumps == 0 {
             return;
         }
 
         info!(
             stream = self.stream_name,
             anomaly_count = self.anomaly_count,
+            wall_clock_confirmed_jumps = self.wall_clock_confirmed_jumps,
             total_backward_skew_secs = format!("{:.3}", self.total_backward_skew_secs),
             max_backward_skew_secs = format!("{:.3}", self.max_backward_skew_secs),
             total_forward_skew_secs = format!("{:.3}", self.total_forward_skew_secs),
@@ -2024,6 +2074,171 @@ mod tests {
                 tracker.capped_frame_count() > 0,
                 "Should have capped at least one frame"
             );
+        }
+    }
+
+    mod timestamp_anomaly_tracker {
+        use super::*;
+
+        fn make_timestamps() -> Timestamps {
+            Timestamps::now()
+        }
+
+        fn make_timestamp(timestamps: Timestamps, offset: Duration) -> Timestamp {
+            Timestamp::Instant(timestamps.instant() + offset)
+        }
+
+        #[test]
+        fn normal_frames_produce_no_anomalies() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..10u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 0);
+            assert!(tracker.wall_clock_start.is_some());
+            assert!(tracker.last_valid_wall_clock.is_some());
+        }
+
+        #[test]
+        fn wall_clock_confirmed_forward_jump_not_counted_as_anomaly() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..5u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            assert_eq!(tracker.anomaly_count, 0);
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+            assert_eq!(tracker.consecutive_anomalies, 0);
+        }
+
+        #[test]
+        fn spurious_forward_jump_counted_as_anomaly() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..5u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            assert_eq!(tracker.anomaly_count, 0);
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert_eq!(tracker.anomaly_count, 1);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 0);
+            assert_eq!(tracker.consecutive_anomalies, 0);
+        }
+
+        #[test]
+        fn resync_flag_set_on_both_confirmed_and_spurious_jumps() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..5u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert!(
+                tracker.take_resync_flag(),
+                "Resync flag should be set after wall-clock-confirmed jump"
+            );
+
+            let next_ts =
+                make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000 + 33 + 3000));
+            tracker.process_timestamp(next_ts, timestamps).unwrap();
+
+            assert!(
+                tracker.take_resync_flag(),
+                "Resync flag should be set after spurious jump"
+            );
+            assert_eq!(tracker.anomaly_count, 1);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+        }
+
+        #[test]
+        fn multiple_confirmed_jumps_tracked_separately() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..3u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump1 = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000));
+            tracker.process_timestamp(jump1, timestamps).unwrap();
+            tracker.take_resync_flag();
+
+            let normal = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000 + 33));
+            tracker.process_timestamp(normal, timestamps).unwrap();
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(5));
+
+            let jump2 =
+                make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000 + 66 + 5000));
+            tracker.process_timestamp(jump2, timestamps).unwrap();
+
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 2);
+            assert_eq!(tracker.resync_count, 2);
+        }
+
+        #[test]
+        fn wall_clock_start_set_on_first_frame() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            assert!(tracker.wall_clock_start.is_none());
+
+            let ts = make_timestamp(timestamps, Duration::ZERO);
+            tracker.process_timestamp(ts, timestamps).unwrap();
+
+            assert!(tracker.wall_clock_start.is_some());
+        }
+
+        #[test]
+        fn confirmed_jump_still_tracks_forward_skew() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..3u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+            assert_eq!(tracker.anomaly_count, 0);
+            assert!(tracker.total_forward_skew_secs > 2.0);
         }
     }
 }
