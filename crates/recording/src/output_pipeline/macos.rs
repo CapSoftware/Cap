@@ -19,11 +19,75 @@ use std::{
 };
 use tracing::*;
 
+const DEFAULT_MP4_MUXER_BUFFER_SIZE: usize = 60;
+const DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT: usize = 240;
+
+const DISK_SPACE_MIN_START_MB: u64 = 500;
+const DISK_SPACE_CRITICAL_MB: u64 = 200;
+const DISK_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {
+    use std::ffi::CString;
+    let c_path = CString::new(path.parent().unwrap_or(path).to_str()?).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+    if result != 0 {
+        return None;
+    }
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64) / (1024 * 1024))
+}
+
 fn get_mp4_muxer_buffer_size(instant_mode: bool) -> usize {
     std::env::var("CAP_MP4_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(if instant_mode { 120 } else { 60 })
+        .unwrap_or(if instant_mode {
+            DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT
+        } else {
+            DEFAULT_MP4_MUXER_BUFFER_SIZE
+        })
+}
+
+type SharedFatalError = Arc<Mutex<Option<String>>>;
+
+fn set_fatal_error(fatal_error: &SharedFatalError, message: String) {
+    if let Ok(mut slot) = fatal_error.lock() {
+        if slot.is_none() {
+            error!("{message}");
+            *slot = Some(message);
+        }
+    } else {
+        error!("Failed to record fatal encoder error");
+    }
+}
+
+fn fatal_error_message(fatal_error: &SharedFatalError) -> Option<String> {
+    fatal_error
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned())
+}
+
+fn wait_for_worker(
+    handle: JoinHandle<anyhow::Result<()>>,
+    timeout: Duration,
+    worker_name: &str,
+) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    loop {
+        if handle.is_finished() {
+            return match handle.join() {
+                Ok(res) => res,
+                Err(panic_payload) => Err(anyhow!("{worker_name} panicked: {panic_payload:?}")),
+            };
+        }
+
+        if start.elapsed() > timeout {
+            return Err(anyhow!("{worker_name} did not finish within {:?}", timeout));
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 struct FrameDropTracker {
