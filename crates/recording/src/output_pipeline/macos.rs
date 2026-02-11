@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, AtomicU64},
         mpsc::{SyncSender, sync_channel},
     },
     thread::JoinHandle,
@@ -219,6 +219,8 @@ struct Mp4EncoderState {
     encoder: Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
     audio_handle: Option<JoinHandle<anyhow::Result<()>>>,
+    video_frame_count: Arc<AtomicU64>,
+    audio_frame_count: Arc<AtomicU64>,
 }
 
 pub struct AVFoundationMp4Muxer {
@@ -304,6 +306,10 @@ impl Muxer for AVFoundationMp4Muxer {
             (None, None)
         };
 
+        let video_frame_count = Arc::new(AtomicU64::new(0));
+        let audio_frame_count = Arc::new(AtomicU64::new(0));
+        let video_count_thread = video_frame_count.clone();
+
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
             .spawn(move || {
@@ -311,7 +317,6 @@ impl Muxer for AVFoundationMp4Muxer {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
 
-                let mut total_frames = 0u64;
                 let mut encoder_busy_count = 0u64;
                 let mut last_disk_check = std::time::Instant::now();
 
@@ -389,7 +394,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                 }
                             }
 
-                            total_frames += 1;
+                            video_count_thread.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                         VideoFrameMessage::Pause => {
                             match encoder_clone.lock() {
@@ -414,6 +419,7 @@ impl Muxer for AVFoundationMp4Muxer {
                     }
                 }
 
+                let total_frames = video_count_thread.load(std::sync::atomic::Ordering::Relaxed);
                 if total_frames > 0 {
                     debug!(
                         total_frames,
@@ -435,6 +441,7 @@ impl Muxer for AVFoundationMp4Muxer {
             let encoder_clone = encoder.clone();
             let audio_fatal_error = fatal_error.clone();
             let (audio_ready_tx, audio_ready_rx) = sync_channel::<anyhow::Result<()>>(1);
+            let audio_count_thread = audio_frame_count.clone();
 
             let audio_handle = std::thread::Builder::new()
                 .name("mp4-audio-encoder".to_string())
@@ -443,7 +450,6 @@ impl Muxer for AVFoundationMp4Muxer {
                         return Err(anyhow!("Failed to send audio ready signal"));
                     }
 
-                    let mut total_frames = 0u64;
                     let mut encoder_busy_count = 0u64;
 
                     while let Ok(Some(msg)) = audio_rx.recv() {
@@ -503,11 +509,14 @@ impl Muxer for AVFoundationMp4Muxer {
                                     }
                                 }
 
-                                total_frames += 1;
+                                audio_count_thread
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
                     }
 
+                    let total_frames =
+                        audio_count_thread.load(std::sync::atomic::Ordering::Relaxed);
                     if total_frames > 0 {
                         debug!(
                             total_frames,
@@ -539,6 +548,8 @@ impl Muxer for AVFoundationMp4Muxer {
                 encoder,
                 encoder_handle: Some(encoder_handle),
                 audio_handle,
+                video_frame_count,
+                audio_frame_count,
             }),
             pause_flag,
             frame_drops: FrameDropTracker::new(),
@@ -574,14 +585,14 @@ impl Muxer for AVFoundationMp4Muxer {
                 trace!("MP4 encoder audio channel already closed during finish: {e}");
             }
 
-            let mut can_finish_encoder = true;
+            let mut video_thread_timed_out = false;
 
             if let Some(handle) = state.encoder_handle.take()
                 && let Err(e) =
-                    wait_for_worker(handle, Duration::from_secs(5), "MP4 encoder video thread")
+                    wait_for_worker(handle, Duration::from_secs(8), "MP4 encoder video thread")
             {
                 warn!("{e:#}");
-                can_finish_encoder = false;
+                video_thread_timed_out = true;
                 if finish_error.is_none() {
                     finish_error = Some(e);
                 }
@@ -592,16 +603,32 @@ impl Muxer for AVFoundationMp4Muxer {
                     wait_for_worker(handle, Duration::from_secs(2), "MP4 audio encoder thread")
             {
                 warn!("{e:#}");
-                can_finish_encoder = false;
                 if finish_error.is_none() {
                     finish_error = Some(e);
                 }
             }
 
-            if can_finish_encoder {
-                match state.encoder.lock() {
-                    Ok(mut encoder) => {
-                        if let Err(e) = encoder.finish(Some(timestamp)) {
+            let video_frames = state
+                .video_frame_count
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let audio_frames = state
+                .audio_frame_count
+                .load(std::sync::atomic::Ordering::Relaxed);
+            info!(
+                video_frames,
+                audio_frames, video_thread_timed_out, "MP4 encoder finish frame counts"
+            );
+
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish(Some(timestamp)) {
+                        if video_thread_timed_out && video_frames > 0 {
+                            warn!(
+                                video_frames,
+                                "Best-effort encoder finalize failed after thread timeout, \
+                                 partial output may still be usable: {e}"
+                            );
+                        } else {
                             let err = anyhow!("Failed to finish MP4 encoder: {e}");
                             warn!("{err:#}");
                             if finish_error.is_none() {
@@ -609,12 +636,12 @@ impl Muxer for AVFoundationMp4Muxer {
                             }
                         }
                     }
-                    Err(_) => {
-                        let err = anyhow!("MP4 encoder mutex poisoned during finish");
-                        error!("{err:#}");
-                        if finish_error.is_none() {
-                            finish_error = Some(err);
-                        }
+                }
+                Err(_) => {
+                    let err = anyhow!("MP4 encoder mutex poisoned during finish");
+                    error!("{err:#}");
+                    if finish_error.is_none() {
+                        finish_error = Some(err);
                     }
                 }
             }
