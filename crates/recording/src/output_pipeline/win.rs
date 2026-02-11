@@ -478,7 +478,10 @@ impl Muxer for WindowsMuxer {
             .await
             .map_err(|_| anyhow!("Encoder thread ended unexpectedly"))??;
 
-        output.lock().unwrap().write_header()?;
+        output
+            .lock()
+            .map_err(|_| anyhow!("Output mutex poisoned during header write"))?
+            .write_header()?;
 
         Ok(Self {
             video_tx,
@@ -900,7 +903,13 @@ impl Muxer for WindowsCameraMuxer {
                                 }
                             },
                             |output_sample| {
-                                let mut output = output.lock().unwrap();
+                                let mut output = match output.lock() {
+                                    Ok(o) => o,
+                                    Err(_) => {
+                                        tracing::error!("Camera output mutex poisoned during write");
+                                        return Err(anyhow!("Camera output mutex poisoned"));
+                                    }
+                                };
                                 if let Err(e) = muxer.write_sample(&output_sample, &mut output)
                                 {
                                     tracing::error!("Camera WriteSample failed: {e}");
@@ -1026,7 +1035,10 @@ impl Muxer for WindowsCameraMuxer {
             .await
             .map_err(|_| anyhow!("Camera encoder thread ended unexpectedly"))??;
 
-        output.lock().unwrap().write_header()?;
+        output
+            .lock()
+            .map_err(|_| anyhow!("Camera output mutex poisoned during header write"))?
+            .write_header()?;
 
         Ok(Self {
             video_tx,
