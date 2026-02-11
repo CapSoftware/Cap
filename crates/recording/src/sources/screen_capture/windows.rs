@@ -551,7 +551,7 @@ impl output_pipeline::VideoSource for VideoSource {
             settings,
             d3d_device,
         }: Self::Config,
-        mut video_tx: mpsc::Sender<Self::Frame>,
+        video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut output_pipeline::SetupCtx,
     ) -> anyhow::Result<Self>
     where
