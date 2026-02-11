@@ -189,6 +189,7 @@ pub struct AVFoundationMp4Muxer {
     pause_flag: Arc<AtomicBool>,
     frame_drops: FrameDropTracker,
     was_paused: bool,
+    fatal_error: SharedFatalError,
 }
 
 #[derive(Default)]
@@ -253,6 +254,10 @@ impl Muxer for AVFoundationMp4Muxer {
 
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
+        let fatal_error = Arc::new(Mutex::new(None));
+        let video_fatal_error = fatal_error.clone();
+        let disk_check_path = output_path.clone();
+        let is_instant = config.instant_mode;
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
@@ -263,23 +268,46 @@ impl Muxer for AVFoundationMp4Muxer {
 
                 let mut total_frames = 0u64;
                 let mut encoder_busy_count = 0u64;
+                let mut last_disk_check = std::time::Instant::now();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
+                    if fatal_error_message(&video_fatal_error).is_some() {
+                        break;
+                    }
+
+                    if is_instant && last_disk_check.elapsed() >= DISK_SPACE_CHECK_INTERVAL {
+                        last_disk_check = std::time::Instant::now();
+                        if let Some(available_mb) = get_available_disk_space_mb(&disk_check_path)
+                            && available_mb < DISK_SPACE_CRITICAL_MB
+                        {
+                            let message = format!(
+                                "Disk space critically low ({}MB), stopping recording to preserve output",
+                                available_mb
+                            );
+                            set_fatal_error(&video_fatal_error, message.clone());
+                            return Err(anyhow!(message));
+                        }
+                    }
+
                     match msg {
                         VideoFrameMessage::Frame(sample_buf, timestamp) => {
-                            let mut encoder = match encoder_clone.lock() {
-                                Ok(e) => e,
-                                Err(_) => {
-                                    error!("MP4 encoder mutex poisoned");
-                                    return Err(anyhow!("MP4 encoder mutex poisoned"));
-                                }
-                            };
-
                             let mut retry_count = 0;
                             const MAX_RETRIES: u32 = 100;
 
                             loop {
-                                match encoder.queue_video_frame(sample_buf.clone(), timestamp) {
+                                let queue_result = {
+                                    let mut encoder = match encoder_clone.lock() {
+                                        Ok(e) => e,
+                                        Err(_) => {
+                                            let message = "MP4 encoder mutex poisoned".to_string();
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                    };
+                                    encoder.queue_video_frame(sample_buf.clone(), timestamp)
+                                };
+
+                                match queue_result {
                                     Ok(()) => break,
                                     Err(QueueFrameError::NotReadyForMore) => {
                                         retry_count += 1;
@@ -295,6 +323,17 @@ impl Muxer for AVFoundationMp4Muxer {
                                         }
                                         std::thread::sleep(Duration::from_micros(500));
                                     }
+                                    Err(QueueFrameError::WriterFailed(err)) => {
+                                        let message =
+                                            format!("Failed to encode video frame: WriterFailed/{err}");
+                                        set_fatal_error(&video_fatal_error, message.clone());
+                                        return Err(anyhow!(message));
+                                    }
+                                    Err(QueueFrameError::Failed) => {
+                                        let message = "Failed to encode video frame: Failed".to_string();
+                                        set_fatal_error(&video_fatal_error, message.clone());
+                                        return Err(anyhow!(message));
+                                    }
                                     Err(e) => {
                                         warn!("Failed to encode video frame: {e}");
                                         break;
@@ -305,13 +344,23 @@ impl Muxer for AVFoundationMp4Muxer {
                             total_frames += 1;
                         }
                         VideoFrameMessage::Pause => {
-                            if let Ok(mut encoder) = encoder_clone.lock() {
-                                encoder.pause();
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => encoder.pause(),
+                                Err(_) => {
+                                    let message = "MP4 encoder mutex poisoned".to_string();
+                                    set_fatal_error(&video_fatal_error, message.clone());
+                                    return Err(anyhow!(message));
+                                }
                             }
                         }
                         VideoFrameMessage::Resume => {
-                            if let Ok(mut encoder) = encoder_clone.lock() {
-                                encoder.resume();
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => encoder.resume(),
+                                Err(_) => {
+                                    let message = "MP4 encoder mutex poisoned".to_string();
+                                    set_fatal_error(&video_fatal_error, message.clone());
+                                    return Err(anyhow!(message));
+                                }
                             }
                         }
                     }
@@ -336,6 +385,7 @@ impl Muxer for AVFoundationMp4Muxer {
         let (audio_tx, audio_handle) = if audio_config.is_some() {
             let (audio_tx, audio_rx) = sync_channel::<Option<AudioFrameMessage>>(buffer_size);
             let encoder_clone = encoder.clone();
+            let audio_fatal_error = fatal_error.clone();
             let (audio_ready_tx, audio_ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
             let audio_handle = std::thread::Builder::new()
@@ -349,21 +399,33 @@ impl Muxer for AVFoundationMp4Muxer {
                     let mut encoder_busy_count = 0u64;
 
                     while let Ok(Some(msg)) = audio_rx.recv() {
+                        if fatal_error_message(&audio_fatal_error).is_some() {
+                            break;
+                        }
+
                         match msg {
                             AudioFrameMessage::Frame(frame, timestamp) => {
-                                let mut encoder = match encoder_clone.lock() {
-                                    Ok(e) => e,
-                                    Err(_) => {
-                                        error!("MP4 audio encoder mutex poisoned");
-                                        return Err(anyhow!("MP4 audio encoder mutex poisoned"));
-                                    }
-                                };
-
                                 let mut retry_count = 0;
                                 const MAX_RETRIES: u32 = 50;
 
                                 loop {
-                                    match encoder.queue_audio_frame(&frame, timestamp) {
+                                    let queue_result = {
+                                        let mut encoder = match encoder_clone.lock() {
+                                            Ok(e) => e,
+                                            Err(_) => {
+                                                let message =
+                                                    "MP4 audio encoder mutex poisoned".to_string();
+                                                set_fatal_error(
+                                                    &audio_fatal_error,
+                                                    message.clone(),
+                                                );
+                                                return Err(anyhow!(message));
+                                            }
+                                        };
+                                        encoder.queue_audio_frame(&frame, timestamp)
+                                    };
+
+                                    match queue_result {
                                         Ok(()) => break,
                                         Err(QueueFrameError::NotReadyForMore) => {
                                             retry_count += 1;
@@ -372,6 +434,19 @@ impl Muxer for AVFoundationMp4Muxer {
                                                 break;
                                             }
                                             std::thread::sleep(Duration::from_micros(500));
+                                        }
+                                        Err(QueueFrameError::WriterFailed(err)) => {
+                                            let message = format!(
+                                                "Failed to encode audio frame: WriterFailed/{err}"
+                                            );
+                                            set_fatal_error(&audio_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                        Err(QueueFrameError::Failed) => {
+                                            let message =
+                                                "Failed to encode audio frame: Failed".to_string();
+                                            set_fatal_error(&audio_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
                                         }
                                         Err(e) => {
                                             warn!("Failed to encode audio frame: {e}");
@@ -420,6 +495,7 @@ impl Muxer for AVFoundationMp4Muxer {
             pause_flag,
             frame_drops: FrameDropTracker::new(),
             was_paused: false,
+            fatal_error,
         })
     }
 
@@ -437,6 +513,8 @@ impl Muxer for AVFoundationMp4Muxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let mut finish_error: Option<anyhow::Error> = None;
+
         if let Some(mut state) = self.state.take() {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("MP4 encoder video channel already closed during finish: {e}");
@@ -447,56 +525,60 @@ impl Muxer for AVFoundationMp4Muxer {
                 trace!("MP4 encoder audio channel already closed during finish: {e}");
             }
 
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        match handle.join() {
-                            Err(panic_payload) => {
-                                warn!("MP4 encoder thread panicked: {:?}", panic_payload);
+            let mut can_finish_encoder = true;
+
+            if let Some(handle) = state.encoder_handle.take()
+                && let Err(e) =
+                    wait_for_worker(handle, Duration::from_secs(5), "MP4 encoder video thread")
+            {
+                warn!("{e:#}");
+                can_finish_encoder = false;
+                if finish_error.is_none() {
+                    finish_error = Some(e);
+                }
+            }
+
+            if let Some(handle) = state.audio_handle.take()
+                && let Err(e) =
+                    wait_for_worker(handle, Duration::from_secs(2), "MP4 audio encoder thread")
+            {
+                warn!("{e:#}");
+                can_finish_encoder = false;
+                if finish_error.is_none() {
+                    finish_error = Some(e);
+                }
+            }
+
+            if can_finish_encoder {
+                match state.encoder.lock() {
+                    Ok(mut encoder) => {
+                        if let Err(e) = encoder.finish(Some(timestamp)) {
+                            let err = anyhow!("Failed to finish MP4 encoder: {e}");
+                            warn!("{err:#}");
+                            if finish_error.is_none() {
+                                finish_error = Some(err);
                             }
-                            Ok(Err(e)) => {
-                                warn!("MP4 encoder thread returned error: {e}");
-                            }
-                            Ok(Ok(())) => {}
                         }
-                        break;
                     }
-                    if start.elapsed() > timeout {
-                        warn!("MP4 encoder thread did not finish within {:?}", timeout);
-                        break;
+                    Err(_) => {
+                        let err = anyhow!("MP4 encoder mutex poisoned during finish");
+                        error!("{err:#}");
+                        if finish_error.is_none() {
+                            finish_error = Some(err);
+                        }
                     }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
+        }
 
-            if let Some(handle) = state.audio_handle.take() {
-                let timeout = Duration::from_secs(2);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        let _ = handle.join();
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
+        if finish_error.is_none()
+            && let Some(message) = fatal_error_message(&self.fatal_error)
+        {
+            finish_error = Some(anyhow!(message));
+        }
 
-            match state.encoder.lock() {
-                Ok(mut encoder) => {
-                    if let Err(e) = encoder.finish(Some(timestamp)) {
-                        warn!("Failed to finish MP4 encoder: {e}");
-                    }
-                }
-                Err(_) => {
-                    error!("MP4 encoder mutex poisoned during finish");
-                    return Ok(Err(anyhow!("MP4 encoder mutex poisoned")));
-                }
-            }
+        if let Some(err) = finish_error {
+            return Err(err);
         }
 
         Ok(Ok(()))
@@ -511,6 +593,10 @@ impl VideoMuxer for AVFoundationMp4Muxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
+        if let Some(message) = fatal_error_message(&self.fatal_error) {
+            return Err(anyhow!(message));
+        }
+
         let is_paused = self.pause_flag.load(std::sync::atomic::Ordering::Relaxed);
 
         if let Some(state) = &self.state {
@@ -549,6 +635,10 @@ impl VideoMuxer for AVFoundationMp4Muxer {
 
 impl AudioMuxer for AVFoundationMp4Muxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        if let Some(message) = fatal_error_message(&self.fatal_error) {
+            return Err(anyhow!(message));
+        }
+
         if let Some(state) = &self.state
             && let Some(audio_tx) = &state.audio_tx
         {
