@@ -89,6 +89,7 @@ impl MatrixRunner {
             .map(|h| h.system_info.clone())
             .unwrap_or_else(|| SystemInfo {
                 platform: std::env::consts::OS.to_string(),
+                os_version: "Unknown".to_string(),
                 cpu: "Unknown".to_string(),
                 memory_gb: 0,
                 gpu: None,
@@ -297,4 +298,181 @@ impl RecordingMetrics {
             0.0
         }
     }
+}
+
+pub struct CompatMatrixRunner {
+    config: TestConfig,
+    hardware: DiscoveredHardware,
+    interactive: bool,
+}
+
+impl CompatMatrixRunner {
+    pub fn new(config: TestConfig, hardware: DiscoveredHardware, interactive: bool) -> Self {
+        Self {
+            config,
+            hardware,
+            interactive,
+        }
+    }
+
+    pub async fn run(&self) -> Result<crate::results::CompatibilityReport> {
+        use crate::results::{BlockingFailure, CompatibilityReport, DeviceCoverage, ResultsMeta};
+        use crate::suites::{ScenarioRunner, classify_test_failure};
+
+        println!(
+            "\n{}",
+            "╔══════════════════════════════════════════════════════╗"
+                .bold()
+                .cyan()
+        );
+        println!(
+            "{}",
+            "║       COMPATIBILITY VALIDATION MATRIX                ║"
+                .bold()
+                .cyan()
+        );
+        println!(
+            "{}",
+            "╚══════════════════════════════════════════════════════╝"
+                .bold()
+                .cyan()
+        );
+        println!();
+        println!("  OS: {}", self.hardware.system_info.os_version);
+        println!("  CPU: {}", self.hardware.system_info.cpu);
+        println!("  Memory: {} GB", self.hardware.system_info.memory_gb);
+        println!("  Displays: {}", self.hardware.displays.len());
+        println!("  Cameras: {}", self.hardware.cameras.len());
+        println!("  Audio Inputs: {}", self.hardware.audio_inputs.len());
+        println!("  Interactive: {}", self.interactive);
+        println!();
+
+        let matrix_runner = MatrixRunner::new(self.config.clone(), self.hardware.clone());
+        let matrix_results = matrix_runner.run().await?;
+
+        let scenario_results = if self.config.scenarios.enabled {
+            println!("\n{}", "Running resilience scenarios...".bold().cyan());
+            let scenario_runner =
+                ScenarioRunner::new(self.config.clone(), self.hardware.clone(), self.interactive);
+            scenario_runner.run_all().await
+        } else {
+            Vec::new()
+        };
+
+        let mut blocking_failures = Vec::new();
+
+        for result in &matrix_results.results {
+            if let Some(classification) = classify_test_failure(result) {
+                if classification.is_blocking() {
+                    blocking_failures.push(BlockingFailure {
+                        test_id: result.test_id.clone(),
+                        test_name: result.name.clone(),
+                        classification,
+                        reason: result
+                            .failure_reason
+                            .clone()
+                            .unwrap_or_else(|| "Unknown failure".to_string()),
+                        reproduction_steps: build_reproduction_steps(result),
+                    });
+                }
+            }
+        }
+
+        for scenario in &scenario_results {
+            if let Some(classification) = &scenario.failure_classification {
+                if classification.is_blocking() {
+                    blocking_failures.push(BlockingFailure {
+                        test_id: scenario.scenario_id.clone(),
+                        test_name: scenario.scenario_name.clone(),
+                        classification: *classification,
+                        reason: scenario
+                            .failure_reason
+                            .clone()
+                            .unwrap_or_else(|| "Unknown failure".to_string()),
+                        reproduction_steps: vec![format!(
+                            "Run: cap-test compat-matrix --interactive (scenario: {})",
+                            scenario.scenario_name
+                        )],
+                    });
+                }
+            }
+        }
+
+        let device_coverage =
+            DeviceCoverage::from_hardware_and_results(&self.hardware, &matrix_results.results);
+
+        let release_gate_passed = blocking_failures.is_empty();
+
+        let meta = ResultsMeta {
+            timestamp: Utc::now(),
+            config_name: self.config.meta.name.clone(),
+            config_path: None,
+            platform: self.hardware.system_info.platform.clone(),
+            system: self.hardware.system_info.clone(),
+            cap_version: option_env!("CARGO_PKG_VERSION").map(String::from),
+        };
+
+        Ok(CompatibilityReport {
+            meta,
+            hardware: Some(self.hardware.clone()),
+            device_coverage,
+            matrix_results,
+            scenario_results,
+            blocking_failures,
+            release_gate_passed,
+        })
+    }
+}
+
+fn build_reproduction_steps(result: &crate::results::TestResult) -> Vec<String> {
+    let mut steps = Vec::new();
+
+    let mut config_parts = Vec::new();
+    if let Some(display) = &result.config.display {
+        config_parts.push(format!(
+            "display={}x{}@{}fps",
+            display.width, display.height, display.fps
+        ));
+        if let Some(id) = &display.display_id {
+            config_parts.push(format!("display_id={}", id));
+        }
+    }
+    if let Some(camera) = &result.config.camera {
+        config_parts.push(format!(
+            "camera={}x{}@{}fps",
+            camera.width, camera.height, camera.fps
+        ));
+        if let Some(id) = &camera.device_id {
+            config_parts.push(format!("camera_id={}", id));
+        }
+    }
+    if let Some(audio) = &result.config.audio {
+        config_parts.push(format!(
+            "audio={}Hz/{}ch",
+            audio.sample_rate, audio.channels
+        ));
+        if let Some(id) = &audio.device_id {
+            config_parts.push(format!("audio_device={}", id));
+        }
+    }
+
+    steps.push(format!("Configuration: {}", config_parts.join(", ")));
+    steps.push(format!("Duration: {}s", result.config.duration_secs));
+
+    if let Some(reason) = &result.failure_reason {
+        steps.push(format!("Failure: {}", reason));
+    }
+
+    for iteration in &result.iterations {
+        if !iteration.errors.is_empty() {
+            for err in &iteration.errors {
+                steps.push(format!(
+                    "Error (iteration {}): {}",
+                    iteration.iteration, err
+                ));
+            }
+        }
+    }
+
+    steps
 }
