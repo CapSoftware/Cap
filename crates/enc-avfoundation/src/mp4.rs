@@ -454,7 +454,16 @@ impl MP4Encoder {
             pts: cm::Time::new(pts_duration.as_micros() as i64, 1_000_000),
             dts: cm::Time::invalid(),
         };
-        let new_frame = frame.copy_with_new_timing(&[timing]).unwrap();
+        let new_frame = match frame.copy_with_new_timing(&[timing]) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "Failed to copy sample buffer with new timing, skipping frame"
+                );
+                return Ok(());
+            }
+        };
         drop(frame);
 
         match append_sample_buf(&mut self.video_input, &self.asset_writer, &new_frame) {
