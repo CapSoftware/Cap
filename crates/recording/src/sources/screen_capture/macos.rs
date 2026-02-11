@@ -154,7 +154,7 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
             48_000,
             2,
         )
-        .unwrap()
+        .expect("static F32/48kHz/stereo audio config")
     }
 }
 
