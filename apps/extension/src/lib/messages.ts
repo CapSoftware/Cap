@@ -124,10 +124,6 @@ export type CameraReadyMessage = {
 	type: "CAMERA_READY";
 };
 
-export type CameraFeedReadyMessage = {
-	type: "CAMERA_FEED_READY";
-};
-
 export type CameraInitState = CameraState & {
 	lastFrameDataUrl?: string | null;
 };
@@ -170,7 +166,6 @@ export type IframeMessage =
 	| CameraResizeMessage
 	| CameraClosedMessage
 	| CameraReadyMessage
-	| CameraFeedReadyMessage
 	| CameraCaptureFrameMessage
 	| CameraFrameCapturedMessage
 	| CameraStateChangedMessage
