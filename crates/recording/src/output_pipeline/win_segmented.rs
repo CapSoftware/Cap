@@ -49,7 +49,7 @@ struct Manifest {
 }
 
 struct SegmentState {
-    video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
+    video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -372,7 +372,7 @@ impl WindowsSegmentedMuxer {
 
         let queue_depth = ((self.frame_rate as f32 / 30.0 * 5.0).ceil() as usize).clamp(3, 12);
         let (video_tx, video_rx) =
-            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(queue_depth);
+            sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(queue_depth);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
         let output = ffmpeg::format::output(&segment_path)?;
         let output = Arc::new(Mutex::new(output));
@@ -580,8 +580,6 @@ impl WindowsSegmentedMuxer {
                             let Ok(mut output) = output_clone.lock() else {
                                 continue;
                             };
-
-                            use scap_ffmpeg::AsFFmpeg;
 
                             frame
                                 .as_ffmpeg()
