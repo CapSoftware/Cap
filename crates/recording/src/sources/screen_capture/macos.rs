@@ -425,8 +425,14 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 return;
                             };
 
-                            let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-                            let slice = buf_list.block().as_slice().unwrap();
+                            let Ok(buf_list) = sample_buffer.audio_buf_list::<2>() else {
+                                warn!("Failed to extract audio buffer list from sample, dropping audio chunk");
+                                return;
+                            };
+                            let Ok(slice) = buf_list.block().as_slice() else {
+                                warn!("Failed to get audio buffer slice, dropping audio chunk");
+                                return;
+                            };
 
                             let mut frame = ffmpeg::frame::Audio::new(
                                 ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
