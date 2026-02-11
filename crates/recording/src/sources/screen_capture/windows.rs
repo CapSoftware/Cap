@@ -42,8 +42,24 @@ impl ScreenCaptureFormat for Direct3DCapture {
 
     fn audio_info() -> AudioInfo {
         let host = cpal::default_host();
-        let output_device = host.default_output_device().unwrap();
-        let supported_config = output_device.default_output_config().unwrap();
+        let Some(output_device) = host.default_output_device() else {
+            warn!("No default audio output device available, using fallback audio config");
+            return AudioInfo::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                48_000,
+                2,
+            )
+            .expect("fallback audio config");
+        };
+        let Ok(supported_config) = output_device.default_output_config() else {
+            warn!("Failed to get default output config, using fallback audio config");
+            return AudioInfo::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                48_000,
+                2,
+            )
+            .expect("fallback audio config");
+        };
 
         let mut info = AudioInfo::from_stream_config(&supported_config);
         let sample_format = info.sample_format;
