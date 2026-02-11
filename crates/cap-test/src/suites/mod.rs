@@ -1,10 +1,12 @@
 mod encoding;
 mod playback;
 mod recording;
+pub mod scenarios;
 mod sync;
-mod validate;
+pub(crate) mod validate;
 
 pub use recording::RecordingTestRunner;
+pub use scenarios::{ScenarioRunner, classify_test_failure};
 pub use validate::validate_recording;
 
 use anyhow::Result;
