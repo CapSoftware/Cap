@@ -104,6 +104,7 @@ function InProgressRecordingInner() {
 	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(
 		null,
 	);
+	const [degradedReason, setDegradedReason] = createSignal<string | null>(null);
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
@@ -183,6 +184,7 @@ function InProgressRecordingInner() {
 			case "Countdown":
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
+				setDegradedReason(null);
 				setPauseResumes([]);
 				setState({
 					variant: "countdown",
@@ -193,6 +195,7 @@ function InProgressRecordingInner() {
 			case "Started":
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
+				setDegradedReason(null);
 				setPauseResumes([]);
 				setState({ variant: "recording" });
 				setStart(Date.now());
@@ -232,6 +235,14 @@ function InProgressRecordingInner() {
 				break;
 			case "Failed":
 				setRecordingFailure(payload.error);
+				break;
+			case "Degraded": {
+				const p = payload as { variant: "Degraded"; reason: string };
+				setDegradedReason(p.reason);
+				break;
+			}
+			case "Recovered":
+				setDegradedReason(null);
 				break;
 		}
 	});
@@ -685,6 +696,17 @@ function InProgressRecordingInner() {
 											/>
 										)}
 									</div>
+									<Show when={degradedReason()}>
+										{(reason) => (
+											<div
+												class="flex h-8 w-8 items-center justify-center"
+												title={reason()}
+												aria-label="Recording quality degraded"
+											>
+												<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
+											</div>
+										)}
+									</Show>
 									<Show when={hasRecordingIssue()}>
 										<ActionButton
 											class={cx(
