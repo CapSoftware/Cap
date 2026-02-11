@@ -27,7 +27,7 @@ use tracing::*;
 
 const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
-const LARGE_FORWARD_JUMP_SECS: f64 = 0.5;
+const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
 
 struct AudioTimestampGenerator {
     sample_rate: u32,
@@ -228,6 +228,11 @@ impl VideoDriftTracker {
         Duration::from_secs_f64(final_secs)
     }
 
+    fn reset_baseline(&mut self) {
+        self.baseline_offset_secs = None;
+        self.drift_warning_logged = false;
+    }
+
     fn capped_frame_count(&self) -> u64 {
         self.capped_frame_count
     }
@@ -253,6 +258,7 @@ pub struct TimestampAnomalyTracker {
     first_frame_baseline: Option<Duration>,
     accumulated_compensation_secs: f64,
     resync_count: u64,
+    did_resync: bool,
 }
 
 impl TimestampAnomalyTracker {
@@ -269,6 +275,7 @@ impl TimestampAnomalyTracker {
             first_frame_baseline: None,
             accumulated_compensation_secs: 0.0,
             resync_count: 0,
+            did_resync: false,
         }
     }
 
@@ -341,6 +348,7 @@ impl TimestampAnomalyTracker {
 
             self.accumulated_compensation_secs += skew_secs;
             self.resync_count += 1;
+            self.did_resync = true;
 
             let adjusted = self.last_valid_duration.unwrap_or(Duration::ZERO);
 
@@ -376,6 +384,7 @@ impl TimestampAnomalyTracker {
         let compensation_secs = current.as_secs_f64() - adjusted.as_secs_f64();
         self.accumulated_compensation_secs -= compensation_secs;
         self.resync_count += 1;
+        self.did_resync = true;
 
         warn!(
             stream = self.stream_name,
@@ -386,7 +395,7 @@ impl TimestampAnomalyTracker {
             resync_count = self.resync_count,
             compensation_applied_secs = format!("{:.3}", compensation_secs),
             accumulated_compensation_secs = format!("{:.3}", self.accumulated_compensation_secs),
-            "Large forward timestamp jump detected (system sleep/wake?), resyncing timeline"
+            "Large forward timestamp jump detected (source restart/system event), resyncing timeline"
         );
 
         self.last_valid_duration = Some(adjusted);
@@ -415,6 +424,12 @@ impl TimestampAnomalyTracker {
 
     pub fn anomaly_count(&self) -> u64 {
         self.anomaly_count
+    }
+
+    pub fn take_resync_flag(&mut self) -> bool {
+        let flag = self.did_resync;
+        self.did_resync = false;
+        flag
     }
 }
 
@@ -1041,6 +1056,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
                     };
 
+                    if anomaly_tracker.take_resync_flag() {
+                        info!(
+                            raw_duration_ms = raw_duration.as_millis(),
+                            "Timeline resync detected, re-baselining drift tracker"
+                        );
+                        drift_tracker.reset_baseline();
+                    }
+
                     let raw_wall_clock = timestamps.instant().elapsed();
                     let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                     let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
@@ -1110,6 +1133,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         continue;
                     }
                 };
+
+                if anomaly_tracker.take_resync_flag() {
+                    drift_tracker.reset_baseline();
+                }
 
                 let raw_wall_clock = timestamps.instant().elapsed();
                 let total_pause = shared_pause.total_pause_duration();
