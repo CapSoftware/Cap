@@ -11,7 +11,7 @@ export const SignInView = ({
 		<div className="h-full w-full flex items-center justify-center p-4">
 			<div className="w-full rounded-xl border border-gray-4 bg-gray-1 p-5">
 				<div className="flex flex-col items-center gap-4">
-					<Logo className="h-10 w-auto" hideLogoName />
+					<Logo className="h-10 w-auto" />
 					<div className="text-center">
 						<div className="text-sm font-medium text-gray-12">
 							Sign in to record with Cap
