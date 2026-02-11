@@ -3,7 +3,7 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
-    http_client::RetryableHttpClient,
+    http_client::{HttpClient, RetryableHttpClient},
     posthog::{PostHogEvent, async_capture_event},
     web_api::{AuthedApiError, ManagerExt},
 };
@@ -37,7 +37,7 @@ use tokio::{
     time::{self, Instant, timeout},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{Span, debug, error, info, info_span, instrument, trace};
+use tracing::{Span, debug, error, info, info_span, instrument, trace, warn};
 use tracing_futures::Instrument;
 
 pub struct UploadedItem {
@@ -54,8 +54,11 @@ pub struct UploadProgressEvent {
     total: String,
 }
 
-const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5 MB - S3 multipart minimum
-const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024; // 15 MB
+const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
+const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
+const NETWORK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CONNECTIVITY_PROBE_INITIAL_DELAY: Duration = Duration::from_secs(2);
+const CONNECTIVITY_PROBE_MAX_DELAY: Duration = Duration::from_secs(30);
 
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
@@ -746,14 +749,18 @@ fn multipart_uploader(
                                 }
 
                                 let size = chunk.len();
-                                let mut req = app
+                                let chunk_for_retry = chunk.clone();
+                                let client = app
                                     .state::<RetryableHttpClient>()
                                     .as_ref()
                                     .map_err(|err| {
                                         format!("uploader/part/{part_number}/client: {err:?}")
                                     })?
+                                    .clone();
+
+                                let mut req = client
                                     .put(&presigned_url)
-                                    .header("Content-Length", chunk.len())
+                                    .header("Content-Length", size)
                                     .timeout(Duration::from_secs(5 * 60))
                                     .body(chunk);
 
@@ -761,13 +768,62 @@ fn multipart_uploader(
                                     req = req.header("Content-MD5", md5_sum);
                                 }
 
-                                let resp = req
+                                let send_result = req
                                     .send()
                                     .instrument(info_span!("s3_put", size = size))
-                                    .await
-                                    .map_err(|err| {
-                                        format!("uploader/part/{part_number}/error: {err:?}")
-                                    })?;
+                                    .await;
+
+                                let resp = match send_result {
+                                    Ok(resp) => resp,
+                                    Err(err) if is_reqwest_network_error(&err) => {
+                                        info!(
+                                            part_number,
+                                            error = %err,
+                                            "Chunk upload failed due to network error, waiting for connectivity"
+                                        );
+                                        if !wait_for_network_recovery(&app, &video_id).await {
+                                            return Err(format!(
+                                                "uploader/part/{part_number}/network_timeout: {err:?}"
+                                            )
+                                            .into());
+                                        }
+                                        let retry_url = api::upload_multipart_presign_part(
+                                            &app,
+                                            &video_id,
+                                            &upload_id,
+                                            part_number,
+                                            md5_sum.as_deref(),
+                                        )
+                                        .await?;
+                                        let mut retry_req = client
+                                            .put(&retry_url)
+                                            .header("Content-Length", size)
+                                            .timeout(Duration::from_secs(5 * 60))
+                                            .body(chunk_for_retry);
+                                        if let Some(md5_sum) = &md5_sum {
+                                            retry_req =
+                                                retry_req.header("Content-MD5", md5_sum);
+                                        }
+                                        retry_req
+                                            .send()
+                                            .instrument(info_span!(
+                                                "s3_put_after_network_recovery",
+                                                size = size
+                                            ))
+                                            .await
+                                            .map_err(|err| {
+                                                format!(
+                                                    "uploader/part/{part_number}/network_retry_error: {err:?}"
+                                                )
+                                            })?
+                                    }
+                                    Err(err) => {
+                                        return Err(format!(
+                                            "uploader/part/{part_number}/error: {err:?}"
+                                        )
+                                        .into());
+                                    }
+                                };
 
                                 let etag = resp
                                     .headers()
@@ -802,7 +858,7 @@ fn multipart_uploader(
                             match upload_result {
                                 Ok(part) => Some(Ok(part)),
                                 Err(err) => {
-                                    tracing::warn!(
+                                    warn!(
                                         part_number = part_number,
                                         offset = offset,
                                         chunk_size = chunk_size,
@@ -896,12 +952,16 @@ async fn retry_failed_chunks(
         .await?;
 
         let size = chunk.len();
-        let mut req = app
+        let chunk_for_retry = chunk.clone();
+        let client = app
             .state::<RetryableHttpClient>()
             .as_ref()
             .map_err(|err| format!("retry/part/{}/client: {err:?}", failed.part_number))?
+            .clone();
+
+        let mut req = client
             .put(&presigned_url)
-            .header("Content-Length", chunk.len())
+            .header("Content-Length", size)
             .timeout(Duration::from_secs(5 * 60))
             .body(chunk);
 
@@ -909,15 +969,65 @@ async fn retry_failed_chunks(
             req = req.header("Content-MD5", md5_sum);
         }
 
-        let resp = req
+        let send_result = req
             .send()
             .instrument(info_span!(
                 "s3_put_retry",
                 part_number = failed.part_number,
                 size = size
             ))
-            .await
-            .map_err(|err| format!("retry/part/{}/error: {err:?}", failed.part_number))?;
+            .await;
+
+        let resp = match send_result {
+            Ok(resp) => resp,
+            Err(err) if is_reqwest_network_error(&err) => {
+                info!(
+                    part_number = failed.part_number,
+                    error = %err,
+                    "Retry chunk upload failed due to network error, waiting for connectivity"
+                );
+                if !wait_for_network_recovery(app, video_id).await {
+                    return Err(format!(
+                        "retry/part/{}/network_timeout: {err:?}",
+                        failed.part_number
+                    )
+                    .into());
+                }
+                let retry_url = api::upload_multipart_presign_part(
+                    app,
+                    video_id,
+                    upload_id,
+                    failed.part_number,
+                    md5_sum.as_deref(),
+                )
+                .await?;
+                let mut retry_req = client
+                    .put(&retry_url)
+                    .header("Content-Length", size)
+                    .timeout(Duration::from_secs(5 * 60))
+                    .body(chunk_for_retry);
+                if let Some(md5_sum) = &md5_sum {
+                    retry_req = retry_req.header("Content-MD5", md5_sum);
+                }
+                retry_req
+                    .send()
+                    .instrument(info_span!(
+                        "s3_put_retry_after_network_recovery",
+                        part_number = failed.part_number,
+                        size = size
+                    ))
+                    .await
+                    .map_err(|err| {
+                        format!(
+                            "retry/part/{}/network_retry_error: {err:?}",
+                            failed.part_number
+                        )
+                    })?
+            }
+            Err(err) => {
+                return Err(format!("retry/part/{}/error: {err:?}", failed.part_number).into());
+            }
+        };
 
         let etag = resp
             .headers()
@@ -956,7 +1066,54 @@ async fn retry_failed_chunks(
     Ok(retry_parts)
 }
 
-/// Takes an incoming stream of bytes and streams them to an S3 object.
+fn is_reqwest_network_error(err: &reqwest::Error) -> bool {
+    err.is_connect() || err.is_timeout() || err.status().is_none()
+}
+
+async fn probe_connectivity(app: &AppHandle) -> bool {
+    let url = app.make_app_url("/").await;
+    app.state::<HttpClient>()
+        .head(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .is_ok()
+}
+
+async fn wait_for_network_recovery(app: &AppHandle, video_id: &str) -> bool {
+    let start = Instant::now();
+    let mut delay = CONNECTIVITY_PROBE_INITIAL_DELAY;
+
+    warn!(
+        video_id,
+        "Network loss detected, pausing uploads until connectivity is restored"
+    );
+
+    loop {
+        if start.elapsed() > NETWORK_RECOVERY_TIMEOUT {
+            error!(
+                video_id,
+                elapsed_secs = start.elapsed().as_secs(),
+                "Network recovery timeout exceeded (5 minutes), giving up"
+            );
+            return false;
+        }
+
+        tokio::time::sleep(delay).await;
+
+        if probe_connectivity(app).await {
+            info!(
+                video_id,
+                waited_secs = start.elapsed().as_secs(),
+                "Network connectivity restored, resuming uploads"
+            );
+            return true;
+        }
+
+        delay = (delay * 2).min(CONNECTIVITY_PROBE_MAX_DELAY);
+    }
+}
+
 #[instrument(skip(app, stream))]
 pub async fn singlepart_uploader(
     app: AppHandle,
