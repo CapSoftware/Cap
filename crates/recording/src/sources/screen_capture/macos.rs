@@ -16,7 +16,7 @@ use std::{
         Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{select, sync::broadcast};
 use tokio_util::{
@@ -187,11 +187,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let (video_tx, video_rx) = flume::bounded(buffer_size);
         let drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let (mut audio_tx, audio_rx) = if self.system_audio {
-            let (tx, rx) = mpsc::channel(32);
+            let (tx, rx) = mpsc::channel(128);
             (Some(tx), Some(rx))
         } else {
             (None, None)
         };
+        let system_audio_drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let system_audio_frame_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
         let display = Display::from_id(&self.config.display)
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
@@ -303,6 +305,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 let scaling_logged = scaling_logged.clone();
                 let scaled_frame_count = scaled_frame_count.clone();
                 let pixel_buffer_copier = pixel_buffer_copier.clone();
+                let sys_audio_drop_counter = system_audio_drop_counter.clone();
+                let sys_audio_frame_counter = system_audio_frame_counter.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -448,7 +452,16 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 );
                             }
 
-                            let _ = audio_tx.try_send(AudioFrame::new(frame, timestamp));
+                            match audio_tx.try_send(AudioFrame::new(frame, timestamp)) {
+                                Ok(()) => {
+                                    sys_audio_frame_counter
+                                        .fetch_add(1, atomic::Ordering::Relaxed);
+                                }
+                                Err(_) => {
+                                    sys_audio_drop_counter
+                                        .fetch_add(1, atomic::Ordering::Relaxed);
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -484,6 +497,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     ChannelAudioSourceConfig::new(self.audio_info(), rx),
                     capturer,
                     error_rx,
+                    system_audio_frame_counter,
+                    system_audio_drop_counter,
                 )
             }),
         ))
@@ -737,9 +752,15 @@ pub struct SystemAudioSourceConfig(
     ChannelAudioSourceConfig,
     Capturer,
     broadcast::Receiver<arc::R<ns::Error>>,
+    Arc<AtomicU64>,
+    Arc<AtomicU64>,
 );
 
-pub struct SystemAudioSource(ChannelAudioSource, Capturer);
+pub struct SystemAudioSource {
+    inner: ChannelAudioSource,
+    capturer: Capturer,
+    cancel_token: CancellationToken,
+}
 
 impl output_pipeline::AudioSource for SystemAudioSource {
     type Config = SystemAudioSourceConfig;
@@ -752,7 +773,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     where
         Self: Sized,
     {
-        let SystemAudioSourceConfig(channel_config, capturer, mut error_rx) = config;
+        let SystemAudioSourceConfig(
+            channel_config,
+            capturer,
+            mut error_rx,
+            frame_counter,
+            drop_counter,
+        ) = config;
 
         ctx.tasks().spawn("system-audio", async move {
             loop {
@@ -773,23 +800,69 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             Ok(())
         });
 
-        ChannelAudioSource::setup(channel_config, tx, ctx)
-            .map(|v| v.map(|source| Self(source, capturer)))
+        let cancel_token = CancellationToken::new();
+
+        let stats_cancel = cancel_token.clone();
+        tokio::spawn(
+            async move {
+                let mut last_log = Instant::now();
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let captured = frame_counter.load(atomic::Ordering::Relaxed);
+                    let dropped = drop_counter.load(atomic::Ordering::Relaxed);
+
+                    if dropped > 0 {
+                        let total = captured + dropped;
+                        let drop_pct = if total > 0 {
+                            100.0 * dropped as f64 / total as f64
+                        } else {
+                            0.0
+                        };
+
+                        if last_log.elapsed() >= Duration::from_secs(5) {
+                            warn!(
+                                captured = captured,
+                                dropped = dropped,
+                                drop_pct = format!("{:.1}%", drop_pct),
+                                "System audio dropping frames due to full channel"
+                            );
+                            last_log = Instant::now();
+                        }
+                    } else if captured > 0 {
+                        debug!(captured = captured, "System audio frames captured");
+                    }
+                }
+            }
+            .with_cancellation_token_owned(stats_cancel)
+            .in_current_span(),
+        );
+
+        ChannelAudioSource::setup(channel_config, tx, ctx).map({
+            let cancel_token = cancel_token.clone();
+            move |v| {
+                v.map(|source| Self {
+                    inner: source,
+                    capturer,
+                    cancel_token,
+                })
+            }
+        })
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
-        self.1.start().await?;
+        self.capturer.start().await?;
 
         Ok(())
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        self.1.stop().await?;
+        self.cancel_token.cancel();
+        self.capturer.stop().await?;
 
         Ok(())
     }
 
     fn audio_info(&self) -> AudioInfo {
-        self.0.audio_info()
+        self.inner.audio_info()
     }
 }
