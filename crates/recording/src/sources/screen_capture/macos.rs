@@ -598,6 +598,7 @@ pub struct VideoSource {
     video_frame_counter: Arc<AtomicU32>,
     drop_counter: Arc<AtomicU64>,
     _drop_guard: DropGuard,
+    health_tx: output_pipeline::HealthSender,
 }
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -624,6 +625,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
         let monitor_capturer = capturer.clone();
         let monitor_cancel = cancel_token.clone();
+        let health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn("screen-capture-monitor", async move {
             loop {
                 select! {
@@ -640,6 +642,10 @@ impl output_pipeline::VideoSource for VideoSource {
 
                         if is_system_stop_error(err.as_ref()) {
                             warn!("Screen capture stream stopped by the system; attempting restart");
+                            output_pipeline::emit_health(
+                                &health_tx,
+                                output_pipeline::PipelineHealthEvent::SourceRestarting,
+                            );
                             if monitor_cancel.is_cancelled() {
                                 break Ok(());
                             }
@@ -649,6 +655,10 @@ impl output_pipeline::VideoSource for VideoSource {
                                     "Failed to restart ScreenCaptureKit stream: {restart_err:#}"
                                 )));
                             }
+                            output_pipeline::emit_health(
+                                &health_tx,
+                                output_pipeline::PipelineHealthEvent::SourceRestarted,
+                            );
                             continue;
                         }
 
@@ -658,6 +668,7 @@ impl output_pipeline::VideoSource for VideoSource {
             }
         });
 
+        let stats_health_tx = ctx.health_tx().clone();
         ChannelVideoSource::setup(inner, video_tx, ctx)
             .await
             .map(|source| Self {
@@ -667,6 +678,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 _drop_guard: drop_guard,
                 video_frame_counter,
                 drop_counter,
+                health_tx: stats_health_tx,
             })
     }
 
@@ -677,6 +689,7 @@ impl output_pipeline::VideoSource for VideoSource {
             tokio::spawn({
                 let video_frame_count = self.video_frame_counter.clone();
                 let drop_counter = self.drop_counter.clone();
+                let health_tx = self.health_tx.clone();
                 async move {
                     let mut prev_frames = 0u32;
                     let mut prev_drops = 0u64;
@@ -699,6 +712,12 @@ impl output_pipeline::VideoSource for VideoSource {
                                     total_frames = current_frames,
                                     total_drops = current_drops,
                                     "Screen capture frame drop rate exceeds 5% threshold"
+                                );
+                                output_pipeline::emit_health(
+                                    &health_tx,
+                                    output_pipeline::PipelineHealthEvent::FrameDropRateHigh {
+                                        rate_pct: drop_rate,
+                                    },
                                 );
                             } else {
                                 debug!(
