@@ -98,36 +98,6 @@ export const CameraPage = () => {
 		};
 	}, [canUseAutoPiPAttribute]);
 
-	const captureFrame = useCallback(() => {
-		const video = videoRef.current;
-		if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
-			return null;
-		}
-
-		const maxSide = 420;
-		const srcWidth = video.videoWidth;
-		const srcHeight = video.videoHeight;
-		const scale = Math.min(1, maxSide / Math.max(srcWidth, srcHeight));
-		const width = Math.max(1, Math.round(srcWidth * scale));
-		const height = Math.max(1, Math.round(srcHeight * scale));
-
-		const canvas = document.createElement("canvas");
-		canvas.width = width;
-		canvas.height = height;
-		const ctx = canvas.getContext("2d");
-		if (!ctx) {
-			return null;
-		}
-
-		if (mirrored) {
-			ctx.translate(canvas.width, 0);
-			ctx.scale(-1, 1);
-		}
-
-		ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-		return canvas.toDataURL("image/jpeg", 0.7);
-	}, [mirrored]);
-
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
 			const msg = event.data as IframeMessage;
@@ -158,11 +128,6 @@ export const CameraPage = () => {
 					}
 					streamRef.current = null;
 				}
-			}
-
-			if (msg.type === "CAMERA_CAPTURE_FRAME") {
-				const dataUrl = captureFrame();
-				postToParent({ type: "CAMERA_FRAME_CAPTURED", dataUrl });
 			}
 
 			if (msg.type === "CAMERA_ENTER_PIP") {
@@ -199,12 +164,15 @@ export const CameraPage = () => {
 		postToParent({ type: "CAMERA_READY" });
 
 		return () => window.removeEventListener("message", handleMessage);
-	}, [captureFrame, isPictureInPictureSupported]);
+	}, [isPictureInPictureSupported]);
 
 	useEffect(() => {
 		if (!deviceId) return;
 
 		let cancelled = false;
+		let fallbackChannel: BroadcastChannel | null = null;
+		let fallbackCanvas: HTMLCanvasElement | null = null;
+		let fallbackCtx: CanvasRenderingContext2D | null = null;
 
 		const startCamera = async () => {
 			if (streamRef.current) {
@@ -231,15 +199,59 @@ export const CameraPage = () => {
 					videoRef.current.srcObject = stream;
 					void videoRef.current.play().catch(() => {});
 				}
-			} catch (err) {
-				console.error("Failed to start camera", err);
+			} catch {
+				if (cancelled) return;
+				startFallbackFrameReceiver();
 			}
+		};
+
+		const startFallbackFrameReceiver = () => {
+			fallbackCanvas = document.createElement("canvas");
+			fallbackCtx = fallbackCanvas.getContext("2d");
+			if (!fallbackCtx) return;
+
+			let streamAttached = false;
+			fallbackChannel = new BroadcastChannel("cap-camera-frames");
+
+			fallbackChannel.onmessage = (event: MessageEvent) => {
+				if (cancelled || !fallbackCanvas || !fallbackCtx) return;
+				const msg = event.data;
+				if (msg.type !== "FRAME" || !msg.bitmap) return;
+
+				const bitmap = msg.bitmap as ImageBitmap;
+				if (
+					fallbackCanvas.width !== bitmap.width ||
+					fallbackCanvas.height !== bitmap.height
+				) {
+					fallbackCanvas.width = bitmap.width;
+					fallbackCanvas.height = bitmap.height;
+				}
+				fallbackCtx.drawImage(bitmap, 0, 0);
+				bitmap.close();
+
+				if (!streamAttached && videoRef.current) {
+					streamAttached = true;
+					const captured = fallbackCanvas.captureStream();
+					streamRef.current = captured;
+					videoRef.current.srcObject = captured;
+					void videoRef.current.play().catch(() => {});
+				}
+			};
+
+			fallbackChannel.postMessage({ type: "REQUEST_FRAMES" });
 		};
 
 		startCamera();
 
 		return () => {
 			cancelled = true;
+			if (fallbackChannel) {
+				fallbackChannel.postMessage({ type: "STOP_FRAMES" });
+				fallbackChannel.close();
+				fallbackChannel = null;
+			}
+			fallbackCanvas = null;
+			fallbackCtx = null;
 			if (streamRef.current) {
 				for (const track of streamRef.current.getTracks()) {
 					track.stop();
@@ -260,7 +272,10 @@ export const CameraPage = () => {
 	}, [size, shape, videoDimensions]);
 
 	useEffect(() => {
-		if (videoDimensions) setLastFrameDataUrl(null);
+		if (videoDimensions) {
+			setLastFrameDataUrl(null);
+			postToParent({ type: "CAMERA_FEED_READY" });
+		}
 	}, [videoDimensions]);
 
 	const handleClose = useCallback(async () => {
@@ -329,7 +344,7 @@ export const CameraPage = () => {
 
 	useEffect(() => {
 		if (typeof document === "undefined") return;
-		if (!isPictureInPictureSupported || canUseAutoPiPAttribute) return;
+		if (!isPictureInPictureSupported) return;
 
 		const handleVisibilityChange = () => {
 			const video = videoRef.current;
@@ -353,9 +368,8 @@ export const CameraPage = () => {
 					.then(() => {
 						autoPictureInPictureRef.current = true;
 					})
-					.catch((err) => {
+					.catch(() => {
 						autoPictureInPictureRef.current = false;
-						console.error("Failed to enter Picture-in-Picture", err);
 					});
 				return;
 			}
@@ -367,9 +381,7 @@ export const CameraPage = () => {
 			) {
 				document
 					.exitPictureInPicture()
-					.catch((err) => {
-						console.error("Failed to exit Picture-in-Picture", err);
-					})
+					.catch(() => {})
 					.finally(() => {
 						autoPictureInPictureRef.current = false;
 					});
@@ -382,7 +394,7 @@ export const CameraPage = () => {
 		document.addEventListener("visibilitychange", handleVisibilityChange);
 		return () =>
 			document.removeEventListener("visibilitychange", handleVisibilityChange);
-	}, [videoDimensions, isPictureInPictureSupported, canUseAutoPiPAttribute]);
+	}, [videoDimensions, isPictureInPictureSupported]);
 
 	useEffect(() => {
 		return () => {
