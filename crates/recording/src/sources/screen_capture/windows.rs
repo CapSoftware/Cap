@@ -2,7 +2,11 @@ use crate::{
     AudioFrame, SetupCtx, output_pipeline,
     screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat},
 };
-use ::windows::Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device};
+use ::windows::Win32::Graphics::Direct3D11::{
+    D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
+};
+use ::windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use anyhow::anyhow;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
@@ -15,7 +19,7 @@ use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32},
     },
     time::Duration,
@@ -89,8 +93,254 @@ impl ScreenCaptureFormat for Direct3DCapture {
     }
 }
 
+pub enum ScreenFrame {
+    Captured(scap_direct3d::Frame),
+    Scaled(ScaledScreenFrame),
+}
+
+pub struct ScaledScreenFrame {
+    texture: ID3D11Texture2D,
+    pixel_data: Vec<u8>,
+    width: u32,
+    height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+}
+
+unsafe impl Send for ScaledScreenFrame {}
+
+impl ScreenFrame {
+    pub fn texture(&self) -> &ID3D11Texture2D {
+        match self {
+            ScreenFrame::Captured(frame) => frame.texture(),
+            ScreenFrame::Scaled(scaled) => &scaled.texture,
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        match self {
+            ScreenFrame::Captured(frame) => frame.width(),
+            ScreenFrame::Scaled(scaled) => scaled.width,
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            ScreenFrame::Captured(frame) => frame.height(),
+            ScreenFrame::Scaled(scaled) => scaled.height,
+        }
+    }
+
+    pub fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, ::windows::core::Error> {
+        match self {
+            ScreenFrame::Captured(frame) => {
+                use scap_ffmpeg::AsFFmpeg;
+                frame.as_ffmpeg()
+            }
+            ScreenFrame::Scaled(scaled) => {
+                let ffmpeg_pixel = match scaled.pixel_format {
+                    scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
+                    scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+                };
+                let mut ff_frame =
+                    ffmpeg::frame::Video::new(ffmpeg_pixel, scaled.width, scaled.height);
+                let dest_stride = ff_frame.stride(0);
+                let dest_bytes = ff_frame.data_mut(0);
+                let row_length = (scaled.width * 4) as usize;
+
+                for row in 0..scaled.height as usize {
+                    let src_start = row * row_length;
+                    let dst_start = row * dest_stride;
+                    let copy_len = row_length.min(
+                        scaled
+                            .pixel_data
+                            .len()
+                            .saturating_sub(src_start)
+                            .min(dest_bytes.len().saturating_sub(dst_start)),
+                    );
+                    if copy_len > 0 {
+                        dest_bytes[dst_start..dst_start + copy_len]
+                            .copy_from_slice(&scaled.pixel_data[src_start..src_start + copy_len]);
+                    }
+                }
+
+                Ok(ff_frame)
+            }
+        }
+    }
+}
+
+struct FrameScalerState {
+    context: ffmpeg::software::scaling::Context,
+    source_width: u32,
+    source_height: u32,
+}
+
+unsafe impl Send for FrameScalerState {}
+
+struct WindowsFrameScaler {
+    target_width: u32,
+    target_height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+    d3d_device: ID3D11Device,
+    state: Option<FrameScalerState>,
+}
+
+impl WindowsFrameScaler {
+    fn new(
+        target_width: u32,
+        target_height: u32,
+        pixel_format: scap_direct3d::PixelFormat,
+        d3d_device: ID3D11Device,
+    ) -> Self {
+        Self {
+            target_width,
+            target_height,
+            pixel_format,
+            d3d_device,
+            state: None,
+        }
+    }
+
+    fn scale_frame(&mut self, frame: &scap_direct3d::Frame) -> Option<ScreenFrame> {
+        let src_width = frame.width();
+        let src_height = frame.height();
+
+        let needs_reinit = self.state.as_ref().map_or(true, |s| {
+            s.source_width != src_width || s.source_height != src_height
+        });
+
+        if needs_reinit {
+            let src_pixel = match self.pixel_format {
+                scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
+                scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+            };
+
+            let context = ffmpeg::software::scaling::Context::get(
+                src_pixel,
+                src_width,
+                src_height,
+                src_pixel,
+                self.target_width,
+                self.target_height,
+                ffmpeg::software::scaling::Flags::BILINEAR,
+            )
+            .ok()?;
+
+            self.state = Some(FrameScalerState {
+                context,
+                source_width: src_width,
+                source_height: src_height,
+            });
+        }
+
+        let buffer = frame.as_buffer().ok()?;
+        let src_data = buffer.data();
+        let src_stride = buffer.stride() as usize;
+        let row_length = (src_width * 4) as usize;
+
+        let src_pixel = match self.pixel_format {
+            scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
+            scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+        };
+
+        let mut src_frame = ffmpeg::frame::Video::new(src_pixel, src_width, src_height);
+        let ff_stride = src_frame.stride(0);
+        let ff_data = src_frame.data_mut(0);
+
+        for row in 0..src_height as usize {
+            let s_start = row * src_stride;
+            let d_start = row * ff_stride;
+            let copy_len = row_length.min(
+                src_data
+                    .len()
+                    .saturating_sub(s_start)
+                    .min(ff_data.len().saturating_sub(d_start)),
+            );
+            if copy_len > 0 {
+                ff_data[d_start..d_start + copy_len]
+                    .copy_from_slice(&src_data[s_start..s_start + copy_len]);
+            }
+        }
+
+        drop(buffer);
+
+        let state = self.state.as_mut()?;
+        let mut dst_frame =
+            ffmpeg::frame::Video::new(src_pixel, self.target_width, self.target_height);
+        state.context.run(&src_frame, &mut dst_frame).ok()?;
+
+        let dst_stride = dst_frame.stride(0);
+        let dst_row_length = (self.target_width * 4) as usize;
+        let total_bytes = dst_row_length * self.target_height as usize;
+        let mut pixel_data = vec![0u8; total_bytes];
+        let dst_data = dst_frame.data(0);
+
+        for row in 0..self.target_height as usize {
+            let s_start = row * dst_stride;
+            let d_start = row * dst_row_length;
+            let copy_len = dst_row_length.min(
+                dst_data
+                    .len()
+                    .saturating_sub(s_start)
+                    .min(pixel_data.len().saturating_sub(d_start)),
+            );
+            if copy_len > 0 {
+                pixel_data[d_start..d_start + copy_len]
+                    .copy_from_slice(&dst_data[s_start..s_start + copy_len]);
+            }
+        }
+
+        let dxgi_format = match self.pixel_format {
+            scap_direct3d::PixelFormat::R8G8B8A8Unorm => {
+                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM
+            }
+            scap_direct3d::PixelFormat::B8G8R8A8Unorm => {
+                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM
+            }
+        };
+
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: self.target_width,
+            Height: self.target_height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: dxgi_format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+
+        let subresource_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: pixel_data.as_ptr() as *const _,
+            SysMemPitch: dst_row_length as u32,
+            SysMemSlicePitch: 0,
+        };
+
+        let texture = unsafe {
+            let mut tex = None;
+            self.d3d_device
+                .CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut tex))
+                .ok()?;
+            tex?
+        };
+
+        Some(ScreenFrame::Scaled(ScaledScreenFrame {
+            texture,
+            pixel_data,
+            width: self.target_width,
+            height: self.target_height,
+            pixel_format: self.pixel_format,
+        }))
+    }
+}
+
 pub struct VideoFrame {
-    pub frame: scap_direct3d::Frame,
+    pub frame: ScreenFrame,
     pub timestamp: Timestamp,
 }
 
@@ -190,6 +440,11 @@ fn create_d3d_capturer(
     error_tx: &mpsc::Sender<anyhow::Error>,
     video_frame_counter: &Arc<AtomicU32>,
     video_drop_counter: &Arc<AtomicU32>,
+    expected_width: u32,
+    expected_height: u32,
+    frame_scaler: Arc<Mutex<WindowsFrameScaler>>,
+    scaling_logged: Arc<AtomicBool>,
+    scaled_frame_count: Arc<AtomicU32>,
 ) -> anyhow::Result<scap_direct3d::Capturer> {
     let capture_item = Display::from_id(display_id)
         .ok_or_else(|| anyhow!("Display not found for ID: {:?}", display_id))?
@@ -209,7 +464,60 @@ fn create_d3d_capturer(
                 let timestamp = Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
                     timestamp.Duration,
                 ));
-                match tx.try_send(VideoFrame { frame, timestamp }) {
+
+                let frame_width = frame.width();
+                let frame_height = frame.height();
+
+                let screen_frame =
+                    if frame_width != expected_width || frame_height != expected_height {
+                        let Ok(mut scaler_guard) = frame_scaler.lock() else {
+                            video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            return Ok(());
+                        };
+
+                        if !scaling_logged.load(atomic::Ordering::Relaxed) {
+                            info!(
+                                expected_width,
+                                expected_height,
+                                frame_width,
+                                frame_height,
+                                "Display resolution changed, scaling frames to match original dimensions"
+                            );
+                            scaling_logged.store(true, atomic::Ordering::Relaxed);
+                        }
+
+                        match scaler_guard.scale_frame(&frame) {
+                            Some(scaled) => {
+                                let count =
+                                    scaled_frame_count.fetch_add(1, atomic::Ordering::Relaxed) + 1;
+                                if count.is_multiple_of(300) {
+                                    debug!(scaled_frames = count, "Scaling frames");
+                                }
+                                scaled
+                            }
+                            None => {
+                                video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        if scaling_logged.swap(false, atomic::Ordering::Relaxed) {
+                            let count = scaled_frame_count.swap(0, atomic::Ordering::Relaxed);
+                            info!(
+                                scaled_frames = count,
+                                "Display dimensions restored, resuming direct capture"
+                            );
+                            if let Ok(mut guard) = frame_scaler.lock() {
+                                guard.state = None;
+                            }
+                        }
+                        ScreenFrame::Captured(frame)
+                    };
+
+                match tx.try_send(VideoFrame {
+                    frame: screen_frame,
+                    timestamp,
+                }) {
                     Ok(()) => {
                         video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
                     }
@@ -256,8 +564,22 @@ impl output_pipeline::VideoSource for VideoSource {
         let tokio_rt = tokio::runtime::Handle::current();
         let restart_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
+        let expected_width = video_info.width;
+        let expected_height = video_info.height;
+        let frame_scaler = Arc::new(Mutex::new(WindowsFrameScaler::new(
+            expected_width,
+            expected_height,
+            Direct3DCapture::PIXEL_FORMAT,
+            d3d_device.clone(),
+        )));
+        let scaling_logged: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        let scaled_frame_count: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+
         ctx.tasks().spawn_thread("d3d-capture-thread", {
             let restart_counter = restart_counter.clone();
+            let frame_scaler = frame_scaler.clone();
+            let scaling_logged = scaling_logged.clone();
+            let scaled_frame_count = scaled_frame_count.clone();
             move || {
                 cap_mediafoundation_utils::thread_init();
 
@@ -274,6 +596,11 @@ impl output_pipeline::VideoSource for VideoSource {
                     &error_tx,
                     &video_frame_counter,
                     &video_drop_counter,
+                    expected_width,
+                    expected_height,
+                    frame_scaler.clone(),
+                    scaling_logged.clone(),
+                    scaled_frame_count.clone(),
                 ) {
                     Ok(c) => {
                         trace!("D3D capturer created successfully");
@@ -295,14 +622,16 @@ impl output_pipeline::VideoSource for VideoSource {
                         let video_frame_counter = video_frame_counter.clone();
                         let video_drop_counter = video_drop_counter.clone();
                         let restart_counter = restart_counter.clone();
+                        let scaled_frame_count = scaled_frame_count.clone();
                         async move {
                             loop {
                                 tokio::time::sleep(Duration::from_secs(5)).await;
                                 let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
                                 let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
                                 let restarts = restart_counter.load(atomic::Ordering::Relaxed);
+                                let scaled = scaled_frame_count.load(atomic::Ordering::Relaxed);
                                 let total = captured + dropped;
-                                if dropped > 0 || restarts > 0 {
+                                if dropped > 0 || restarts > 0 || scaled > 0 {
                                     let drop_pct = if total > 0 {
                                         100.0 * dropped as f64 / total as f64
                                     } else {
@@ -313,6 +642,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                         dropped = dropped,
                                         drop_pct = format!("{:.1}%", drop_pct),
                                         restarts = restarts,
+                                        scaled_frames = scaled,
                                         "Screen capture stats"
                                     );
                                 } else {
@@ -364,6 +694,11 @@ impl output_pipeline::VideoSource for VideoSource {
                                 &error_tx,
                                 &video_frame_counter,
                                 &video_drop_counter,
+                                expected_width,
+                                expected_height,
+                                frame_scaler.clone(),
+                                scaling_logged.clone(),
+                                scaled_frame_count.clone(),
                             ) {
                                 Ok(mut new_cap) => match new_cap.start() {
                                     Ok(()) => {
