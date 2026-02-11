@@ -29,6 +29,27 @@ const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 60;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
 
+const HEALTH_CHANNEL_CAPACITY: usize = 32;
+
+#[derive(Debug, Clone)]
+pub enum PipelineHealthEvent {
+    FrameDropRateHigh { rate_pct: f64 },
+    AudioGapDetected { gap_ms: u64 },
+    SourceRestarting,
+    SourceRestarted,
+}
+
+pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
+pub type HealthReceiver = tokio::sync::mpsc::Receiver<PipelineHealthEvent>;
+
+fn new_health_channel() -> (HealthSender, HealthReceiver) {
+    tokio::sync::mpsc::channel(HEALTH_CHANNEL_CAPACITY)
+}
+
+pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
+    let _ = tx.try_send(event);
+}
+
 struct AudioTimestampGenerator {
     sample_rate: u32,
     total_samples: u64,
@@ -650,14 +671,25 @@ impl OutputPipeline {
     }
 }
 
-#[derive(Default)]
 pub struct SetupCtx {
     tasks: TaskPool,
+    health_tx: HealthSender,
 }
 
 impl SetupCtx {
+    fn new(health_tx: HealthSender) -> Self {
+        Self {
+            tasks: TaskPool::default(),
+            health_tx,
+        }
+    }
+
     pub fn tasks(&mut self) -> &mut TaskPool {
         &mut self.tasks
+    }
+
+    pub fn health_tx(&self) -> &HealthSender {
+        &self.health_tx
     }
 }
 
@@ -782,8 +814,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             ..
         } = self;
 
-        let mut setup_ctx = SetupCtx::default();
         let build_ctx = BuildCtx::new();
+        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone());
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
@@ -847,6 +879,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count,
+            health_rx: Some(build_ctx.health_rx),
         })
     }
 }
@@ -867,8 +900,8 @@ impl OutputPipelineBuilder<NoVideo> {
             return Err(anyhow!("Invariant: No audio sources"));
         }
 
-        let mut setup_ctx = SetupCtx::default();
         let build_ctx = BuildCtx::new();
+        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone());
 
         let (first_tx, first_rx) = oneshot::channel();
 
@@ -915,6 +948,7 @@ impl OutputPipelineBuilder<NoVideo> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
+            health_rx: Some(build_ctx.health_rx),
         })
     }
 }
@@ -924,6 +958,8 @@ struct BuildCtx {
     done_tx: oneshot::Sender<anyhow::Result<()>>,
     done_rx: DoneFut,
     pause_flag: Arc<AtomicBool>,
+    health_tx: HealthSender,
+    health_rx: HealthReceiver,
 }
 
 impl BuildCtx {
@@ -931,6 +967,7 @@ impl BuildCtx {
         let stop_token = CancellationToken::new();
 
         let (done_tx, done_rx) = oneshot::channel();
+        let (health_tx, health_rx) = new_health_channel();
 
         Self {
             stop_token,
@@ -944,6 +981,8 @@ impl BuildCtx {
                 .boxed()
                 .shared(),
             pause_flag: Arc::new(AtomicBool::new(false)),
+            health_tx,
+            health_rx,
         }
     }
 }
@@ -1279,6 +1318,7 @@ impl PreparedAudioSources {
         let sample_rate = self.audio_info.sample_rate;
         let audio_info = self.audio_info;
         let has_wireless_source = self.has_wireless_source;
+        let health_tx = setup_ctx.health_tx().clone();
 
         setup_ctx.tasks().spawn("mux-audio", {
             let stop_token = stop_token.child_token();
@@ -1328,6 +1368,13 @@ impl PreparedAudioSources {
                                     }
 
                                     gap_tracker.record_insertion(gap_duration);
+
+                                    emit_health(
+                                        &health_tx,
+                                        PipelineHealthEvent::AudioGapDetected {
+                                            gap_ms: gap_duration.as_millis() as u64,
+                                        },
+                                    );
 
                                     if let Err(e) = muxer
                                         .lock()
@@ -1483,6 +1530,7 @@ pub struct OutputPipeline {
     pause_flag: Arc<AtomicBool>,
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
+    health_rx: Option<HealthReceiver>,
 }
 
 pub struct FinishedOutputPipeline {
@@ -1547,6 +1595,10 @@ impl OutputPipeline {
 
     pub fn cancel(&self) {
         self.cancel_token.cancel();
+    }
+
+    pub fn take_health_rx(&mut self) -> Option<HealthReceiver> {
+        self.health_rx.take()
     }
 }
 
