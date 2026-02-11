@@ -17,10 +17,10 @@ export const SettingsButton = ({ visible, onClick }: SettingsButtonProps) => {
 			variant="outline"
 			size="icon"
 			aria-label="Open recorder settings"
-			className="absolute right-3 top-3 z-10 !p-0"
+			className="absolute right-3 top-3 z-30 !h-9 !w-9 !rounded-full !border-gray-200 !bg-white/80 !p-0 hover:!bg-gray-100"
 			onClick={onClick}
 		>
-			<Settings className="size-5 text-gray-12" aria-hidden />
+			<Settings className="size-5 text-gray-600" aria-hidden />
 		</Button>
 	);
 };
