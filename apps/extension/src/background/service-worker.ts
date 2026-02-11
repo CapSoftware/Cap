@@ -71,14 +71,48 @@ async function getActiveTabId(): Promise<number | null> {
 }
 
 async function injectContentScript(tabId: number): Promise<void> {
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		chrome.scripting.executeScript(
 			{
 				target: { tabId },
 				files: ["content-script.js"],
 			},
 			() => {
+				if (chrome.runtime.lastError) {
+					reject(new Error(chrome.runtime.lastError.message));
+					return;
+				}
 				resolve();
+			},
+		);
+	});
+}
+
+async function captureLastFrame(tabId: number): Promise<string | null> {
+	return new Promise((resolve) => {
+		let done = false;
+
+		const timeoutId = setTimeout(() => {
+			if (done) return;
+			done = true;
+			resolve(null);
+		}, 900);
+
+		chrome.tabs.sendMessage(
+			tabId,
+			{ type: "CAPTURE_LAST_FRAME" },
+			(response) => {
+				if (done) return;
+				done = true;
+				clearTimeout(timeoutId);
+
+				if (chrome.runtime.lastError) {
+					resolve(null);
+					return;
+				}
+
+				const res = response as { dataUrl?: unknown } | null;
+				resolve(typeof res?.dataUrl === "string" ? res.dataUrl : null);
 			},
 		);
 	});
@@ -95,11 +129,39 @@ async function handleShowCamera(state: CameraState): Promise<void> {
 
 	await setCameraState(state);
 	await setCameraTabId(tabId);
-	await injectContentScript(tabId);
+	try {
+		await injectContentScript(tabId);
+	} catch {
+		return;
+	}
 
 	setTimeout(() => {
 		sendToTab(tabId, { type: "INJECT_CAMERA", state });
 	}, 100);
+}
+
+async function handleMoveCameraToTab(tabId: number): Promise<void> {
+	const state = await getCameraState();
+	if (!state) return;
+
+	const currentTabId = await getCameraTabId();
+	if (currentTabId === tabId) return;
+
+	try {
+		await injectContentScript(tabId);
+	} catch {
+		return;
+	}
+
+	const lastFrameDataUrl =
+		currentTabId !== null ? await captureLastFrame(currentTabId) : null;
+
+	if (currentTabId !== null) {
+		sendToTab(currentTabId, { type: "REMOVE_CAMERA" });
+	}
+
+	await setCameraTabId(tabId);
+	sendToTab(tabId, { type: "INJECT_CAMERA", state, lastFrameDataUrl });
 }
 
 async function handleHideCamera(): Promise<void> {
@@ -161,6 +223,37 @@ chrome.tabs.onRemoved.addListener((tabId: number) => {
 	getCameraTabId().then((cameraTabId) => {
 		if (cameraTabId === tabId) {
 			setCameraState(null);
+		}
+	});
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+	handleMoveCameraToTab(tabId).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	if (changeInfo.status !== "complete") return;
+
+	getCameraTabId().then((cameraTabId) => {
+		if (cameraTabId !== tabId) return;
+		getCameraState().then((state) => {
+			if (!state) return;
+			injectContentScript(tabId)
+				.then(() => {
+					sendToTab(tabId, { type: "INJECT_CAMERA", state });
+				})
+				.catch(() => {});
+		});
+	});
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+	getCameraTabId().then((tabId) => {
+		if (tabId === null) return;
+		if (windowId === chrome.windows.WINDOW_ID_NONE) {
+			sendToTab(tabId, { type: "ENTER_CAMERA_PIP" });
+		} else {
+			sendToTab(tabId, { type: "EXIT_CAMERA_PIP" });
 		}
 	});
 });
