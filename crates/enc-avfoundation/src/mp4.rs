@@ -20,6 +20,9 @@ pub struct MP4Encoder {
     audio_input: Option<arc::R<av::AssetWriterInput>>,
     audio_resampler: Option<resampling::Context>,
     audio_output_rate: u32,
+    expected_width: usize,
+    expected_height: usize,
+    dimension_mismatch_count: u64,
     last_frame_timestamp: Option<Duration>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
@@ -341,6 +344,9 @@ impl MP4Encoder {
         }
 
         Ok(Self {
+            expected_width: video_config.width as usize,
+            expected_height: video_config.height as usize,
+            dimension_mismatch_count: 0,
             config: video_config,
             audio_input,
             audio_resampler,
@@ -377,6 +383,27 @@ impl MP4Encoder {
 
         if !self.video_input.is_ready_for_more_media_data() {
             return Err(QueueFrameError::NotReadyForMore);
+        }
+
+        if let Some(image_buf) = frame.image_buf() {
+            let frame_width = image_buf.width();
+            let frame_height = image_buf.height();
+            if frame_width != self.expected_width || frame_height != self.expected_height {
+                self.dimension_mismatch_count += 1;
+                if self.dimension_mismatch_count <= 5
+                    || self.dimension_mismatch_count.is_multiple_of(100)
+                {
+                    warn!(
+                        expected_width = self.expected_width,
+                        expected_height = self.expected_height,
+                        frame_width,
+                        frame_height,
+                        mismatch_count = self.dimension_mismatch_count,
+                        "Frame dimension mismatch, dropping frame to protect writer"
+                    );
+                }
+                return Ok(());
+            }
         }
 
         if !self.is_writing {
