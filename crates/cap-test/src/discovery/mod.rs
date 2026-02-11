@@ -22,6 +22,7 @@ pub struct DiscoveredHardware {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub platform: String,
+    pub os_version: String,
     pub cpu: String,
     pub memory_gb: u64,
     pub gpu: Option<String>,
@@ -48,6 +49,7 @@ impl DiscoveredHardware {
 
         println!("\n{}", "System Info:".bold());
         println!("  Platform: {}", self.system_info.platform);
+        println!("  OS Version: {}", self.system_info.os_version);
         println!("  CPU: {}", self.system_info.cpu);
         println!("  Memory: {} GB", self.system_info.memory_gb);
         if let Some(gpu) = &self.system_info.gpu {
@@ -140,14 +142,57 @@ fn discover_system_info() -> SystemInfo {
         "Unknown".to_string()
     };
 
+    let os_version = detect_os_version();
     let gpu = detect_gpu();
 
     SystemInfo {
         platform,
+        os_version,
         cpu,
         memory_gb,
         gpu,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn detect_os_version() -> String {
+    std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| format!("macOS {}", s.trim()))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "macOS (unknown version)".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn detect_os_version() -> String {
+    std::process::Command::new("cmd")
+        .args(["/C", "ver"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "Windows (unknown version)".to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn detect_os_version() -> String {
+    "Unknown OS".to_string()
 }
 
 #[cfg(target_os = "macos")]
