@@ -684,6 +684,7 @@ pub struct AVFoundationCameraMuxer {
     pause_flag: Arc<AtomicBool>,
     frame_drops: FrameDropTracker,
     was_paused: bool,
+    fatal_error: SharedFatalError,
 }
 
 #[derive(Default)]
@@ -721,6 +722,8 @@ impl Muxer for AVFoundationCameraMuxer {
 
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
+        let fatal_error = Arc::new(Mutex::new(None));
+        let video_fatal_error = fatal_error.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-camera-encoder".to_string())
@@ -733,21 +736,30 @@ impl Muxer for AVFoundationCameraMuxer {
                 let mut encoder_busy_count = 0u64;
 
                 while let Ok(Some(msg)) = video_rx.recv() {
+                    if fatal_error_message(&video_fatal_error).is_some() {
+                        break;
+                    }
+
                     match msg {
                         CameraFrameMessage::Frame(sample_buf, timestamp) => {
-                            let mut encoder = match encoder_clone.lock() {
-                                Ok(e) => e,
-                                Err(_) => {
-                                    error!("Camera MP4 encoder mutex poisoned");
-                                    return Err(anyhow!("Camera MP4 encoder mutex poisoned"));
-                                }
-                            };
-
                             let mut retry_count = 0;
                             const MAX_RETRIES: u32 = 100;
 
                             loop {
-                                match encoder.queue_video_frame(sample_buf.clone(), timestamp) {
+                                let queue_result = {
+                                    let mut encoder = match encoder_clone.lock() {
+                                        Ok(e) => e,
+                                        Err(_) => {
+                                            let message =
+                                                "Camera MP4 encoder mutex poisoned".to_string();
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                    };
+                                    encoder.queue_video_frame(sample_buf.clone(), timestamp)
+                                };
+
+                                match queue_result {
                                     Ok(()) => break,
                                     Err(QueueFrameError::NotReadyForMore) => {
                                         retry_count += 1;
@@ -763,6 +775,18 @@ impl Muxer for AVFoundationCameraMuxer {
                                         }
                                         std::thread::sleep(Duration::from_micros(500));
                                     }
+                                    Err(QueueFrameError::WriterFailed(err)) => {
+                                        let message = format!(
+                                            "Failed to encode camera frame: WriterFailed/{err}"
+                                        );
+                                        set_fatal_error(&video_fatal_error, message.clone());
+                                        return Err(anyhow!(message));
+                                    }
+                                    Err(QueueFrameError::Failed) => {
+                                        let message = "Failed to encode camera frame: Failed".to_string();
+                                        set_fatal_error(&video_fatal_error, message.clone());
+                                        return Err(anyhow!(message));
+                                    }
                                     Err(e) => {
                                         warn!("Failed to encode camera frame: {e}");
                                         break;
@@ -773,13 +797,23 @@ impl Muxer for AVFoundationCameraMuxer {
                             total_frames += 1;
                         }
                         CameraFrameMessage::Pause => {
-                            if let Ok(mut encoder) = encoder_clone.lock() {
-                                encoder.pause();
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => encoder.pause(),
+                                Err(_) => {
+                                    let message = "Camera MP4 encoder mutex poisoned".to_string();
+                                    set_fatal_error(&video_fatal_error, message.clone());
+                                    return Err(anyhow!(message));
+                                }
                             }
                         }
                         CameraFrameMessage::Resume => {
-                            if let Ok(mut encoder) = encoder_clone.lock() {
-                                encoder.resume();
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => encoder.resume(),
+                                Err(_) => {
+                                    let message = "Camera MP4 encoder mutex poisoned".to_string();
+                                    set_fatal_error(&video_fatal_error, message.clone());
+                                    return Err(anyhow!(message));
+                                }
                             }
                         }
                     }
@@ -815,6 +849,7 @@ impl Muxer for AVFoundationCameraMuxer {
             pause_flag,
             frame_drops: FrameDropTracker::new(),
             was_paused: false,
+            fatal_error,
         })
     }
 
@@ -827,49 +862,56 @@ impl Muxer for AVFoundationCameraMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let mut finish_error: Option<anyhow::Error> = None;
+
         if let Some(mut state) = self.state.take() {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("Camera MP4 encoder channel already closed during finish: {e}");
             }
 
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        match handle.join() {
-                            Err(panic_payload) => {
-                                warn!("Camera MP4 encoder thread panicked: {:?}", panic_payload);
-                            }
-                            Ok(Err(e)) => {
-                                warn!("Camera MP4 encoder thread returned error: {e}");
-                            }
-                            Ok(Ok(())) => {}
-                        }
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Camera MP4 encoder thread did not finish within {:?}",
-                            timeout
-                        );
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
+            let mut can_finish_encoder = true;
+
+            if let Some(handle) = state.encoder_handle.take()
+                && let Err(e) =
+                    wait_for_worker(handle, Duration::from_secs(5), "Camera MP4 encoder thread")
+            {
+                warn!("{e:#}");
+                can_finish_encoder = false;
+                if finish_error.is_none() {
+                    finish_error = Some(e);
                 }
             }
 
-            match state.encoder.lock() {
-                Ok(mut encoder) => {
-                    if let Err(e) = encoder.finish(Some(timestamp)) {
-                        warn!("Failed to finish camera MP4 encoder: {e}");
+            if can_finish_encoder {
+                match state.encoder.lock() {
+                    Ok(mut encoder) => {
+                        if let Err(e) = encoder.finish(Some(timestamp)) {
+                            let err = anyhow!("Failed to finish camera MP4 encoder: {e}");
+                            warn!("{err:#}");
+                            if finish_error.is_none() {
+                                finish_error = Some(err);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let err = anyhow!("Camera MP4 encoder mutex poisoned during finish");
+                        error!("{err:#}");
+                        if finish_error.is_none() {
+                            finish_error = Some(err);
+                        }
                     }
                 }
-                Err(_) => {
-                    error!("Camera MP4 encoder mutex poisoned during finish");
-                    return Ok(Err(anyhow!("Camera MP4 encoder mutex poisoned")));
-                }
             }
+        }
+
+        if finish_error.is_none()
+            && let Some(message) = fatal_error_message(&self.fatal_error)
+        {
+            finish_error = Some(anyhow!(message));
+        }
+
+        if let Some(err) = finish_error {
+            return Err(err);
         }
 
         Ok(Ok(()))
@@ -884,6 +926,10 @@ impl VideoMuxer for AVFoundationCameraMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
+        if let Some(message) = fatal_error_message(&self.fatal_error) {
+            return Err(anyhow!(message));
+        }
+
         let is_paused = self.pause_flag.load(std::sync::atomic::Ordering::Relaxed);
 
         if let Some(state) = &self.state {
