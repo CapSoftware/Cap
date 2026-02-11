@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::*;
 
-const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
+const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 60;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
 const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
 
@@ -306,7 +306,16 @@ impl TimestampAnomalyTracker {
             }
         }
 
-        self.consecutive_anomalies = 0;
+        if self.consecutive_anomalies > 0 {
+            info!(
+                stream = self.stream_name,
+                burst_length = self.consecutive_anomalies,
+                total_anomalies = self.anomaly_count,
+                resync_count = self.resync_count,
+                "Timestamp anomaly burst resolved - valid timestamps resumed"
+            );
+            self.consecutive_anomalies = 0;
+        }
         self.last_valid_duration = Some(adjusted);
         Ok(adjusted)
     }
@@ -349,6 +358,7 @@ impl TimestampAnomalyTracker {
             self.accumulated_compensation_secs += skew_secs;
             self.resync_count += 1;
             self.did_resync = true;
+            self.consecutive_anomalies = 0;
 
             let adjusted = self.last_valid_duration.unwrap_or(Duration::ZERO);
 
