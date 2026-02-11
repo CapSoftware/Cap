@@ -1713,6 +1713,6 @@ pub fn upload_mf_buffer_to_texture(
     unsafe {
         let mut texture = None;
         device.CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut texture))?;
-        Ok(texture.unwrap())
+        texture.ok_or_else(|| anyhow!("CreateTexture2D succeeded but returned no texture"))
     }
 }
