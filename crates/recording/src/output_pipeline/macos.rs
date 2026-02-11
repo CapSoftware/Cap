@@ -90,6 +90,43 @@ fn wait_for_worker(
     }
 }
 
+struct ChannelPressureTracker {
+    depth: Arc<std::sync::atomic::AtomicUsize>,
+    capacity: usize,
+    last_warning: std::time::Instant,
+}
+
+impl ChannelPressureTracker {
+    fn new(capacity: usize) -> (Self, Arc<std::sync::atomic::AtomicUsize>) {
+        let depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (
+            Self {
+                depth: depth.clone(),
+                capacity,
+                last_warning: std::time::Instant::now(),
+            },
+            depth,
+        )
+    }
+
+    fn on_send(&mut self) {
+        let current = self
+            .depth
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let threshold = (self.capacity * 4) / 5;
+        if current > threshold && self.last_warning.elapsed() >= Duration::from_secs(5) {
+            self.last_warning = std::time::Instant::now();
+            warn!(
+                depth = current,
+                capacity = self.capacity,
+                fill_pct = format!("{:.0}%", 100.0 * current as f64 / self.capacity as f64),
+                "Encoder channel pressure high (>80%)"
+            );
+        }
+    }
+}
+
 struct FrameDropTracker {
     drops_in_window: u32,
     frames_in_window: u32,
@@ -188,6 +225,7 @@ pub struct AVFoundationMp4Muxer {
     state: Option<Mp4EncoderState>,
     pause_flag: Arc<AtomicBool>,
     frame_drops: FrameDropTracker,
+    channel_pressure: Option<ChannelPressureTracker>,
     was_paused: bool,
     fatal_error: SharedFatalError,
 }
@@ -259,6 +297,13 @@ impl Muxer for AVFoundationMp4Muxer {
         let disk_check_path = output_path.clone();
         let is_instant = config.instant_mode;
 
+        let (channel_pressure, channel_depth) = if is_instant {
+            let (tracker, depth) = ChannelPressureTracker::new(buffer_size);
+            (Some(tracker), Some(depth))
+        } else {
+            (None, None)
+        };
+
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
             .spawn(move || {
@@ -271,6 +316,9 @@ impl Muxer for AVFoundationMp4Muxer {
                 let mut last_disk_check = std::time::Instant::now();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
+                    if let Some(ref depth) = channel_depth {
+                        depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     if fatal_error_message(&video_fatal_error).is_some() {
                         break;
                     }
@@ -494,6 +542,7 @@ impl Muxer for AVFoundationMp4Muxer {
             }),
             pause_flag,
             frame_drops: FrameDropTracker::new(),
+            channel_pressure,
             was_paused: false,
             fatal_error,
         })
@@ -619,6 +668,9 @@ impl VideoMuxer for AVFoundationMp4Muxer {
             {
                 Ok(()) => {
                     self.frame_drops.record_frame();
+                    if let Some(ref mut pressure) = self.channel_pressure {
+                        pressure.on_send();
+                    }
                 }
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
                     self.frame_drops.record_drop();
