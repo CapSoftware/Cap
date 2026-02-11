@@ -85,10 +85,6 @@ export type RemoveCameraMessage = {
 	type: "REMOVE_CAMERA";
 };
 
-export type CaptureLastFrameMessage = {
-	type: "CAPTURE_LAST_FRAME";
-};
-
 export type EnterCameraPipMessage = {
 	type: "ENTER_CAMERA_PIP";
 };
@@ -101,7 +97,6 @@ export type BackgroundToContentMessage =
 	| InjectCameraMessage
 	| UpdateCameraContentMessage
 	| RemoveCameraMessage
-	| CaptureLastFrameMessage
 	| EnterCameraPipMessage
 	| ExitCameraPipMessage;
 
@@ -127,6 +122,10 @@ export type CameraClosedMessage = {
 
 export type CameraReadyMessage = {
 	type: "CAMERA_READY";
+};
+
+export type CameraFeedReadyMessage = {
+	type: "CAMERA_FEED_READY";
 };
 
 export type CameraInitState = CameraState & {
@@ -171,6 +170,7 @@ export type IframeMessage =
 	| CameraResizeMessage
 	| CameraClosedMessage
 	| CameraReadyMessage
+	| CameraFeedReadyMessage
 	| CameraCaptureFrameMessage
 	| CameraFrameCapturedMessage
 	| CameraStateChangedMessage
