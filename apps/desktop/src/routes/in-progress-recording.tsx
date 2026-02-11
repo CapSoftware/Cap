@@ -135,7 +135,7 @@ function InProgressRecordingInner() {
 				"Microphone disconnected. Silence will be used until it reconnects.",
 			);
 		if (disconnectedInputs.camera)
-			issues.push("Camera disconnected. Reconnect it to continue recording.");
+			issues.push("Camera disconnected. Recording continues without camera overlay.");
 		const failure = recordingFailure();
 		if (failure) issues.push(failure);
 		return issues;
@@ -220,14 +220,6 @@ function InProgressRecordingInner() {
 				break;
 			case "InputLost": {
 				setDisconnectedInputs(payload.input, () => true);
-				if (payload.input === "camera") {
-					const wasDisconnected = hasDisconnectedInput();
-					if (!wasDisconnected && state().variant === "recording") {
-						setPauseResumes((a) => [...a, { pause: Date.now() }]);
-					}
-					setState({ variant: "paused" });
-					setTime(Date.now());
-				}
 				break;
 			}
 			case "InputRestored":
@@ -695,19 +687,27 @@ function InProgressRecordingInner() {
 												data-tauri-drag-region
 											/>
 										)}
+								</div>
+								<Show when={hasCameraInput() && disconnectedInputs.camera}>
+									<div
+										class="flex h-8 w-8 items-center justify-center"
+										title="Camera disconnected - recording continues without camera overlay"
+									>
+										<IconLucideVideoOff class="size-5 text-amber-11" />
 									</div>
-									<Show when={degradedReason()}>
-										{(reason) => (
-											<div
-												class="flex h-8 w-8 items-center justify-center"
-												title={reason()}
-												aria-label="Recording quality degraded"
-											>
-												<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
-											</div>
-										)}
-									</Show>
-									<Show when={hasRecordingIssue()}>
+								</Show>
+								<Show when={degradedReason()}>
+									{(reason) => (
+										<div
+											class="flex h-8 w-8 items-center justify-center"
+											title={reason()}
+											aria-label="Recording quality degraded"
+										>
+											<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
+										</div>
+									)}
+								</Show>
+								<Show when={hasRecordingIssue()}>
 										<ActionButton
 											class={cx(
 												"text-red-10 hover:bg-red-3/40",
@@ -726,7 +726,6 @@ function InProgressRecordingInner() {
 										<ActionButton
 											disabled={
 												togglePause.isPending ||
-												hasDisconnectedInput() ||
 												isCountdown()
 											}
 											onClick={() => togglePause.mutate()}

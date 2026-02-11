@@ -363,27 +363,21 @@ impl App {
             return Ok(());
         }
 
-        let (title, body, should_pause) = match kind {
+        let (title, body) = match kind {
             RecordingInputKind::Microphone => (
                 "Microphone disconnected",
                 "Recording continues. Silence will be used until the microphone reconnects.",
-                false,
             ),
             RecordingInputKind::Camera => (
                 "Camera disconnected",
-                "Recording paused. Reconnect your camera, then resume or stop the recording.",
-                true,
+                "Recording continues without camera. Camera overlay will resume when the device reconnects.",
             ),
         };
-
-        if should_pause && let Some(recording) = self.current_recording_mut() {
-            recording.pause().await.map_err(|e| e.to_string())?;
-        }
 
         let _ = NewNotification {
             title: title.to_string(),
             body: body.to_string(),
-            is_error: should_pause,
+            is_error: false,
         }
         .emit(&self.handle);
 
@@ -402,7 +396,23 @@ impl App {
                 self.ensure_selected_mic_ready().await.ok();
             }
             RecordingInputKind::Camera => {
-                self.ensure_selected_camera_ready().await.ok();
+                match self.ensure_selected_camera_ready().await {
+                    Ok(()) => {
+                        info!("Camera reconnected and reinitialized successfully");
+                        let _ = NewNotification {
+                            title: "Camera reconnected".to_string(),
+                            body: "Camera overlay has been restored.".to_string(),
+                            is_error: false,
+                        }
+                        .emit(&self.handle);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to reinitialize camera after reconnect, will retry on next poll");
+                        self.disconnected_inputs
+                            .insert(RecordingInputKind::Camera);
+                        return Ok(());
+                    }
+                }
             }
         }
 
@@ -1078,7 +1088,7 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
 
                 if !available && !is_marked {
                     warn!(
-                        "Camera watcher: camera {:?} detected as unavailable, pausing recording",
+                        "Camera watcher: camera {:?} detected as unavailable, continuing recording without camera",
                         selected_id
                     );
                     let mut app = state.write().await;
