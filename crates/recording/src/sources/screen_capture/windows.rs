@@ -16,7 +16,7 @@ use scap_targets::{Display, DisplayId};
 use std::{
     sync::{
         Arc,
-        atomic::{self, AtomicU32},
+        atomic::{self, AtomicBool, AtomicU32},
     },
     time::Duration,
 };
@@ -176,6 +176,60 @@ pub struct VideoSource {
 enum VideoControl {
     Start(oneshot::Sender<anyhow::Result<()>>),
     Stop(oneshot::Sender<anyhow::Result<()>>),
+    Restart,
+}
+
+const MAX_CAPTURE_RESTARTS: u32 = 3;
+const RESTART_DELAY: Duration = Duration::from_secs(1);
+
+fn create_d3d_capturer(
+    display_id: &DisplayId,
+    settings: &scap_direct3d::Settings,
+    d3d_device: &ID3D11Device,
+    video_tx: &mpsc::Sender<VideoFrame>,
+    error_tx: &mpsc::Sender<anyhow::Error>,
+    video_frame_counter: &Arc<AtomicU32>,
+    video_drop_counter: &Arc<AtomicU32>,
+) -> anyhow::Result<scap_direct3d::Capturer> {
+    let capture_item = Display::from_id(display_id)
+        .ok_or_else(|| anyhow!("Display not found for ID: {:?}", display_id))?
+        .raw_handle()
+        .try_as_capture_item()
+        .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?;
+
+    scap_direct3d::Capturer::new(
+        capture_item,
+        settings.clone(),
+        {
+            let video_frame_counter = video_frame_counter.clone();
+            let video_drop_counter = video_drop_counter.clone();
+            let mut tx = video_tx.clone();
+            move |frame| {
+                let timestamp = frame.inner().SystemRelativeTime()?;
+                let timestamp = Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
+                    timestamp.Duration,
+                ));
+                match tx.try_send(VideoFrame { frame, timestamp }) {
+                    Ok(()) => {
+                        video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                    }
+                    Err(_) => {
+                        video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                    }
+                }
+                Ok(())
+            }
+        },
+        {
+            let mut err_tx = error_tx.clone();
+            move || {
+                drop(err_tx.try_send(anyhow!("closed")));
+                Ok(())
+            }
+        },
+        Some(d3d_device.clone()),
+    )
+    .map_err(|e| anyhow!("{e}"))
 }
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -187,7 +241,7 @@ impl output_pipeline::VideoSource for VideoSource {
             video_info,
             display_id,
             settings,
-            d3d_device, // Share the D3D device with the encoder to avoid device mismatch
+            d3d_device,
         }: Self::Config,
         mut video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut output_pipeline::SetupCtx,
@@ -195,143 +249,180 @@ impl output_pipeline::VideoSource for VideoSource {
     where
         Self: Sized,
     {
-        let (error_tx, mut error_rx) = mpsc::channel(1);
-        let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
+        let (error_tx, mut error_rx) = mpsc::channel(4);
+        let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(2);
+        let monitor_ctrl_tx = ctrl_tx.clone();
 
         let tokio_rt = tokio::runtime::Handle::current();
+        let restart_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
-        ctx.tasks().spawn_thread("d3d-capture-thread", move || {
-            cap_mediafoundation_utils::thread_init();
+        ctx.tasks().spawn_thread("d3d-capture-thread", {
+            let restart_counter = restart_counter.clone();
+            move || {
+                cap_mediafoundation_utils::thread_init();
 
-            // Look up the display and create the GraphicsCaptureItem on this thread to avoid COM threading issues
-            let capture_item = match Display::from_id(&display_id) {
-                Some(display) => {
-                    match display.raw_handle().try_as_capture_item() {
-                        Ok(item) => {
-                            trace!("GraphicsCaptureItem created successfully on capture thread");
-                            item
-                        }
-                        Err(e) => {
-                            error!("Failed to create GraphicsCaptureItem on capture thread: {}", e);
-                            return Err(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
-                        }
+                let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+                let video_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+                let cancel_token = CancellationToken::new();
+                let mut error_tx = error_tx;
+
+                let mut capturer = match create_d3d_capturer(
+                    &display_id,
+                    &settings,
+                    &d3d_device,
+                    &video_tx,
+                    &error_tx,
+                    &video_frame_counter,
+                    &video_drop_counter,
+                ) {
+                    Ok(c) => {
+                        trace!("D3D capturer created successfully");
+                        Some(c)
                     }
-                }
-                None => {
-                    error!("Display not found for ID: {:?}", display_id);
-                    return Err(anyhow!("Display not found for ID: {:?}", display_id));
-                }
-            };
+                    Err(e) => {
+                        error!("Failed to create D3D capturer: {}", e);
+                        return Err(e);
+                    }
+                };
 
-            let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-            let video_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-            let cancel_token = CancellationToken::new();
+                let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
+                    error!("Failed to receive Start control message - channel disconnected");
+                    return Err(anyhow!("Control channel disconnected before Start"));
+                };
 
-            let res = scap_direct3d::Capturer::new(
-                capture_item,
-                settings,
-                {
-                    let video_frame_counter = video_frame_counter.clone();
-                    let video_drop_counter = video_drop_counter.clone();
-                    move |frame| {
-                        let timestamp = frame.inner().SystemRelativeTime()?;
-                        let timestamp = Timestamp::PerformanceCounter(
-                            PerformanceCounterTimestamp::new(timestamp.Duration),
-                        );
-                        match video_tx.try_send(VideoFrame { frame, timestamp }) {
-                            Ok(()) => {
-                                video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                tokio_rt.spawn(
+                    {
+                        let video_frame_counter = video_frame_counter.clone();
+                        let video_drop_counter = video_drop_counter.clone();
+                        let restart_counter = restart_counter.clone();
+                        async move {
+                            loop {
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                                let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
+                                let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
+                                let restarts = restart_counter.load(atomic::Ordering::Relaxed);
+                                let total = captured + dropped;
+                                if dropped > 0 || restarts > 0 {
+                                    let drop_pct = if total > 0 {
+                                        100.0 * dropped as f64 / total as f64
+                                    } else {
+                                        0.0
+                                    };
+                                    warn!(
+                                        captured = captured,
+                                        dropped = dropped,
+                                        drop_pct = format!("{:.1}%", drop_pct),
+                                        restarts = restarts,
+                                        "Screen capture stats"
+                                    );
+                                } else {
+                                    debug!(captured = captured, "Screen capture frames");
+                                }
                             }
-                            Err(_) => {
-                                video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                        }
+                    }
+                    .with_cancellation_token_owned(cancel_token.clone())
+                    .in_current_span(),
+                );
+                let drop_guard = cancel_token.drop_guard();
+
+                trace!("Starting D3D capturer");
+                let start_result = capturer
+                    .as_mut()
+                    .map(|c| c.start().map_err(Into::into))
+                    .unwrap_or(Err(anyhow!("No capturer available")));
+                if let Err(ref e) = start_result {
+                    error!("Failed to start D3D capturer: {}", e);
+                }
+                if reply.send(start_result).is_err() {
+                    error!("Failed to send start result - receiver dropped");
+                    return Ok(());
+                }
+
+                loop {
+                    match ctrl_rx.recv() {
+                        Ok(VideoControl::Stop(reply)) => {
+                            if let Some(mut cap) = capturer.take() {
+                                let _ = reply.send(cap.stop().map_err(Into::into));
+                            } else {
+                                let _ = reply.send(Ok(()));
+                            }
+                            break;
+                        }
+                        Ok(VideoControl::Restart) => {
+                            info!("Restarting Windows screen capture");
+                            if let Some(mut old) = capturer.take() {
+                                let _ = old.stop();
+                                drop(old);
+                            }
+
+                            match create_d3d_capturer(
+                                &display_id,
+                                &settings,
+                                &d3d_device,
+                                &video_tx,
+                                &error_tx,
+                                &video_frame_counter,
+                                &video_drop_counter,
+                            ) {
+                                Ok(mut new_cap) => match new_cap.start() {
+                                    Ok(()) => {
+                                        let count = restart_counter
+                                            .fetch_add(1, atomic::Ordering::Relaxed)
+                                            + 1;
+                                        info!(
+                                            restart_count = count,
+                                            "Windows screen capture restarted successfully"
+                                        );
+                                        capturer = Some(new_cap);
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "Failed to start restarted capturer");
+                                        let _ =
+                                            error_tx.try_send(anyhow!("restart_start_failed: {e}"));
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!(error = %e, "Failed to recreate capturer");
+                                    let _ =
+                                        error_tx.try_send(anyhow!("restart_create_failed: {e}"));
+                                }
                             }
                         }
-
-                        Ok(())
-                    }
-                },
-                {
-                    let mut error_tx = error_tx.clone();
-                    move || {
-                        drop(error_tx.try_send(anyhow!("closed")));
-
-                        Ok(())
-                    }
-                },
-                Some(d3d_device), // Use the same D3D device as the encoder
-            );
-
-            let mut capturer = match res {
-                Ok(capturer) => {
-                    trace!("D3D capturer created successfully");
-                    capturer
-                }
-                Err(e) => {
-                    error!("Failed to create D3D capturer: {}", e);
-                    return Err(e.into());
-                }
-            };
-
-            let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
-                error!("Failed to receive Start control message - channel disconnected");
-                return Err(anyhow!("Control channel disconnected before Start"));
-            };
-
-            tokio_rt.spawn(
-                async move {
-                    loop {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
-                        let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
-                        let total = captured + dropped;
-                        if dropped > 0 {
-                            let drop_pct = if total > 0 { 100.0 * dropped as f64 / total as f64 } else { 0.0 };
-                            warn!(
-                                captured = captured,
-                                dropped = dropped,
-                                drop_pct = format!("{:.1}%", drop_pct),
-                                "Screen capture source dropping frames due to full channel"
-                            );
-                        } else {
-                            debug!(
-                                captured = captured,
-                                "Screen capture frames"
-                            );
-                        }
+                        Ok(VideoControl::Start(_)) => {}
+                        Err(_) => break,
                     }
                 }
-                .with_cancellation_token_owned(cancel_token.clone())
-                .in_current_span()
-            );
-			let drop_guard = cancel_token.drop_guard();
 
-            trace!("Starting D3D capturer");
-            let start_result = capturer.start().map_err(Into::into);
-            if let Err(ref e) = start_result {
-                error!("Failed to start D3D capturer: {}", e);
+                drop(drop_guard);
+
+                Ok(())
             }
-            if reply.send(start_result).is_err() {
-                error!("Failed to send start result - receiver dropped");
-                return Ok(());
-            }
-
-            let Ok(VideoControl::Stop(reply)) = ctrl_rx.recv() else {
-                trace!("Failed to receive Stop control message - channel disconnected (expected during shutdown)");
-                return Ok(());
-            };
-
-            if reply.send(capturer.stop().map_err(Into::into)).is_err() {
-            	return Ok(());
-            }
-
-            drop(drop_guard);
-
-            Ok(())
         });
 
         ctx.tasks().spawn("d3d-capture", async move {
-            if let Some(err) = error_rx.next().await {
-                return Err(anyhow!("{err}"));
+            let mut restart_count = 0u32;
+
+            while let Some(err) = error_rx.next().await {
+                if restart_count < MAX_CAPTURE_RESTARTS {
+                    restart_count += 1;
+                    warn!(
+                        restart_count,
+                        max_restarts = MAX_CAPTURE_RESTARTS,
+                        error = %err,
+                        "Windows capture interrupted, attempting restart"
+                    );
+                    tokio::time::sleep(RESTART_DELAY).await;
+                    if monitor_ctrl_tx.try_send(VideoControl::Restart).is_err() {
+                        return Err(anyhow!("Failed to send restart signal to capture thread"));
+                    }
+                    continue;
+                }
+
+                return Err(anyhow!(
+                    "Windows screen capture failed after {} restart attempts: {err}",
+                    MAX_CAPTURE_RESTARTS
+                ));
             }
 
             Ok(())
@@ -380,10 +471,160 @@ pub enum StartCapturingError {
     StartCapturer(::windows::core::Error),
 }
 
+const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SILENCE_CHUNK_DURATION: Duration = Duration::from_millis(20);
+const SILENCE_CHUNKS_ON_SWITCH: usize = 5;
+
 pub struct SystemAudioSourceConfig;
 
+struct CapturerState {
+    capturer: Option<scap_cpal::Capturer>,
+    is_started: bool,
+    device_name: String,
+}
+
 pub struct SystemAudioSource {
-    capturer: scap_cpal::Capturer,
+    state: Arc<std::sync::Mutex<CapturerState>>,
+    cancel_token: CancellationToken,
+    audio_info: AudioInfo,
+}
+
+struct SystemAudioResampler {
+    context: ffmpeg::software::resampling::Context,
+}
+
+impl SystemAudioResampler {
+    fn create(source_info: &AudioInfo, target_info: &AudioInfo) -> Option<Self> {
+        let context = ffmpeg::software::resampler(
+            (
+                source_info.sample_format,
+                source_info.channel_layout(),
+                source_info.sample_rate,
+            ),
+            (
+                target_info.sample_format,
+                target_info.channel_layout(),
+                target_info.sample_rate,
+            ),
+        )
+        .ok()?;
+        Some(Self { context })
+    }
+
+    fn resample(
+        &mut self,
+        input: ffmpeg::frame::Audio,
+        timestamp: Timestamp,
+    ) -> Option<AudioFrame> {
+        let mut output = ffmpeg::frame::Audio::empty();
+        self.context.run(&input, &mut output).ok()?;
+        Some(AudioFrame::new(output, timestamp))
+    }
+}
+
+fn get_current_device_name() -> String {
+    let host = cpal::default_host();
+    host.default_output_device()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_default()
+}
+
+fn create_silence_frame(info: &AudioInfo, sample_count: usize) -> ffmpeg::frame::Audio {
+    let mut frame =
+        ffmpeg::frame::Audio::new(info.sample_format, sample_count, info.channel_layout());
+    for i in 0..frame.planes() {
+        frame.data_mut(i).fill(0);
+    }
+    frame.set_rate(info.sample_rate);
+    frame
+}
+
+fn create_system_audio_capturer(
+    mut tx: mpsc::Sender<AudioFrame>,
+    frame_counter: Arc<AtomicU32>,
+    drop_counter: Arc<AtomicU32>,
+    error_flag: Arc<AtomicBool>,
+    last_timestamp: Arc<std::sync::Mutex<Option<Timestamp>>>,
+    original_info: AudioInfo,
+) -> Result<scap_cpal::Capturer, scap_cpal::CapturerError> {
+    let new_info = Direct3DCapture::audio_info();
+    let needs_resample = new_info.sample_rate != original_info.sample_rate
+        || new_info.channels != original_info.channels
+        || new_info.sample_format != original_info.sample_format;
+
+    let mut resampler = if needs_resample {
+        info!(
+            original_rate = original_info.sample_rate,
+            new_rate = new_info.sample_rate,
+            original_channels = original_info.channels,
+            new_channels = new_info.channels,
+            "System audio device format differs from original, creating resampler"
+        );
+        SystemAudioResampler::create(&new_info, &original_info)
+    } else {
+        None
+    };
+
+    scap_cpal::create_capturer(
+        {
+            let frame_counter = frame_counter.clone();
+            let drop_counter = drop_counter.clone();
+            let last_timestamp = last_timestamp.clone();
+            move |data, info, config| {
+                use scap_ffmpeg::*;
+
+                let timestamp = Timestamp::from_cpal(info.timestamp().capture);
+                let raw_frame = data.as_ffmpeg(config);
+
+                let frame = if let Some(ref mut ctx) = resampler {
+                    match ctx.resample(raw_frame, timestamp) {
+                        Some(f) => f,
+                        None => {
+                            drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                } else {
+                    AudioFrame::new(raw_frame, timestamp)
+                };
+
+                if let Ok(mut guard) = last_timestamp.lock() {
+                    *guard = Some(timestamp);
+                }
+
+                const MAX_RETRIES: u32 = 3;
+                const RETRY_DELAY_US: u64 = 500;
+
+                let mut retries = 0;
+                let mut current_frame = Some(frame);
+
+                while let Some(f) = current_frame.take() {
+                    match tx.try_send(f) {
+                        Ok(()) => {
+                            frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            break;
+                        }
+                        Err(err) if err.is_full() && retries < MAX_RETRIES => {
+                            retries += 1;
+                            std::thread::sleep(Duration::from_micros(RETRY_DELAY_US));
+                            current_frame = Some(err.into_inner());
+                        }
+                        Err(_) => {
+                            drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                }
+            }
+        },
+        {
+            let error_flag = error_flag.clone();
+            move |e| {
+                warn!("System audio CPAL stream error: {e}");
+                error_flag.store(true, atomic::Ordering::Relaxed);
+            }
+        },
+    )
 }
 
 impl output_pipeline::AudioSource for SystemAudioSource {
@@ -391,77 +632,195 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
     fn setup(
         _: Self::Config,
-        mut tx: mpsc::Sender<AudioFrame>,
+        tx: mpsc::Sender<AudioFrame>,
         ctx: &mut SetupCtx,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static
     where
         Self: Sized,
     {
-        let (error_tx, error_rx) = oneshot::channel();
+        let cancel_token = CancellationToken::new();
 
-        ctx.tasks().spawn("system-audio", async move {
-            if let Ok(err) = error_rx.await {
-                return Err(anyhow!("{err}"));
+        ctx.tasks().spawn("system-audio", {
+            let cancel = cancel_token.clone();
+            async move {
+                cancel.cancelled().await;
+                Ok(())
             }
-
-            Ok(())
         });
 
-        async {
-            let mut error_tx = Some(error_tx);
-            let audio_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-            let audio_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let audio_info = Direct3DCapture::audio_info();
+        let device_name = get_current_device_name();
 
-            let capturer = scap_cpal::create_capturer(
-                {
-                    let audio_frame_counter = audio_frame_counter.clone();
-                    let audio_drop_counter = audio_drop_counter.clone();
-                    move |data, info, config| {
-                        use scap_ffmpeg::*;
+        let frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let error_flag = Arc::new(AtomicBool::new(false));
+        let last_timestamp: Arc<std::sync::Mutex<Option<Timestamp>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let device_switch_count: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let silence_frame_count: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
-                        let timestamp = Timestamp::from_cpal(info.timestamp().capture);
-                        let frame = AudioFrame::new(data.as_ffmpeg(config), timestamp);
+        let setup_result = create_system_audio_capturer(
+            tx.clone(),
+            frame_counter.clone(),
+            drop_counter.clone(),
+            error_flag.clone(),
+            last_timestamp.clone(),
+            audio_info,
+        );
 
-                        const MAX_RETRIES: u32 = 3;
-                        const RETRY_DELAY_US: u64 = 500;
+        let state = Arc::new(std::sync::Mutex::new(CapturerState {
+            capturer: None,
+            is_started: false,
+            device_name,
+        }));
 
-                        let mut retries = 0;
-                        let mut current_frame = Some(frame);
+        ctx.tasks().spawn_thread("system-audio-watcher", {
+            let state = state.clone();
+            let mut watcher_tx = tx.clone();
+            let frame_counter = frame_counter.clone();
+            let drop_counter = drop_counter.clone();
+            let error_flag = error_flag.clone();
+            let last_timestamp = last_timestamp.clone();
+            let cancel = cancel_token.clone();
+            let device_switch_count = device_switch_count.clone();
+            let silence_frame_count = silence_frame_count.clone();
 
-                        while let Some(f) = current_frame.take() {
-                            match tx.try_send(f) {
-                                Ok(()) => {
-                                    audio_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
-                                    break;
-                                }
-                                Err(err) if err.is_full() && retries < MAX_RETRIES => {
-                                    retries += 1;
-                                    std::thread::sleep(Duration::from_micros(RETRY_DELAY_US));
-                                    current_frame = Some(err.into_inner());
-                                }
-                                Err(_) => {
-                                    audio_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
-                                    break;
-                                }
+            move || {
+                let silence_chunk_samples = (audio_info.sample_rate as f64
+                    * SILENCE_CHUNK_DURATION.as_secs_f64())
+                .ceil() as usize;
+
+                loop {
+                    std::thread::sleep(DEVICE_POLL_INTERVAL);
+
+                    if cancel.is_cancelled() {
+                        break;
+                    }
+
+                    let current_name = get_current_device_name();
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(_) => break,
+                    };
+
+                    let stream_error = error_flag.swap(false, atomic::Ordering::Relaxed);
+                    let device_changed = current_name != guard.device_name;
+                    let needs_retry = guard.capturer.is_none() && guard.is_started;
+
+                    if !device_changed && !stream_error && !needs_retry {
+                        continue;
+                    }
+
+                    if device_changed {
+                        info!(
+                            old_device = guard.device_name,
+                            new_device = current_name,
+                            "Default audio output device changed"
+                        );
+                        device_switch_count.fetch_add(1, atomic::Ordering::Relaxed);
+                    } else if stream_error {
+                        info!("System audio stream error detected, recreating capturer");
+                    } else {
+                        info!("Retrying system audio capturer creation");
+                    }
+
+                    let was_started = guard.is_started;
+
+                    if let Some(old_capturer) = guard.capturer.take() {
+                        if was_started {
+                            let _ = old_capturer.pause();
+                        }
+                        drop(old_capturer);
+                    }
+
+                    let base_ts = last_timestamp.lock().ok().and_then(|g| *g);
+                    if let Some(mut ts) = base_ts {
+                        let chunk_duration = Duration::from_secs_f64(
+                            silence_chunk_samples as f64 / audio_info.sample_rate as f64,
+                        );
+                        for _ in 0..SILENCE_CHUNKS_ON_SWITCH {
+                            ts = ts + chunk_duration;
+                            let silence = create_silence_frame(&audio_info, silence_chunk_samples);
+                            let frame = AudioFrame::new(silence, ts);
+                            if watcher_tx.try_send(frame).is_err() {
+                                break;
                             }
+                            silence_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
+                        }
+                        if let Ok(mut lt) = last_timestamp.lock() {
+                            *lt = Some(ts);
                         }
                     }
-                },
-                move |e| {
-                    if let Some(error_tx) = error_tx.take() {
-                        let _ = error_tx.send(e);
+
+                    match create_system_audio_capturer(
+                        watcher_tx.clone(),
+                        frame_counter.clone(),
+                        drop_counter.clone(),
+                        error_flag.clone(),
+                        last_timestamp.clone(),
+                        audio_info,
+                    ) {
+                        Ok(new_capturer) => {
+                            if was_started {
+                                match new_capturer.play() {
+                                    Ok(()) => {
+                                        info!(
+                                            device = current_name,
+                                            "System audio capturer restarted on new device"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            device = current_name,
+                                            error = %e,
+                                            "Failed to start capturer on new device, will retry"
+                                        );
+                                        guard.device_name = current_name;
+                                        continue;
+                                    }
+                                }
+                            }
+                            guard.capturer = Some(new_capturer);
+                            guard.device_name = current_name;
+                        }
+                        Err(e) => {
+                            warn!(
+                                device = current_name,
+                                error = %e,
+                                "Failed to create capturer for new audio device, will retry"
+                            );
+                            guard.device_name = current_name;
+                        }
                     }
-                },
-            )?;
+                }
+
+                Ok(())
+            }
+        });
+
+        let cancel = cancel_token.clone();
+
+        async move {
+            let capturer = setup_result.map_err(|e| anyhow!("{e}"))?;
+            if let Ok(mut guard) = state.lock() {
+                guard.capturer = Some(capturer);
+            }
 
             tokio::spawn({
+                let cancel = cancel.clone();
                 async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        let captured = audio_frame_counter.load(atomic::Ordering::Relaxed);
-                        let dropped = audio_drop_counter.load(atomic::Ordering::Relaxed);
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                            _ = cancel.cancelled() => break,
+                        }
+                        let captured = frame_counter.load(atomic::Ordering::Relaxed);
+                        let dropped = drop_counter.load(atomic::Ordering::Relaxed);
+                        let switches = device_switch_count.load(atomic::Ordering::Relaxed);
+                        let silence = silence_frame_count.load(atomic::Ordering::Relaxed);
                         let total = captured + dropped;
-                        if dropped > 0 {
+
+                        if dropped > 0 || switches > 0 {
                             let drop_pct = if total > 0 {
                                 100.0 * dropped as f64 / total as f64
                             } else {
@@ -471,7 +830,9 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                                 captured = captured,
                                 dropped = dropped,
                                 drop_pct = format!("{:.1}%", drop_pct),
-                                "System audio capture dropping frames due to full channel"
+                                device_switches = switches,
+                                silence_frames = silence,
+                                "System audio capture stats"
                             );
                         } else if captured > 0 {
                             debug!(captured = captured, "System audio frames captured");
@@ -480,28 +841,41 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                 }
             });
 
-            Ok(Self { capturer })
+            Ok(Self {
+                state,
+                cancel_token: cancel,
+                audio_info,
+            })
         }
     }
 
     fn audio_info(&self) -> cap_media_info::AudioInfo {
-        Direct3DCapture::audio_info()
+        self.audio_info
     }
 
     fn start(&mut self) -> impl Future<Output = anyhow::Result<()>> {
-        let res = self.capturer.play().map_err(Into::into);
-        async { res }
+        let result = match self.state.lock() {
+            Ok(mut guard) => {
+                guard.is_started = true;
+                match &guard.capturer {
+                    Some(c) => c.play().map_err(|e| anyhow!("{e}")),
+                    None => Ok(()),
+                }
+            }
+            Err(_) => Err(anyhow!("System audio state lock poisoned")),
+        };
+        async move { result }
     }
 
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> {
-        let res = self.capturer.pause();
-
-        async move {
-            if let Err(err) = res {
-                warn!("system audio capturer pause failed: {err}");
+        self.cancel_token.cancel();
+        if let Ok(guard) = self.state.lock() {
+            if let Some(ref capturer) = guard.capturer {
+                if let Err(err) = capturer.pause() {
+                    warn!("system audio capturer pause failed: {err}");
+                }
             }
-
-            Ok(())
         }
+        async { Ok(()) }
     }
 }
