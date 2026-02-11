@@ -9,6 +9,8 @@ interface SettingsPanelProps {
 	rememberDevices: boolean;
 	onClose: () => void;
 	onRememberDevicesChange: (value: boolean) => void;
+	onOpenDashboard?: () => void;
+	onSignOut?: () => void;
 }
 
 export const SettingsPanel = ({
@@ -16,6 +18,8 @@ export const SettingsPanel = ({
 	rememberDevices,
 	onClose,
 	onRememberDevicesChange,
+	onOpenDashboard,
+	onSignOut,
 }: SettingsPanelProps) => {
 	return (
 		<AnimatePresence mode="wait">
@@ -59,6 +63,34 @@ export const SettingsPanel = ({
 								aria-label="Remember selected devices"
 							/>
 						</div>
+						{(onOpenDashboard || onSignOut) && (
+							<div className="flex flex-col gap-2">
+								<div className="text-xs font-medium text-gray-10 px-1">
+									Account
+								</div>
+								<div className="flex flex-col gap-2">
+									{onOpenDashboard && (
+										<button
+											type="button"
+											onClick={onOpenDashboard}
+											className="flex w-full items-center justify-between rounded-xl border border-gray-3 bg-gray-1 px-4 py-3 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-2 dark:bg-gray-3 dark:hover:bg-gray-4"
+										>
+											<span>Dashboard</span>
+											<span className="text-xs text-gray-10">Open</span>
+										</button>
+									)}
+									{onSignOut && (
+										<button
+											type="button"
+											onClick={onSignOut}
+											className="flex w-full items-center justify-between rounded-xl border border-gray-3 bg-gray-1 px-4 py-3 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-2 dark:bg-gray-3 dark:hover:bg-gray-4"
+										>
+											<span>Sign out</span>
+										</button>
+									)}
+								</div>
+							</div>
+						)}
 					</div>
 				</motion.div>
 			)}
