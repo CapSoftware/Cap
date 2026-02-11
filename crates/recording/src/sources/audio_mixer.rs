@@ -16,7 +16,8 @@ use tracing::{debug, info, warn};
 use crate::output_pipeline::AudioFrame;
 
 const DEFAULT_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
-const MIN_BUFFER_TIMEOUT: Duration = Duration::from_millis(20);
+const MIN_BUFFER_TIMEOUT_WIRED: Duration = Duration::from_millis(20);
+const MIN_BUFFER_TIMEOUT_WIRELESS: Duration = Duration::from_millis(90);
 const MAX_BUFFER_TIMEOUT: Duration = Duration::from_millis(250);
 const BUFFER_TIMEOUT_HEADROOM: f64 = 2.5;
 
@@ -512,7 +513,13 @@ fn buffer_timeout_for(info: &AudioInfo) -> Duration {
 
     let with_headroom = base.mul_f64(BUFFER_TIMEOUT_HEADROOM);
 
-    clamp_duration(with_headroom, MIN_BUFFER_TIMEOUT, MAX_BUFFER_TIMEOUT)
+    let min_timeout = if info.is_wireless_transport {
+        MIN_BUFFER_TIMEOUT_WIRELESS
+    } else {
+        MIN_BUFFER_TIMEOUT_WIRED
+    };
+
+    clamp_duration(with_headroom, min_timeout, MAX_BUFFER_TIMEOUT)
 }
 
 fn clamp_duration(value: Duration, min: Duration, max: Duration) -> Duration {
