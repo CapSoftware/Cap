@@ -272,10 +272,7 @@ export const CameraPage = () => {
 	}, [size, shape, videoDimensions]);
 
 	useEffect(() => {
-		if (videoDimensions) {
-			setLastFrameDataUrl(null);
-			postToParent({ type: "CAMERA_FEED_READY" });
-		}
+		if (videoDimensions) setLastFrameDataUrl(null);
 	}, [videoDimensions]);
 
 	const handleClose = useCallback(async () => {
