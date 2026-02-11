@@ -1,14 +1,28 @@
+import type {
+	BackgroundToContentMessage,
+	CameraInitState,
+	CameraPosition,
+	CameraState,
+	IframeMessage,
+} from "../lib/messages";
+
+const globalScope = globalThis as unknown as {
+	__capCameraContentScriptLoaded?: boolean;
+};
+const alreadyLoaded = globalScope.__capCameraContentScriptLoaded === true;
+if (!alreadyLoaded) globalScope.__capCameraContentScriptLoaded = true;
+
 const HOST_ID = "cap-camera-preview-host";
 
 let shadowHost: HTMLElement | null = null;
 let iframe: HTMLIFrameElement | null = null;
-let dragState: {
-	isDragging: boolean;
-	startX: number;
-	startY: number;
-	offsetX: number;
-	offsetY: number;
-} = { isDragging: false, startX: 0, startY: 0, offsetX: 0, offsetY: 0 };
+let placeholderImage: HTMLImageElement | null = null;
+let overlayPosition: CameraPosition | null = null;
+
+let pendingFrameCapture: {
+	resolve: (dataUrl: string | null) => void;
+	timeoutId: number;
+} | null = null;
 
 function getDefaultPosition() {
 	return {
@@ -17,12 +31,45 @@ function getDefaultPosition() {
 	};
 }
 
-function createCameraOverlay(state: {
-	deviceId: string;
-	size: string;
-	shape: string;
-	mirrored: boolean;
-}) {
+function clampPosition(
+	position: CameraPosition,
+	width: number,
+	height: number,
+): CameraPosition {
+	const maxX = Math.max(0, window.innerWidth - width);
+	const maxY = Math.max(0, window.innerHeight - height);
+
+	return {
+		x: Math.max(0, Math.min(position.x, maxX)),
+		y: Math.max(0, Math.min(position.y, maxY)),
+	};
+}
+
+function applyOverlayPosition(position: CameraPosition) {
+	if (!shadowHost) return;
+
+	overlayPosition = position;
+	shadowHost.style.left = `${position.x}px`;
+	shadowHost.style.top = `${position.y}px`;
+}
+
+function ensureOverlayPosition() {
+	if (!shadowHost) return;
+
+	const left = Number.parseFloat(shadowHost.style.left || "0");
+	const top = Number.parseFloat(shadowHost.style.top || "0");
+	const next = clampPosition(
+		{ x: Number.isFinite(left) ? left : 0, y: Number.isFinite(top) ? top : 0 },
+		shadowHost.offsetWidth,
+		shadowHost.offsetHeight,
+	);
+	applyOverlayPosition(next);
+}
+
+function createCameraOverlay(
+	state: CameraState,
+	lastFrameDataUrl?: string | null,
+) {
 	if (document.getElementById(HOST_ID)) return;
 
 	shadowHost = document.createElement("div");
@@ -30,7 +77,14 @@ function createCameraOverlay(state: {
 	shadowHost.style.cssText =
 		"position:fixed;z-index:2147483647;border:none;pointer-events:auto;";
 
-	const pos = getDefaultPosition();
+	const initialWidth = 250;
+	const initialHeight = 302;
+	const pos = clampPosition(
+		state.position ?? getDefaultPosition(),
+		initialWidth,
+		initialHeight,
+	);
+	overlayPosition = pos;
 	shadowHost.style.left = `${pos.x}px`;
 	shadowHost.style.top = `${pos.y}px`;
 	shadowHost.style.width = "250px";
@@ -44,12 +98,24 @@ function createCameraOverlay(state: {
 			all: initial;
 		}
 		.cap-camera-container {
+			position: relative;
 			width: 100%;
 			height: 100%;
-			cursor: move;
+			cursor: grab;
 			user-select: none;
 		}
+		.cap-camera-placeholder {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+			opacity: 1;
+			transition: opacity 150ms ease-out;
+		}
 		iframe {
+			position: absolute;
+			inset: 0;
 			width: 100%;
 			height: 100%;
 			border: none;
@@ -62,139 +128,206 @@ function createCameraOverlay(state: {
 	const container = document.createElement("div");
 	container.className = "cap-camera-container";
 
+	if (lastFrameDataUrl) {
+		placeholderImage = document.createElement("img");
+		placeholderImage.className = "cap-camera-placeholder";
+		placeholderImage.src = lastFrameDataUrl;
+		placeholderImage.style.borderRadius =
+			state.shape === "round" ? "9999px" : "3rem";
+		container.appendChild(placeholderImage);
+	}
+
 	const cameraUrl = chrome.runtime.getURL("camera.html");
 	iframe = document.createElement("iframe");
 	iframe.src = cameraUrl;
 	iframe.allow = "camera;autoplay;picture-in-picture";
 	iframe.style.cssText =
-		"width:100%;height:100%;border:none;background:transparent;";
+		"width:100%;height:100%;border:none;background:transparent;opacity:0;transition:opacity 150ms ease-out;";
 
 	iframe.addEventListener("load", () => {
 		if (iframe?.contentWindow) {
-			iframe.contentWindow.postMessage({ type: "CAMERA_INIT", state }, "*");
+			const initState: CameraInitState = {
+				...state,
+				lastFrameDataUrl: lastFrameDataUrl ?? null,
+			};
+			const msg: IframeMessage = { type: "CAMERA_INIT", state: initState };
+			iframe.contentWindow.postMessage(msg, "*");
 		}
 	});
 
 	container.appendChild(iframe);
 	shadow.appendChild(container);
 
-	container.addEventListener("mousedown", onDragStart);
-	document.addEventListener("mousemove", onDragMove);
-	document.addEventListener("mouseup", onDragEnd);
-
 	document.body.appendChild(shadowHost);
+	requestAnimationFrame(ensureOverlayPosition);
 }
 
 function removeCameraOverlay() {
+	if (pendingFrameCapture) {
+		clearTimeout(pendingFrameCapture.timeoutId);
+		pendingFrameCapture.resolve(null);
+		pendingFrameCapture = null;
+	}
+
 	if (shadowHost) {
 		shadowHost.remove();
 		shadowHost = null;
 		iframe = null;
+		placeholderImage = null;
+		overlayPosition = null;
 	}
-	document.removeEventListener("mousemove", onDragMove);
-	document.removeEventListener("mouseup", onDragEnd);
 }
 
-function onDragStart(e: MouseEvent) {
-	if (!shadowHost) return;
+if (!alreadyLoaded) {
+	chrome.runtime.onMessage.addListener(
+		(
+			message: unknown,
+			_sender: ChromeMessageSender,
+			sendResponse: ChromeMessageResponse,
+		) => {
+			const msg = message as BackgroundToContentMessage;
 
-	const target = e.composedPath()[0] as HTMLElement;
-	if (target.tagName === "IFRAME") return;
-
-	e.preventDefault();
-	e.stopPropagation();
-
-	const rect = shadowHost.getBoundingClientRect();
-	dragState = {
-		isDragging: true,
-		startX: e.clientX,
-		startY: e.clientY,
-		offsetX: e.clientX - rect.left,
-		offsetY: e.clientY - rect.top,
-	};
-}
-
-function onDragMove(e: MouseEvent) {
-	if (!dragState.isDragging || !shadowHost) return;
-
-	e.preventDefault();
-
-	const newX = e.clientX - dragState.offsetX;
-	const newY = e.clientY - dragState.offsetY;
-
-	const maxX = window.innerWidth - shadowHost.offsetWidth;
-	const maxY = window.innerHeight - shadowHost.offsetHeight;
-
-	shadowHost.style.left = `${Math.max(0, Math.min(newX, maxX))}px`;
-	shadowHost.style.top = `${Math.max(0, Math.min(newY, maxY))}px`;
-}
-
-function onDragEnd() {
-	dragState.isDragging = false;
-}
-
-chrome.runtime.onMessage.addListener(
-	(
-		message: unknown,
-		_sender: ChromeMessageSender,
-		sendResponse: ChromeMessageResponse,
-	) => {
-		const msg = message as {
-			type: string;
-			state?: Record<string, unknown>;
-		};
-
-		if (msg.type === "INJECT_CAMERA" && msg.state) {
-			createCameraOverlay(
-				msg.state as {
-					deviceId: string;
-					size: string;
-					shape: string;
-					mirrored: boolean;
-				},
-			);
-			sendResponse({ ok: true });
-			return;
-		}
-
-		if (
-			msg.type === "UPDATE_CAMERA_CONTENT" &&
-			msg.state &&
-			iframe?.contentWindow
-		) {
-			iframe.contentWindow.postMessage(
-				{ type: "CAMERA_UPDATE", state: msg.state },
-				"*",
-			);
-			sendResponse({ ok: true });
-			return;
-		}
-
-		if (msg.type === "REMOVE_CAMERA") {
-			if (iframe?.contentWindow) {
-				iframe.contentWindow.postMessage({ type: "CAMERA_DESTROY" }, "*");
+			if (msg.type === "INJECT_CAMERA") {
+				createCameraOverlay(msg.state, msg.lastFrameDataUrl ?? null);
+				sendResponse({ ok: true });
+				return;
 			}
-			setTimeout(removeCameraOverlay, 50);
-			sendResponse({ ok: true });
-			return;
+
+			if (msg.type === "UPDATE_CAMERA_CONTENT" && msg.state) {
+				if (msg.state.position) {
+					applyOverlayPosition(
+						clampPosition(
+							msg.state.position,
+							shadowHost?.offsetWidth ?? 0,
+							shadowHost?.offsetHeight ?? 0,
+						),
+					);
+				}
+
+				if (iframe?.contentWindow) {
+					const iframeMsg: IframeMessage = {
+						type: "CAMERA_UPDATE",
+						state: msg.state,
+					};
+					iframe.contentWindow.postMessage(iframeMsg, "*");
+				}
+				sendResponse({ ok: true });
+				return;
+			}
+
+			if (msg.type === "REMOVE_CAMERA") {
+				if (iframe?.contentWindow) {
+					iframe.contentWindow.postMessage({ type: "CAMERA_DESTROY" }, "*");
+				}
+				setTimeout(removeCameraOverlay, 50);
+				sendResponse({ ok: true });
+				return;
+			}
+
+			if (msg.type === "CAPTURE_LAST_FRAME") {
+				if (!iframe?.contentWindow) {
+					sendResponse({ dataUrl: null });
+					return;
+				}
+
+				if (pendingFrameCapture) {
+					sendResponse({ dataUrl: null });
+					return;
+				}
+
+				new Promise<string | null>((resolve) => {
+					const timeoutId = window.setTimeout(() => {
+						if (!pendingFrameCapture) return;
+						pendingFrameCapture.resolve(null);
+						pendingFrameCapture = null;
+					}, 800);
+					pendingFrameCapture = { resolve, timeoutId };
+					const iframeMsg: IframeMessage = { type: "CAMERA_CAPTURE_FRAME" };
+					iframe.contentWindow.postMessage(iframeMsg, "*");
+				}).then((dataUrl) => sendResponse({ dataUrl }));
+
+				return true;
+			}
+
+			if (msg.type === "ENTER_CAMERA_PIP") {
+				if (iframe?.contentWindow) {
+					const iframeMsg: IframeMessage = { type: "CAMERA_ENTER_PIP" };
+					iframe.contentWindow.postMessage(iframeMsg, "*");
+				}
+				sendResponse({ ok: true });
+				return;
+			}
+
+			if (msg.type === "EXIT_CAMERA_PIP") {
+				if (iframe?.contentWindow) {
+					const iframeMsg: IframeMessage = { type: "CAMERA_EXIT_PIP" };
+					iframe.contentWindow.postMessage(iframeMsg, "*");
+				}
+				sendResponse({ ok: true });
+				return;
+			}
+		},
+	);
+
+	window.addEventListener("message", (event) => {
+		if (event.source !== iframe?.contentWindow) return;
+
+		const msg = event.data as IframeMessage;
+
+		if (msg.type === "CAMERA_RESIZE" && shadowHost) {
+			const width = msg.width || 250;
+			const height = msg.height || 302;
+			shadowHost.style.width = `${width}px`;
+			shadowHost.style.height = `${height}px`;
+			ensureOverlayPosition();
 		}
-	},
-);
 
-window.addEventListener("message", (event) => {
-	if (event.source !== iframe?.contentWindow) return;
+		if (msg.type === "CAMERA_CLOSED") {
+			removeCameraOverlay();
+			chrome.runtime.sendMessage({ type: "HIDE_CAMERA" });
+		}
 
-	const msg = event.data as { type: string; width?: number; height?: number };
+		if (msg.type === "CAMERA_READY") {
+			if (iframe) iframe.style.opacity = "1";
+			if (placeholderImage) {
+				placeholderImage.style.opacity = "0";
+				const imageToRemove = placeholderImage;
+				placeholderImage = null;
+				setTimeout(() => {
+					imageToRemove.remove();
+				}, 180);
+			}
+		}
 
-	if (msg.type === "CAMERA_RESIZE" && shadowHost) {
-		const width = msg.width ?? 250;
-		const height = msg.height ?? 302;
-		shadowHost.style.width = `${width}px`;
-		shadowHost.style.height = `${height}px`;
-	}
+		if (msg.type === "CAMERA_FRAME_CAPTURED") {
+			if (!pendingFrameCapture) return;
+			clearTimeout(pendingFrameCapture.timeoutId);
+			const resolve = pendingFrameCapture.resolve;
+			pendingFrameCapture = null;
+			resolve(msg.dataUrl);
+		}
 
-	if (msg.type === "CAMERA_CLOSED") {
-		removeCameraOverlay();
-		chrome.runtime.sendMessage({ type: "HIDE_CAMERA" });
-	}
-});
+		if (msg.type === "CAMERA_STATE_CHANGED") {
+			chrome.runtime.sendMessage({ type: "UPDATE_CAMERA", state: msg.state });
+		}
+
+		if (msg.type === "CAMERA_DRAG_DELTA") {
+			if (!shadowHost) return;
+			const current = overlayPosition ?? getDefaultPosition();
+			const next = clampPosition(
+				{ x: current.x + msg.deltaX, y: current.y + msg.deltaY },
+				shadowHost.offsetWidth,
+				shadowHost.offsetHeight,
+			);
+			applyOverlayPosition(next);
+		}
+
+		if (msg.type === "CAMERA_DRAG_END") {
+			if (!overlayPosition) return;
+			chrome.runtime.sendMessage({
+				type: "UPDATE_CAMERA",
+				state: { position: overlayPosition },
+			});
+		}
+	});
+}
