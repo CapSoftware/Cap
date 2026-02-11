@@ -575,11 +575,13 @@ impl output_pipeline::VideoSource for VideoSource {
         let scaling_logged: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let scaled_frame_count: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
+        let stats_health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn_thread("d3d-capture-thread", {
             let restart_counter = restart_counter.clone();
             let frame_scaler = frame_scaler.clone();
             let scaling_logged = scaling_logged.clone();
             let scaled_frame_count = scaled_frame_count.clone();
+            let stats_health_tx = stats_health_tx.clone();
             move || {
                 cap_mediafoundation_utils::thread_init();
 
@@ -623,6 +625,7 @@ impl output_pipeline::VideoSource for VideoSource {
                         let video_drop_counter = video_drop_counter.clone();
                         let restart_counter = restart_counter.clone();
                         let scaled_frame_count = scaled_frame_count.clone();
+                        let stats_health_tx = stats_health_tx.clone();
                         async move {
                             loop {
                                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -645,6 +648,14 @@ impl output_pipeline::VideoSource for VideoSource {
                                         scaled_frames = scaled,
                                         "Screen capture stats"
                                     );
+                                    if drop_pct > 5.0 {
+                                        output_pipeline::emit_health(
+                                            &stats_health_tx,
+                                            output_pipeline::PipelineHealthEvent::FrameDropRateHigh {
+                                                rate_pct: drop_pct,
+                                            },
+                                        );
+                                    }
                                 } else {
                                     debug!(captured = captured, "Screen capture frames");
                                 }
@@ -681,6 +692,10 @@ impl output_pipeline::VideoSource for VideoSource {
                         }
                         Ok(VideoControl::Restart) => {
                             info!("Restarting Windows screen capture");
+                            output_pipeline::emit_health(
+                                &stats_health_tx,
+                                output_pipeline::PipelineHealthEvent::SourceRestarting,
+                            );
                             if let Some(mut old) = capturer.take() {
                                 let _ = old.stop();
                                 drop(old);
@@ -708,6 +723,10 @@ impl output_pipeline::VideoSource for VideoSource {
                                         info!(
                                             restart_count = count,
                                             "Windows screen capture restarted successfully"
+                                        );
+                                        output_pipeline::emit_health(
+                                            &stats_health_tx,
+                                            output_pipeline::PipelineHealthEvent::SourceRestarted,
                                         );
                                         capturer = Some(new_cap);
                                     }
