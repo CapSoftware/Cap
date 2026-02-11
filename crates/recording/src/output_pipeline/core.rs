@@ -19,7 +19,7 @@ use std::{
         Arc,
         atomic::{self, AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -53,6 +53,102 @@ impl AudioTimestampGenerator {
         self.total_samples += frame_samples;
         Duration::from_nanos(timestamp_nanos.min(u64::MAX as u128) as u64)
     }
+
+    fn advance_by_duration(&mut self, duration: Duration) -> u64 {
+        let samples = (duration.as_secs_f64() * self.sample_rate as f64).round() as u64;
+        self.total_samples += samples;
+        samples
+    }
+}
+
+const WIRED_GAP_THRESHOLD: Duration = Duration::from_millis(70);
+const WIRELESS_GAP_THRESHOLD: Duration = Duration::from_millis(160);
+const MAX_SILENCE_INSERTION: Duration = Duration::from_secs(1);
+
+struct AudioGapTracker {
+    wall_clock_start: Option<Instant>,
+    gap_threshold: Duration,
+    total_silence_inserted: Duration,
+    silence_insertion_count: u64,
+    last_silence_log: Option<Instant>,
+}
+
+impl AudioGapTracker {
+    fn new(has_wireless_source: bool) -> Self {
+        Self {
+            wall_clock_start: None,
+            gap_threshold: if has_wireless_source {
+                WIRELESS_GAP_THRESHOLD
+            } else {
+                WIRED_GAP_THRESHOLD
+            },
+            total_silence_inserted: Duration::ZERO,
+            silence_insertion_count: 0,
+            last_silence_log: None,
+        }
+    }
+
+    fn mark_started(&mut self) {
+        if self.wall_clock_start.is_none() {
+            self.wall_clock_start = Some(Instant::now());
+        }
+    }
+
+    fn detect_gap(
+        &self,
+        sample_based_elapsed: Duration,
+        total_pause_duration: Duration,
+    ) -> Option<Duration> {
+        let wall_start = self.wall_clock_start?;
+        let wall_elapsed = wall_start.elapsed().saturating_sub(total_pause_duration);
+
+        if wall_elapsed <= sample_based_elapsed {
+            return None;
+        }
+
+        let gap = wall_elapsed.saturating_sub(sample_based_elapsed);
+        if gap > self.gap_threshold {
+            Some(gap.min(MAX_SILENCE_INSERTION))
+        } else {
+            None
+        }
+    }
+
+    fn record_insertion(&mut self, duration: Duration) {
+        self.silence_insertion_count += 1;
+        self.total_silence_inserted += duration;
+
+        let should_log = self
+            .last_silence_log
+            .map(|t| t.elapsed() >= Duration::from_secs(5))
+            .unwrap_or(true);
+
+        if should_log {
+            warn!(
+                gap_ms = duration.as_millis(),
+                total_silence_ms = self.total_silence_inserted.as_millis(),
+                insertion_count = self.silence_insertion_count,
+                threshold_ms = self.gap_threshold.as_millis(),
+                "Audio gap detected, inserting silence"
+            );
+            self.last_silence_log = Some(Instant::now());
+        }
+    }
+}
+
+fn create_silence_frame(audio_info: &AudioInfo, sample_count: usize) -> ffmpeg::frame::Audio {
+    let mut frame = ffmpeg::frame::Audio::new(
+        audio_info.sample_format,
+        sample_count,
+        audio_info.channel_layout(),
+    );
+
+    for i in 0..frame.planes() {
+        frame.data_mut(i).fill(0);
+    }
+
+    frame.set_rate(audio_info.sample_rate);
+    frame
 }
 
 struct VideoDriftTracker {
@@ -1080,6 +1176,7 @@ struct PreparedAudioSources {
     audio_info: AudioInfo,
     audio_rx: mpsc::Receiver<AudioFrame>,
     erased_audio_sources: Vec<ErasedAudioSource>,
+    has_wireless_source: bool,
 }
 
 impl PreparedAudioSources {
@@ -1093,6 +1190,8 @@ impl PreparedAudioSources {
         shared_pause: SharedWallClockPause,
     ) {
         let sample_rate = self.audio_info.sample_rate;
+        let audio_info = self.audio_info;
+        let has_wireless_source = self.has_wireless_source;
 
         setup_ctx.tasks().spawn("mux-audio", {
             let stop_token = stop_token.child_token();
@@ -1101,6 +1200,7 @@ impl PreparedAudioSources {
                 let mut timestamp_generator = AudioTimestampGenerator::new(sample_rate);
                 let mut dropped_during_pause: u64 = 0;
                 let mut frame_count: u64 = 0;
+                let mut gap_tracker = AudioGapTracker::new(has_wireless_source);
 
                 let res = stop_token
                     .run_until_cancelled(async {
@@ -1114,6 +1214,42 @@ impl PreparedAudioSources {
 
                             if let Some(first_tx) = first_tx.take() {
                                 let _ = first_tx.send(frame.timestamp);
+                            }
+
+                            gap_tracker.mark_started();
+
+                            let sample_based_before = timestamp_generator.next_timestamp(0);
+
+                            if let Some(gap_duration) =
+                                gap_tracker.detect_gap(sample_based_before, total_pause_duration)
+                            {
+                                let silence_samples =
+                                    timestamp_generator.advance_by_duration(gap_duration);
+
+                                if silence_samples > 0 {
+                                    let silence =
+                                        create_silence_frame(&audio_info, silence_samples as usize);
+
+                                    let silence_frame = AudioFrame::new(silence, frame.timestamp);
+
+                                    if gap_duration >= MAX_SILENCE_INSERTION {
+                                        error!(
+                                            gap_ms = gap_duration.as_millis(),
+                                            "Audio gap exceeded 1s cap, \
+                                             something may be seriously wrong"
+                                        );
+                                    }
+
+                                    gap_tracker.record_insertion(gap_duration);
+
+                                    if let Err(e) = muxer
+                                        .lock()
+                                        .await
+                                        .send_audio_frame(silence_frame, sample_based_before)
+                                    {
+                                        error!("Audio encoder (silence): {e}");
+                                    }
+                                }
                             }
 
                             let frame_samples = frame.inner.samples() as u64;
@@ -1130,6 +1266,9 @@ impl PreparedAudioSources {
                                     corrected_secs = timestamp.as_secs_f64(),
                                     total_samples = timestamp_generator.total_samples,
                                     total_pause_ms = total_pause_duration.as_millis(),
+                                    silence_insertions = gap_tracker.silence_insertion_count,
+                                    total_silence_ms =
+                                        gap_tracker.total_silence_inserted.as_millis(),
                                     "Audio timestamp status"
                                 );
                             }
@@ -1149,6 +1288,14 @@ impl PreparedAudioSources {
                         dropped_during_pause,
                         total_pause_ms = final_pause_duration.as_millis(),
                         "Audio frames dropped during pause (not counted in samples)"
+                    );
+                }
+
+                if gap_tracker.silence_insertion_count > 0 {
+                    info!(
+                        silence_insertions = gap_tracker.silence_insertion_count,
+                        total_silence_ms = gap_tracker.total_silence_inserted.as_millis(),
+                        "Audio gap tracking summary at finish"
                     );
                 }
 
@@ -1179,7 +1326,7 @@ async fn setup_audio_sources(
     }
 
     let mut erased_audio_sources = vec![];
-    let (audio_tx, audio_rx) = mpsc::channel(64);
+    let (audio_tx, audio_rx) = mpsc::channel(128);
 
     let audio_info = if audio_sources.len() == 1 {
         let source = (audio_sources.swap_remove(0))(audio_tx, setup_ctx).await?;
@@ -1192,7 +1339,7 @@ async fn setup_audio_sources(
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
         for audio_source_setup in audio_sources {
-            let (tx, rx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::channel(128);
             let source = (audio_source_setup)(tx, setup_ctx).await?;
 
             audio_mixer.add_source(source.audio_info, rx);
@@ -1222,6 +1369,10 @@ async fn setup_audio_sources(
         AudioMixer::INFO
     };
 
+    let has_wireless_source = erased_audio_sources
+        .iter()
+        .any(|s| s.audio_info.is_wireless_transport);
+
     for source in &mut erased_audio_sources {
         (source.start_fn)(source.inner.as_mut()).await?;
     }
@@ -1230,6 +1381,7 @@ async fn setup_audio_sources(
         audio_info,
         audio_rx,
         erased_audio_sources,
+        has_wireless_source,
     }))
 }
 
