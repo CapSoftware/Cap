@@ -40,6 +40,7 @@ export const CameraPage = () => {
 		useState<VideoDimensions | null>(null);
 	const [isInPictureInPicture, setIsInPictureInPicture] = useState(false);
 	const autoPictureInPictureRef = useRef(false);
+	const hasSignaledVideoReadyRef = useRef(false);
 	const dragRef = useRef<{
 		pointerId: number;
 		lastX: number;
@@ -98,12 +99,19 @@ export const CameraPage = () => {
 		};
 	}, [canUseAutoPiPAttribute]);
 
+	const signalVideoReady = useCallback(() => {
+		if (hasSignaledVideoReadyRef.current) return;
+		hasSignaledVideoReadyRef.current = true;
+		postToParent({ type: "CAMERA_VIDEO_READY" });
+	}, []);
+
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
 			const msg = event.data as IframeMessage;
 
 			if (msg.type === "CAMERA_INIT" && msg.state) {
 				const s = msg.state as CameraInitState;
+				hasSignaledVideoReadyRef.current = false;
 				setDeviceId(s.deviceId);
 				if (s.size) setSize(s.size);
 				if (s.shape) setShape(s.shape);
@@ -114,7 +122,10 @@ export const CameraPage = () => {
 			}
 
 			if (msg.type === "CAMERA_UPDATE" && msg.state) {
-				if (msg.state.deviceId) setDeviceId(msg.state.deviceId);
+				if (msg.state.deviceId) {
+					hasSignaledVideoReadyRef.current = false;
+					setDeviceId(msg.state.deviceId);
+				}
 				if (msg.state.size) setSize(msg.state.size);
 				if (msg.state.shape) setShape(msg.state.shape);
 				if (typeof msg.state.mirrored === "boolean")
@@ -412,12 +423,10 @@ export const CameraPage = () => {
 	}
 
 	const metrics = getPreviewMetrics(size, shape, videoDimensions);
-	const videoStyle = videoDimensions
-		? {
-				transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
-				opacity: isInPictureInPicture ? 0 : 1,
-			}
-		: { opacity: 0 };
+	const videoStyle = {
+		transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
+		opacity: isInPictureInPicture ? 0 : 1,
+	};
 
 	const borderRadius =
 		shape === "round" ? "9999px" : size === "sm" ? "3rem" : "4rem";
@@ -608,6 +617,9 @@ export const CameraPage = () => {
 								}
 							}
 						}}
+						onLoadedData={signalVideoReady}
+						onCanPlay={signalVideoReady}
+						onPlaying={signalVideoReady}
 					/>
 					{!videoDimensions && !lastFrameDataUrl && (
 						<div className="absolute inset-0 flex items-center justify-center">
