@@ -6,11 +6,17 @@ export type VideoDimensions = {
 	height: number;
 };
 
+export type CameraPosition = {
+	x: number;
+	y: number;
+};
+
 export type CameraState = {
 	deviceId: string;
 	size: CameraPreviewSize;
 	shape: CameraPreviewShape;
 	mirrored: boolean;
+	position?: CameraPosition;
 };
 
 export const WINDOW_PADDING = 20;
@@ -67,6 +73,7 @@ export type PopupMessage =
 export type InjectCameraMessage = {
 	type: "INJECT_CAMERA";
 	state: CameraState;
+	lastFrameDataUrl?: string | null;
 };
 
 export type UpdateCameraContentMessage = {
@@ -78,14 +85,29 @@ export type RemoveCameraMessage = {
 	type: "REMOVE_CAMERA";
 };
 
+export type CaptureLastFrameMessage = {
+	type: "CAPTURE_LAST_FRAME";
+};
+
+export type EnterCameraPipMessage = {
+	type: "ENTER_CAMERA_PIP";
+};
+
+export type ExitCameraPipMessage = {
+	type: "EXIT_CAMERA_PIP";
+};
+
 export type BackgroundToContentMessage =
 	| InjectCameraMessage
 	| UpdateCameraContentMessage
-	| RemoveCameraMessage;
+	| RemoveCameraMessage
+	| CaptureLastFrameMessage
+	| EnterCameraPipMessage
+	| ExitCameraPipMessage;
 
 export type CameraInitMessage = {
 	type: "CAMERA_INIT";
-	state: CameraState;
+	state: CameraInitState;
 };
 
 export type CameraUpdateMessage = {
@@ -107,9 +129,52 @@ export type CameraReadyMessage = {
 	type: "CAMERA_READY";
 };
 
+export type CameraInitState = CameraState & {
+	lastFrameDataUrl?: string | null;
+};
+
+export type CameraCaptureFrameMessage = {
+	type: "CAMERA_CAPTURE_FRAME";
+};
+
+export type CameraFrameCapturedMessage = {
+	type: "CAMERA_FRAME_CAPTURED";
+	dataUrl: string | null;
+};
+
+export type CameraStateChangedMessage = {
+	type: "CAMERA_STATE_CHANGED";
+	state: Partial<CameraState>;
+};
+
+export type CameraDragDeltaMessage = {
+	type: "CAMERA_DRAG_DELTA";
+	deltaX: number;
+	deltaY: number;
+};
+
+export type CameraDragEndMessage = {
+	type: "CAMERA_DRAG_END";
+};
+
+export type CameraEnterPipMessage = {
+	type: "CAMERA_ENTER_PIP";
+};
+
+export type CameraExitPipMessage = {
+	type: "CAMERA_EXIT_PIP";
+};
+
 export type IframeMessage =
 	| CameraInitMessage
 	| CameraUpdateMessage
 	| CameraResizeMessage
 	| CameraClosedMessage
-	| CameraReadyMessage;
+	| CameraReadyMessage
+	| CameraCaptureFrameMessage
+	| CameraFrameCapturedMessage
+	| CameraStateChangedMessage
+	| CameraDragDeltaMessage
+	| CameraDragEndMessage
+	| CameraEnterPipMessage
+	| CameraExitPipMessage;
