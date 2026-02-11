@@ -230,10 +230,16 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 .crop_bounds
                 .map(|bounds| bounds.size())
                 .or_else(|| display.logical_size())
-                .unwrap();
+                .ok_or_else(|| anyhow!("Display has no logical size"))?;
 
-            let scale =
-                display.physical_size().unwrap().width() / display.logical_size().unwrap().width();
+            let physical_size = display
+                .physical_size()
+                .ok_or_else(|| anyhow!("Display has no physical size"))?;
+            let display_logical_size = display
+                .logical_size()
+                .ok_or_else(|| anyhow!("Display has no logical size for scale computation"))?;
+
+            let scale = physical_size.width() / display_logical_size.width();
 
             let width = ensure_even((logical_size.width() * scale) as u32) as f64;
             let height = ensure_even((logical_size.height() * scale) as u32) as f64;
