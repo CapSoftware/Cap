@@ -395,25 +395,22 @@ impl App {
             RecordingInputKind::Microphone => {
                 self.ensure_selected_mic_ready().await.ok();
             }
-            RecordingInputKind::Camera => {
-                match self.ensure_selected_camera_ready().await {
-                    Ok(()) => {
-                        info!("Camera reconnected and reinitialized successfully");
-                        let _ = NewNotification {
-                            title: "Camera reconnected".to_string(),
-                            body: "Camera overlay has been restored.".to_string(),
-                            is_error: false,
-                        }
-                        .emit(&self.handle);
+            RecordingInputKind::Camera => match self.ensure_selected_camera_ready().await {
+                Ok(()) => {
+                    info!("Camera reconnected and reinitialized successfully");
+                    let _ = NewNotification {
+                        title: "Camera reconnected".to_string(),
+                        body: "Camera overlay has been restored.".to_string(),
+                        is_error: false,
                     }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to reinitialize camera after reconnect, will retry on next poll");
-                        self.disconnected_inputs
-                            .insert(RecordingInputKind::Camera);
-                        return Ok(());
-                    }
+                    .emit(&self.handle);
                 }
-            }
+                Err(e) => {
+                    warn!(error = %e, "Failed to reinitialize camera after reconnect, will retry on next poll");
+                    self.disconnected_inputs.insert(RecordingInputKind::Camera);
+                    return Ok(());
+                }
+            },
         }
 
         let _ = RecordingEvent::InputRestored { input: kind }.emit(&self.handle);

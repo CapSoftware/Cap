@@ -16,9 +16,9 @@ struct CameraFrameScaler {
     context: ffmpeg::software::scaling::Context,
     source_width: u32,
     source_height: u32,
-    target_width: u32,
-    target_height: u32,
 }
+
+unsafe impl Send for CameraFrameScaler {}
 
 impl CameraFrameScaler {
     fn new(
@@ -43,8 +43,6 @@ impl CameraFrameScaler {
             context,
             source_width: src_width,
             source_height: src_height,
-            target_width: dst_width,
-            target_height: dst_height,
         })
     }
 
