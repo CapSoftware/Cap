@@ -3,9 +3,11 @@ import type {
 	CameraState,
 	PopupMessage,
 } from "../lib/messages";
+import type { OffscreenMessage } from "../lib/offscreen-messages";
 
 const CAMERA_STATE_KEY = "cap_camera_state";
 const CAMERA_TAB_KEY = "cap_camera_tab";
+const LAST_FRAME_KEY = "cap_camera_last_frame";
 
 function getCameraState(): Promise<CameraState | null> {
 	return new Promise((resolve) => {
@@ -57,9 +59,33 @@ function setCameraTabId(tabId: number | null): Promise<void> {
 	});
 }
 
+function getLastFrame(): Promise<string | null> {
+	return new Promise((resolve) => {
+		chrome.storage.session.get(
+			[LAST_FRAME_KEY],
+			(items: Record<string, unknown>) => {
+				const frame = items[LAST_FRAME_KEY];
+				resolve(typeof frame === "string" ? frame : null);
+			},
+		);
+	});
+}
+
+function setLastFrame(dataUrl: string | null): Promise<void> {
+	return new Promise((resolve) => {
+		if (!dataUrl) {
+			chrome.storage.session.remove([LAST_FRAME_KEY], () => resolve());
+			return;
+		}
+		chrome.storage.session.set({ [LAST_FRAME_KEY]: dataUrl }, () => resolve());
+	});
+}
+
 function sendToTab(tabId: number, message: BackgroundToContentMessage): void {
 	chrome.tabs.sendMessage(tabId, message);
 }
+
+let injectVersion = 0;
 
 async function getActiveTabId(): Promise<number | null> {
 	return new Promise((resolve) => {
@@ -88,34 +114,47 @@ async function injectContentScript(tabId: number): Promise<void> {
 	});
 }
 
-async function captureLastFrame(tabId: number): Promise<string | null> {
-	return new Promise((resolve) => {
-		let done = false;
+const OFFSCREEN_URL = "offscreen.html";
 
-		const timeoutId = setTimeout(() => {
-			if (done) return;
-			done = true;
-			resolve(null);
-		}, 900);
-
-		chrome.tabs.sendMessage(
-			tabId,
-			{ type: "CAPTURE_LAST_FRAME" },
-			(response) => {
-				if (done) return;
-				done = true;
-				clearTimeout(timeoutId);
-
-				if (chrome.runtime.lastError) {
-					resolve(null);
-					return;
-				}
-
-				const res = response as { dataUrl?: unknown } | null;
-				resolve(typeof res?.dataUrl === "string" ? res.dataUrl : null);
-			},
-		);
+async function hasOffscreenDocument(): Promise<boolean> {
+	const contexts = await chrome.runtime.getContexts({
+		contextTypes: ["OFFSCREEN_DOCUMENT"],
 	});
+	return contexts.length > 0;
+}
+
+async function ensureOffscreenDocument(): Promise<void> {
+	if (await hasOffscreenDocument()) return;
+
+	await chrome.offscreen.createDocument({
+		url: OFFSCREEN_URL,
+		reasons: ["USER_MEDIA"],
+		justification: "Persistent camera stream for WebRTC relay",
+	});
+}
+
+async function closeOffscreenDocument(): Promise<void> {
+	if (!(await hasOffscreenDocument())) return;
+	await chrome.offscreen.closeDocument();
+}
+
+function sendToOffscreen(message: OffscreenMessage): Promise<unknown> {
+	return new Promise((resolve) => {
+		chrome.runtime.sendMessage(message, (response) => {
+			resolve(response);
+		});
+	});
+}
+
+async function captureLastFrame(mirrored: boolean): Promise<string | null> {
+	if (!(await hasOffscreenDocument())) return null;
+
+	const response = (await sendToOffscreen({
+		type: "OFFSCREEN_CAPTURE_FRAME",
+		mirrored,
+	})) as { dataUrl?: unknown } | null;
+
+	return typeof response?.dataUrl === "string" ? response.dataUrl : null;
 }
 
 async function handleShowCamera(state: CameraState): Promise<void> {
@@ -129,6 +168,14 @@ async function handleShowCamera(state: CameraState): Promise<void> {
 
 	await setCameraState(state);
 	await setCameraTabId(tabId);
+	await setLastFrame(null);
+
+	await ensureOffscreenDocument();
+	await sendToOffscreen({
+		type: "OFFSCREEN_START_CAMERA",
+		deviceId: state.deviceId,
+	});
+
 	try {
 		await injectContentScript(tabId);
 	} catch {
@@ -141,27 +188,43 @@ async function handleShowCamera(state: CameraState): Promise<void> {
 }
 
 async function handleMoveCameraToTab(tabId: number): Promise<void> {
+	const version = ++injectVersion;
+
 	const state = await getCameraState();
-	if (!state) return;
+	if (!state || version !== injectVersion) return;
 
 	const currentTabId = await getCameraTabId();
 	if (currentTabId === tabId) return;
+	if (version !== injectVersion) return;
+
+	let lastFrameDataUrl: string | null = null;
+	if (currentTabId !== null) {
+		lastFrameDataUrl = await captureLastFrame(state.mirrored);
+		if (version !== injectVersion) return;
+		sendToTab(currentTabId, { type: "REMOVE_CAMERA" });
+	}
+
+	if (lastFrameDataUrl) {
+		await setLastFrame(lastFrameDataUrl);
+	} else {
+		lastFrameDataUrl = await getLastFrame();
+	}
+	if (version !== injectVersion) return;
+
+	await setCameraTabId(tabId);
+	if (version !== injectVersion) return;
 
 	try {
 		await injectContentScript(tabId);
 	} catch {
 		return;
 	}
+	if (version !== injectVersion) return;
 
-	const lastFrameDataUrl =
-		currentTabId !== null ? await captureLastFrame(currentTabId) : null;
-
-	if (currentTabId !== null) {
-		sendToTab(currentTabId, { type: "REMOVE_CAMERA" });
-	}
-
-	await setCameraTabId(tabId);
-	sendToTab(tabId, { type: "INJECT_CAMERA", state, lastFrameDataUrl });
+	setTimeout(() => {
+		if (version !== injectVersion) return;
+		sendToTab(tabId, { type: "INJECT_CAMERA", state, lastFrameDataUrl });
+	}, 100);
 }
 
 async function handleHideCamera(): Promise<void> {
@@ -169,7 +232,14 @@ async function handleHideCamera(): Promise<void> {
 	if (tabId !== null) {
 		sendToTab(tabId, { type: "REMOVE_CAMERA" });
 	}
+
+	if (await hasOffscreenDocument()) {
+		await sendToOffscreen({ type: "OFFSCREEN_STOP_CAMERA" });
+		await closeOffscreenDocument();
+	}
+
 	await setCameraState(null);
+	await setLastFrame(null);
 }
 
 async function handleUpdateCamera(
@@ -180,6 +250,15 @@ async function handleUpdateCamera(
 
 	const updated = { ...current, ...partial };
 	await setCameraState(updated);
+
+	if (partial.deviceId && partial.deviceId !== current.deviceId) {
+		if (await hasOffscreenDocument()) {
+			await sendToOffscreen({
+				type: "OFFSCREEN_SWITCH_CAMERA",
+				deviceId: partial.deviceId,
+			});
+		}
+	}
 
 	const tabId = await getCameraTabId();
 	if (tabId !== null) {
@@ -222,7 +301,7 @@ chrome.runtime.onMessage.addListener(
 chrome.tabs.onRemoved.addListener((tabId: number) => {
 	getCameraTabId().then((cameraTabId) => {
 		if (cameraTabId === tabId) {
-			setCameraState(null);
+			setCameraTabId(null);
 		}
 	});
 });
@@ -234,16 +313,39 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 	if (changeInfo.status !== "complete") return;
 
-	getCameraTabId().then((cameraTabId) => {
+	getCameraTabId().then(async (cameraTabId) => {
 		if (cameraTabId !== tabId) return;
-		getCameraState().then((state) => {
-			if (!state) return;
-			injectContentScript(tabId)
-				.then(() => {
-					sendToTab(tabId, { type: "INJECT_CAMERA", state });
-				})
-				.catch(() => {});
-		});
+
+		const version = ++injectVersion;
+
+		const state = await getCameraState();
+		if (!state || version !== injectVersion) return;
+
+		let lastFrameDataUrl = await captureLastFrame(state.mirrored);
+		if (version !== injectVersion) return;
+
+		if (lastFrameDataUrl) {
+			await setLastFrame(lastFrameDataUrl);
+		} else {
+			lastFrameDataUrl = await getLastFrame();
+		}
+		if (version !== injectVersion) return;
+
+		try {
+			await injectContentScript(tabId);
+		} catch {
+			return;
+		}
+		if (version !== injectVersion) return;
+
+		setTimeout(() => {
+			if (version !== injectVersion) return;
+			sendToTab(tabId, {
+				type: "INJECT_CAMERA",
+				state,
+				lastFrameDataUrl,
+			});
+		}, 100);
 	});
 });
 
