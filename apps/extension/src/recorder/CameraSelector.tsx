@@ -9,7 +9,7 @@ import {
 } from "@cap/ui";
 import clsx from "clsx";
 import { CameraIcon, CameraOffIcon } from "lucide-react";
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 import { useMediaPermission } from "./useMediaPermission";
 import { NO_CAMERA, NO_CAMERA_VALUE } from "./web-recorder-constants";
@@ -19,6 +19,7 @@ interface CameraSelectorProps {
 	availableCameras: MediaDeviceInfo[];
 	dialogOpen: boolean;
 	disabled?: boolean;
+	variant?: "default" | "compact";
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 	onCameraChange: (cameraId: string | null) => void;
@@ -30,6 +31,7 @@ export const CameraSelector = ({
 	availableCameras,
 	dialogOpen,
 	disabled = false,
+	variant = "default",
 	open,
 	onOpenChange,
 	onCameraChange,
@@ -44,6 +46,12 @@ export const CameraSelector = ({
 	const permissionSupported = permissionState !== "unsupported";
 	const shouldRequestPermission =
 		permissionSupported && permissionState !== "granted";
+	const compact = variant === "compact";
+	const selectedCamera = availableCameras.find(
+		(camera) => camera.deviceId === selectedCameraId,
+	);
+	const selectedCameraLabel =
+		selectedCamera?.label?.trim() || (selectedCameraId ? "Camera" : NO_CAMERA);
 
 	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
 
@@ -57,13 +65,8 @@ export const CameraSelector = ({
 				: "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]",
 	);
 
-	const handleStatusPillClick = async (
-		event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>,
-	) => {
+	const requestPermissionAndRefresh = async () => {
 		if (shouldRequestPermission) {
-			event.preventDefault();
-			event.stopPropagation();
-
 			try {
 				const granted = await requestPermission();
 				if (granted) {
@@ -78,6 +81,21 @@ export const CameraSelector = ({
 				}
 			}
 
+			return true;
+		}
+
+		return false;
+	};
+
+	const handleStatusPillClick = async (
+		event:
+			| ReactMouseEvent<HTMLButtonElement>
+			| KeyboardEvent<HTMLButtonElement>,
+	) => {
+		const requestedPermission = await requestPermissionAndRefresh();
+		if (requestedPermission) {
+			event.preventDefault();
+			event.stopPropagation();
 			return;
 		}
 
@@ -93,7 +111,7 @@ export const CameraSelector = ({
 
 	const handleStatusPillKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
 		if (event.key === "Enter" || event.key === " ") {
-			handleStatusPillClick(event);
+			void handleStatusPillClick(event);
 		}
 	};
 
@@ -111,16 +129,25 @@ export const CameraSelector = ({
 				<div className="relative w-full">
 					<SelectTrigger
 						className={clsx(
-							"relative flex flex-row items-center h-[2rem] pl-[0.375rem] pr-[3.5rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11 [&>svg]:hidden",
+							"relative flex flex-row items-center transition-colors overflow-hidden z-10 font-normal [&>svg]:hidden",
+							compact
+								? "h-[2.8rem] w-full rounded-[14px] border border-gray-200 bg-white px-[0.5rem] text-gray-900 hover:bg-gray-50 focus:border-gray-300 disabled:text-gray-400"
+								: "h-[2rem] pl-[0.375rem] pr-[3.5rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11",
 							disabled || shouldRequestPermission
 								? "cursor-default"
 								: undefined,
 						)}
 						onPointerDown={(event) => {
-							if (shouldRequestPermission) {
+							if (shouldRequestPermission && !compact) {
 								event.preventDefault();
 								event.stopPropagation();
 							}
+						}}
+						onClick={(event) => {
+							if (!compact || !shouldRequestPermission) return;
+							event.preventDefault();
+							event.stopPropagation();
+							void requestPermissionAndRefresh();
 						}}
 						onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
 							if (shouldRequestPermission) {
@@ -128,33 +155,51 @@ export const CameraSelector = ({
 								if (keys.includes(event.key)) {
 									event.preventDefault();
 									event.stopPropagation();
+									if (compact && (event.key === "Enter" || event.key === " ")) {
+										void requestPermissionAndRefresh();
+									}
 								}
 							}
 						}}
 						aria-disabled={disabled || shouldRequestPermission}
 					>
-						<SelectValue
-							placeholder={NO_CAMERA}
-							className="flex-1 flex items-center gap-[0.375rem] truncate"
-						/>
-					</SelectTrigger>
-					<button
-						type="button"
-						className={clsx(
-							statusPillClassName,
-							"absolute right-[0.375rem] top-1/2 -translate-y-1/2 z-20",
+						{compact ? (
+							<span className="flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5">
+								<CameraIcon className="size-4 shrink-0 text-gray-400" />
+								<span className="w-full truncate text-center text-[0.7rem] text-gray-900">
+									{shouldRequestPermission
+										? "Allow camera"
+										: selectedCameraLabel}
+								</span>
+							</span>
+						) : (
+							<SelectValue
+								placeholder={NO_CAMERA}
+								className="flex-1 flex items-center gap-[0.375rem] truncate"
+							/>
 						)}
-						disabled={statusPillDisabled}
-						aria-disabled={statusPillDisabled}
-						onClick={handleStatusPillClick}
-						onKeyDown={handleStatusPillKeyDown}
-					>
-						{shouldRequestPermission
-							? "Request permission"
-							: cameraEnabled
-								? "On"
-								: "Off"}
-					</button>
+					</SelectTrigger>
+					{!compact && (
+						<button
+							type="button"
+							className={clsx(
+								statusPillClassName,
+								"absolute right-[0.375rem] top-1/2 -translate-y-1/2 z-20",
+							)}
+							disabled={statusPillDisabled}
+							aria-disabled={statusPillDisabled}
+							onClick={(event) => {
+								void handleStatusPillClick(event);
+							}}
+							onKeyDown={handleStatusPillKeyDown}
+						>
+							{shouldRequestPermission
+								? "Request permission"
+								: cameraEnabled
+									? "On"
+									: "Off"}
+						</button>
+					)}
 				</div>
 				<SelectContent className="z-[502]">
 					<SelectItem value={NO_CAMERA_VALUE}>
