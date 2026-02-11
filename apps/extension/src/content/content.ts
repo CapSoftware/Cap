@@ -19,10 +19,7 @@ let iframe: HTMLIFrameElement | null = null;
 let placeholderImage: HTMLImageElement | null = null;
 let overlayPosition: CameraPosition | null = null;
 
-let pendingFrameCapture: {
-	resolve: (dataUrl: string | null) => void;
-	timeoutId: number;
-} | null = null;
+let pendingInitState: CameraInitState | null = null;
 
 function getDefaultPosition() {
 	return {
@@ -110,8 +107,8 @@ function createCameraOverlay(
 			width: 100%;
 			height: 100%;
 			object-fit: cover;
-			opacity: 1;
-			transition: opacity 150ms ease-out;
+			z-index: 1;
+			transition: opacity 0.2s ease-out;
 		}
 		iframe {
 			position: absolute;
@@ -140,20 +137,14 @@ function createCameraOverlay(
 	const cameraUrl = chrome.runtime.getURL("camera.html");
 	iframe = document.createElement("iframe");
 	iframe.src = cameraUrl;
-	iframe.allow = "camera;autoplay;picture-in-picture";
+	iframe.allow = "camera;autoplay;picture-in-picture;auto-picture-in-picture";
 	iframe.style.cssText =
-		"width:100%;height:100%;border:none;background:transparent;opacity:0;transition:opacity 150ms ease-out;";
+		"width:100%;height:100%;border:none;background:transparent;";
 
-	iframe.addEventListener("load", () => {
-		if (iframe?.contentWindow) {
-			const initState: CameraInitState = {
-				...state,
-				lastFrameDataUrl: lastFrameDataUrl ?? null,
-			};
-			const msg: IframeMessage = { type: "CAMERA_INIT", state: initState };
-			iframe.contentWindow.postMessage(msg, "*");
-		}
-	});
+	pendingInitState = {
+		...state,
+		lastFrameDataUrl: lastFrameDataUrl ?? null,
+	};
 
 	container.appendChild(iframe);
 	shadow.appendChild(container);
@@ -163,11 +154,7 @@ function createCameraOverlay(
 }
 
 function removeCameraOverlay() {
-	if (pendingFrameCapture) {
-		clearTimeout(pendingFrameCapture.timeoutId);
-		pendingFrameCapture.resolve(null);
-		pendingFrameCapture = null;
-	}
+	pendingInitState = null;
 
 	if (shadowHost) {
 		shadowHost.remove();
@@ -224,31 +211,6 @@ if (!alreadyLoaded) {
 				return;
 			}
 
-			if (msg.type === "CAPTURE_LAST_FRAME") {
-				if (!iframe?.contentWindow) {
-					sendResponse({ dataUrl: null });
-					return;
-				}
-
-				if (pendingFrameCapture) {
-					sendResponse({ dataUrl: null });
-					return;
-				}
-
-				new Promise<string | null>((resolve) => {
-					const timeoutId = window.setTimeout(() => {
-						if (!pendingFrameCapture) return;
-						pendingFrameCapture.resolve(null);
-						pendingFrameCapture = null;
-					}, 800);
-					pendingFrameCapture = { resolve, timeoutId };
-					const iframeMsg: IframeMessage = { type: "CAMERA_CAPTURE_FRAME" };
-					iframe.contentWindow.postMessage(iframeMsg, "*");
-				}).then((dataUrl) => sendResponse({ dataUrl }));
-
-				return true;
-			}
-
 			if (msg.type === "ENTER_CAMERA_PIP") {
 				if (iframe?.contentWindow) {
 					const iframeMsg: IframeMessage = { type: "CAMERA_ENTER_PIP" };
@@ -288,23 +250,25 @@ if (!alreadyLoaded) {
 		}
 
 		if (msg.type === "CAMERA_READY") {
-			if (iframe) iframe.style.opacity = "1";
-			if (placeholderImage) {
-				placeholderImage.style.opacity = "0";
-				const imageToRemove = placeholderImage;
-				placeholderImage = null;
-				setTimeout(() => {
-					imageToRemove.remove();
-				}, 180);
+			if (pendingInitState && iframe?.contentWindow) {
+				const initMsg: IframeMessage = {
+					type: "CAMERA_INIT",
+					state: pendingInitState,
+				};
+				iframe.contentWindow.postMessage(initMsg, "*");
+				pendingInitState = null;
 			}
 		}
 
-		if (msg.type === "CAMERA_FRAME_CAPTURED") {
-			if (!pendingFrameCapture) return;
-			clearTimeout(pendingFrameCapture.timeoutId);
-			const resolve = pendingFrameCapture.resolve;
-			pendingFrameCapture = null;
-			resolve(msg.dataUrl);
+		if (msg.type === "CAMERA_FEED_READY") {
+			if (placeholderImage) {
+				placeholderImage.style.opacity = "0";
+				const img = placeholderImage;
+				setTimeout(() => {
+					img.remove();
+					if (placeholderImage === img) placeholderImage = null;
+				}, 200);
+			}
 		}
 
 		if (msg.type === "CAMERA_STATE_CHANGED") {
