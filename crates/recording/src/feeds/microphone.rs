@@ -25,6 +25,8 @@ type StreamReadyFuture =
 pub struct MicrophoneSamples {
     pub data: Vec<u8>,
     pub format: SampleFormat,
+    pub sample_rate: u32,
+    pub channels: u16,
     pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
 }
@@ -200,6 +202,9 @@ impl MicrophoneFeed {
                     buffer_size_description
                 );
 
+                let callback_sample_rate = config.sample_rate().0;
+                let callback_channels = config.channels();
+
                 let stream = match device.build_input_stream_raw(
                     &stream_config,
                     sample_format,
@@ -220,6 +225,8 @@ impl MicrophoneFeed {
                                 .tell(MicrophoneSamples {
                                     data: data.bytes().to_vec(),
                                     format: data.sample_format(),
+                                    sample_rate: callback_sample_rate,
+                                    channels: callback_channels,
                                     info: info.clone(),
                                     timestamp: Timestamp::from_cpal(info.timestamp().capture),
                                 })
@@ -762,8 +769,16 @@ impl Message<Lock> for MicrophoneFeed {
             let _ = actor_ref.tell(Unlock).await;
         });
 
+        let latency_info = estimate_input_latency(
+            config.sample_rate().0,
+            buffer_size_frames.unwrap_or(1024),
+            Some(&device_name),
+        );
+        let audio_info = AudioInfo::from_stream_config_with_buffer(&config, buffer_size_frames)
+            .with_wireless_transport(latency_info.transport.is_wireless());
+
         Ok(MicrophoneFeedLock {
-            audio_info: AudioInfo::from_stream_config_with_buffer(&config, buffer_size_frames),
+            audio_info,
             actor: ctx.actor_ref(),
             config,
             buffer_size_frames,
