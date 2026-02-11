@@ -21,13 +21,20 @@ export const RecorderView = ({
 	onSignOut: () => void;
 }) => {
 	const orgId = pickOrgId(me);
+	const handleOpenDashboard = () => {
+		try {
+			window.open(`${CAP_WEB_ORIGIN}/dashboard`, "_blank", "noopener");
+		} catch {
+			toast.error("Failed to open dashboard");
+		}
+	};
 
 	if (!orgId) {
 		return (
 			<div className="h-full w-full p-4">
 				<div className="w-full rounded-xl border border-gray-4 bg-gray-1 p-5">
 					<div className="flex items-center justify-between">
-						<Logo className="h-8 w-auto" hideLogoName />
+						<Logo className="h-8 w-auto" />
 						<Button variant="transparent" size="sm" onClick={onSignOut}>
 							Sign out
 						</Button>
@@ -42,35 +49,12 @@ export const RecorderView = ({
 
 	return (
 		<div className="h-full w-full p-3">
-			<div className="flex items-center justify-between pb-2">
-				<Logo className="h-8 w-auto" hideLogoName />
-				<div className="flex items-center gap-2">
-					<Button
-						variant="transparent"
-						size="sm"
-						onClick={() => {
-							try {
-								window.open(
-									`${CAP_WEB_ORIGIN}/dashboard`,
-									"_blank",
-									"noopener",
-								);
-							} catch {
-								toast.error("Failed to open dashboard");
-							}
-						}}
-					>
-						Dashboard
-					</Button>
-					<Button variant="transparent" size="sm" onClick={onSignOut}>
-						Sign out
-					</Button>
-				</div>
-			</div>
 			<WebRecorderPanel
 				organisationId={orgId}
 				isProUser={me.user.isPro}
 				apiKey={apiKey}
+				onOpenDashboard={handleOpenDashboard}
+				onSignOut={onSignOut}
 			/>
 		</div>
 	);

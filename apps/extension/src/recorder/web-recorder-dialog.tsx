@@ -2,7 +2,6 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { CAP_WEB_ORIGIN } from "@/lib/cap-web";
 import type { CameraState } from "@/lib/messages";
 import { CameraSelector } from "./CameraSelector";
@@ -34,10 +33,14 @@ export const WebRecorderPanel = ({
 	organisationId,
 	isProUser,
 	apiKey,
+	onOpenDashboard,
+	onSignOut,
 }: {
 	organisationId: string;
 	isProUser: boolean;
 	apiKey: string;
+	onOpenDashboard?: () => void;
+	onSignOut?: () => void;
 }) => {
 	const [captureMode, setCaptureMode] = useState<CaptureMode>("instant");
 
@@ -51,6 +54,8 @@ export const WebRecorderPanel = ({
 				isProUser={isProUser}
 				captureMode={captureMode}
 				setCaptureMode={setCaptureMode}
+				onOpenDashboard={onOpenDashboard}
+				onSignOut={onSignOut}
 				useRecorder={useStudioRecorder}
 			/>
 		);
@@ -65,6 +70,8 @@ export const WebRecorderPanel = ({
 			isProUser={isProUser}
 			captureMode={captureMode}
 			setCaptureMode={setCaptureMode}
+			onOpenDashboard={onOpenDashboard}
+			onSignOut={onSignOut}
 			useRecorder={useWebRecorder}
 		/>
 	);
@@ -77,6 +84,8 @@ function RecorderPanelInner({
 	isProUser,
 	captureMode,
 	setCaptureMode,
+	onOpenDashboard,
+	onSignOut,
 	useRecorder,
 }: {
 	apiOrigin: string;
@@ -85,6 +94,8 @@ function RecorderPanelInner({
 	isProUser: boolean;
 	captureMode: CaptureMode;
 	setCaptureMode: (mode: CaptureMode) => void;
+	onOpenDashboard?: () => void;
+	onSignOut?: () => void;
 	useRecorder: typeof useWebRecorder;
 }) {
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -95,6 +106,7 @@ function RecorderPanelInner({
 	const [micSelectOpen, setMicSelectOpen] = useState(false);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
+	const skipNextCameraSyncRef = useRef(false);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -191,7 +203,6 @@ function RecorderPanelInner({
 		resumeRecording,
 		stopRecording,
 		restartRecording,
-		resetState,
 	} = useRecorder({
 		apiOrigin,
 		apiKey,
@@ -233,26 +244,6 @@ function RecorderPanelInner({
 		});
 	};
 
-	const handleClose = () => {
-		if (isBusy) {
-			toast.info("Keep this recorder open while your upload finishes.");
-			return;
-		}
-
-		resetState();
-		setSelectedCameraId(null);
-		setRecordingMode("fullscreen");
-		setCaptureMode("instant");
-		setSettingsOpen(false);
-		setHowItWorksOpen(false);
-
-		try {
-			window.close();
-		} catch {
-			toast.error("Failed to close");
-		}
-	};
-
 	const handleSettingsOpen = () => {
 		setSettingsOpen(true);
 		setHowItWorksOpen(false);
@@ -264,6 +255,11 @@ function RecorderPanelInner({
 	};
 
 	useEffect(() => {
+		if (skipNextCameraSyncRef.current) {
+			skipNextCameraSyncRef.current = false;
+			return;
+		}
+
 		if (selectedCameraId) {
 			const state: CameraState = {
 				deviceId: selectedCameraId,
@@ -283,6 +279,7 @@ function RecorderPanelInner({
 			(response: unknown) => {
 				const res = response as { state?: CameraState | null } | null;
 				if (res?.state?.deviceId) {
+					skipNextCameraSyncRef.current = true;
 					setSelectedCameraId(res.state.deviceId);
 				}
 			},
@@ -302,7 +299,7 @@ function RecorderPanelInner({
 					initial="hidden"
 					animate="visible"
 					exit="exit"
-					className="relative flex justify-center flex-col p-[1rem] pt-[2rem] gap-[0.75rem] text-[0.875rem] font-[400] text-[--text-primary] bg-gray-2 rounded-lg min-h-[350px]"
+					className="relative flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] text-[--text-primary] bg-gray-2 rounded-lg min-h-[350px]"
 				>
 					<SettingsButton
 						visible={!settingsOpen}
@@ -313,16 +310,14 @@ function RecorderPanelInner({
 						rememberDevices={rememberDevices}
 						onClose={() => setSettingsOpen(false)}
 						onRememberDevicesChange={handleRememberDevicesChange}
+						onOpenDashboard={onOpenDashboard}
+						onSignOut={onSignOut}
 					/>
 					<HowItWorksPanel
 						open={howItWorksOpen}
 						onClose={() => setHowItWorksOpen(false)}
 					/>
-					<WebRecorderDialogHeader
-						isBusy={isBusy}
-						isProUser={isProUser}
-						onClose={handleClose}
-					/>
+					<WebRecorderDialogHeader isProUser={isProUser} />
 					<div className="flex rounded-lg border border-gray-3 p-0.5 gap-0.5">
 						<button
 							type="button"
