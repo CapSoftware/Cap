@@ -97,7 +97,7 @@ use windows::{
 };
 
 pub struct WindowsMuxer {
-    video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
+    video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
     frame_drops: FrameDropTracker,
@@ -143,7 +143,7 @@ impl Muxer for WindowsMuxer {
             "Windows MP4 muxer encoder channel buffer size"
         );
         let (video_tx, video_rx) =
-            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(buffer_size);
+            sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(buffer_size);
 
         let mut output = ffmpeg::format::output(&output_path)?;
 
@@ -409,8 +409,6 @@ impl Muxer for WindowsMuxer {
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut last_timestamp: Option<Duration> = None;
-
-                        use scap_ffmpeg::AsFFmpeg;
 
                         loop {
                             let (ffmpeg_frame, ts) = match video_rx.recv_timeout(frame_interval) {
