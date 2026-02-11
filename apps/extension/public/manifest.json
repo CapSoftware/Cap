@@ -6,7 +6,7 @@
 		"default_title": "Cap",
 		"default_popup": "popup.html"
 	},
-	"permissions": ["storage", "identity", "scripting", "activeTab"],
+	"permissions": ["storage", "identity", "scripting", "activeTab", "windows"],
 	"host_permissions": ["<all_urls>"],
 	"background": {
 		"service_worker": "service-worker.js",
