@@ -1714,9 +1714,11 @@ pub fn upload_mf_buffer_to_texture(
     unsafe {
         let mut texture = None;
         device.CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut texture))?;
-        texture.ok_or_else(|| windows::core::Error::new(
-            windows::core::HRESULT(-1),
-            "CreateTexture2D succeeded but returned no texture"
-        ))
+        texture.ok_or_else(|| {
+            windows::core::Error::new(
+                windows::core::HRESULT(-1),
+                "CreateTexture2D succeeded but returned no texture",
+            )
+        })
     }
 }
