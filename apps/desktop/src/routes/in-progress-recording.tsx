@@ -131,7 +131,7 @@ function InProgressRecordingInner() {
 		const issues: string[] = [];
 		if (disconnectedInputs.microphone)
 			issues.push(
-				"Microphone disconnected. Reconnect it to continue recording.",
+				"Microphone disconnected. Silence will be used until it reconnects.",
 			);
 		if (disconnectedInputs.camera)
 			issues.push("Camera disconnected. Reconnect it to continue recording.");
@@ -216,13 +216,15 @@ function InProgressRecordingInner() {
 				setTime(Date.now());
 				break;
 			case "InputLost": {
-				const wasDisconnected = hasDisconnectedInput();
 				setDisconnectedInputs(payload.input, () => true);
-				if (!wasDisconnected && state().variant === "recording") {
-					setPauseResumes((a) => [...a, { pause: Date.now() }]);
+				if (payload.input === "camera") {
+					const wasDisconnected = hasDisconnectedInput();
+					if (!wasDisconnected && state().variant === "recording") {
+						setPauseResumes((a) => [...a, { pause: Date.now() }]);
+					}
+					setState({ variant: "paused" });
+					setTime(Date.now());
 				}
-				setState({ variant: "paused" });
-				setTime(Date.now());
 				break;
 			}
 			case "InputRestored":
