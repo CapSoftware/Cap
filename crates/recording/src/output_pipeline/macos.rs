@@ -971,3 +971,60 @@ impl AudioMuxer for AVFoundationCameraMuxer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod mp4_muxer_buffer_size {
+        use super::*;
+
+        #[test]
+        fn instant_mode_buffer_is_larger_than_normal() {
+            assert!(
+                DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT > DEFAULT_MP4_MUXER_BUFFER_SIZE,
+                "Instant mode buffer ({}) should be larger than normal mode buffer ({})",
+                DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT,
+                DEFAULT_MP4_MUXER_BUFFER_SIZE
+            );
+        }
+
+        #[test]
+        fn instant_mode_default_is_240() {
+            assert_eq!(DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT, 240);
+        }
+
+        #[test]
+        fn normal_mode_default_is_60() {
+            assert_eq!(DEFAULT_MP4_MUXER_BUFFER_SIZE, 60);
+        }
+
+        #[test]
+        fn env_override_takes_precedence() {
+            unsafe {
+                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "500");
+            }
+            let normal = get_mp4_muxer_buffer_size(false);
+            let instant = get_mp4_muxer_buffer_size(true);
+            unsafe {
+                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
+            }
+            assert_eq!(normal, 500);
+            assert_eq!(instant, 500);
+        }
+
+        #[test]
+        fn invalid_env_falls_back_to_defaults() {
+            unsafe {
+                std::env::set_var("CAP_MP4_MUXER_BUFFER_SIZE", "not_a_number");
+            }
+            let normal = get_mp4_muxer_buffer_size(false);
+            let instant = get_mp4_muxer_buffer_size(true);
+            unsafe {
+                std::env::remove_var("CAP_MP4_MUXER_BUFFER_SIZE");
+            }
+            assert_eq!(normal, DEFAULT_MP4_MUXER_BUFFER_SIZE);
+            assert_eq!(instant, DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT);
+        }
+    }
+}
