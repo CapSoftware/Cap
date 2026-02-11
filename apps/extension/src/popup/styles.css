@@ -32,11 +32,12 @@ html,
 body {
 	height: 100%;
 	width: 100%;
+	background: transparent;
 }
 
 body {
 	margin: 0;
-	background: var(--gray-2);
+	background: transparent;
 	color: var(--text-primary);
 	min-width: 340px;
 	min-height: 520px;
