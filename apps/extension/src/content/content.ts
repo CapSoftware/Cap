@@ -107,8 +107,8 @@ function createCameraOverlay(
 			width: 100%;
 			height: 100%;
 			object-fit: cover;
-			z-index: 1;
-			transition: opacity 0.2s ease-out;
+			pointer-events: none;
+			transition: opacity 0.3s ease-out;
 		}
 		iframe {
 			position: absolute;
@@ -258,16 +258,13 @@ if (!alreadyLoaded) {
 				iframe.contentWindow.postMessage(initMsg, "*");
 				pendingInitState = null;
 			}
-		}
-
-		if (msg.type === "CAMERA_FEED_READY") {
 			if (placeholderImage) {
 				placeholderImage.style.opacity = "0";
 				const img = placeholderImage;
 				setTimeout(() => {
 					img.remove();
 					if (placeholderImage === img) placeholderImage = null;
-				}, 200);
+				}, 300);
 			}
 		}
 
