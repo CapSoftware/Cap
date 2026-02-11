@@ -10,16 +10,14 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+	CameraInitState,
 	CameraPreviewShape,
 	CameraPreviewSize,
-	CameraState,
+	IframeMessage,
 	VideoDimensions,
 } from "../lib/messages";
 import { BAR_HEIGHT, getPreviewMetrics } from "../lib/messages";
 
-type AutoPictureInPictureDocument = Document & {
-	autoPictureInPictureEnabled?: boolean;
-};
 type AutoPictureInPictureVideo = HTMLVideoElement & {
 	autoPictureInPicture?: boolean;
 };
@@ -37,10 +35,16 @@ export const CameraPage = () => {
 	const [mirrored, setMirrored] = useState(false);
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const streamRef = useRef<MediaStream | null>(null);
+	const [lastFrameDataUrl, setLastFrameDataUrl] = useState<string | null>(null);
 	const [videoDimensions, setVideoDimensions] =
 		useState<VideoDimensions | null>(null);
 	const [isInPictureInPicture, setIsInPictureInPicture] = useState(false);
 	const autoPictureInPictureRef = useRef(false);
+	const dragRef = useRef<{
+		pointerId: number;
+		lastX: number;
+		lastY: number;
+	} | null>(null);
 
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
@@ -53,13 +57,8 @@ export const CameraPage = () => {
 			return false;
 		}
 
-		const doc = document as AutoPictureInPictureDocument;
-		const autoPiPAllowed =
-			typeof doc.autoPictureInPictureEnabled === "boolean"
-				? doc.autoPictureInPictureEnabled
-				: true;
-
-		if (!doc.pictureInPictureEnabled || !autoPiPAllowed) {
+		const doc = document;
+		if (!doc.pictureInPictureEnabled) {
 			return false;
 		}
 
@@ -99,16 +98,49 @@ export const CameraPage = () => {
 		};
 	}, [canUseAutoPiPAttribute]);
 
+	const captureFrame = useCallback(() => {
+		const video = videoRef.current;
+		if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+			return null;
+		}
+
+		const maxSide = 420;
+		const srcWidth = video.videoWidth;
+		const srcHeight = video.videoHeight;
+		const scale = Math.min(1, maxSide / Math.max(srcWidth, srcHeight));
+		const width = Math.max(1, Math.round(srcWidth * scale));
+		const height = Math.max(1, Math.round(srcHeight * scale));
+
+		const canvas = document.createElement("canvas");
+		canvas.width = width;
+		canvas.height = height;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) {
+			return null;
+		}
+
+		if (mirrored) {
+			ctx.translate(canvas.width, 0);
+			ctx.scale(-1, 1);
+		}
+
+		ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+		return canvas.toDataURL("image/jpeg", 0.7);
+	}, [mirrored]);
+
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
-			const msg = event.data as { type: string; state?: Partial<CameraState> };
+			const msg = event.data as IframeMessage;
 
 			if (msg.type === "CAMERA_INIT" && msg.state) {
-				const s = msg.state as CameraState;
+				const s = msg.state as CameraInitState;
 				setDeviceId(s.deviceId);
 				if (s.size) setSize(s.size);
 				if (s.shape) setShape(s.shape);
 				if (typeof s.mirrored === "boolean") setMirrored(s.mirrored);
+				setLastFrameDataUrl(
+					typeof s.lastFrameDataUrl === "string" ? s.lastFrameDataUrl : null,
+				);
 			}
 
 			if (msg.type === "CAMERA_UPDATE" && msg.state) {
@@ -127,13 +159,47 @@ export const CameraPage = () => {
 					streamRef.current = null;
 				}
 			}
+
+			if (msg.type === "CAMERA_CAPTURE_FRAME") {
+				const dataUrl = captureFrame();
+				postToParent({ type: "CAMERA_FRAME_CAPTURED", dataUrl });
+			}
+
+			if (msg.type === "CAMERA_ENTER_PIP") {
+				const video = videoRef.current;
+				if (!video || !isPictureInPictureSupported) return;
+				if (document.pictureInPictureElement === video) return;
+
+				video
+					.requestPictureInPicture()
+					.then(() => {
+						autoPictureInPictureRef.current = true;
+					})
+					.catch(() => {
+						autoPictureInPictureRef.current = false;
+					});
+			}
+
+			if (msg.type === "CAMERA_EXIT_PIP") {
+				const video = videoRef.current;
+				if (!video || !isPictureInPictureSupported) return;
+				if (document.pictureInPictureElement !== video) return;
+				if (!autoPictureInPictureRef.current) return;
+
+				document
+					.exitPictureInPicture()
+					.catch(() => {})
+					.finally(() => {
+						autoPictureInPictureRef.current = false;
+					});
+			}
 		};
 
 		window.addEventListener("message", handleMessage);
 		postToParent({ type: "CAMERA_READY" });
 
 		return () => window.removeEventListener("message", handleMessage);
-	}, []);
+	}, [captureFrame, isPictureInPictureSupported]);
 
 	useEffect(() => {
 		if (!deviceId) return;
@@ -163,6 +229,7 @@ export const CameraPage = () => {
 				streamRef.current = stream;
 				if (videoRef.current) {
 					videoRef.current.srcObject = stream;
+					void videoRef.current.play().catch(() => {});
 				}
 			} catch (err) {
 				console.error("Failed to start camera", err);
@@ -191,6 +258,10 @@ export const CameraPage = () => {
 			height: totalHeight,
 		});
 	}, [size, shape, videoDimensions]);
+
+	useEffect(() => {
+		if (videoDimensions) setLastFrameDataUrl(null);
+	}, [videoDimensions]);
 
 	const handleClose = useCallback(async () => {
 		if (
@@ -265,8 +336,6 @@ export const CameraPage = () => {
 			if (!video || !videoDimensions) return;
 
 			const currentElement = document.pictureInPictureElement;
-			const hasActiveUserGesture =
-				typeof navigator !== "undefined" && navigator.userActivation?.isActive;
 
 			if (
 				currentElement &&
@@ -278,7 +347,6 @@ export const CameraPage = () => {
 
 			if (document.visibilityState === "hidden") {
 				if (currentElement === video) return;
-				if (!hasActiveUserGesture) return;
 
 				video
 					.requestPictureInPicture()
@@ -346,7 +414,46 @@ export const CameraPage = () => {
 		shape === "round" ? "9999px" : size === "sm" ? "3rem" : "4rem";
 
 	return (
-		<div className="group w-full" style={{ width: `${metrics.width}px` }}>
+		<div
+			className="group w-full cursor-grab active:cursor-grabbing"
+			style={{ width: `${metrics.width}px` }}
+			onPointerDown={(event) => {
+				if (event.button !== 0) return;
+				const target = event.target as HTMLElement;
+				if (target.closest("[data-controls]")) return;
+				if (target.closest("[data-no-drag]")) return;
+				dragRef.current = {
+					pointerId: event.pointerId,
+					lastX: event.clientX,
+					lastY: event.clientY,
+				};
+				event.currentTarget.setPointerCapture(event.pointerId);
+			}}
+			onPointerMove={(event) => {
+				const current = dragRef.current;
+				if (!current || current.pointerId !== event.pointerId) return;
+				event.preventDefault();
+				const deltaX = event.clientX - current.lastX;
+				const deltaY = event.clientY - current.lastY;
+				current.lastX = event.clientX;
+				current.lastY = event.clientY;
+				postToParent({ type: "CAMERA_DRAG_DELTA", deltaX, deltaY });
+			}}
+			onPointerUp={(event) => {
+				const current = dragRef.current;
+				if (!current || current.pointerId !== event.pointerId) return;
+				dragRef.current = null;
+				postToParent({ type: "CAMERA_DRAG_END" });
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			}}
+			onPointerCancel={(event) => {
+				const current = dragRef.current;
+				if (!current || current.pointerId !== event.pointerId) return;
+				dragRef.current = null;
+				postToParent({ type: "CAMERA_DRAG_END" });
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			}}
+		>
 			<div className="flex relative flex-col w-full" style={{ borderRadius }}>
 				<div className="h-13">
 					<div className="flex flex-row justify-center items-center">
@@ -360,34 +467,52 @@ export const CameraPage = () => {
 								type="button"
 								onClick={handleClose}
 								className="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12"
+								data-no-drag
 							>
 								<X className="size-5.5" />
 							</button>
 							<button
 								type="button"
-								onClick={() => setSize((s) => (s === "sm" ? "lg" : "sm"))}
+								onClick={() =>
+									setSize((s) => {
+										const next = s === "sm" ? "lg" : "sm";
+										postToParent({
+											type: "CAMERA_STATE_CHANGED",
+											state: { size: next },
+										});
+										return next;
+									})
+								}
 								className={clsx(
 									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									size === "lg" && "bg-gray-3 text-gray-12",
 								)}
+								data-no-drag
 							>
 								<Maximize2 className="size-5.5" />
 							</button>
 							<button
 								type="button"
 								onClick={() =>
-									setShape((s) =>
-										s === "round"
-											? "square"
-											: s === "square"
-												? "full"
-												: "round",
-									)
+									setShape((s) => {
+										const next =
+											s === "round"
+												? "square"
+												: s === "square"
+													? "full"
+													: "round";
+										postToParent({
+											type: "CAMERA_STATE_CHANGED",
+											state: { shape: next },
+										});
+										return next;
+									})
 								}
 								className={clsx(
 									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									shape !== "round" && "bg-gray-3 text-gray-12",
 								)}
+								data-no-drag
 							>
 								{shape === "round" && <Circle className="size-5.5" />}
 								{shape === "square" && <Square className="size-5.5" />}
@@ -397,11 +522,21 @@ export const CameraPage = () => {
 							</button>
 							<button
 								type="button"
-								onClick={() => setMirrored((m) => !m)}
+								onClick={() =>
+									setMirrored((m) => {
+										const next = !m;
+										postToParent({
+											type: "CAMERA_STATE_CHANGED",
+											state: { mirrored: next },
+										});
+										return next;
+									})
+								}
 								className={clsx(
 									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									mirrored && "bg-gray-3 text-gray-12",
 								)}
+								data-no-drag
 							>
 								<FlipHorizontal className="size-5.5" />
 							</button>
@@ -413,6 +548,7 @@ export const CameraPage = () => {
 										"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 										isInPictureInPicture && "bg-gray-3 text-gray-12",
 									)}
+									data-no-drag
 								>
 									<PictureInPicture className="size-5.5" />
 								</button>
@@ -431,6 +567,17 @@ export const CameraPage = () => {
 						height: `${metrics.height}px`,
 					}}
 				>
+					{!videoDimensions && lastFrameDataUrl && (
+						<img
+							src={lastFrameDataUrl}
+							alt=""
+							aria-hidden
+							className={clsx(
+								"absolute inset-0 w-full h-full object-cover",
+								shape === "round" ? "rounded-full" : "rounded-3xl",
+							)}
+						/>
+					)}
 					<video
 						ref={videoRef}
 						autoPlay
@@ -439,7 +586,7 @@ export const CameraPage = () => {
 						disablePictureInPicture={false}
 						controlsList="nodownload nofullscreen noremoteplayback"
 						className={clsx(
-							"absolute inset-0 w-full h-full object-cover pointer-events-none",
+							"absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-200",
 							shape === "round" ? "rounded-full" : "rounded-3xl",
 						)}
 						style={videoStyle}
@@ -453,7 +600,7 @@ export const CameraPage = () => {
 							}
 						}}
 					/>
-					{!videoDimensions && (
+					{!videoDimensions && !lastFrameDataUrl && (
 						<div className="absolute inset-0 flex items-center justify-center">
 							<div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white" />
 						</div>
@@ -467,6 +614,7 @@ export const CameraPage = () => {
 									onClick={handleTogglePictureInPicture}
 									className="flex items-center justify-center size-4 rounded-full hover:bg-white/20 transition-colors"
 									aria-label="Exit Picture in Picture"
+									data-no-drag
 								>
 									<X className="size-3" />
 								</button>
