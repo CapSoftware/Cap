@@ -17,6 +17,7 @@ export default defineConfig({
 				popup: path.resolve(__dirname, "popup.html"),
 				permissions: path.resolve(__dirname, "permissions.html"),
 				camera: path.resolve(__dirname, "camera.html"),
+				offscreen: path.resolve(__dirname, "offscreen.html"),
 				"service-worker": path.resolve(
 					__dirname,
 					"src/background/service-worker.ts",
