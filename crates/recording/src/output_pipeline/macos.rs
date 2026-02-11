@@ -211,6 +211,19 @@ impl Muxer for AVFoundationMp4Muxer {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
+        if config.instant_mode
+            && let Some(available_mb) = get_available_disk_space_mb(&output_path)
+        {
+            info!(available_mb, "Disk space check before recording start");
+            if available_mb < DISK_SPACE_MIN_START_MB {
+                return Err(anyhow!(
+                    "Insufficient disk space to start recording: {}MB available, {}MB required",
+                    available_mb,
+                    DISK_SPACE_MIN_START_MB
+                ));
+            }
+        }
+
         let buffer_size = get_mp4_muxer_buffer_size(config.instant_mode);
         debug!(
             buffer_size,
