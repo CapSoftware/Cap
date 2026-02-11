@@ -59,6 +59,7 @@ impl CameraFrameScaler {
 }
 
 pub struct Camera {
+    #[allow(dead_code)]
     feed_lock: Arc<CameraFeedLock>,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped: Arc<AtomicBool>,
