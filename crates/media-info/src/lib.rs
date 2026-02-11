@@ -15,6 +15,7 @@ pub struct AudioInfo {
     pub channels: usize,
     pub time_base: FFRational,
     pub buffer_size: u32,
+    pub is_wireless_transport: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +46,7 @@ impl AudioInfo {
             channels: channel_count as usize,
             time_base: FFRational(1, 1_000_000),
             buffer_size: 1024,
+            is_wireless_transport: false,
         })
     }
 
@@ -55,6 +57,7 @@ impl AudioInfo {
             channels: channel_count as usize,
             time_base: FFRational(1, 1_000_000),
             buffer_size: 1024,
+            is_wireless_transport: false,
         }
     }
 
@@ -77,7 +80,7 @@ impl AudioInfo {
         // MAX_AUDIO_CHANNELS. This ensures audio data parsing works correctly.
         // The clamping to supported FFmpeg layouts happens in channel_layout()
         // and wrap_frame_with_max_channels() when creating output frames.
-        let raw_channels = config.channels().max(1); // At least 1 channel
+        let raw_channels = config.channels().max(1);
 
         Self {
             sample_format,
@@ -85,6 +88,7 @@ impl AudioInfo {
             channels: raw_channels.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
+            is_wireless_transport: false,
         }
     }
 
@@ -95,10 +99,10 @@ impl AudioInfo {
         Ok(Self {
             sample_format: decoder.format(),
             sample_rate: decoder.rate(),
-            // TODO: Use channel layout when we support more than just mono/stereo
             channels: usize::from(decoder.channels()),
             time_base: decoder.time_base(),
             buffer_size: decoder.frame_size(),
+            is_wireless_transport: false,
         })
     }
 
@@ -202,6 +206,11 @@ impl AudioInfo {
     /// Always expects packed input data
     pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
         self.wrap_frame_with_max_channels(data, self.channels)
+    }
+
+    pub fn with_wireless_transport(mut self, is_wireless: bool) -> Self {
+        self.is_wireless_transport = is_wireless;
+        self
     }
 
     pub fn with_max_channels(&self, channels: u16) -> Self {
