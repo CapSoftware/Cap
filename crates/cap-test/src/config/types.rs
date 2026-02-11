@@ -9,6 +9,8 @@ pub struct TestConfig {
     pub cameras: CameraConfig,
     pub audio: AudioConfig,
     pub thresholds: ThresholdConfig,
+    #[serde(default)]
+    pub scenarios: ScenarioConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,6 +244,130 @@ impl Default for ThresholdConfig {
             min_effective_fps_ratio: 0.95,
             max_p95_latency_ms: 50.0,
             max_av_sync_drift_ms: 100.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenarioConfig {
+    #[serde(default = "default_scenarios_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_scenario_duration")]
+    pub duration_secs: u64,
+    #[serde(default)]
+    pub scenarios: Vec<ScenarioType>,
+}
+
+fn default_scenarios_enabled() -> bool {
+    false
+}
+
+fn default_scenario_duration() -> u64 {
+    15
+}
+
+impl Default for ScenarioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration_secs: 15,
+            scenarios: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScenarioType {
+    MicDisconnectReconnect,
+    CameraDisconnectReconnect,
+    DisplayResolutionChange,
+    SystemAudioDeviceSwitch,
+    CaptureSourceRestart,
+    MultiMonitorRecording,
+    LongDurationStability,
+    AllDevicesCombined,
+}
+
+impl ScenarioType {
+    pub fn requires_interactive(&self) -> bool {
+        matches!(
+            self,
+            ScenarioType::MicDisconnectReconnect
+                | ScenarioType::CameraDisconnectReconnect
+                | ScenarioType::DisplayResolutionChange
+                | ScenarioType::SystemAudioDeviceSwitch
+                | ScenarioType::CaptureSourceRestart
+        )
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ScenarioType::MicDisconnectReconnect => "Microphone Disconnect/Reconnect",
+            ScenarioType::CameraDisconnectReconnect => "Camera Disconnect/Reconnect",
+            ScenarioType::DisplayResolutionChange => "Display Resolution Change",
+            ScenarioType::SystemAudioDeviceSwitch => "System Audio Device Switch",
+            ScenarioType::CaptureSourceRestart => "Capture Source Restart",
+            ScenarioType::MultiMonitorRecording => "Multi-Monitor Recording",
+            ScenarioType::LongDurationStability => "Long Duration Stability",
+            ScenarioType::AllDevicesCombined => "All Devices Combined",
+        }
+    }
+
+    pub fn related_task(&self) -> &'static str {
+        match self {
+            ScenarioType::MicDisconnectReconnect => "task 6",
+            ScenarioType::CameraDisconnectReconnect => "task 17",
+            ScenarioType::DisplayResolutionChange => "task 9",
+            ScenarioType::SystemAudioDeviceSwitch => "task 7",
+            ScenarioType::CaptureSourceRestart => "task 8",
+            ScenarioType::MultiMonitorRecording => "task 10",
+            ScenarioType::LongDurationStability => "stability",
+            ScenarioType::AllDevicesCombined => "integration",
+        }
+    }
+
+    pub fn all() -> Vec<ScenarioType> {
+        vec![
+            ScenarioType::MicDisconnectReconnect,
+            ScenarioType::CameraDisconnectReconnect,
+            ScenarioType::DisplayResolutionChange,
+            ScenarioType::SystemAudioDeviceSwitch,
+            ScenarioType::CaptureSourceRestart,
+            ScenarioType::MultiMonitorRecording,
+            ScenarioType::LongDurationStability,
+            ScenarioType::AllDevicesCombined,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureClassification {
+    Panic,
+    UnrecoverableStop,
+    UnplayableOutput,
+    PerformanceBelowThreshold,
+    ValidationError,
+}
+
+impl FailureClassification {
+    pub fn is_blocking(&self) -> bool {
+        matches!(
+            self,
+            FailureClassification::Panic
+                | FailureClassification::UnrecoverableStop
+                | FailureClassification::UnplayableOutput
+        )
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            FailureClassification::Panic => "PANIC",
+            FailureClassification::UnrecoverableStop => "UNRECOVERABLE STOP",
+            FailureClassification::UnplayableOutput => "UNPLAYABLE OUTPUT",
+            FailureClassification::PerformanceBelowThreshold => "PERFORMANCE BELOW THRESHOLD",
+            FailureClassification::ValidationError => "VALIDATION ERROR",
         }
     }
 }
