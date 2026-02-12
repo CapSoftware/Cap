@@ -264,13 +264,14 @@ function SaveProgressOverlay({
 	message: string | null;
 	onCancel: () => void;
 }) {
+	const resolvedMessage = message || "Saving your changes...";
+	const messageContainsPercent = /\d{1,3}%/.test(resolvedMessage);
+
 	return (
 		<div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded-lg">
 			<div className="flex flex-col items-center gap-4 max-w-xs px-6">
 				<Loader2 className="size-8 text-white animate-spin" />
-				<p className="text-sm text-white/90 text-center">
-					{message || "Saving your changes..."}
-				</p>
+				<p className="text-sm text-white/90 text-center">{resolvedMessage}</p>
 				<div className="w-full flex flex-col items-center gap-1.5">
 					<div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
 						<div
@@ -278,7 +279,11 @@ function SaveProgressOverlay({
 							style={{ width: `${Math.max(2, progress)}%` }}
 						/>
 					</div>
-					<span className="text-xs text-white/70">{Math.round(progress)}%</span>
+					{!messageContainsPercent && (
+						<span className="text-xs text-white/70">
+							{Math.round(progress)}%
+						</span>
+					)}
 				</div>
 				<button
 					type="button"
