@@ -51,6 +51,38 @@ describe("computeRenderSpec", () => {
 		expect(spec.innerRect.y).toBe(10);
 	});
 
+	it("fits inner rect to source ratio when output ratio differs", () => {
+		const spec = computeRenderSpec(
+			baseConfig({ aspectRatio: "classic" }),
+			1920,
+			1080,
+		);
+		expect(spec.outputWidth).toBe(1920);
+		expect(spec.outputHeight).toBe(1440);
+		expect(spec.innerRect.width).toBe(1920);
+		expect(spec.innerRect.height).toBe(1080);
+		expect(spec.innerRect.x).toBe(0);
+		expect(spec.innerRect.y).toBe(180);
+	});
+
+	it("keeps room for shadow when source ratio differs from output ratio", () => {
+		const spec = computeRenderSpec(
+			baseConfig({
+				aspectRatio: "classic",
+				background: {
+					...baseConfig().background,
+					shadow: 100,
+					advancedShadow: { size: 50, opacity: 50, blur: 50 },
+				},
+			}),
+			1920,
+			1080,
+		);
+		expect(spec.innerRect.width).toBeLessThan(spec.outputWidth);
+		expect(spec.innerRect.x).toBeGreaterThan(0);
+		expect(spec.innerRect.width / spec.innerRect.height).toBeCloseTo(16 / 9, 2);
+	});
+
 	it("maps rounding type to radius multiplier", () => {
 		const rounded = computeRenderSpec(
 			baseConfig({
