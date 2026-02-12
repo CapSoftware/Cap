@@ -31,6 +31,9 @@ const ACTION_TEXT = {
 	openRecordingPickerDisplay: "Record display",
 	openRecordingPickerWindow: "Record window",
 	openRecordingPickerArea: "Record area",
+	screenshotDisplay: "Screenshot current display",
+	screenshotWindow: "Screenshot current window",
+	screenshotArea: "Screenshot area picker",
 } satisfies { [K in HotkeyAction]?: string };
 
 export default function () {
@@ -87,6 +90,9 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 			"openRecordingPickerDisplay",
 			"openRecordingPickerWindow",
 			"openRecordingPickerArea",
+			"screenshotDisplay",
+			"screenshotWindow",
+			"screenshotArea",
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (
