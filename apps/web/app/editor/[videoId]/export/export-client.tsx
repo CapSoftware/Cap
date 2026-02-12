@@ -22,6 +22,7 @@ import type {
 	ProjectConfiguration,
 	TimelineSegment,
 } from "../../types/project-config";
+import { getAudioPlaybackGain } from "../../utils/audio";
 import { resolveBackgroundAssetPath } from "../../utils/backgrounds";
 import {
 	formatTime,
@@ -727,8 +728,13 @@ export function ExportClient({
 			audioContext = new AudioContextCtor();
 			await audioContext.resume().catch(() => undefined);
 			const source = audioContext.createMediaElementSource(videoEl);
+			const gain = audioContext.createGain();
+			const outputGain = getAudioPlaybackGain(projectConfig.audio);
 			const destination = audioContext.createMediaStreamDestination();
-			source.connect(destination);
+			source.connect(gain);
+			gain.connect(destination);
+			gain.gain.value = outputGain;
+			videoEl.muted = outputGain <= 0;
 			for (const track of destination.stream.getAudioTracks()) {
 				stream.addTrack(track);
 			}
@@ -940,6 +946,7 @@ export function ExportClient({
 		cameraUrl,
 		effectiveResize,
 		projectConfig.timeline?.segments,
+		projectConfig.audio,
 		sourceSpec,
 		stripAudio,
 		video.duration,
