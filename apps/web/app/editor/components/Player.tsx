@@ -467,7 +467,8 @@ export function Player() {
 
 	const cropOverlayStyle = useMemo(() => {
 		if (!cropDraft) return null;
-		if (cropViewportSize.width <= 0 || cropViewportSize.height <= 0) return null;
+		if (cropViewportSize.width <= 0 || cropViewportSize.height <= 0)
+			return null;
 		return {
 			left: (cropDraft.x / sourceWidth) * cropViewportSize.width,
 			top: (cropDraft.y / sourceHeight) * cropViewportSize.height,
