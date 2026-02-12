@@ -106,10 +106,7 @@ pub async fn export_video(
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    let force_ffmpeg = true;
-    tracing::info!(
-        "Using FFmpeg decoder for export (ensures all frames can be decoded regardless of keyframe positions)"
-    );
+    let force_ffmpeg = false;
 
     let _guard = if let Some(ref ed) = *editor {
         ed.export_active.store(true, Ordering::Release);
