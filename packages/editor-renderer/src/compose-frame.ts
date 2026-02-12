@@ -137,7 +137,8 @@ export function composeFrame(
 
 	if (videoFrame) {
 		const { x, y, width, height } = spec.innerRect;
-		const videoRatio = videoFrame.width / videoFrame.height;
+		const crop = spec.videoCrop;
+		const videoRatio = crop.width / crop.height;
 		const rectRatio = width / height;
 
 		let drawW: number;
@@ -159,6 +160,10 @@ export function composeFrame(
 
 		(ctx as unknown as { drawImage(...args: unknown[]): void }).drawImage(
 			videoFrame.source,
+			crop.x,
+			crop.y,
+			crop.width,
+			crop.height,
 			drawX,
 			drawY,
 			drawW,
