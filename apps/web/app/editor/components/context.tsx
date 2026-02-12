@@ -10,11 +10,12 @@ import {
 	useState,
 } from "react";
 import { DEFAULT_EDITOR_STATE, type EditorState } from "../types/editor-state";
-import type {
-	ProjectConfiguration,
-	TimelineSegment,
-} from "../types/project-config";
+import type { ProjectConfiguration } from "../types/project-config";
 import { createDefaultConfig } from "../utils/defaults";
+import {
+	findNextSegmentIndex,
+	findSegmentIndexAtTime,
+} from "../utils/playback";
 import {
 	createEmptyWaveform,
 	generateWaveformFromUrl,
@@ -58,31 +59,6 @@ function savePersistedState(
 	try {
 		localStorage.setItem(getEditorStorageKey(videoId), JSON.stringify(state));
 	} catch {}
-}
-
-function findSegmentAtTime(
-	segments: TimelineSegment[],
-	time: number,
-): TimelineSegment | null {
-	for (const segment of segments) {
-		if (time >= segment.start && time < segment.end) {
-			return segment;
-		}
-	}
-	return null;
-}
-
-function findNextSegment(
-	segments: TimelineSegment[],
-	time: number,
-): TimelineSegment | null {
-	const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
-	for (const segment of sortedSegments) {
-		if (segment.start > time) {
-			return segment;
-		}
-	}
-	return null;
 }
 
 interface VideoData {
@@ -278,16 +254,18 @@ export function EditorProvider({
 		const segments = project.timeline?.segments ?? [
 			{ start: 0, end: video.duration, timescale: 1 },
 		];
-		const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
 		const currentTime = videoRef.current.currentTime;
 
-		const currentSegment = findSegmentAtTime(sortedSegments, currentTime);
-		if (!currentSegment) {
-			const nextSegment = findNextSegment(sortedSegments, currentTime);
-			if (nextSegment) {
-				videoRef.current.currentTime = nextSegment.start;
+		const currentSegmentIndex = findSegmentIndexAtTime(segments, currentTime);
+		if (currentSegmentIndex === -1) {
+			const nextSegmentIndex = findNextSegmentIndex(segments, currentTime);
+			if (nextSegmentIndex !== -1) {
+				const nextSegment = segments[nextSegmentIndex];
+				if (nextSegment) {
+					videoRef.current.currentTime = nextSegment.start;
+				}
 			} else {
-				const firstSegment = sortedSegments[0];
+				const firstSegment = segments[0];
 				if (firstSegment) {
 					videoRef.current.currentTime = firstSegment.start;
 				}
@@ -338,7 +316,6 @@ export function EditorProvider({
 		const segments = project.timeline?.segments ?? [
 			{ start: 0, end: video.duration, timescale: 1 },
 		];
-		const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
 		let animationFrameId: number;
 
 		const syncCamera = (time: number) => {
@@ -352,14 +329,17 @@ export function EditorProvider({
 		const updatePlayhead = () => {
 			if (videoRef.current) {
 				const currentTime = videoRef.current.currentTime;
-
-				const currentSegment = findSegmentAtTime(sortedSegments, currentTime);
-				const lastSegment = sortedSegments[sortedSegments.length - 1];
+				const currentSegmentIndex = findSegmentIndexAtTime(
+					segments,
+					currentTime,
+				);
+				const lastSegment = segments[segments.length - 1];
 				const endTime = lastSegment?.end ?? video.duration;
 
-				if (currentSegment) {
-					if (currentTime >= currentSegment.end) {
-						const nextSegment = findNextSegment(sortedSegments, currentTime);
+				if (currentSegmentIndex !== -1) {
+					const currentSegment = segments[currentSegmentIndex];
+					if (currentSegment && currentTime >= currentSegment.end - 0.001) {
+						const nextSegment = segments[currentSegmentIndex + 1];
 						if (nextSegment) {
 							videoRef.current.currentTime = nextSegment.start;
 							syncCamera(nextSegment.start);
@@ -375,7 +355,9 @@ export function EditorProvider({
 						}
 					}
 				} else {
-					const nextSegment = findNextSegment(sortedSegments, currentTime);
+					const nextSegmentIndex = findNextSegmentIndex(segments, currentTime);
+					const nextSegment =
+						nextSegmentIndex === -1 ? null : segments[nextSegmentIndex];
 					if (nextSegment) {
 						videoRef.current.currentTime = nextSegment.start;
 						syncCamera(nextSegment.start);
