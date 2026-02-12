@@ -1,7 +1,7 @@
 import { Popover } from "@kobalte/core/popover";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
-import { Show, type ValidComponent } from "solid-js";
+import { batch, Show, type ValidComponent } from "solid-js";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCorners from "~icons/cap/corners";
 import { useScreenshotEditorContext } from "../context";
@@ -20,18 +20,63 @@ const CORNER_STYLE_OPTIONS = [
 	{ name: "Rounded", value: "rounded" },
 ] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
+function hasNoVisibleBackground(source: {
+	type: string;
+	path?: string | null;
+	alpha?: number;
+}): boolean {
+	if (source.type === "color") {
+		return (source.alpha ?? 255) === 0;
+	}
+	if (source.type === "wallpaper" || source.type === "image") {
+		return !source.path;
+	}
+	return false;
+}
+
 export function RoundingPopover() {
 	const { project, setProject, activePopover, setActivePopover } =
 		useScreenshotEditorContext();
+
+	const handleRoundingChange = (v: number[]) => {
+		const value = v[0];
+		batch(() => {
+			if (
+				value > 0 &&
+				hasNoVisibleBackground(
+					project.background.source as {
+						type: string;
+						path?: string | null;
+						alpha?: number;
+					},
+				)
+			) {
+				setProject("background", "source", {
+					type: "color",
+					value: [255, 255, 255],
+					alpha: 255,
+				});
+				if (project.background.padding === 0) {
+					setProject("background", "padding", 10);
+				}
+			}
+			setProject("background", "rounding", value);
+		});
+	};
 
 	return (
 		<Popover
 			placement="bottom-start"
 			open={activePopover() === "rounding"}
-			onOpenChange={(open) => setActivePopover(open ? "rounding" : null)}
+			onOpenChange={(open) => {
+				if (!open && activePopover() === "rounding") setActivePopover(null);
+			}}
 		>
-			<Popover.Trigger
+			<Popover.Anchor
 				as={EditorButton}
+				onClick={() =>
+					setActivePopover(activePopover() === "rounding" ? null : "rounding")
+				}
 				leftIcon={<IconCapCorners class="size-4" />}
 				tooltipText="Corner Rounding"
 			/>
@@ -42,7 +87,7 @@ export function RoundingPopover() {
 							<span class="text-xs font-medium text-gray-11">Rounding</span>
 							<Slider
 								value={[project.background.rounding]}
-								onChange={(v) => setProject("background", "rounding", v[0])}
+								onChange={handleRoundingChange}
 								minValue={0}
 								maxValue={100}
 								step={1}
