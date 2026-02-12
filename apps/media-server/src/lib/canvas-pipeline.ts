@@ -71,9 +71,43 @@ function parseProgressFromStderr(
 	stderrLine: string,
 	totalDurationUs: number,
 ): number | null {
-	const match = stderrLine.match(/out_time_us=(\d+)/);
-	if (!match) return null;
-	const currentUs = Number.parseInt(match[1] ?? "0", 10);
+	if (totalDurationUs <= 0) {
+		return null;
+	}
+
+	const outTimeUsMatch = stderrLine.match(/out_time_us=(\d+)/);
+	if (outTimeUsMatch) {
+		const currentUs = Number.parseInt(outTimeUsMatch[1] ?? "0", 10);
+		return Math.min(100, (currentUs / totalDurationUs) * 100);
+	}
+
+	const outTimeMsMatch = stderrLine.match(/out_time_ms=(\d+)/);
+	if (outTimeMsMatch) {
+		const currentUs = Number.parseInt(outTimeMsMatch[1] ?? "0", 10);
+		return Math.min(100, (currentUs / totalDurationUs) * 100);
+	}
+
+	const outTimeMatch = stderrLine.match(
+		/out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/,
+	);
+	if (!outTimeMatch) {
+		return null;
+	}
+
+	const hours = Number.parseInt(outTimeMatch[1] ?? "0", 10);
+	const minutes = Number.parseInt(outTimeMatch[2] ?? "0", 10);
+	const seconds = Number.parseFloat(outTimeMatch[3] ?? "0");
+	if (
+		!Number.isFinite(hours) ||
+		!Number.isFinite(minutes) ||
+		!Number.isFinite(seconds)
+	) {
+		return null;
+	}
+
+	const currentUs = Math.round(
+		(hours * 3600 + minutes * 60 + seconds) * 1_000_000,
+	);
 	return Math.min(100, (currentUs / totalDurationUs) * 100);
 }
 
