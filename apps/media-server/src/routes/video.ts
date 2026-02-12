@@ -452,7 +452,10 @@ async function processVideoAsync(
 			},
 			(progress, message) => {
 				const scaledProgress = 10 + progress * 0.7;
-				updateJob(jobId, { progress: scaledProgress, message });
+				const scaledMessage = message.startsWith("Encoding:")
+					? `Encoding: ${Math.round(scaledProgress)}%`
+					: message;
+				updateJob(jobId, { progress: scaledProgress, message: scaledMessage });
 				const currentJob = getJob(jobId);
 				if (currentJob) {
 					void sendWebhook(currentJob);
@@ -631,7 +634,10 @@ async function processEditorVideoAsync(
 			{},
 			(progress, message) => {
 				const scaledProgress = 10 + progress * 0.8;
-				updateJob(jobId, { progress: scaledProgress, message });
+				const scaledMessage = message.startsWith("Encoding:")
+					? `Encoding: ${Math.round(scaledProgress)}%`
+					: message;
+				updateJob(jobId, { progress: scaledProgress, message: scaledMessage });
 				const currentJob = getJob(jobId);
 				if (currentJob) {
 					void sendWebhook(currentJob);
