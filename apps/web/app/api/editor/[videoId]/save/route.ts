@@ -1,11 +1,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { videos } from "@cap/database/schema";
+import { videoEditorProjects, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { normalizeConfigForRender } from "@cap/editor-render-spec";
 import type { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Schema } from "effect";
 import type { NextRequest } from "next/server";
 import { start } from "workflow/api";
@@ -13,6 +13,7 @@ import {
 	ProjectConfiguration,
 	type ProjectConfiguration as ProjectConfigurationType,
 } from "@/app/editor/types/project-config";
+import { hasCameraRecording } from "@/lib/editor-camera";
 import {
 	createEditorSavedRenderState,
 	getCameraVideoKey,
@@ -29,6 +30,7 @@ interface RouteContext {
 const SaveBody = Schema.Struct({
 	config: ProjectConfiguration,
 	force: Schema.optional(Schema.Boolean),
+	expectedUpdatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export async function GET(_request: NextRequest, context: RouteContext) {
@@ -92,6 +94,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
 	const config = parsedBody.right.config as ProjectConfigurationType;
 	const force = parsedBody.right.force === true;
+	const expectedUpdatedAt = parsedBody.right.expectedUpdatedAt ?? null;
 
 	const normalized = normalizeConfigForRender(config);
 	const errors = normalized.issues.filter(
@@ -128,6 +131,38 @@ export async function POST(request: NextRequest, context: RouteContext) {
 		return Response.json({ error: "Forbidden" }, { status: 403 });
 	}
 
+	const [currentProject] = await db()
+		.select({
+			config: videoEditorProjects.config,
+			updatedAt: videoEditorProjects.updatedAt,
+		})
+		.from(videoEditorProjects)
+		.where(
+			and(
+				eq(videoEditorProjects.videoId, video.id),
+				eq(videoEditorProjects.ownerId, user.id),
+			),
+		)
+		.limit(1);
+
+	const currentProjectUpdatedAt =
+		currentProject?.updatedAt.toISOString() ?? null;
+
+	if (
+		currentProject &&
+		(!expectedUpdatedAt || expectedUpdatedAt !== currentProjectUpdatedAt)
+	) {
+		return Response.json(
+			{
+				error: "Editor config is out of date",
+				code: "CONFIG_CONFLICT",
+				config: currentProject.config as ProjectConfigurationType,
+				updatedAt: currentProjectUpdatedAt,
+			},
+			{ status: 409 },
+		);
+	}
+
 	const currentMetadata = (video.metadata as VideoMetadata | null) || {};
 	const currentRenderState = getEditorSavedRenderState(currentMetadata);
 	const isLegacyStuckPreparingState =
@@ -144,6 +179,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
 				success: true,
 				status: currentRenderState.status,
 				renderState: currentRenderState,
+				updatedAt: currentProjectUpdatedAt,
+				configSaved: false,
 			},
 			{ status: 200 },
 		);
@@ -157,13 +194,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
 			updatedAt = NOW()
 	`);
 
+	const [savedProject] = await db()
+		.select({
+			updatedAt: videoEditorProjects.updatedAt,
+		})
+		.from(videoEditorProjects)
+		.where(
+			and(
+				eq(videoEditorProjects.videoId, video.id),
+				eq(videoEditorProjects.ownerId, user.id),
+			),
+		)
+		.limit(1);
+
+	const savedProjectUpdatedAt =
+		savedProject?.updatedAt.toISOString() ?? new Date().toISOString();
+
 	const sourceType = (video.source as { type: string } | null)?.type;
 	const sourceKey = getOriginalVideoKey(video.id, user.id, sourceType);
 	const outputKey = getSavedRenderOutputKey(video.id, user.id);
-	const cameraKey =
+	const hasCamera =
 		sourceType === "webStudio"
-			? getCameraVideoKey(video.id, user.id)
-			: undefined;
+			? await hasCameraRecording({
+					videoId: video.id,
+					ownerId: video.ownerId,
+					bucketId: video.bucket,
+				})
+			: false;
+	const cameraKey = hasCamera
+		? getCameraVideoKey(video.id, video.ownerId)
+		: undefined;
 
 	const queuedState = createEditorSavedRenderState({
 		status: "QUEUED",
@@ -229,6 +289,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
 			success: true,
 			status: "QUEUED",
 			renderState: queuedState,
+			updatedAt: savedProjectUpdatedAt,
+			configSaved: true,
 		},
 		{ status: 200 },
 	);
