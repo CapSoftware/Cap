@@ -348,8 +348,8 @@ export function Timeline() {
 
 					<div className="flex items-stretch gap-2 h-full">
 						<div
-							className="flex items-center justify-center text-gray-11"
-							style={{ width: TRACK_GUTTER - 8 }}
+							className="flex shrink-0 items-center justify-center text-gray-11"
+							style={{ width: TRACK_GUTTER - 8, height: TRACK_HEIGHT }}
 						>
 							<svg
 								className="size-4"

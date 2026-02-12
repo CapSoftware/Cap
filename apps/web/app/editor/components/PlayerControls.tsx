@@ -11,11 +11,21 @@ export function PlayerControls() {
 	return (
 		<div className="flex items-center gap-4 px-4 py-3 border-t border-gray-4 bg-gray-2">
 			<div className="flex items-center gap-2">
-				<Button variant="ghost" size="sm" onClick={() => actions.seekTo(0)}>
+				<Button
+					variant="ghost"
+					size="sm"
+					onClick={() => actions.seekTo(0)}
+					className="text-gray-11 hover:text-gray-12 hover:bg-gray-4"
+				>
 					<SkipBack className="size-4" />
 				</Button>
 
-				<Button variant="ghost" size="sm" onClick={actions.togglePlayback}>
+				<Button
+					variant="ghost"
+					size="sm"
+					onClick={actions.togglePlayback}
+					className="text-gray-11 hover:text-gray-12 hover:bg-gray-4"
+				>
 					{editorState.playing ? (
 						<Pause className="size-4" />
 					) : (
