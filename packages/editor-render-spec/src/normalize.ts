@@ -138,6 +138,61 @@ function normalizeBackgroundSource(
 	return fallback;
 }
 
+function normalizeBackgroundCrop(
+	value: unknown,
+	issues: RenderConfigIssue[],
+): { x: number; y: number; width: number; height: number } | null {
+	if (value == null) return null;
+
+	if (!isRecord(value)) {
+		issues.push(
+			issue(
+				"warning",
+				"BACKGROUND_CROP_INVALID",
+				"background.crop",
+				"Background crop is invalid and was ignored.",
+			),
+		);
+		return null;
+	}
+
+	const x = value.x;
+	const y = value.y;
+	const width = value.width;
+	const height = value.height;
+
+	if (
+		!isFiniteNumber(x) ||
+		!isFiniteNumber(y) ||
+		!isFiniteNumber(width) ||
+		!isFiniteNumber(height)
+	) {
+		issues.push(
+			issue(
+				"warning",
+				"BACKGROUND_CROP_INVALID",
+				"background.crop",
+				"Background crop is invalid and was ignored.",
+			),
+		);
+		return null;
+	}
+
+	if (width <= 0 || height <= 0) {
+		issues.push(
+			issue(
+				"warning",
+				"BACKGROUND_CROP_INVALID_SIZE",
+				"background.crop",
+				"Background crop width and height must be greater than zero.",
+			),
+		);
+		return null;
+	}
+
+	return { x, y, width, height };
+}
+
 function normalizeTimeline(
 	value: unknown,
 	issues: RenderConfigIssue[],
@@ -279,17 +334,6 @@ export function normalizeConfigForRender(
 		);
 	}
 
-	if (background && background.crop !== undefined && background.crop !== null) {
-		issues.push(
-			issue(
-				"error",
-				"BACKGROUND_CROP_UNSUPPORTED",
-				"background.crop",
-				"Background crop is not supported for export.",
-			),
-		);
-	}
-
 	if (
 		background &&
 		background.border !== undefined &&
@@ -306,6 +350,7 @@ export function normalizeConfigForRender(
 	}
 
 	const source = normalizeBackgroundSource(background?.source, issues);
+	const crop = normalizeBackgroundCrop(background?.crop, issues);
 
 	const paddingRaw = background?.padding;
 	const padding = isFiniteNumber(paddingRaw) ? clamp(paddingRaw, 0, 40) : 0;
@@ -373,6 +418,7 @@ export function normalizeConfigForRender(
 			padding,
 			rounding,
 			roundingType,
+			crop,
 			shadow,
 			advancedShadow,
 		},
