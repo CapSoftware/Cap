@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { editTitle } from "@/actions/videos/edit-title";
+import type { ProjectConfiguration } from "../types/project-config";
 import { useEditorContext } from "./context";
 
 interface HeaderProps {
@@ -15,7 +16,14 @@ interface HeaderProps {
 }
 
 export function Header({ videoId }: HeaderProps) {
-	const { video, history, project, saveRender } = useEditorContext();
+	const {
+		video,
+		history,
+		project,
+		projectUpdatedAt,
+		syncProject,
+		saveRender,
+	} = useEditorContext();
 	const router = useRouter();
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
 	const [title, setTitle] = useState(video.name);
@@ -101,15 +109,42 @@ export function Header({ videoId }: HeaderProps) {
 		setIsNavigatingToExport(true);
 
 		try {
-			await fetch(`/api/editor/${videoId}`, {
+			const response = await fetch(`/api/editor/${videoId}`, {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ config: project }),
-			}).catch(() => undefined);
+				body: JSON.stringify({
+					config: project,
+					expectedUpdatedAt: projectUpdatedAt,
+				}),
+			});
+			const data = (await response.json().catch(() => null)) as
+				| {
+						code?: string;
+						config?: ProjectConfiguration;
+						updatedAt?: string;
+				  }
+				| null;
+
+			if (
+				response.status === 409 &&
+				data?.code === "CONFIG_CONFLICT" &&
+				data.config &&
+				typeof data.updatedAt === "string"
+			) {
+				syncProject(data.config, data.updatedAt);
+				toast.error("This tab synced to newer changes from another tab.");
+			}
 		} finally {
 			router.push(`/editor/${videoId}/export`);
 		}
-	}, [router, videoId, project, isNavigatingToExport]);
+	}, [
+		isNavigatingToExport,
+		project,
+		projectUpdatedAt,
+		router,
+		syncProject,
+		videoId,
+	]);
 
 	return (
 		<header className="flex items-center justify-between h-12 sm:h-14 px-2 sm:px-4 border-b border-gray-4 bg-gray-2 shrink-0">
