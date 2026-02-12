@@ -16,14 +16,8 @@ interface HeaderProps {
 }
 
 export function Header({ videoId }: HeaderProps) {
-	const {
-		video,
-		history,
-		project,
-		projectUpdatedAt,
-		syncProject,
-		saveRender,
-	} = useEditorContext();
+	const { video, history, project, projectUpdatedAt, syncProject, saveRender } =
+		useEditorContext();
 	const router = useRouter();
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
 	const [title, setTitle] = useState(video.name);
@@ -117,13 +111,11 @@ export function Header({ videoId }: HeaderProps) {
 					expectedUpdatedAt: projectUpdatedAt,
 				}),
 			});
-			const data = (await response.json().catch(() => null)) as
-				| {
-						code?: string;
-						config?: ProjectConfiguration;
-						updatedAt?: string;
-				  }
-				| null;
+			const data = (await response.json().catch(() => null)) as {
+				code?: string;
+				config?: ProjectConfiguration;
+				updatedAt?: string;
+			} | null;
 
 			if (
 				response.status === 409 &&

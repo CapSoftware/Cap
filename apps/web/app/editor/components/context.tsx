@@ -210,7 +210,9 @@ export function EditorProvider({
 	const initialTimeRef = useRef(0);
 	const hasRestoredTimeRef = useRef(false);
 	const loadedPersistedForVideoIdRef = useRef<string | null>(null);
-	const projectUpdatedAtRef = useRef<string | null>(initialProjectUpdatedAt ?? null);
+	const projectUpdatedAtRef = useRef<string | null>(
+		initialProjectUpdatedAt ?? null,
+	);
 	const projectSerializedRef = useRef<string>(serializeProject(initialProject));
 	const skipNextProjectSaveRef = useRef(true);
 	const tabIdRef = useRef(createTabId());
@@ -290,7 +292,7 @@ export function EditorProvider({
 	useEffect(() => {
 		skipNextProjectSaveRef.current = true;
 		setProjectUpdatedAt(initialProjectUpdatedAt ?? null);
-	}, [initialProjectUpdatedAt, setProjectUpdatedAt, video.id]);
+	}, [initialProjectUpdatedAt, setProjectUpdatedAt]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -299,7 +301,9 @@ export function EditorProvider({
 		const onStorage = (event: StorageEvent) => {
 			if (event.key !== syncKey || !event.newValue) return;
 			try {
-				const payload = JSON.parse(event.newValue) as Partial<EditorProjectSyncPayload>;
+				const payload = JSON.parse(
+					event.newValue,
+				) as Partial<EditorProjectSyncPayload>;
 				if (payload.videoId !== video.id) return;
 				if (payload.tabId === tabIdRef.current) return;
 				if (typeof payload.updatedAt !== "string") return;
@@ -406,13 +410,11 @@ export function EditorProvider({
 				}),
 			})
 				.then(async (response) => {
-					const data = (await response.json().catch(() => null)) as
-						| {
-							code?: string;
-							config?: ProjectConfiguration;
-							updatedAt?: string;
-						}
-						| null;
+					const data = (await response.json().catch(() => null)) as {
+						code?: string;
+						config?: ProjectConfiguration;
+						updatedAt?: string;
+					} | null;
 
 					if (!response.ok) {
 						if (

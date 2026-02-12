@@ -39,8 +39,7 @@ async function getProjectConfig(
 			if (data.config) {
 				return {
 					config: data.config as ProjectConfiguration,
-					updatedAt:
-						typeof data.updatedAt === "string" ? data.updatedAt : null,
+					updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : null,
 				};
 			}
 		}
