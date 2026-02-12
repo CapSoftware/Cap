@@ -13,6 +13,7 @@ function baseConfig(
 			padding: 0,
 			rounding: 0,
 			roundingType: "squircle",
+			crop: null,
 			shadow: 0,
 			advancedShadow: { size: 50, opacity: 18, blur: 50 },
 		},
@@ -95,6 +96,38 @@ describe("computeRenderSpec", () => {
 		expect(spec.shadowSpec.spreadPx).toBe(6);
 		expect(spec.shadowSpec.alpha).toBe(0.45);
 	});
+
+	it("uses crop bounds for rendered source frame", () => {
+		const spec = computeRenderSpec(
+			baseConfig({
+				background: {
+					...baseConfig().background,
+					crop: { x: 10, y: 20, width: 640, height: 360 },
+				},
+			}),
+			1920,
+			1080,
+		);
+
+		expect(spec.videoCrop).toEqual({ x: 10, y: 20, width: 640, height: 360 });
+		expect(spec.outputWidth).toBe(640);
+		expect(spec.outputHeight).toBe(360);
+	});
+
+	it("clamps crop bounds into source frame", () => {
+		const spec = computeRenderSpec(
+			baseConfig({
+				background: {
+					...baseConfig().background,
+					crop: { x: -10, y: -40, width: 5000, height: 5000 },
+				},
+			}),
+			1280,
+			720,
+		);
+
+		expect(spec.videoCrop).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
+	});
 });
 
 describe("normalizeConfigForRender", () => {
@@ -132,5 +165,28 @@ describe("normalizeConfigForRender", () => {
 		if (result2.config.background.source.type === "gradient") {
 			expect(result2.config.background.source.angle).toBe(360);
 		}
+	});
+
+	it("accepts valid background crop", () => {
+		const result = normalizeConfigForRender({
+			background: {
+				crop: {
+					x: 100,
+					y: 120,
+					width: 800,
+					height: 500,
+				},
+			},
+		});
+
+		expect(result.config.background.crop).toEqual({
+			x: 100,
+			y: 120,
+			width: 800,
+			height: 500,
+		});
+		expect(
+			result.issues.some((i) => i.code === "BACKGROUND_CROP_UNSUPPORTED"),
+		).toBe(false);
 	});
 });
