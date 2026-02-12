@@ -45,11 +45,19 @@ export type AdvancedShadowSpec = {
 	blur: number;
 };
 
+export type BackgroundCropSpec = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
 export type BackgroundConfigSpec = {
 	source: BackgroundSourceSpec;
 	padding: number;
 	rounding: number;
 	roundingType: "rounded" | "squircle";
+	crop: BackgroundCropSpec | null;
 	shadow: number;
 	advancedShadow: AdvancedShadowSpec;
 };
@@ -134,6 +142,7 @@ export type RenderSpec = {
 	outputWidth: number;
 	outputHeight: number;
 	innerRect: RenderInnerRect;
+	videoCrop: RenderInnerRect;
 	backgroundSpec: RenderBackgroundSpec;
 	maskSpec: RenderMaskSpec;
 	shadowSpec: RenderShadowSpec;
