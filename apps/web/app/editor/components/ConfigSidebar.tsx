@@ -38,6 +38,35 @@ const ASPECT_RATIOS: Array<{ value: AspectRatio; label: string }> = [
 	{ value: "tall", label: "3:4" },
 ];
 
+const SOCIAL_ASPECT_PRESETS: Array<{
+	id: string;
+	label: string;
+	ratio: string;
+	value: AspectRatio;
+}> = [
+	{
+		id: "instagram-story",
+		label: "Instagram Story",
+		ratio: "9:16",
+		value: "vertical",
+	},
+	{ id: "tiktok", label: "TikTok", ratio: "9:16", value: "vertical" },
+	{
+		id: "instagram-reel",
+		label: "Instagram Reel",
+		ratio: "9:16",
+		value: "vertical",
+	},
+	{
+		id: "instagram-feed",
+		label: "Instagram Feed",
+		ratio: "1:1",
+		value: "square",
+	},
+	{ id: "youtube", label: "YouTube", ratio: "16:9", value: "wide" },
+	{ id: "linkedin", label: "LinkedIn", ratio: "4:3", value: "classic" },
+];
+
 interface SliderProps {
 	value: number;
 	onChange: (value: number) => void;
@@ -112,6 +141,17 @@ function BackgroundPanel() {
 		background.source.type === "gradient" ? background.source.angle : undefined;
 	const [backgroundTheme, setBackgroundTheme] =
 		useState<keyof typeof BACKGROUND_THEMES>("macOS");
+	const [activeSocialAspectPresetId, setActiveSocialAspectPresetId] = useState<
+		string | null
+	>(null);
+
+	const updateAspectRatio = useCallback(
+		(nextAspectRatio: AspectRatio | null, socialPresetId: string | null) => {
+			setProject({ ...project, aspectRatio: nextAspectRatio });
+			setActiveSocialAspectPresetId(socialPresetId);
+		},
+		[project, setProject],
+	);
 
 	const toAbsoluteAssetUrl = useCallback((path: string) => {
 		if (typeof window === "undefined") return path;
@@ -209,6 +249,21 @@ function BackgroundPanel() {
 			? resolveBackgroundSourcePath(background.source)
 			: null;
 
+	useEffect(() => {
+		if (project.aspectRatio === null) {
+			setActiveSocialAspectPresetId(null);
+			return;
+		}
+
+		if (activeSocialAspectPresetId == null) return;
+
+		const activePreset = SOCIAL_ASPECT_PRESETS.find(
+			(preset) => preset.id === activeSocialAspectPresetId,
+		);
+		if (activePreset?.value === project.aspectRatio) return;
+		setActiveSocialAspectPresetId(null);
+	}, [project.aspectRatio, activeSocialAspectPresetId]);
+
 	return (
 		<div className="flex flex-col gap-6">
 			<Field label="Aspect Ratio">
@@ -217,7 +272,7 @@ function BackgroundPanel() {
 						<button
 							type="button"
 							key={value}
-							onClick={() => setProject({ ...project, aspectRatio: value })}
+							onClick={() => updateAspectRatio(value, null)}
 							className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
 								project.aspectRatio === value
 									? "border-blue-8 bg-blue-3 text-blue-11"
@@ -229,7 +284,7 @@ function BackgroundPanel() {
 					))}
 					<button
 						type="button"
-						onClick={() => setProject({ ...project, aspectRatio: null })}
+						onClick={() => updateAspectRatio(null, null)}
 						className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
 							project.aspectRatio === null
 								? "border-blue-8 bg-blue-3 text-blue-11"
@@ -238,6 +293,27 @@ function BackgroundPanel() {
 					>
 						Auto
 					</button>
+				</div>
+				<div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
+					{SOCIAL_ASPECT_PRESETS.map((preset) => (
+						<button
+							type="button"
+							key={preset.id}
+							onClick={() => updateAspectRatio(preset.value, preset.id)}
+							className={`px-3 py-2 rounded-lg border transition-colors text-left ${
+								activeSocialAspectPresetId === preset.id
+									? "border-blue-8 bg-blue-3 text-blue-11"
+									: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+							}`}
+						>
+							<div className="text-xs font-medium leading-none">
+								{preset.label}
+							</div>
+							<div className="text-[11px] mt-1 leading-none text-gray-10">
+								{preset.ratio}
+							</div>
+						</button>
+					))}
 				</div>
 			</Field>
 
