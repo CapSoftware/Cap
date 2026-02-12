@@ -71,6 +71,7 @@ function makeSpec(bgOverride: RenderSpec["backgroundSpec"]): RenderSpec {
 		outputWidth: 1920,
 		outputHeight: 1080,
 		innerRect: { x: 100, y: 100, width: 1720, height: 880 },
+		videoCrop: { x: 0, y: 0, width: 1920, height: 1080 },
 		backgroundSpec: bgOverride,
 		maskSpec: { shape: "roundedRect", roundingType: "rounded", radiusPx: 20 },
 		shadowSpec: {
