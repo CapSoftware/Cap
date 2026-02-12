@@ -21,6 +21,7 @@ interface EditorProps {
 	videoUrl: string;
 	cameraUrl?: string | null;
 	initialConfig?: ProjectConfiguration;
+	initialProjectUpdatedAt?: string | null;
 }
 
 function EditorContent({ videoId }: { videoId: string }) {
@@ -47,6 +48,7 @@ export function Editor({
 	videoUrl,
 	cameraUrl,
 	initialConfig,
+	initialProjectUpdatedAt,
 }: EditorProps) {
 	return (
 		<EditorProvider
@@ -54,6 +56,7 @@ export function Editor({
 			videoUrl={videoUrl}
 			cameraUrl={cameraUrl ?? null}
 			initialConfig={initialConfig}
+			initialProjectUpdatedAt={initialProjectUpdatedAt}
 		>
 			<EditorContent videoId={video.id} />
 		</EditorProvider>
