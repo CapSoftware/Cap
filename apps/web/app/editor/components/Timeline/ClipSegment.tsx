@@ -150,14 +150,14 @@ export function ClipSegment({
 			<button
 				ref={segmentRef}
 				type="button"
-				className={`absolute h-full rounded-md transition-colors ${
+				className={`absolute h-full rounded-md transition-colors overflow-visible ${
 					isSelected
-						? "bg-blue-500/40 border-blue-400 border-2"
-						: "bg-blue-500/30 border-blue-500/50 border"
+						? "bg-blue-500/40 border-blue-400 border-2 z-20"
+						: "bg-blue-500/30 border-blue-500/50 border z-10"
 				} ${isDragging ? "cursor-ew-resize" : "cursor-pointer"}`}
 				style={{
 					left: `${startX}px`,
-					width: `${Math.max(width, 4)}px`,
+					width: `${Math.max(width, 12)}px`,
 				}}
 				onClick={handleClick}
 				onDoubleClick={handleDoubleClick}
@@ -209,14 +209,14 @@ function TrimHandle({ edge, isDragging, onPointerDown }: TrimHandleProps) {
 	return (
 		<div
 			aria-hidden="true"
-			className={`absolute top-0 bottom-0 w-2 cursor-ew-resize group ${
-				edge === "start" ? "left-0" : "right-0"
+			className={`absolute top-0 bottom-0 w-4 cursor-ew-resize group z-30 ${
+				edge === "start" ? "-left-2" : "-right-2"
 			}`}
 			style={{ touchAction: "none" }}
 			onPointerDown={onPointerDown}
 		>
 			<div
-				className={`absolute top-1/2 -translate-y-1/2 h-6 w-1 rounded-full transition-colors ${isDragging ? "bg-blue-300" : "bg-blue-400/50 group-hover:bg-blue-300"} ${edge === "start" ? "left-1" : "right-1"}`}
+				className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-6 w-1 rounded-full transition-colors ${isDragging ? "bg-blue-300" : "bg-blue-400/50 group-hover:bg-blue-300"}`}
 			/>
 		</div>
 	);
