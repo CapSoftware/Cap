@@ -7,10 +7,10 @@ import {
 	forwardRef,
 	useEffect,
 	useImperativeHandle,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
+import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
@@ -50,7 +50,8 @@ export const ShareVideo = forwardRef<
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
 		savedRenderProcessing?: boolean;
-		savedRenderMessage?: string;
+		savedRenderProgress?: number | null;
+		savedRenderMessage?: string | null;
 		hasSavedRender?: boolean;
 	}
 >(
@@ -64,6 +65,7 @@ export const ShareVideo = forwardRef<
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
 			savedRenderProcessing,
+			savedRenderProgress,
 			savedRenderMessage,
 			hasSavedRender,
 		},
@@ -186,6 +188,22 @@ export const ShareVideo = forwardRef<
 
 		const isWebStudio = data.source.type === "webStudio";
 		const studioNeedsRender = isWebStudio && !hasSavedRender;
+		const normalizedStepMessage = savedRenderMessage
+			? savedRenderMessage
+					.replace(/\s*\d{1,3}%\s*/g, " ")
+					.replace(/\s+/g, " ")
+					.replace(/\s*:\s*$/, "")
+					.trim()
+			: null;
+		const savingProgress = Math.max(
+			0,
+			Math.min(100, Math.round(savedRenderProgress ?? 0)),
+		);
+		const savingStepDetail =
+			normalizedStepMessage ||
+			(savedRenderProcessing
+				? "Rendering saved changes..."
+				: "Saved changes processing");
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" ||
@@ -224,8 +242,26 @@ export const ShareVideo = forwardRef<
 			<>
 				<div className="relative h-full">
 					{savedRenderProcessing && (
-						<div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 bg-black/70 text-white text-xs rounded-full">
-							{savedRenderMessage || "Processing your saved changes..."}
+						<div className="absolute left-3 bottom-14 z-40">
+							<Tooltip
+								content={
+									<div className="flex flex-col gap-1 leading-snug">
+										<span>{savingStepDetail}</span>
+										<span className="text-gray-6">
+											Progress: {savingProgress}%
+										</span>
+									</div>
+								}
+								className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+								delayDuration={100}
+							>
+								<button
+									type="button"
+									className="px-3 py-1 text-xs font-medium text-white bg-black/70 rounded-md border border-white/20 whitespace-nowrap backdrop-blur-sm"
+								>
+									Saving: {savingProgress}%
+								</button>
+							</Tooltip>
 						</div>
 					)}
 					{studioNeedsRender ? (
