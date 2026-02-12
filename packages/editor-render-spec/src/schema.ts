@@ -38,6 +38,14 @@ export const BackgroundConfigSchema = z.object({
 	padding: z.number(),
 	rounding: z.number(),
 	roundingType: z.enum(["rounded", "squircle"]),
+	crop: z
+		.object({
+			x: z.number(),
+			y: z.number(),
+			width: z.number(),
+			height: z.number(),
+		})
+		.nullable(),
 	shadow: z.number(),
 	advancedShadow: AdvancedShadowSchema,
 });
