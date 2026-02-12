@@ -10,6 +10,7 @@ pub struct PendingScreenshot {
     pub data: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    pub channels: u32,
     pub created_at: Instant,
 }
 
