@@ -1183,8 +1183,14 @@ function RecordingControls(props: {
 	const permissions = createMemo(() => devices.data?.permissions);
 	const setMicInput = createMutation(() => ({
 		mutationFn: async (name: string | null) => {
-			await commands.setMicInput(name);
-			setOptions("micName", name);
+			const previous = rawOptions.micName ?? null;
+			if (previous !== name) setOptions("micName", name);
+			try {
+				await commands.setMicInput(name);
+			} catch (error) {
+				if (previous !== name) setOptions("micName", previous);
+				throw error;
+			}
 		},
 	}));
 	const setCamera = createCameraMutation();

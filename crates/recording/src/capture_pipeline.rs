@@ -108,6 +108,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 .with_timestamps(start_time)
                 .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
                     output_height: output_size.map(|(_, h)| h),
+                    instant_mode: false,
                 })
                 .await
         }
@@ -136,6 +137,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         output
             .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
                 output_height: Some(output_resolution.1),
+                instant_mode: true,
             })
             .await
     }
@@ -217,7 +219,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_builder
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                bitrate_multiplier: 0.15f32,
+                bitrate_multiplier: 0.055f32,
                 frame_rate: 30u32,
                 d3d_device,
                 output_size: Some(windows::Graphics::SizeInt32 {

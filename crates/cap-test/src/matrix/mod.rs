@@ -3,4 +3,4 @@ mod runner;
 
 #[allow(unused_imports)]
 pub use generator::*;
-pub use runner::*;
+pub use runner::{CompatMatrixRunner, MatrixRunner, RecordingMetrics};

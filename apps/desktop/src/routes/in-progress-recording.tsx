@@ -104,6 +104,7 @@ function InProgressRecordingInner() {
 	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(
 		null,
 	);
+	const [degradedReason, setDegradedReason] = createSignal<string | null>(null);
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
@@ -131,10 +132,12 @@ function InProgressRecordingInner() {
 		const issues: string[] = [];
 		if (disconnectedInputs.microphone)
 			issues.push(
-				"Microphone disconnected. Reconnect it to continue recording.",
+				"Microphone disconnected. Silence will be used until it reconnects.",
 			);
 		if (disconnectedInputs.camera)
-			issues.push("Camera disconnected. Reconnect it to continue recording.");
+			issues.push(
+				"Camera disconnected. Recording continues without camera overlay.",
+			);
 		const failure = recordingFailure();
 		if (failure) issues.push(failure);
 		return issues;
@@ -183,6 +186,7 @@ function InProgressRecordingInner() {
 			case "Countdown":
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
+				setDegradedReason(null);
 				setPauseResumes([]);
 				setState({
 					variant: "countdown",
@@ -193,6 +197,7 @@ function InProgressRecordingInner() {
 			case "Started":
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
+				setDegradedReason(null);
 				setPauseResumes([]);
 				setState({ variant: "recording" });
 				setStart(Date.now());
@@ -216,13 +221,7 @@ function InProgressRecordingInner() {
 				setTime(Date.now());
 				break;
 			case "InputLost": {
-				const wasDisconnected = hasDisconnectedInput();
 				setDisconnectedInputs(payload.input, () => true);
-				if (!wasDisconnected && state().variant === "recording") {
-					setPauseResumes((a) => [...a, { pause: Date.now() }]);
-				}
-				setState({ variant: "paused" });
-				setTime(Date.now());
 				break;
 			}
 			case "InputRestored":
@@ -230,6 +229,14 @@ function InProgressRecordingInner() {
 				break;
 			case "Failed":
 				setRecordingFailure(payload.error);
+				break;
+			case "Degraded": {
+				const p = payload as { variant: "Degraded"; reason: string };
+				setDegradedReason(p.reason);
+				break;
+			}
+			case "Recovered":
+				setDegradedReason(null);
 				break;
 		}
 	});
@@ -683,6 +690,25 @@ function InProgressRecordingInner() {
 											/>
 										)}
 									</div>
+									<Show when={hasCameraInput() && disconnectedInputs.camera}>
+										<div
+											class="flex h-8 w-8 items-center justify-center"
+											title="Camera disconnected - recording continues without camera overlay"
+										>
+											<IconLucideVideoOff class="size-5 text-amber-11" />
+										</div>
+									</Show>
+									<Show when={degradedReason()}>
+										{(reason) => (
+											<div
+												class="flex h-8 w-8 items-center justify-center"
+												title={reason()}
+												aria-label="Recording quality degraded"
+											>
+												<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
+											</div>
+										)}
+									</Show>
 									<Show when={hasRecordingIssue()}>
 										<ActionButton
 											class={cx(
@@ -700,11 +726,7 @@ function InProgressRecordingInner() {
 
 									{canPauseRecording() && (
 										<ActionButton
-											disabled={
-												togglePause.isPending ||
-												hasDisconnectedInput() ||
-												isCountdown()
-											}
+											disabled={togglePause.isPending || isCountdown()}
 											onClick={() => togglePause.mutate()}
 											title={
 												state().variant === "paused"

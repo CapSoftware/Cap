@@ -68,6 +68,145 @@ fn run_ffprobe(path: &Path) -> Result<FfprobeOutput> {
     serde_json::from_str(&json).context("Failed to parse ffprobe output")
 }
 
+fn collect_display_dirs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name();
+            if name == "display" && path.join("init.mp4").exists() {
+                out.push(path);
+            } else {
+                collect_display_dirs(&path, out);
+            }
+        }
+    }
+}
+
+fn validate_dash_display_dirs(
+    dirs: &[std::path::PathBuf],
+) -> (Option<VideoValidation>, Vec<String>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut fps = 0.0f64;
+    let mut codec = String::new();
+    let mut total_duration = 0.0f64;
+    let mut total_frames = 0u64;
+
+    for dir in dirs {
+        let init_path = dir.join("init.mp4");
+        if let Ok(probe) = run_ffprobe(&init_path) {
+            for stream in &probe.streams {
+                if stream.codec_type == "video" && width == 0 {
+                    width = stream.width.unwrap_or(0);
+                    height = stream.height.unwrap_or(0);
+                    codec = stream.codec_name.clone().unwrap_or_default();
+                    if let Some(ref rate) = stream.r_frame_rate {
+                        fps = parse_frame_rate(rate);
+                    } else if let Some(ref rate) = stream.avg_frame_rate {
+                        fps = parse_frame_rate(rate);
+                    }
+                }
+            }
+        }
+
+        let m3u8_path = dir.join("media_0.m3u8");
+        if m3u8_path.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&m3u8_path) {
+                for line in contents.lines() {
+                    if let Some(duration_str) = line.strip_prefix("#EXTINF:") {
+                        let dur_str = duration_str.split(',').next().unwrap_or("");
+                        if let Ok(dur) = dur_str.parse::<f64>() {
+                            total_duration += dur;
+                        }
+                    }
+                }
+            }
+        }
+
+        if total_duration == 0.0 {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            let m4s_count = entries
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "m4s"))
+                .count();
+            if m4s_count > 0 {
+                total_duration = m4s_count as f64 * 3.0;
+                warnings.push(format!(
+                    "Estimated duration from {} m4s segments (no m3u8 found)",
+                    m4s_count
+                ));
+            }
+        }
+    }
+
+    if width == 0 {
+        errors.push("Could not determine video properties from DASH segments".to_string());
+        return (None, errors, warnings);
+    }
+
+    if fps > 240.0 {
+        fps = 0.0;
+    }
+
+    if fps > 0.0 && total_duration > 0.0 {
+        total_frames = (total_duration * fps) as u64;
+    }
+
+    (
+        Some(VideoValidation {
+            width,
+            height,
+            fps,
+            duration_secs: total_duration,
+            frame_count: total_frames,
+            codec,
+        }),
+        errors,
+        warnings,
+    )
+}
+
+fn collect_video_segments(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_video_segments(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext == "m4s" || ext == "mp4")
+        {
+            out.push(path);
+        }
+    }
+}
+
+fn collect_audio_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_audio_files(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext == "m4a" || ext == "ogg" || ext == "aac")
+        {
+            out.push(path);
+        }
+    }
+}
+
 pub async fn validate_recording(path: &Path) -> Result<ValidationResult> {
     let path_str = path.display().to_string();
 
@@ -148,131 +287,140 @@ async fn validate_cap_project(
         return Ok((None, None, None, errors, warnings));
     }
 
-    let mut segment_files: Vec<_> = std::fs::read_dir(&content_path)
-        .ok()
-        .map(|dir| {
-            dir.filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .is_some_and(|ext| ext == "m4s" || ext == "mp4")
-                })
-                .map(|e| e.path())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut display_dirs = Vec::new();
+    collect_display_dirs(&content_path, &mut display_dirs);
 
-    segment_files.sort();
+    if !display_dirs.is_empty() {
+        let (v, e, w) = validate_dash_display_dirs(&display_dirs);
+        video_info = v;
+        errors.extend(e);
+        warnings.extend(w);
+    } else {
+        let mut segment_files: Vec<_> = Vec::new();
+        collect_video_segments(&content_path, &mut segment_files);
+        segment_files.sort();
 
-    if segment_files.is_empty() {
-        errors.push("No video segments found".to_string());
-        return Ok((None, None, None, errors, warnings));
-    }
+        if segment_files.is_empty() {
+            errors.push("No video segments found".to_string());
+            return Ok((None, None, None, errors, warnings));
+        }
 
-    let mut total_duration = 0.0;
-    let mut total_frames = 0u64;
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut fps = 0.0f64;
-    let mut codec = String::new();
+        let mut total_duration = 0.0;
+        let mut total_frames = 0u64;
+        let mut width = 0u32;
+        let mut height = 0u32;
+        let mut fps = 0.0f64;
+        let mut codec = String::new();
 
-    for segment in &segment_files {
-        match run_ffprobe(segment) {
-            Ok(probe) => {
-                for stream in &probe.streams {
-                    if stream.codec_type == "video" {
-                        if width == 0 {
-                            width = stream.width.unwrap_or(0);
-                            height = stream.height.unwrap_or(0);
-                            codec = stream.codec_name.clone().unwrap_or_default();
-                            if let Some(ref rate) = stream.r_frame_rate {
-                                fps = parse_frame_rate(rate);
-                            } else if let Some(ref rate) = stream.avg_frame_rate {
-                                fps = parse_frame_rate(rate);
+        for segment in &segment_files {
+            match run_ffprobe(segment) {
+                Ok(probe) => {
+                    for stream in &probe.streams {
+                        if stream.codec_type == "video" {
+                            if width == 0 {
+                                width = stream.width.unwrap_or(0);
+                                height = stream.height.unwrap_or(0);
+                                codec = stream.codec_name.clone().unwrap_or_default();
+                                if let Some(ref rate) = stream.r_frame_rate {
+                                    fps = parse_frame_rate(rate);
+                                } else if let Some(ref rate) = stream.avg_frame_rate {
+                                    fps = parse_frame_rate(rate);
+                                }
+                            }
+                            if let Some(ref dur) = stream.duration
+                                && let Ok(d) = dur.parse::<f64>()
+                            {
+                                total_duration += d;
+                            }
+                            if let Some(ref frames) = stream.nb_frames
+                                && let Ok(f) = frames.parse::<u64>()
+                            {
+                                total_frames += f;
                             }
                         }
-                        if let Some(ref dur) = stream.duration
-                            && let Ok(d) = dur.parse::<f64>()
-                        {
-                            total_duration += d;
-                        }
-                        if let Some(ref frames) = stream.nb_frames
-                            && let Ok(f) = frames.parse::<u64>()
-                        {
-                            total_frames += f;
-                        }
                     }
-                }
-                if total_duration == 0.0
-                    && let Some(ref format) = probe.format
-                    && let Some(ref dur) = format.duration
-                    && let Ok(d) = dur.parse::<f64>()
-                {
-                    total_duration += d;
-                }
-            }
-            Err(e) => {
-                debug!("Failed to probe segment {:?}: {}", segment, e);
-            }
-        }
-    }
-
-    if width > 0 {
-        if total_frames == 0 && fps > 0.0 {
-            total_frames = (total_duration * fps) as u64;
-        }
-        video_info = Some(VideoValidation {
-            width,
-            height,
-            fps,
-            duration_secs: total_duration,
-            frame_count: total_frames,
-            codec,
-        });
-    } else {
-        errors.push("Could not determine video properties from segments".to_string());
-    }
-
-    let audio_files = ["audio.ogg", "audio-input.ogg", "mic.ogg"];
-    for audio_file in audio_files {
-        let audio_path = path.join(audio_file);
-        if audio_path.exists() {
-            match run_ffprobe(&audio_path) {
-                Ok(probe) => {
-                    for stream in probe.streams {
-                        if stream.codec_type == "audio" {
-                            let duration = stream
-                                .duration
-                                .as_ref()
-                                .and_then(|d| d.parse::<f64>().ok())
-                                .or_else(|| {
-                                    probe
-                                        .format
-                                        .as_ref()
-                                        .and_then(|f| f.duration.as_ref())
-                                        .and_then(|d| d.parse::<f64>().ok())
-                                })
-                                .unwrap_or(0.0);
-
-                            audio_info = Some(AudioValidation {
-                                sample_rate: stream
-                                    .sample_rate
-                                    .as_ref()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(48000),
-                                channels: stream.channels.unwrap_or(2) as u16,
-                                duration_secs: duration,
-                                codec: stream.codec_name.unwrap_or_else(|| "unknown".to_string()),
-                            });
-                            break;
-                        }
+                    if total_duration == 0.0
+                        && let Some(ref format) = probe.format
+                        && let Some(ref dur) = format.duration
+                        && let Ok(d) = dur.parse::<f64>()
+                    {
+                        total_duration += d;
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to probe audio file {:?}: {}", audio_path, e);
+                    debug!("Failed to probe segment {:?}: {}", segment, e);
                 }
             }
-            break;
+        }
+
+        if width > 0 {
+            if total_frames == 0 && fps > 0.0 {
+                total_frames = (total_duration * fps) as u64;
+            }
+            video_info = Some(VideoValidation {
+                width,
+                height,
+                fps,
+                duration_secs: total_duration,
+                frame_count: total_frames,
+                codec,
+            });
+        } else {
+            errors.push("Could not determine video properties from segments".to_string());
+        }
+    }
+
+    let mut audio_candidates = Vec::new();
+    let top_level_audio = ["audio.ogg", "audio-input.ogg", "mic.ogg"];
+    for audio_file in top_level_audio {
+        let audio_path = path.join(audio_file);
+        if audio_path.exists() {
+            audio_candidates.push(audio_path);
+        }
+    }
+    if audio_candidates.is_empty() {
+        collect_audio_files(&content_path, &mut audio_candidates);
+        audio_candidates.sort();
+    }
+
+    for audio_path in audio_candidates {
+        match run_ffprobe(&audio_path) {
+            Ok(probe) => {
+                for stream in probe.streams {
+                    if stream.codec_type == "audio" {
+                        let duration = stream
+                            .duration
+                            .as_ref()
+                            .and_then(|d| d.parse::<f64>().ok())
+                            .or_else(|| {
+                                probe
+                                    .format
+                                    .as_ref()
+                                    .and_then(|f| f.duration.as_ref())
+                                    .and_then(|d| d.parse::<f64>().ok())
+                            })
+                            .unwrap_or(0.0);
+
+                        audio_info = Some(AudioValidation {
+                            sample_rate: stream
+                                .sample_rate
+                                .as_ref()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(48000),
+                            channels: stream.channels.unwrap_or(2) as u16,
+                            duration_secs: duration,
+                            codec: stream.codec_name.unwrap_or_else(|| "unknown".to_string()),
+                        });
+                        break;
+                    }
+                }
+                if audio_info.is_some() {
+                    break;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to probe audio file {:?}: {}", audio_path, e);
+            }
         }
     }
 

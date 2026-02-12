@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -409,6 +410,274 @@ impl ComparisonResult {
         }
 
         println!();
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompatibilityReport {
+    pub meta: ResultsMeta,
+    pub hardware: Option<DiscoveredHardware>,
+    pub device_coverage: DeviceCoverage,
+    pub matrix_results: TestResults,
+    pub scenario_results: Vec<ScenarioResult>,
+    pub blocking_failures: Vec<BlockingFailure>,
+    pub release_gate_passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceCoverage {
+    pub displays_tested: u32,
+    pub displays_total: u32,
+    pub cameras_tested: u32,
+    pub cameras_total: u32,
+    pub builtin_mics_tested: u32,
+    pub usb_mics_tested: u32,
+    pub bluetooth_mics_tested: u32,
+    pub virtual_cameras_tested: u32,
+    pub capture_cards_tested: u32,
+    pub multi_monitor: bool,
+}
+
+impl DeviceCoverage {
+    pub fn from_hardware_and_results(
+        hardware: &DiscoveredHardware,
+        results: &[TestResult],
+    ) -> Self {
+        let displays_total = hardware.displays.len() as u32;
+        let cameras_total = hardware.cameras.len() as u32;
+
+        let displays_tested = results
+            .iter()
+            .filter(|r| r.config.display.is_some() && r.status != TestStatus::Skip)
+            .map(|r| {
+                r.config
+                    .display
+                    .as_ref()
+                    .and_then(|d| d.display_id.clone())
+                    .unwrap_or_default()
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u32;
+
+        let cameras_tested = results
+            .iter()
+            .filter(|r| r.config.camera.is_some() && r.status != TestStatus::Skip)
+            .map(|r| {
+                r.config
+                    .camera
+                    .as_ref()
+                    .and_then(|c| c.device_id.clone())
+                    .unwrap_or_default()
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u32;
+
+        let audio_tested_ids: std::collections::HashSet<_> = results
+            .iter()
+            .filter(|r| r.config.audio.is_some() && r.status != TestStatus::Skip)
+            .filter_map(|r| r.config.audio.as_ref().and_then(|a| a.device_id.clone()))
+            .collect();
+
+        let builtin_mics_tested = hardware
+            .audio_inputs
+            .iter()
+            .filter(|a| a.is_builtin && audio_tested_ids.contains(&a.id))
+            .count() as u32;
+
+        let usb_mics_tested = hardware
+            .audio_inputs
+            .iter()
+            .filter(|a| a.is_usb && audio_tested_ids.contains(&a.id))
+            .count() as u32;
+
+        let bluetooth_mics_tested = hardware
+            .audio_inputs
+            .iter()
+            .filter(|a| a.is_bluetooth && audio_tested_ids.contains(&a.id))
+            .count() as u32;
+
+        let camera_tested_ids: std::collections::HashSet<_> = results
+            .iter()
+            .filter(|r| r.config.camera.is_some() && r.status != TestStatus::Skip)
+            .filter_map(|r| r.config.camera.as_ref().and_then(|c| c.device_id.clone()))
+            .collect();
+
+        let virtual_cameras_tested = hardware
+            .cameras
+            .iter()
+            .filter(|c| c.is_virtual && camera_tested_ids.contains(&c.id))
+            .count() as u32;
+
+        let capture_cards_tested = hardware
+            .cameras
+            .iter()
+            .filter(|c| c.is_capture_card && camera_tested_ids.contains(&c.id))
+            .count() as u32;
+
+        let multi_monitor = displays_total > 1 && displays_tested > 1;
+
+        Self {
+            displays_tested,
+            displays_total,
+            cameras_tested,
+            cameras_total,
+            builtin_mics_tested,
+            usb_mics_tested,
+            bluetooth_mics_tested,
+            virtual_cameras_tested,
+            capture_cards_tested,
+            multi_monitor,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenarioResult {
+    pub scenario_id: String,
+    pub scenario_name: String,
+    pub related_task: String,
+    pub status: TestStatus,
+    pub interactive_required: bool,
+    pub failure_reason: Option<String>,
+    pub failure_classification: Option<crate::config::FailureClassification>,
+    pub duration_secs: f64,
+    pub validation: Option<ValidationResult>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockingFailure {
+    pub test_id: String,
+    pub test_name: String,
+    pub classification: crate::config::FailureClassification,
+    pub reason: String,
+    pub reproduction_steps: Vec<String>,
+}
+
+impl CompatibilityReport {
+    pub fn save_json(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .context("Failed to serialize compatibility report")?;
+        std::fs::write(path, json)
+            .with_context(|| format!("Failed to write report to {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn print_summary(&self) {
+        use colored::Colorize;
+
+        println!(
+            "\n{}",
+            "=== Compatibility Validation Report ===".bold().cyan()
+        );
+        println!(
+            "  OS: {} ({})",
+            self.meta.system.os_version, self.meta.system.platform
+        );
+        println!("  CPU: {}", self.meta.system.cpu);
+        println!("  Memory: {} GB", self.meta.system.memory_gb);
+        if let Some(gpu) = &self.meta.system.gpu {
+            println!("  GPU: {}", gpu);
+        }
+        println!("  Timestamp: {}", self.meta.timestamp);
+
+        println!("\n{}", "Device Coverage:".bold());
+        println!(
+            "  Displays: {}/{}",
+            self.device_coverage.displays_tested, self.device_coverage.displays_total
+        );
+        println!(
+            "  Cameras: {}/{}",
+            self.device_coverage.cameras_tested, self.device_coverage.cameras_total
+        );
+        println!(
+            "  Built-in Mics: {}",
+            self.device_coverage.builtin_mics_tested
+        );
+        println!("  USB Mics: {}", self.device_coverage.usb_mics_tested);
+        println!(
+            "  Bluetooth Mics: {}",
+            self.device_coverage.bluetooth_mics_tested
+        );
+        println!(
+            "  Virtual Cameras: {}",
+            self.device_coverage.virtual_cameras_tested
+        );
+        println!(
+            "  Capture Cards: {}",
+            self.device_coverage.capture_cards_tested
+        );
+        let multi_status = if self.device_coverage.multi_monitor {
+            "Yes".green()
+        } else {
+            "N/A (single monitor)".yellow()
+        };
+        println!("  Multi-Monitor: {}", multi_status);
+
+        self.matrix_results.print_summary();
+
+        if !self.scenario_results.is_empty() {
+            println!("{}", "Scenario Results:".bold().cyan());
+            for scenario in &self.scenario_results {
+                let status_str = match scenario.status {
+                    TestStatus::Pass => "PASS".green().bold(),
+                    TestStatus::Fail => "FAIL".red().bold(),
+                    TestStatus::Skip => "SKIP".yellow().bold(),
+                    TestStatus::Error => "ERROR".red().bold(),
+                };
+                let interactive_tag = if scenario.interactive_required {
+                    " [interactive]"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {} {} ({}){}",
+                    status_str, scenario.scenario_name, scenario.related_task, interactive_tag
+                );
+                if let Some(reason) = &scenario.failure_reason {
+                    println!("    Reason: {}", reason.dimmed());
+                }
+                if let Some(classification) = &scenario.failure_classification {
+                    let class_str = if classification.is_blocking() {
+                        classification.display_name().red().bold()
+                    } else {
+                        classification.display_name().yellow().bold()
+                    };
+                    println!("    Classification: {}", class_str);
+                }
+            }
+            println!();
+        }
+
+        if !self.blocking_failures.is_empty() {
+            println!(
+                "{} ({})",
+                "BLOCKING FAILURES:".red().bold(),
+                self.blocking_failures.len()
+            );
+            for failure in &self.blocking_failures {
+                println!(
+                    "  [{}] {} - {}",
+                    failure.classification.display_name().red(),
+                    failure.test_name,
+                    failure.reason
+                );
+                if !failure.reproduction_steps.is_empty() {
+                    println!("    Reproduction:");
+                    for step in &failure.reproduction_steps {
+                        println!("      - {}", step);
+                    }
+                }
+            }
+            println!();
+        }
+
+        let gate_str = if self.release_gate_passed {
+            "RELEASE GATE: PASSED".green().bold()
+        } else {
+            "RELEASE GATE: FAILED".red().bold()
+        };
+        println!("{}\n", gate_str);
     }
 }
 

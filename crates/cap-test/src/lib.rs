@@ -6,5 +6,5 @@ pub mod suites;
 
 pub use config::TestConfig;
 pub use discovery::DiscoveredHardware;
-pub use matrix::MatrixRunner;
+pub use matrix::{CompatMatrixRunner, MatrixRunner};
 pub use results::{ResultsSummary, TestResult, TestResults};

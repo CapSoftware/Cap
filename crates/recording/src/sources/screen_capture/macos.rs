@@ -16,7 +16,7 @@ use std::{
         Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{select, sync::broadcast};
 use tokio_util::{
@@ -154,7 +154,7 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
             48_000,
             2,
         )
-        .unwrap()
+        .expect("static F32/48kHz/stereo audio config")
     }
 }
 
@@ -187,11 +187,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let (video_tx, video_rx) = flume::bounded(buffer_size);
         let drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let (mut audio_tx, audio_rx) = if self.system_audio {
-            let (tx, rx) = mpsc::channel(32);
+            let (tx, rx) = mpsc::channel(128);
             (Some(tx), Some(rx))
         } else {
             (None, None)
         };
+        let system_audio_drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let system_audio_frame_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
         let display = Display::from_id(&self.config.display)
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
@@ -230,10 +232,16 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 .crop_bounds
                 .map(|bounds| bounds.size())
                 .or_else(|| display.logical_size())
-                .unwrap();
+                .ok_or_else(|| anyhow!("Display has no logical size"))?;
 
-            let scale =
-                display.physical_size().unwrap().width() / display.logical_size().unwrap().width();
+            let physical_size = display
+                .physical_size()
+                .ok_or_else(|| anyhow!("Display has no physical size"))?;
+            let display_logical_size = display
+                .logical_size()
+                .ok_or_else(|| anyhow!("Display has no logical size for scale computation"))?;
+
+            let scale = physical_size.width() / display_logical_size.width();
 
             let width = ensure_even((logical_size.width() * scale) as u32) as f64;
             let height = ensure_even((logical_size.height() * scale) as u32) as f64;
@@ -297,6 +305,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 let scaling_logged = scaling_logged.clone();
                 let scaled_frame_count = scaled_frame_count.clone();
                 let pixel_buffer_copier = pixel_buffer_copier.clone();
+                let sys_audio_drop_counter = system_audio_drop_counter.clone();
+                let sys_audio_frame_counter = system_audio_frame_counter.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -419,8 +429,14 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 return;
                             };
 
-                            let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-                            let slice = buf_list.block().as_slice().unwrap();
+                            let Ok(buf_list) = sample_buffer.audio_buf_list::<2>() else {
+                                warn!("Failed to extract audio buffer list from sample, dropping audio chunk");
+                                return;
+                            };
+                            let Ok(slice) = buf_list.block().as_slice() else {
+                                warn!("Failed to get audio buffer slice, dropping audio chunk");
+                                return;
+                            };
 
                             let mut frame = ffmpeg::frame::Audio::new(
                                 ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
@@ -436,7 +452,16 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 );
                             }
 
-                            let _ = audio_tx.try_send(AudioFrame::new(frame, timestamp));
+                            match audio_tx.try_send(AudioFrame::new(frame, timestamp)) {
+                                Ok(()) => {
+                                    sys_audio_frame_counter
+                                        .fetch_add(1, atomic::Ordering::Relaxed);
+                                }
+                                Err(_) => {
+                                    sys_audio_drop_counter
+                                        .fetch_add(1, atomic::Ordering::Relaxed);
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -472,6 +497,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     ChannelAudioSourceConfig::new(self.audio_info(), rx),
                     capturer,
                     error_rx,
+                    system_audio_frame_counter,
+                    system_audio_drop_counter,
                 )
             }),
         ))
@@ -571,6 +598,7 @@ pub struct VideoSource {
     video_frame_counter: Arc<AtomicU32>,
     drop_counter: Arc<AtomicU64>,
     _drop_guard: DropGuard,
+    health_tx: output_pipeline::HealthSender,
 }
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -597,6 +625,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
         let monitor_capturer = capturer.clone();
         let monitor_cancel = cancel_token.clone();
+        let health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn("screen-capture-monitor", async move {
             loop {
                 select! {
@@ -613,6 +642,10 @@ impl output_pipeline::VideoSource for VideoSource {
 
                         if is_system_stop_error(err.as_ref()) {
                             warn!("Screen capture stream stopped by the system; attempting restart");
+                            output_pipeline::emit_health(
+                                &health_tx,
+                                output_pipeline::PipelineHealthEvent::SourceRestarting,
+                            );
                             if monitor_cancel.is_cancelled() {
                                 break Ok(());
                             }
@@ -622,6 +655,10 @@ impl output_pipeline::VideoSource for VideoSource {
                                     "Failed to restart ScreenCaptureKit stream: {restart_err:#}"
                                 )));
                             }
+                            output_pipeline::emit_health(
+                                &health_tx,
+                                output_pipeline::PipelineHealthEvent::SourceRestarted,
+                            );
                             continue;
                         }
 
@@ -631,6 +668,7 @@ impl output_pipeline::VideoSource for VideoSource {
             }
         });
 
+        let stats_health_tx = ctx.health_tx().clone();
         ChannelVideoSource::setup(inner, video_tx, ctx)
             .await
             .map(|source| Self {
@@ -640,6 +678,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 _drop_guard: drop_guard,
                 video_frame_counter,
                 drop_counter,
+                health_tx: stats_health_tx,
             })
     }
 
@@ -650,6 +689,7 @@ impl output_pipeline::VideoSource for VideoSource {
             tokio::spawn({
                 let video_frame_count = self.video_frame_counter.clone();
                 let drop_counter = self.drop_counter.clone();
+                let health_tx = self.health_tx.clone();
                 async move {
                     let mut prev_frames = 0u32;
                     let mut prev_drops = 0u64;
@@ -672,6 +712,12 @@ impl output_pipeline::VideoSource for VideoSource {
                                     total_frames = current_frames,
                                     total_drops = current_drops,
                                     "Screen capture frame drop rate exceeds 5% threshold"
+                                );
+                                output_pipeline::emit_health(
+                                    &health_tx,
+                                    output_pipeline::PipelineHealthEvent::FrameDropRateHigh {
+                                        rate_pct: drop_rate,
+                                    },
                                 );
                             } else {
                                 debug!(
@@ -725,9 +771,15 @@ pub struct SystemAudioSourceConfig(
     ChannelAudioSourceConfig,
     Capturer,
     broadcast::Receiver<arc::R<ns::Error>>,
+    Arc<AtomicU64>,
+    Arc<AtomicU64>,
 );
 
-pub struct SystemAudioSource(ChannelAudioSource, Capturer);
+pub struct SystemAudioSource {
+    inner: ChannelAudioSource,
+    capturer: Capturer,
+    cancel_token: CancellationToken,
+}
 
 impl output_pipeline::AudioSource for SystemAudioSource {
     type Config = SystemAudioSourceConfig;
@@ -740,7 +792,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     where
         Self: Sized,
     {
-        let SystemAudioSourceConfig(channel_config, capturer, mut error_rx) = config;
+        let SystemAudioSourceConfig(
+            channel_config,
+            capturer,
+            mut error_rx,
+            frame_counter,
+            drop_counter,
+        ) = config;
 
         ctx.tasks().spawn("system-audio", async move {
             loop {
@@ -761,23 +819,69 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             Ok(())
         });
 
-        ChannelAudioSource::setup(channel_config, tx, ctx)
-            .map(|v| v.map(|source| Self(source, capturer)))
+        let cancel_token = CancellationToken::new();
+
+        let stats_cancel = cancel_token.clone();
+        tokio::spawn(
+            async move {
+                let mut last_log = Instant::now();
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let captured = frame_counter.load(atomic::Ordering::Relaxed);
+                    let dropped = drop_counter.load(atomic::Ordering::Relaxed);
+
+                    if dropped > 0 {
+                        let total = captured + dropped;
+                        let drop_pct = if total > 0 {
+                            100.0 * dropped as f64 / total as f64
+                        } else {
+                            0.0
+                        };
+
+                        if last_log.elapsed() >= Duration::from_secs(5) {
+                            warn!(
+                                captured = captured,
+                                dropped = dropped,
+                                drop_pct = format!("{:.1}%", drop_pct),
+                                "System audio dropping frames due to full channel"
+                            );
+                            last_log = Instant::now();
+                        }
+                    } else if captured > 0 {
+                        debug!(captured = captured, "System audio frames captured");
+                    }
+                }
+            }
+            .with_cancellation_token_owned(stats_cancel)
+            .in_current_span(),
+        );
+
+        ChannelAudioSource::setup(channel_config, tx, ctx).map({
+            let cancel_token = cancel_token.clone();
+            move |v| {
+                v.map(|source| Self {
+                    inner: source,
+                    capturer,
+                    cancel_token,
+                })
+            }
+        })
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
-        self.1.start().await?;
+        self.capturer.start().await?;
 
         Ok(())
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        self.1.stop().await?;
+        self.cancel_token.cancel();
+        self.capturer.stop().await?;
 
         Ok(())
     }
 
     fn audio_info(&self) -> AudioInfo {
-        self.0.audio_info()
+        self.inner.audio_info()
     }
 }

@@ -1184,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11215,8 +11215,6 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "25.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f968767fe4d3d33747bbd1473ccd55bf0f6451f55d733b5597e67b5deab4ad17"
 dependencies = [
  "android_system_properties",
  "arrayvec",

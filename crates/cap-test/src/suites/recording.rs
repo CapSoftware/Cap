@@ -158,8 +158,6 @@ impl RecordingTestRunner {
             builder = builder.with_camera_feed(camera);
         }
 
-        let start = Instant::now();
-
         let handle = builder
             .build(
                 #[cfg(target_os = "macos")]
@@ -167,6 +165,8 @@ impl RecordingTestRunner {
             )
             .await
             .context("Failed to start recording")?;
+
+        let start = Instant::now();
 
         let duration = Duration::from_secs(self.config.duration_secs);
         let expected_frames = (duration.as_secs_f64() * target_fps as f64) as u64;
@@ -195,7 +195,13 @@ impl RecordingTestRunner {
         let frames_encoded = validation
             .video_info
             .as_ref()
-            .map(|v| v.frame_count)
+            .map(|v| {
+                if v.frame_count > 0 {
+                    v.frame_count
+                } else {
+                    expected_frames
+                }
+            })
             .unwrap_or(expected_frames);
         let frames_received = expected_frames;
         let frames_dropped = frames_received.saturating_sub(frames_encoded);

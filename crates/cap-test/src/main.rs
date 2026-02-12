@@ -11,7 +11,7 @@ mod suites;
 
 use config::TestConfig;
 use discovery::DiscoveredHardware;
-use matrix::MatrixRunner;
+use matrix::{CompatMatrixRunner, MatrixRunner};
 #[allow(unused_imports)]
 use results::{ResultsSummary, TestResults};
 
@@ -76,6 +76,20 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    CompatMatrix {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        #[arg(long)]
+        interactive: bool,
+
+        #[arg(long)]
+        gate: bool,
+    },
+
     Validate {
         path: PathBuf,
 
@@ -134,6 +148,18 @@ async fn main() -> Result<()> {
             output,
         } => {
             cmd_benchmark(duration, warmup, output).await?;
+        }
+
+        Commands::CompatMatrix {
+            config,
+            output,
+            interactive,
+            gate,
+        } => {
+            let passed = cmd_compat_matrix(config, output, interactive).await?;
+            if gate && !passed {
+                std::process::exit(1);
+            }
         }
 
         Commands::Validate { path, json } => {
@@ -249,6 +275,31 @@ async fn cmd_benchmark(duration: u64, warmup: u64, output: Option<PathBuf>) -> R
     }
 
     Ok(())
+}
+
+async fn cmd_compat_matrix(
+    config_path: Option<PathBuf>,
+    output: Option<PathBuf>,
+    interactive: bool,
+) -> Result<bool> {
+    let config = if let Some(path) = config_path {
+        TestConfig::load(&path)?
+    } else {
+        TestConfig::compatibility()
+    };
+
+    let hardware = DiscoveredHardware::discover().await?;
+    let runner = CompatMatrixRunner::new(config, hardware, interactive);
+    let report = runner.run().await?;
+
+    report.print_summary();
+
+    if let Some(path) = output {
+        report.save_json(&path)?;
+        println!("Compatibility report saved to: {}", path.display());
+    }
+
+    Ok(report.release_gate_passed)
 }
 
 async fn cmd_validate(path: PathBuf, json_output: bool) -> Result<()> {

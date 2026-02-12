@@ -363,25 +363,21 @@ impl App {
             return Ok(());
         }
 
-        if let Some(recording) = self.current_recording_mut() {
-            recording.pause().await.map_err(|e| e.to_string())?;
-        }
-
         let (title, body) = match kind {
             RecordingInputKind::Microphone => (
                 "Microphone disconnected",
-                "Recording paused. Reconnect your microphone, then resume or stop the recording.",
+                "Recording continues. Silence will be used until the microphone reconnects.",
             ),
             RecordingInputKind::Camera => (
                 "Camera disconnected",
-                "Recording paused. Reconnect your camera, then resume or stop the recording.",
+                "Recording continues without camera. Camera overlay will resume when the device reconnects.",
             ),
         };
 
         let _ = NewNotification {
             title: title.to_string(),
             body: body.to_string(),
-            is_error: true,
+            is_error: false,
         }
         .emit(&self.handle);
 
@@ -399,9 +395,22 @@ impl App {
             RecordingInputKind::Microphone => {
                 self.ensure_selected_mic_ready().await.ok();
             }
-            RecordingInputKind::Camera => {
-                self.ensure_selected_camera_ready().await.ok();
-            }
+            RecordingInputKind::Camera => match self.ensure_selected_camera_ready().await {
+                Ok(()) => {
+                    info!("Camera reconnected and reinitialized successfully");
+                    let _ = NewNotification {
+                        title: "Camera reconnected".to_string(),
+                        body: "Camera overlay has been restored.".to_string(),
+                        is_error: false,
+                    }
+                    .emit(&self.handle);
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to reinitialize camera after reconnect, will retry on next poll");
+                    self.disconnected_inputs.insert(RecordingInputKind::Camera);
+                    return Ok(());
+                }
+            },
         }
 
         let _ = RecordingEvent::InputRestored { input: kind }.emit(&self.handle);
@@ -734,17 +743,23 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
         while let Ok(err) = error_rx.recv_async().await {
             error!("Mic feed actor error: {err}");
 
-            let mut app = state.write().await;
-
-            if let Err(handle_err) = app
-                .handle_input_disconnect(RecordingInputKind::Microphone)
-                .await
             {
-                warn!("Failed to pause recording after mic disconnect: {handle_err}");
+                let mut app = state.write().await;
+
+                if let Err(handle_err) = app
+                    .handle_input_disconnect(RecordingInputKind::Microphone)
+                    .await
+                {
+                    warn!("Failed to handle mic disconnect event: {handle_err}");
+                }
             }
 
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            let mut app = state.write().await;
             match app.ensure_selected_mic_ready().await {
                 Ok(()) => {
+                    info!("Microphone stream recovered after error");
                     if let Err(restored_err) = app
                         .handle_input_restored(RecordingInputKind::Microphone)
                         .await
@@ -753,7 +768,7 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
                     }
                 }
                 Err(restart_err) => {
-                    warn!("Failed to restart microphone input: {restart_err}");
+                    warn!("Failed to restart microphone input after error: {restart_err}");
                 }
             }
         }
@@ -967,6 +982,25 @@ async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id:
     app_state.camera_in_use = false;
 }
 
+fn find_mic_by_label_or_fuzzy(
+    devices: &microphone::MicrophonesMap,
+    selected_label: &str,
+) -> Option<String> {
+    if devices.contains_key(selected_label) {
+        return Some(selected_label.to_string());
+    }
+
+    let selected_lower = selected_label.to_lowercase();
+
+    devices
+        .keys()
+        .find(|name| {
+            let name_lower = name.to_lowercase();
+            name_lower.contains(&selected_lower) || selected_lower.contains(&name_lower)
+        })
+        .cloned()
+}
+
 fn spawn_microphone_watcher(app_handle: AppHandle) {
     tokio::spawn(async move {
         let state = app_handle.state::<ArcLock<App>>();
@@ -985,9 +1019,10 @@ fn spawn_microphone_watcher(app_handle: AppHandle) {
             };
 
             if should_check && let Some(selected_label) = label {
-                let available = microphone::MicrophoneFeed::list().contains_key(&selected_label);
+                let devices = microphone::MicrophoneFeed::list();
+                let matched = find_mic_by_label_or_fuzzy(&devices, &selected_label);
 
-                if !available && !is_marked {
+                if matched.is_none() && !is_marked {
                     let mut app = state.write().await;
                     if let Err(err) = app
                         .handle_input_disconnect(RecordingInputKind::Microphone)
@@ -995,8 +1030,20 @@ fn spawn_microphone_watcher(app_handle: AppHandle) {
                     {
                         warn!("Failed to handle mic disconnect: {err}");
                     }
-                } else if available && is_marked {
+                } else if let Some(matched_label) = matched
+                    && is_marked
+                {
                     let mut app = state.write().await;
+
+                    if matched_label != selected_label {
+                        info!(
+                            original = selected_label,
+                            matched = matched_label,
+                            "Microphone reconnected with different name (possible Bluetooth profile switch)"
+                        );
+                        app.selected_mic_label = Some(matched_label);
+                    }
+
                     if let Err(err) = app
                         .handle_input_restored(RecordingInputKind::Microphone)
                         .await
@@ -1038,7 +1085,7 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
 
                 if !available && !is_marked {
                     warn!(
-                        "Camera watcher: camera {:?} detected as unavailable, pausing recording",
+                        "Camera watcher: camera {:?} detected as unavailable, continuing recording without camera",
                         selected_id
                     );
                     let mut app = state.write().await;

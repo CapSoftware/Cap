@@ -20,6 +20,9 @@ pub struct MP4Encoder {
     audio_input: Option<arc::R<av::AssetWriterInput>>,
     audio_resampler: Option<resampling::Context>,
     audio_output_rate: u32,
+    expected_width: usize,
+    expected_height: usize,
+    dimension_mismatch_count: u64,
     last_frame_timestamp: Option<Duration>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
@@ -52,6 +55,12 @@ pub enum InitError {
     AddAudioInput(&'static cidre::ns::Exception),
     #[error("AudioResampler/{0}")]
     AudioResampler(ffmpeg::Error),
+    #[error("InvalidConfig: {0}")]
+    InvalidConfig(String),
+    #[error("OutputPath: {0}")]
+    OutputPath(String),
+    #[error("StartWritingFailed: {0}")]
+    StartWritingFailed(String),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -89,6 +98,25 @@ impl MP4Encoder {
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
+        Self::init_with_options(output, video_config, audio_config, output_height, false)
+    }
+
+    pub fn init_instant_mode(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(output, video_config, audio_config, output_height, true)
+    }
+
+    fn init_with_options(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+        instant_mode: bool,
+    ) -> Result<Self, InitError> {
         info!(
             width = video_config.width,
             height = video_config.height,
@@ -96,10 +124,46 @@ impl MP4Encoder {
             frame_rate = ?video_config.frame_rate,
             output_height = ?output_height,
             has_audio = audio_config.is_some(),
+            instant_mode,
             "Initializing AVFoundation MP4 encoder (VideoToolbox hardware encoding)"
         );
         debug!("{video_config:#?}");
         debug!("{audio_config:#?}");
+
+        if video_config.width == 0 || video_config.height == 0 {
+            return Err(InitError::InvalidConfig(format!(
+                "Video dimensions must be non-zero, got {}x{}",
+                video_config.width, video_config.height
+            )));
+        }
+
+        if video_config.frame_rate.0 <= 0 || video_config.frame_rate.1 <= 0 {
+            return Err(InitError::InvalidConfig(format!(
+                "Frame rate components must be positive, got {}/{}",
+                video_config.frame_rate.0, video_config.frame_rate.1
+            )));
+        }
+
+        if let Some(parent) = output.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                InitError::OutputPath(format!(
+                    "Failed to create parent directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        if output.exists() {
+            warn!(path = %output.display(), "Output file already exists, removing before creating AVAssetWriter");
+            std::fs::remove_file(&output).map_err(|e| {
+                InitError::OutputPath(format!(
+                    "Failed to remove existing output file {}: {e}",
+                    output.display()
+                ))
+            })?;
+        }
 
         let fps = video_config.frame_rate.0 as f32 / video_config.frame_rate.1 as f32;
 
@@ -140,11 +204,19 @@ impl MP4Encoder {
                 ns::Number::with_u32(output_height).as_id_ref(),
             );
 
-            let bitrate = get_average_bitrate(output_width as f32, output_height as f32, fps);
+            let bitrate = if instant_mode {
+                get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
+            } else {
+                get_average_bitrate(output_width as f32, output_height as f32, fps)
+            };
 
-            debug!("recording bitrate: {bitrate}");
+            debug!(instant_mode, "recording bitrate: {bitrate}");
 
-            let keyframe_interval = (fps * 2.0) as i32;
+            let keyframe_interval = if instant_mode {
+                fps as i32
+            } else {
+                (fps * 2.0) as i32
+            };
 
             output_settings.insert(
                 av::video_settings_keys::compression_props(),
@@ -263,9 +335,18 @@ impl MP4Encoder {
             None => (None, None, 0),
         };
 
-        asset_writer.start_writing();
+        if !asset_writer.start_writing() {
+            let error_desc = asset_writer
+                .error()
+                .map(|e| format!("{e}"))
+                .unwrap_or_else(|| "unknown error".to_string());
+            return Err(InitError::StartWritingFailed(error_desc));
+        }
 
         Ok(Self {
+            expected_width: video_config.width as usize,
+            expected_height: video_config.height as usize,
+            dimension_mismatch_count: 0,
             config: video_config,
             audio_input,
             audio_resampler,
@@ -302,6 +383,27 @@ impl MP4Encoder {
 
         if !self.video_input.is_ready_for_more_media_data() {
             return Err(QueueFrameError::NotReadyForMore);
+        }
+
+        if let Some(image_buf) = frame.image_buf() {
+            let frame_width = image_buf.width();
+            let frame_height = image_buf.height();
+            if frame_width != self.expected_width || frame_height != self.expected_height {
+                self.dimension_mismatch_count += 1;
+                if self.dimension_mismatch_count <= 5
+                    || self.dimension_mismatch_count.is_multiple_of(100)
+                {
+                    warn!(
+                        expected_width = self.expected_width,
+                        expected_height = self.expected_height,
+                        frame_width,
+                        frame_height,
+                        mismatch_count = self.dimension_mismatch_count,
+                        "Frame dimension mismatch, dropping frame to protect writer"
+                    );
+                }
+                return Ok(());
+            }
         }
 
         if !self.is_writing {
@@ -346,13 +448,22 @@ impl MP4Encoder {
 
         self.last_video_pts = Some(pts_duration);
 
-        let frame_duration_ms = self.video_frame_duration().as_millis() as i64;
+        let frame_duration_us = self.video_frame_duration().as_micros() as i64;
         let timing = SampleTimingInfo {
-            duration: cm::Time::new(frame_duration_ms.max(1), 1_000),
-            pts: cm::Time::new(pts_duration.as_millis() as i64, 1_000),
+            duration: cm::Time::new(frame_duration_us.max(1), 1_000_000),
+            pts: cm::Time::new(pts_duration.as_micros() as i64, 1_000_000),
             dts: cm::Time::invalid(),
         };
-        let new_frame = frame.copy_with_new_timing(&[timing]).unwrap();
+        let new_frame = match frame.copy_with_new_timing(&[timing]) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "Failed to copy sample buffer with new timing, skipping frame"
+                );
+                return Ok(());
+            }
+        };
         drop(frame);
 
         match append_sample_buf(&mut self.video_input, &self.asset_writer, &new_frame) {
@@ -615,8 +726,10 @@ impl MP4Encoder {
             end_session_time = end_session_time.max(audio_end_time);
         }
 
-        self.asset_writer
-            .end_session_at_src_time(cm::Time::new(end_session_time.as_millis() as i64, 1000));
+        self.asset_writer.end_session_at_src_time(cm::Time::new(
+            end_session_time.as_micros() as i64,
+            1_000_000,
+        ));
         self.video_input.mark_as_finished();
         if let Some(i) = self.audio_input.as_mut() {
             i.mark_as_finished()
@@ -681,25 +794,228 @@ fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
         + fps.min(60.0) / 30.0 * 5_000_000.0
 }
 
-// #[cfg(test)]
-// mod test {
-//     use super::*;
+fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixel_ratio = width * height / (1920.0 * 1080.0);
+    let fps_ratio = fps.min(60.0) / 30.0;
+    1_500_000.0 + pixel_ratio * 1_500_000.0 + fps_ratio * 500_000.0
+}
 
-//     #[test]
-//     fn bitrate() {
-//         let hd_30 = get_average_bitrate(1920.0, 1080.0, 30.0);
-//         assert!(hd_30 < 10_000_000.0);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_media_info::RawVideoFormat;
 
-//         let hd_60 = get_average_bitrate(1920.0, 1080.0, 60.0);
-//         assert!(hd_60 < 13_000_000.0);
+    fn valid_video_config() -> VideoInfo {
+        VideoInfo::from_raw(RawVideoFormat::Bgra, 1920, 1080, 30)
+    }
 
-//         let fk_30 = get_average_bitrate(1280.0, 720.0, 30.0);
-//         assert!(fk_30 < 20_000_000.0);
+    #[test]
+    fn rejects_zero_width() {
+        let mut config = valid_video_config();
+        config.width = 0;
 
-//         let fk_60 = get_average_bitrate(1280.0, 720.0, 60.0);
-//         assert!(fk_60 < 24_000_000.0);
-//     }
-// }
+        let result = MP4Encoder::init(
+            std::env::temp_dir().join("test_zero_width.mp4"),
+            config,
+            None,
+            None,
+        );
+
+        match result {
+            Err(InitError::InvalidConfig(msg)) => {
+                assert!(
+                    msg.contains("non-zero"),
+                    "Error should mention non-zero: {msg}"
+                );
+            }
+            Err(e) => panic!("Expected InvalidConfig, got: {e}"),
+            Ok(_) => panic!("Expected error for zero width"),
+        }
+    }
+
+    #[test]
+    fn rejects_zero_height() {
+        let mut config = valid_video_config();
+        config.height = 0;
+
+        let result = MP4Encoder::init(
+            std::env::temp_dir().join("test_zero_height.mp4"),
+            config,
+            None,
+            None,
+        );
+
+        match result {
+            Err(InitError::InvalidConfig(msg)) => {
+                assert!(
+                    msg.contains("non-zero"),
+                    "Error should mention non-zero: {msg}"
+                );
+            }
+            Err(e) => panic!("Expected InvalidConfig, got: {e}"),
+            Ok(_) => panic!("Expected error for zero height"),
+        }
+    }
+
+    #[test]
+    fn rejects_zero_fps_numerator() {
+        let mut config = valid_video_config();
+        config.frame_rate = ffmpeg::util::rational::Rational(0, 1);
+
+        let result = MP4Encoder::init(
+            std::env::temp_dir().join("test_zero_fps.mp4"),
+            config,
+            None,
+            None,
+        );
+
+        match result {
+            Err(InitError::InvalidConfig(msg)) => {
+                assert!(
+                    msg.contains("positive"),
+                    "Error should mention positive: {msg}"
+                );
+            }
+            Err(e) => panic!("Expected InvalidConfig, got: {e}"),
+            Ok(_) => panic!("Expected error for zero fps numerator"),
+        }
+    }
+
+    #[test]
+    fn rejects_zero_fps_denominator() {
+        let mut config = valid_video_config();
+        config.frame_rate = ffmpeg::util::rational::Rational(30, 0);
+
+        let result = MP4Encoder::init(
+            std::env::temp_dir().join("test_zero_fps_denom.mp4"),
+            config,
+            None,
+            None,
+        );
+
+        match result {
+            Err(InitError::InvalidConfig(msg)) => {
+                assert!(
+                    msg.contains("positive"),
+                    "Error should mention positive: {msg}"
+                );
+            }
+            Err(e) => panic!("Expected InvalidConfig, got: {e}"),
+            Ok(_) => panic!("Expected error for zero fps denominator"),
+        }
+    }
+
+    #[test]
+    fn rejects_negative_fps() {
+        let mut config = valid_video_config();
+        config.frame_rate = ffmpeg::util::rational::Rational(-30, 1);
+
+        let result = MP4Encoder::init(
+            std::env::temp_dir().join("test_neg_fps.mp4"),
+            config,
+            None,
+            None,
+        );
+
+        match result {
+            Err(InitError::InvalidConfig(msg)) => {
+                assert!(
+                    msg.contains("positive"),
+                    "Error should mention positive: {msg}"
+                );
+            }
+            Err(e) => panic!("Expected InvalidConfig, got: {e}"),
+            Ok(_) => panic!("Expected error for negative fps"),
+        }
+    }
+
+    #[test]
+    fn creates_parent_directory() {
+        let dir = std::env::temp_dir()
+            .join("cap_test_encoder_parent")
+            .join("nested")
+            .join("dir");
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
+
+        let output = dir.join("test_output.mp4");
+        let config = valid_video_config();
+
+        let result = MP4Encoder::init(output.clone(), config, None, None);
+        assert!(result.is_ok(), "Should succeed: {}", result.err().unwrap());
+
+        assert!(dir.exists(), "Parent directory should have been created");
+
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("cap_test_encoder_parent"));
+    }
+
+    #[test]
+    fn removes_existing_output_file() {
+        let output = std::env::temp_dir().join("cap_test_existing_output.mp4");
+        std::fs::write(&output, b"stale data").unwrap();
+        assert!(output.exists());
+
+        let config = valid_video_config();
+        let result = MP4Encoder::init(output.clone(), config, None, None);
+        assert!(
+            result.is_ok(),
+            "Should succeed even with pre-existing file: {}",
+            result.err().unwrap()
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn succeeds_with_valid_config() {
+        let output = std::env::temp_dir().join("cap_test_valid_encoder.mp4");
+        let _ = std::fs::remove_file(&output);
+
+        let config = valid_video_config();
+        let result = MP4Encoder::init(output.clone(), config, None, None);
+
+        assert!(
+            result.is_ok(),
+            "Valid config should succeed: {}",
+            result.err().unwrap()
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn instant_mode_succeeds_with_valid_config() {
+        let output = std::env::temp_dir().join("cap_test_instant_encoder.mp4");
+        let _ = std::fs::remove_file(&output);
+
+        let config = valid_video_config();
+        let result = MP4Encoder::init_instant_mode(output.clone(), config, None, None);
+
+        assert!(
+            result.is_ok(),
+            "Instant mode valid config should succeed: {}",
+            result.err().unwrap()
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn bitrate_calculations() {
+        let hd_30 = get_average_bitrate(1920.0, 1080.0, 30.0);
+        assert!(hd_30 < 15_000_000.0);
+        assert!(hd_30 > 5_000_000.0);
+
+        let hd_60 = get_average_bitrate(1920.0, 1080.0, 60.0);
+        assert!(hd_60 > hd_30);
+
+        let instant_hd_30 = get_instant_mode_bitrate(1920.0, 1080.0, 30.0);
+        assert!(
+            instant_hd_30 < hd_30,
+            "Instant mode bitrate should be lower"
+        );
+    }
+}
 
 trait SampleBufExt {
     fn create(

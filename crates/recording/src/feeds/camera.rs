@@ -461,7 +461,7 @@ async fn setup_camera(
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera)?;
-    let frame_rate = format.frame_rate() as u32;
+    let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);
@@ -535,7 +535,7 @@ async fn setup_camera(
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera)?;
-    let frame_rate = format.frame_rate() as u32;
+    let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);

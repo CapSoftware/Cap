@@ -46,6 +46,7 @@ pub struct ActorHandle {
     actor_ref: kameo::actor::ActorRef<Actor>,
     pub capture_target: ScreenCaptureTarget,
     done_fut: output_pipeline::DoneFut,
+    health_rx: Option<output_pipeline::HealthReceiver>,
 }
 
 impl ActorHandle {
@@ -55,6 +56,10 @@ impl ActorHandle {
 
     pub fn done_fut(&self) -> output_pipeline::DoneFut {
         self.done_fut.clone()
+    }
+
+    pub fn take_health_rx(&mut self) -> Option<output_pipeline::HealthReceiver> {
+        self.health_rx.take()
     }
 
     pub async fn pause(&self) -> anyhow::Result<()> {
@@ -363,7 +368,7 @@ pub async fn spawn_instant_recording_actor(
     #[cfg(windows)]
     cap_mediafoundation_utils::thread_init();
 
-    let (pipeline, video_info) = match inputs.capture_target {
+    let (mut pipeline, video_info) = match inputs.capture_target {
         ScreenCaptureTarget::CameraOnly => {
             let camera_feed = inputs.camera_feed.clone().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -461,13 +466,13 @@ pub async fn spawn_instant_recording_actor(
     trace!("spawning recording actor");
 
     let done_fut = pipeline.output.done_fut();
+    let health_rx = pipeline.output.take_health_rx();
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
         capture_target: inputs.capture_target.clone(),
         video_info,
         state: ActorState::Recording {
             pipeline,
-            // pipeline_done_rx,
             segment_start_time,
         },
     });
@@ -476,6 +481,7 @@ pub async fn spawn_instant_recording_actor(
         actor_ref: actor_ref.clone(),
         capture_target: inputs.capture_target,
         done_fut: done_fut.clone(),
+        health_rx,
     };
 
     tokio::spawn(async move {

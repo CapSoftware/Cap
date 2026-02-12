@@ -64,6 +64,7 @@ impl TestConfig {
                 },
             },
             thresholds: ThresholdConfig::default(),
+            scenarios: ScenarioConfig::default(),
         }
     }
 
@@ -109,6 +110,7 @@ impl TestConfig {
                 max_p95_latency_ms: 100.0,
                 max_av_sync_drift_ms: 200.0,
             },
+            scenarios: ScenarioConfig::default(),
         }
     }
 
@@ -175,6 +177,11 @@ impl TestConfig {
                 },
             },
             thresholds: ThresholdConfig::default(),
+            scenarios: ScenarioConfig {
+                enabled: true,
+                duration_secs: 20,
+                scenarios: ScenarioType::all(),
+            },
         }
     }
 
@@ -224,6 +231,76 @@ impl TestConfig {
                 },
             },
             thresholds: ThresholdConfig::default(),
+            scenarios: ScenarioConfig::default(),
+        }
+    }
+
+    pub fn compatibility() -> Self {
+        Self {
+            meta: MetaConfig {
+                name: "Compatibility Validation Matrix".to_string(),
+                description: "Full compatibility validation for release sign-off covering all device types, OS variants, and resilience scenarios".to_string(),
+            },
+            recording: RecordingConfig {
+                duration_secs: 15,
+                warmup_secs: 3,
+                iterations: 3,
+            },
+            displays: DisplayConfig {
+                resolutions: vec![
+                    ResolutionPreset::new(1280, 720, "720p"),
+                    ResolutionPreset::new(1920, 1080, "1080p"),
+                    ResolutionPreset::new(2560, 1440, "1440p"),
+                    ResolutionPreset::new(3840, 2160, "4K"),
+                    ResolutionPreset::new(5120, 2880, "5K"),
+                    ResolutionPreset::new(2560, 1080, "UW-1080"),
+                    ResolutionPreset::new(3440, 1440, "UW-1440"),
+                    ResolutionPreset::new(3024, 1964, "MBP-14"),
+                    ResolutionPreset::new(3456, 2234, "MBP-16"),
+                ],
+                frame_rates: vec![30, 60],
+                use_discovered: true,
+            },
+            cameras: CameraConfig {
+                resolutions: vec![
+                    ResolutionPreset::new(640, 480, "VGA"),
+                    ResolutionPreset::new(1280, 720, "720p"),
+                    ResolutionPreset::new(1920, 1080, "1080p"),
+                    ResolutionPreset::new(3840, 2160, "4K"),
+                ],
+                frame_rates: vec![30, 60],
+                pixel_formats: vec![
+                    "NV12".to_string(),
+                    "YUYV422".to_string(),
+                    "MJPEG".to_string(),
+                ],
+                enabled: true,
+            },
+            audio: AudioConfig {
+                microphones: MicrophoneConfig {
+                    sample_rates: vec![8000, 16000, 44100, 48000, 96000],
+                    channels: vec![1, 2],
+                    include_bluetooth: true,
+                    include_usb: true,
+                    include_builtin: true,
+                    enabled: true,
+                },
+                system: SystemAudioConfig {
+                    enabled: true,
+                    sample_rates: vec![44100, 48000],
+                },
+            },
+            thresholds: ThresholdConfig {
+                max_drop_rate_percent: 1.0,
+                min_effective_fps_ratio: 0.95,
+                max_p95_latency_ms: 50.0,
+                max_av_sync_drift_ms: 100.0,
+            },
+            scenarios: ScenarioConfig {
+                enabled: true,
+                duration_secs: 15,
+                scenarios: ScenarioType::all(),
+            },
         }
     }
 }

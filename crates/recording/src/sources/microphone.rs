@@ -2,14 +2,26 @@ use crate::{
     feeds::microphone::{self, MicrophoneFeedLock},
     output_pipeline::{AudioFrame, AudioSource},
 };
-use cap_media_info::AudioInfo;
+use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::SampleFormat;
 use futures::{SinkExt, channel::mpsc};
 use kameo::error::SendError;
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use thiserror::Error;
+use tracing::{debug, info, warn};
 
 const MICROPHONE_TARGET_CHANNELS: u16 = 1;
+
+const SILENCE_TIMEOUT_WIRED: Duration = Duration::from_millis(100);
+const SILENCE_TIMEOUT_WIRELESS: Duration = Duration::from_millis(200);
+const SILENCE_CHUNK_DURATION: Duration = Duration::from_millis(20);
 
 pub struct Microphone {
     info: AudioInfo,
@@ -22,6 +34,79 @@ pub enum MicrophoneSourceError {
     ActorNotRunning,
     #[error("failed to add microphone sender: {0}")]
     AddSenderFailed(SendError<()>),
+}
+
+struct MicResampler {
+    context: ffmpeg::software::resampling::Context,
+    source_rate: u32,
+    source_channels: u16,
+    source_format: SampleFormat,
+}
+
+impl MicResampler {
+    fn create(
+        source_rate: u32,
+        source_channels: u16,
+        source_format: SampleFormat,
+        target_info: &AudioInfo,
+    ) -> Option<Self> {
+        let ffmpeg_fmt = ffmpeg_sample_format_for(source_format)?;
+        let source_info = AudioInfo::new_raw(
+            ffmpeg_fmt,
+            source_rate,
+            source_channels.min(AudioInfo::MAX_AUDIO_CHANNELS),
+        );
+
+        let context = ffmpeg::software::resampler(
+            (
+                source_info.sample_format,
+                source_info.channel_layout(),
+                source_info.sample_rate,
+            ),
+            (
+                target_info.sample_format,
+                target_info.channel_layout(),
+                target_info.sample_rate,
+            ),
+        )
+        .ok()?;
+
+        Some(Self {
+            context,
+            source_rate,
+            source_channels,
+            source_format,
+        })
+    }
+
+    fn matches(&self, rate: u32, channels: u16, format: SampleFormat) -> bool {
+        self.source_rate == rate && self.source_channels == channels && self.source_format == format
+    }
+
+    fn resample(
+        &mut self,
+        data: &[u8],
+        source_rate: u32,
+        source_channels: u16,
+        source_format: SampleFormat,
+        timestamp: cap_timestamp::Timestamp,
+    ) -> Option<AudioFrame> {
+        let ffmpeg_fmt = ffmpeg_sample_format_for(source_format)?;
+        let source_info = AudioInfo::new_raw(
+            ffmpeg_fmt,
+            source_rate,
+            source_channels.min(AudioInfo::MAX_AUDIO_CHANNELS),
+        );
+
+        let input_frame = source_info.wrap_frame(data);
+        let mut output = ffmpeg::frame::Audio::empty();
+
+        if self.context.run(&input_frame, &mut output).is_err() {
+            return None;
+        }
+
+        Some(AudioFrame::new(output, timestamp))
+    }
 }
 
 impl AudioSource for Microphone {
@@ -41,7 +126,14 @@ impl AudioSource for Microphone {
             let audio_info = source_info.with_max_channels(MICROPHONE_TARGET_CHANNELS);
             let source_channels = source_info.channels;
             let target_channels = audio_info.channels;
-            let (tx, rx) = flume::bounded(32);
+            let is_wireless = source_info.is_wireless_transport;
+            let (tx, rx) = flume::bounded(128);
+
+            let send_timeout = if is_wireless {
+                Duration::from_millis(20)
+            } else {
+                Duration::from_millis(5)
+            };
 
             feed_lock
                 .ask(microphone::AddSender(tx))
@@ -51,21 +143,209 @@ impl AudioSource for Microphone {
                     other => MicrophoneSourceError::AddSenderFailed(other.map_msg(|_| ())),
                 })?;
 
-            tokio::spawn(async move {
-                while let Ok(frame) = rx.recv_async().await {
-                    let packed = maybe_downmix_channels(
-                        &frame.data,
-                        frame.format,
-                        source_channels,
-                        target_channels,
-                    );
+            let mic_frame_counter = Arc::new(AtomicU64::new(0));
+            let mic_drop_counter = Arc::new(AtomicU64::new(0));
+            let mic_silence_counter = Arc::new(AtomicU64::new(0));
 
-                    let _ = audio_tx
-                        .send(AudioFrame::new(
-                            audio_info.wrap_frame(packed.as_ref()),
-                            frame.timestamp,
-                        ))
-                        .await;
+            let silence_timeout = if is_wireless {
+                SILENCE_TIMEOUT_WIRELESS
+            } else {
+                SILENCE_TIMEOUT_WIRED
+            };
+
+            let silence_chunk_samples =
+                (audio_info.rate() as f64 * SILENCE_CHUNK_DURATION.as_secs_f64()).ceil() as usize;
+
+            let original_rate = source_info.sample_rate;
+            let original_channels = source_info.channels as u16;
+
+            tokio::spawn({
+                let frame_counter = mic_frame_counter.clone();
+                let drop_counter = mic_drop_counter.clone();
+                let silence_counter = mic_silence_counter.clone();
+                async move {
+                    let mut resampler: Option<MicResampler> = None;
+                    let mut silence_mode = false;
+                    let mut last_timestamp: Option<cap_timestamp::Timestamp> = None;
+                    let mut last_frame_duration = SILENCE_CHUNK_DURATION;
+
+                    loop {
+                        match tokio::time::timeout(silence_timeout, rx.recv_async()).await {
+                            Ok(Ok(frame)) => {
+                                if silence_mode {
+                                    info!("Microphone data resumed after silence period");
+                                    silence_mode = false;
+                                }
+
+                                let format_changed = frame.sample_rate != original_rate
+                                    || frame.channels != original_channels;
+
+                                let needs_resampling = if format_changed {
+                                    match &resampler {
+                                        Some(r)
+                                            if r.matches(
+                                                frame.sample_rate,
+                                                frame.channels,
+                                                frame.format,
+                                            ) =>
+                                        {
+                                            true
+                                        }
+                                        Some(_) | None => {
+                                            info!(
+                                                old_rate = original_rate,
+                                                new_rate = frame.sample_rate,
+                                                old_channels = original_channels,
+                                                new_channels = frame.channels,
+                                                "Microphone format changed, creating resampler"
+                                            );
+                                            resampler = MicResampler::create(
+                                                frame.sample_rate,
+                                                frame.channels,
+                                                frame.format,
+                                                &audio_info,
+                                            );
+                                            resampler.is_some()
+                                        }
+                                    }
+                                } else {
+                                    if resampler.is_some() {
+                                        info!(
+                                            "Microphone format restored to original, dropping resampler"
+                                        );
+                                        resampler = None;
+                                    }
+                                    false
+                                };
+
+                                let audio_frame = if needs_resampling {
+                                    if let Some(ref mut ctx) = resampler {
+                                        ctx.resample(
+                                            &frame.data,
+                                            frame.sample_rate,
+                                            frame.channels,
+                                            frame.format,
+                                            frame.timestamp,
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    let packed = maybe_downmix_channels(
+                                        &frame.data,
+                                        frame.format,
+                                        source_channels,
+                                        target_channels,
+                                    );
+                                    Some(AudioFrame::new(
+                                        audio_info.wrap_frame(packed.as_ref()),
+                                        frame.timestamp,
+                                    ))
+                                };
+
+                                let Some(audio_frame) = audio_frame else {
+                                    drop_counter.fetch_add(1, Ordering::Relaxed);
+                                    continue;
+                                };
+
+                                let sample_count = audio_frame.samples();
+                                last_frame_duration = Duration::from_secs_f64(
+                                    sample_count as f64 / audio_info.rate() as f64,
+                                );
+                                last_timestamp = Some(frame.timestamp);
+
+                                match tokio::time::timeout(send_timeout, audio_tx.send(audio_frame))
+                                    .await
+                                {
+                                    Ok(Ok(())) => {
+                                        frame_counter.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    _ => {
+                                        drop_counter.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                            Ok(Err(_)) => {
+                                debug!("Microphone feed channel closed");
+                                break;
+                            }
+                            Err(_) => {
+                                if !silence_mode {
+                                    warn!(
+                                        is_wireless = is_wireless,
+                                        timeout_ms = silence_timeout.as_millis(),
+                                        "Microphone data timeout, generating silence"
+                                    );
+                                    silence_mode = true;
+                                }
+
+                                let timestamp = match last_timestamp {
+                                    Some(ts) => {
+                                        let next = ts + last_frame_duration;
+                                        last_timestamp = Some(next);
+                                        last_frame_duration = Duration::from_secs_f64(
+                                            silence_chunk_samples as f64 / audio_info.rate() as f64,
+                                        );
+                                        next
+                                    }
+                                    None => {
+                                        continue;
+                                    }
+                                };
+
+                                let silence_frame =
+                                    create_silence_frame(&audio_info, silence_chunk_samples);
+                                let audio_frame = AudioFrame::new(silence_frame, timestamp);
+
+                                silence_counter.fetch_add(1, Ordering::Relaxed);
+
+                                match tokio::time::timeout(send_timeout, audio_tx.send(audio_frame))
+                                    .await
+                                {
+                                    Ok(Ok(())) => {}
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            tokio::spawn({
+                let frame_counter = mic_frame_counter;
+                let drop_counter = mic_drop_counter;
+                let silence_counter = mic_silence_counter;
+                async move {
+                    let mut last_log = Instant::now();
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let captured = frame_counter.load(Ordering::Relaxed);
+                        let dropped = drop_counter.load(Ordering::Relaxed);
+                        let silence = silence_counter.load(Ordering::Relaxed);
+
+                        if (dropped > 0 || silence > 0)
+                            && last_log.elapsed() >= Duration::from_secs(5)
+                        {
+                            let total = captured + dropped;
+                            let drop_pct = if total > 0 {
+                                100.0 * dropped as f64 / total as f64
+                            } else {
+                                0.0
+                            };
+                            warn!(
+                                captured = captured,
+                                dropped = dropped,
+                                silence_frames = silence,
+                                drop_pct = format!("{:.1}%", drop_pct),
+                                is_wireless = is_wireless,
+                                send_timeout_ms = send_timeout.as_millis(),
+                                "Microphone audio stats"
+                            );
+                            last_log = Instant::now();
+                        } else if captured > 0 {
+                            debug!(captured = captured, "Microphone audio frames forwarded");
+                        }
+                    }
                 }
             });
 
@@ -79,6 +359,18 @@ impl AudioSource for Microphone {
     fn audio_info(&self) -> AudioInfo {
         self.info
     }
+}
+
+fn create_silence_frame(info: &AudioInfo, sample_count: usize) -> ffmpeg::frame::Audio {
+    let mut frame =
+        ffmpeg::frame::Audio::new(info.sample_format, sample_count, info.channel_layout());
+
+    for i in 0..frame.planes() {
+        frame.data_mut(i).fill(0);
+    }
+
+    frame.set_rate(info.rate() as u32);
+    frame
 }
 
 fn maybe_downmix_channels<'a>(

@@ -19,15 +19,36 @@ use std::{
         Arc,
         atomic::{self, AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::*;
 
-const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
+const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 60;
 const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
-const LARGE_FORWARD_JUMP_SECS: f64 = 0.5;
+const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
+
+const HEALTH_CHANNEL_CAPACITY: usize = 32;
+
+#[derive(Debug, Clone)]
+pub enum PipelineHealthEvent {
+    FrameDropRateHigh { rate_pct: f64 },
+    AudioGapDetected { gap_ms: u64 },
+    SourceRestarting,
+    SourceRestarted,
+}
+
+pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
+pub type HealthReceiver = tokio::sync::mpsc::Receiver<PipelineHealthEvent>;
+
+fn new_health_channel() -> (HealthSender, HealthReceiver) {
+    tokio::sync::mpsc::channel(HEALTH_CHANNEL_CAPACITY)
+}
+
+pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
+    let _ = tx.try_send(event);
+}
 
 struct AudioTimestampGenerator {
     sample_rate: u32,
@@ -53,6 +74,102 @@ impl AudioTimestampGenerator {
         self.total_samples += frame_samples;
         Duration::from_nanos(timestamp_nanos.min(u64::MAX as u128) as u64)
     }
+
+    fn advance_by_duration(&mut self, duration: Duration) -> u64 {
+        let samples = (duration.as_secs_f64() * self.sample_rate as f64).round() as u64;
+        self.total_samples += samples;
+        samples
+    }
+}
+
+const WIRED_GAP_THRESHOLD: Duration = Duration::from_millis(70);
+const WIRELESS_GAP_THRESHOLD: Duration = Duration::from_millis(160);
+const MAX_SILENCE_INSERTION: Duration = Duration::from_secs(1);
+
+struct AudioGapTracker {
+    wall_clock_start: Option<Instant>,
+    gap_threshold: Duration,
+    total_silence_inserted: Duration,
+    silence_insertion_count: u64,
+    last_silence_log: Option<Instant>,
+}
+
+impl AudioGapTracker {
+    fn new(has_wireless_source: bool) -> Self {
+        Self {
+            wall_clock_start: None,
+            gap_threshold: if has_wireless_source {
+                WIRELESS_GAP_THRESHOLD
+            } else {
+                WIRED_GAP_THRESHOLD
+            },
+            total_silence_inserted: Duration::ZERO,
+            silence_insertion_count: 0,
+            last_silence_log: None,
+        }
+    }
+
+    fn mark_started(&mut self) {
+        if self.wall_clock_start.is_none() {
+            self.wall_clock_start = Some(Instant::now());
+        }
+    }
+
+    fn detect_gap(
+        &self,
+        sample_based_elapsed: Duration,
+        total_pause_duration: Duration,
+    ) -> Option<Duration> {
+        let wall_start = self.wall_clock_start?;
+        let wall_elapsed = wall_start.elapsed().saturating_sub(total_pause_duration);
+
+        if wall_elapsed <= sample_based_elapsed {
+            return None;
+        }
+
+        let gap = wall_elapsed.saturating_sub(sample_based_elapsed);
+        if gap > self.gap_threshold {
+            Some(gap.min(MAX_SILENCE_INSERTION))
+        } else {
+            None
+        }
+    }
+
+    fn record_insertion(&mut self, duration: Duration) {
+        self.silence_insertion_count += 1;
+        self.total_silence_inserted += duration;
+
+        let should_log = self
+            .last_silence_log
+            .map(|t| t.elapsed() >= Duration::from_secs(5))
+            .unwrap_or(true);
+
+        if should_log {
+            warn!(
+                gap_ms = duration.as_millis(),
+                total_silence_ms = self.total_silence_inserted.as_millis(),
+                insertion_count = self.silence_insertion_count,
+                threshold_ms = self.gap_threshold.as_millis(),
+                "Audio gap detected, inserting silence"
+            );
+            self.last_silence_log = Some(Instant::now());
+        }
+    }
+}
+
+fn create_silence_frame(audio_info: &AudioInfo, sample_count: usize) -> ffmpeg::frame::Audio {
+    let mut frame = ffmpeg::frame::Audio::new(
+        audio_info.sample_format,
+        sample_count,
+        audio_info.channel_layout(),
+    );
+
+    for i in 0..frame.planes() {
+        frame.data_mut(i).fill(0);
+    }
+
+    frame.set_rate(audio_info.sample_rate);
+    frame
 }
 
 struct VideoDriftTracker {
@@ -132,6 +249,11 @@ impl VideoDriftTracker {
         Duration::from_secs_f64(final_secs)
     }
 
+    fn reset_baseline(&mut self) {
+        self.baseline_offset_secs = None;
+        self.drift_warning_logged = false;
+    }
+
     fn capped_frame_count(&self) -> u64 {
         self.capped_frame_count
     }
@@ -157,6 +279,10 @@ pub struct TimestampAnomalyTracker {
     first_frame_baseline: Option<Duration>,
     accumulated_compensation_secs: f64,
     resync_count: u64,
+    did_resync: bool,
+    wall_clock_start: Option<Instant>,
+    last_valid_wall_clock: Option<Instant>,
+    wall_clock_confirmed_jumps: u64,
 }
 
 impl TimestampAnomalyTracker {
@@ -173,6 +299,10 @@ impl TimestampAnomalyTracker {
             first_frame_baseline: None,
             accumulated_compensation_secs: 0.0,
             resync_count: 0,
+            did_resync: false,
+            wall_clock_start: None,
+            last_valid_wall_clock: None,
+            wall_clock_confirmed_jumps: 0,
         }
     }
 
@@ -181,6 +311,12 @@ impl TimestampAnomalyTracker {
         timestamp: Timestamp,
         timestamps: Timestamps,
     ) -> Result<Duration, TimestampAnomalyError> {
+        let now = Instant::now();
+
+        if self.wall_clock_start.is_none() {
+            self.wall_clock_start = Some(now);
+        }
+
         let signed_secs = timestamp.signed_duration_since_secs(timestamps);
 
         if signed_secs < 0.0 {
@@ -199,12 +335,24 @@ impl TimestampAnomalyTracker {
         {
             let jump_secs = forward_jump.as_secs_f64();
             if jump_secs > LARGE_FORWARD_JUMP_SECS {
-                return self.handle_forward_jump(last, adjusted, jump_secs);
+                let result = self.handle_forward_jump(last, adjusted, jump_secs, now);
+                self.last_valid_wall_clock = Some(now);
+                return result;
             }
         }
 
-        self.consecutive_anomalies = 0;
+        if self.consecutive_anomalies > 0 {
+            info!(
+                stream = self.stream_name,
+                burst_length = self.consecutive_anomalies,
+                total_anomalies = self.anomaly_count,
+                resync_count = self.resync_count,
+                "Timestamp anomaly burst resolved - valid timestamps resumed"
+            );
+            self.consecutive_anomalies = 0;
+        }
         self.last_valid_duration = Some(adjusted);
+        self.last_valid_wall_clock = Some(now);
         Ok(adjusted)
     }
 
@@ -245,6 +393,8 @@ impl TimestampAnomalyTracker {
 
             self.accumulated_compensation_secs += skew_secs;
             self.resync_count += 1;
+            self.did_resync = true;
+            self.consecutive_anomalies = 0;
 
             let adjusted = self.last_valid_duration.unwrap_or(Duration::ZERO);
 
@@ -267,8 +417,13 @@ impl TimestampAnomalyTracker {
         last: Duration,
         current: Duration,
         jump_secs: f64,
+        now: Instant,
     ) -> Result<Duration, TimestampAnomalyError> {
-        self.anomaly_count += 1;
+        let wall_clock_confirmed = self.last_valid_wall_clock.map_or(false, |last_wc| {
+            let wall_clock_gap_secs = now.duration_since(last_wc).as_secs_f64();
+            wall_clock_gap_secs >= jump_secs * 0.5
+        });
+
         self.total_forward_skew_secs += jump_secs;
         if jump_secs > self.max_forward_skew_secs {
             self.max_forward_skew_secs = jump_secs;
@@ -280,18 +435,48 @@ impl TimestampAnomalyTracker {
         let compensation_secs = current.as_secs_f64() - adjusted.as_secs_f64();
         self.accumulated_compensation_secs -= compensation_secs;
         self.resync_count += 1;
+        self.did_resync = true;
 
-        warn!(
-            stream = self.stream_name,
-            forward_secs = jump_secs,
-            last_valid_ms = last.as_millis(),
-            current_ms = current.as_millis(),
-            total_anomalies = self.anomaly_count,
-            resync_count = self.resync_count,
-            compensation_applied_secs = format!("{:.3}", compensation_secs),
-            accumulated_compensation_secs = format!("{:.3}", self.accumulated_compensation_secs),
-            "Large forward timestamp jump detected (system sleep/wake?), resyncing timeline"
-        );
+        if wall_clock_confirmed {
+            let wall_clock_gap_secs = self
+                .last_valid_wall_clock
+                .map(|wc| now.duration_since(wc).as_secs_f64())
+                .unwrap_or(0.0);
+
+            self.wall_clock_confirmed_jumps += 1;
+
+            info!(
+                stream = self.stream_name,
+                forward_secs = jump_secs,
+                wall_clock_gap_secs = format!("{:.3}", wall_clock_gap_secs),
+                last_valid_ms = last.as_millis(),
+                current_ms = current.as_millis(),
+                resync_count = self.resync_count,
+                confirmed_jumps = self.wall_clock_confirmed_jumps,
+                "Wall-clock-confirmed forward jump (system sleep/wake), accepting new baseline"
+            );
+        } else {
+            self.anomaly_count += 1;
+
+            let wall_clock_gap_secs = self
+                .last_valid_wall_clock
+                .map(|wc| now.duration_since(wc).as_secs_f64())
+                .unwrap_or(0.0);
+
+            warn!(
+                stream = self.stream_name,
+                forward_secs = jump_secs,
+                wall_clock_gap_secs = format!("{:.3}", wall_clock_gap_secs),
+                last_valid_ms = last.as_millis(),
+                current_ms = current.as_millis(),
+                total_anomalies = self.anomaly_count,
+                resync_count = self.resync_count,
+                compensation_applied_secs = format!("{:.3}", compensation_secs),
+                accumulated_compensation_secs =
+                    format!("{:.3}", self.accumulated_compensation_secs),
+                "Spurious forward timestamp jump (source clock glitch), resyncing timeline"
+            );
+        }
 
         self.last_valid_duration = Some(adjusted);
         self.consecutive_anomalies = 0;
@@ -300,13 +485,14 @@ impl TimestampAnomalyTracker {
     }
 
     pub fn log_stats_if_notable(&self) {
-        if self.anomaly_count == 0 {
+        if self.anomaly_count == 0 && self.wall_clock_confirmed_jumps == 0 {
             return;
         }
 
         info!(
             stream = self.stream_name,
             anomaly_count = self.anomaly_count,
+            wall_clock_confirmed_jumps = self.wall_clock_confirmed_jumps,
             total_backward_skew_secs = format!("{:.3}", self.total_backward_skew_secs),
             max_backward_skew_secs = format!("{:.3}", self.max_backward_skew_secs),
             total_forward_skew_secs = format!("{:.3}", self.total_forward_skew_secs),
@@ -319,6 +505,12 @@ impl TimestampAnomalyTracker {
 
     pub fn anomaly_count(&self) -> u64 {
         self.anomaly_count
+    }
+
+    pub fn take_resync_flag(&mut self) -> bool {
+        let flag = self.did_resync;
+        self.did_resync = false;
+        flag
     }
 }
 
@@ -479,14 +671,25 @@ impl OutputPipeline {
     }
 }
 
-#[derive(Default)]
 pub struct SetupCtx {
     tasks: TaskPool,
+    health_tx: HealthSender,
 }
 
 impl SetupCtx {
+    fn new(health_tx: HealthSender) -> Self {
+        Self {
+            tasks: TaskPool::default(),
+            health_tx,
+        }
+    }
+
     pub fn tasks(&mut self) -> &mut TaskPool {
         &mut self.tasks
+    }
+
+    pub fn health_tx(&self) -> &HealthSender {
+        &self.health_tx
     }
 }
 
@@ -611,8 +814,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             ..
         } = self;
 
-        let mut setup_ctx = SetupCtx::default();
         let build_ctx = BuildCtx::new();
+        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone());
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
@@ -676,6 +879,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count,
+            health_rx: Some(build_ctx.health_rx),
         })
     }
 }
@@ -696,8 +900,8 @@ impl OutputPipelineBuilder<NoVideo> {
             return Err(anyhow!("Invariant: No audio sources"));
         }
 
-        let mut setup_ctx = SetupCtx::default();
         let build_ctx = BuildCtx::new();
+        let mut setup_ctx = SetupCtx::new(build_ctx.health_tx.clone());
 
         let (first_tx, first_rx) = oneshot::channel();
 
@@ -744,6 +948,7 @@ impl OutputPipelineBuilder<NoVideo> {
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
+            health_rx: Some(build_ctx.health_rx),
         })
     }
 }
@@ -753,6 +958,8 @@ struct BuildCtx {
     done_tx: oneshot::Sender<anyhow::Result<()>>,
     done_rx: DoneFut,
     pause_flag: Arc<AtomicBool>,
+    health_tx: HealthSender,
+    health_rx: HealthReceiver,
 }
 
 impl BuildCtx {
@@ -760,6 +967,7 @@ impl BuildCtx {
         let stop_token = CancellationToken::new();
 
         let (done_tx, done_rx) = oneshot::channel();
+        let (health_tx, health_rx) = new_health_channel();
 
         Self {
             stop_token,
@@ -773,6 +981,8 @@ impl BuildCtx {
                 .boxed()
                 .shared(),
             pause_flag: Arc::new(AtomicBool::new(false)),
+            health_tx,
+            health_rx,
         }
     }
 }
@@ -945,6 +1155,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
                     };
 
+                    if anomaly_tracker.take_resync_flag() {
+                        info!(
+                            raw_duration_ms = raw_duration.as_millis(),
+                            "Timeline resync detected, re-baselining drift tracker"
+                        );
+                        drift_tracker.reset_baseline();
+                    }
+
                     let raw_wall_clock = timestamps.instant().elapsed();
                     let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause_duration);
                     let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
@@ -1015,6 +1233,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
                 };
 
+                if anomaly_tracker.take_resync_flag() {
+                    drift_tracker.reset_baseline();
+                }
+
                 let raw_wall_clock = timestamps.instant().elapsed();
                 let total_pause = shared_pause.total_pause_duration();
                 let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
@@ -1080,6 +1302,7 @@ struct PreparedAudioSources {
     audio_info: AudioInfo,
     audio_rx: mpsc::Receiver<AudioFrame>,
     erased_audio_sources: Vec<ErasedAudioSource>,
+    has_wireless_source: bool,
 }
 
 impl PreparedAudioSources {
@@ -1093,6 +1316,9 @@ impl PreparedAudioSources {
         shared_pause: SharedWallClockPause,
     ) {
         let sample_rate = self.audio_info.sample_rate;
+        let audio_info = self.audio_info;
+        let has_wireless_source = self.has_wireless_source;
+        let health_tx = setup_ctx.health_tx().clone();
 
         setup_ctx.tasks().spawn("mux-audio", {
             let stop_token = stop_token.child_token();
@@ -1101,6 +1327,7 @@ impl PreparedAudioSources {
                 let mut timestamp_generator = AudioTimestampGenerator::new(sample_rate);
                 let mut dropped_during_pause: u64 = 0;
                 let mut frame_count: u64 = 0;
+                let mut gap_tracker = AudioGapTracker::new(has_wireless_source);
 
                 let res = stop_token
                     .run_until_cancelled(async {
@@ -1114,6 +1341,49 @@ impl PreparedAudioSources {
 
                             if let Some(first_tx) = first_tx.take() {
                                 let _ = first_tx.send(frame.timestamp);
+                            }
+
+                            gap_tracker.mark_started();
+
+                            let sample_based_before = timestamp_generator.next_timestamp(0);
+
+                            if let Some(gap_duration) =
+                                gap_tracker.detect_gap(sample_based_before, total_pause_duration)
+                            {
+                                let silence_samples =
+                                    timestamp_generator.advance_by_duration(gap_duration);
+
+                                if silence_samples > 0 {
+                                    let silence =
+                                        create_silence_frame(&audio_info, silence_samples as usize);
+
+                                    let silence_frame = AudioFrame::new(silence, frame.timestamp);
+
+                                    if gap_duration >= MAX_SILENCE_INSERTION {
+                                        error!(
+                                            gap_ms = gap_duration.as_millis(),
+                                            "Audio gap exceeded 1s cap, \
+                                             something may be seriously wrong"
+                                        );
+                                    }
+
+                                    gap_tracker.record_insertion(gap_duration);
+
+                                    emit_health(
+                                        &health_tx,
+                                        PipelineHealthEvent::AudioGapDetected {
+                                            gap_ms: gap_duration.as_millis() as u64,
+                                        },
+                                    );
+
+                                    if let Err(e) = muxer
+                                        .lock()
+                                        .await
+                                        .send_audio_frame(silence_frame, sample_based_before)
+                                    {
+                                        error!("Audio encoder (silence): {e}");
+                                    }
+                                }
                             }
 
                             let frame_samples = frame.inner.samples() as u64;
@@ -1130,6 +1400,9 @@ impl PreparedAudioSources {
                                     corrected_secs = timestamp.as_secs_f64(),
                                     total_samples = timestamp_generator.total_samples,
                                     total_pause_ms = total_pause_duration.as_millis(),
+                                    silence_insertions = gap_tracker.silence_insertion_count,
+                                    total_silence_ms =
+                                        gap_tracker.total_silence_inserted.as_millis(),
                                     "Audio timestamp status"
                                 );
                             }
@@ -1149,6 +1422,14 @@ impl PreparedAudioSources {
                         dropped_during_pause,
                         total_pause_ms = final_pause_duration.as_millis(),
                         "Audio frames dropped during pause (not counted in samples)"
+                    );
+                }
+
+                if gap_tracker.silence_insertion_count > 0 {
+                    info!(
+                        silence_insertions = gap_tracker.silence_insertion_count,
+                        total_silence_ms = gap_tracker.total_silence_inserted.as_millis(),
+                        "Audio gap tracking summary at finish"
                     );
                 }
 
@@ -1179,7 +1460,7 @@ async fn setup_audio_sources(
     }
 
     let mut erased_audio_sources = vec![];
-    let (audio_tx, audio_rx) = mpsc::channel(64);
+    let (audio_tx, audio_rx) = mpsc::channel(128);
 
     let audio_info = if audio_sources.len() == 1 {
         let source = (audio_sources.swap_remove(0))(audio_tx, setup_ctx).await?;
@@ -1192,7 +1473,7 @@ async fn setup_audio_sources(
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
         for audio_source_setup in audio_sources {
-            let (tx, rx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::channel(128);
             let source = (audio_source_setup)(tx, setup_ctx).await?;
 
             audio_mixer.add_source(source.audio_info, rx);
@@ -1222,6 +1503,10 @@ async fn setup_audio_sources(
         AudioMixer::INFO
     };
 
+    let has_wireless_source = erased_audio_sources
+        .iter()
+        .any(|s| s.audio_info.is_wireless_transport);
+
     for source in &mut erased_audio_sources {
         (source.start_fn)(source.inner.as_mut()).await?;
     }
@@ -1230,6 +1515,7 @@ async fn setup_audio_sources(
         audio_info,
         audio_rx,
         erased_audio_sources,
+        has_wireless_source,
     }))
 }
 
@@ -1244,6 +1530,7 @@ pub struct OutputPipeline {
     pause_flag: Arc<AtomicBool>,
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
+    health_rx: Option<HealthReceiver>,
 }
 
 pub struct FinishedOutputPipeline {
@@ -1308,6 +1595,10 @@ impl OutputPipeline {
 
     pub fn cancel(&self) {
         self.cancel_token.cancel();
+    }
+
+    pub fn take_health_rx(&mut self) -> Option<HealthReceiver> {
+        self.health_rx.take()
     }
 }
 
@@ -1835,6 +2126,171 @@ mod tests {
                 tracker.capped_frame_count() > 0,
                 "Should have capped at least one frame"
             );
+        }
+    }
+
+    mod timestamp_anomaly_tracker {
+        use super::*;
+
+        fn make_timestamps() -> Timestamps {
+            Timestamps::now()
+        }
+
+        fn make_timestamp(timestamps: Timestamps, offset: Duration) -> Timestamp {
+            Timestamp::Instant(timestamps.instant() + offset)
+        }
+
+        #[test]
+        fn normal_frames_produce_no_anomalies() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..10u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 0);
+            assert!(tracker.wall_clock_start.is_some());
+            assert!(tracker.last_valid_wall_clock.is_some());
+        }
+
+        #[test]
+        fn wall_clock_confirmed_forward_jump_not_counted_as_anomaly() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..5u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            assert_eq!(tracker.anomaly_count, 0);
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+            assert_eq!(tracker.consecutive_anomalies, 0);
+        }
+
+        #[test]
+        fn spurious_forward_jump_counted_as_anomaly() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..5u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            assert_eq!(tracker.anomaly_count, 0);
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert_eq!(tracker.anomaly_count, 1);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 0);
+            assert_eq!(tracker.consecutive_anomalies, 0);
+        }
+
+        #[test]
+        fn resync_flag_set_on_both_confirmed_and_spurious_jumps() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..5u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert!(
+                tracker.take_resync_flag(),
+                "Resync flag should be set after wall-clock-confirmed jump"
+            );
+
+            let next_ts =
+                make_timestamp(timestamps, Duration::from_millis(4 * 33 + 3000 + 33 + 3000));
+            tracker.process_timestamp(next_ts, timestamps).unwrap();
+
+            assert!(
+                tracker.take_resync_flag(),
+                "Resync flag should be set after spurious jump"
+            );
+            assert_eq!(tracker.anomaly_count, 1);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+        }
+
+        #[test]
+        fn multiple_confirmed_jumps_tracked_separately() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..3u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump1 = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000));
+            tracker.process_timestamp(jump1, timestamps).unwrap();
+            tracker.take_resync_flag();
+
+            let normal = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000 + 33));
+            tracker.process_timestamp(normal, timestamps).unwrap();
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(5));
+
+            let jump2 =
+                make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000 + 66 + 5000));
+            tracker.process_timestamp(jump2, timestamps).unwrap();
+
+            assert_eq!(tracker.anomaly_count, 0);
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 2);
+            assert_eq!(tracker.resync_count, 2);
+        }
+
+        #[test]
+        fn wall_clock_start_set_on_first_frame() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            assert!(tracker.wall_clock_start.is_none());
+
+            let ts = make_timestamp(timestamps, Duration::ZERO);
+            tracker.process_timestamp(ts, timestamps).unwrap();
+
+            assert!(tracker.wall_clock_start.is_some());
+        }
+
+        #[test]
+        fn confirmed_jump_still_tracks_forward_skew() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let timestamps = make_timestamps();
+
+            for i in 0..3u64 {
+                let ts = make_timestamp(timestamps, Duration::from_millis(i * 33));
+                tracker.process_timestamp(ts, timestamps).unwrap();
+            }
+
+            tracker.last_valid_wall_clock = Instant::now().checked_sub(Duration::from_secs(3));
+
+            let jump_ts = make_timestamp(timestamps, Duration::from_millis(2 * 33 + 3000));
+            tracker.process_timestamp(jump_ts, timestamps).unwrap();
+
+            assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
+            assert_eq!(tracker.anomaly_count, 0);
+            assert!(tracker.total_forward_skew_secs > 2.0);
         }
     }
 }
