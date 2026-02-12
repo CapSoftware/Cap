@@ -221,9 +221,11 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         HotkeyAction::ScreenshotWindow => {
             use scap_targets::Window;
 
-            let window = Window::get_topmost_at_cursor()
-                .ok_or_else(|| "No window found under cursor".to_string())?;
-            let target = ScreenCaptureTarget::Window { id: window.id() };
+            let target = {
+                let window = Window::get_topmost_at_cursor()
+                    .ok_or_else(|| "No window found under cursor".to_string())?;
+                ScreenCaptureTarget::Window { id: window.id() }
+            };
 
             match recording::take_screenshot(app.clone(), target).await {
                 Ok(path) => {
