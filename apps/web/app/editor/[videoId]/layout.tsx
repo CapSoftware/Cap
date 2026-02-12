@@ -1,3 +1,10 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+	title: "Editor — Cap",
+	description: "Edit and export your recordings in Cap.",
+};
+
 export default function EditorLayout({
 	children,
 }: {
