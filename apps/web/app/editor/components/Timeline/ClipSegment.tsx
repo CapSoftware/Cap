@@ -10,6 +10,7 @@ import { WaveformCanvas } from "./WaveformCanvas";
 interface ClipSegmentProps {
 	segment: TimelineSegment;
 	index: number;
+	displayStart: number;
 	transform: { position: number; zoom: number };
 	secsPerPixel: number;
 	duration: number;
@@ -29,6 +30,7 @@ const SEGMENT_HEIGHT = 40;
 export function ClipSegment({
 	segment,
 	index,
+	displayStart,
 	transform,
 	secsPerPixel,
 	duration,
@@ -43,15 +45,16 @@ export function ClipSegment({
 	const { actions } = useEditorContext();
 	const segmentRef = useRef<HTMLButtonElement>(null);
 	const [isDragging, setIsDragging] = useState<"start" | "end" | null>(null);
+	const effectiveTimescale = segment.timescale > 0 ? segment.timescale : 1;
 
 	const startX = useMemo(
-		() => (segment.start - transform.position) / secsPerPixel,
-		[segment.start, transform.position, secsPerPixel],
+		() => (displayStart - transform.position) / secsPerPixel,
+		[displayStart, transform.position, secsPerPixel],
 	);
 
 	const width = useMemo(
-		() => (segment.end - segment.start) / secsPerPixel,
-		[segment.start, segment.end, secsPerPixel],
+		() => (segment.end - segment.start) / effectiveTimescale / secsPerPixel,
+		[segment.start, segment.end, effectiveTimescale, secsPerPixel],
 	);
 
 	const handleClick = useCallback(() => {
@@ -70,7 +73,8 @@ export function ClipSegment({
 		(e: React.PointerEvent, edge: "start" | "end") => {
 			e.stopPropagation();
 			e.preventDefault();
-			(e.target as HTMLElement).setPointerCapture(e.pointerId);
+			e.currentTarget.setPointerCapture(e.pointerId);
+			onSelect?.(index);
 			onTrimBegin?.();
 			setIsDragging(edge);
 
@@ -80,21 +84,21 @@ export function ClipSegment({
 
 			const handlePointerMove = (moveEvent: PointerEvent) => {
 				const deltaX = moveEvent.clientX - startClientX;
-				const deltaTime = deltaX * secsPerPixel;
+				const deltaSourceTime = deltaX * secsPerPixel * effectiveTimescale;
 
 				if (edge === "start") {
 					const newStart = Math.max(
 						0,
 						Math.min(
 							originalEnd - MIN_SEGMENT_DURATION,
-							originalStart + deltaTime,
+							originalStart + deltaSourceTime,
 						),
 					);
 					onTrimStart?.(index, newStart);
 				} else {
 					const newEnd = Math.max(
 						originalStart + MIN_SEGMENT_DURATION,
-						Math.min(duration, originalEnd + deltaTime),
+						Math.min(duration, originalEnd + deltaSourceTime),
 					);
 					onTrimEnd?.(index, newEnd);
 				}
@@ -114,11 +118,13 @@ export function ClipSegment({
 			segment.start,
 			segment.end,
 			secsPerPixel,
+			effectiveTimescale,
 			index,
 			onTrimBegin,
 			onTrimStart,
 			onTrimEnd,
 			onTrimCommit,
+			onSelect,
 			duration,
 		],
 	);
