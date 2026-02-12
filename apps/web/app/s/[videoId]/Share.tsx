@@ -4,6 +4,7 @@ import type { comments as commentsSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
+import { useTranscript } from "hooks/use-transcript";
 import {
 	startTransition,
 	use,
@@ -317,6 +318,23 @@ export const Share = ({
 
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;
+	const {
+		data: transcriptContent,
+		error: transcriptError,
+		isLoading: isTranscriptLoading,
+	} = useTranscript(data.id, transcriptionStatus);
+	const hasTranscriptionTimedOut = useMemo(() => {
+		const videoCreationTime = new Date(data.createdAt).getTime();
+		const fiveMinutesInMs = 5 * 60 * 1000;
+		return (
+			Date.now() - videoCreationTime > fiveMinutesInMs && !transcriptionStatus
+		);
+	}, [data.createdAt, transcriptionStatus]);
+	const transcriptUnavailable =
+		transcriptionStatus === "COMPLETE" &&
+		!isTranscriptLoading &&
+		!transcriptContent &&
+		Boolean(transcriptError);
 
 	const aiData = useMemo(
 		() => ({
@@ -345,7 +363,11 @@ export const Share = ({
 			return false;
 		}
 
-		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
+		if (!transcriptionStatus) {
+			return !hasTranscriptionTimedOut;
+		}
+
+		if (transcriptionStatus === "PROCESSING") {
 			return true;
 		}
 
@@ -358,6 +380,10 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
+			if (transcriptUnavailable) {
+				return false;
+			}
+
 			if (
 				aiData.aiGenerationStatus === "SKIPPED" ||
 				aiData.aiGenerationStatus === "ERROR" ||
