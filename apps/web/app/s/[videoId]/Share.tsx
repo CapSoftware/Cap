@@ -410,8 +410,14 @@ export const Share = ({
 		videoStatus?.editorSavedRenderStatus ||
 		initialEditorSavedRender?.status ||
 		null;
+	const editorSavedRenderProgress =
+		videoStatus?.editorSavedRenderProgress ??
+		initialEditorSavedRender?.progress ??
+		0;
 	const editorSavedRenderMessage =
-		videoStatus?.editorSavedRenderMessage || initialEditorSavedRender?.message;
+		videoStatus?.editorSavedRenderMessage ??
+		initialEditorSavedRender?.message ??
+		null;
 	const isSavedRenderProcessing =
 		editorSavedRenderStatus === "QUEUED" ||
 		editorSavedRenderStatus === "PROCESSING";
@@ -508,10 +514,8 @@ export const Share = ({
 									chapters={aiData?.chapters || []}
 									aiGenerationStatus={aiData?.aiGenerationStatus}
 									savedRenderProcessing={isSavedRenderProcessing}
-									savedRenderMessage={
-										editorSavedRenderMessage ||
-										"Processing your saved changes..."
-									}
+									savedRenderProgress={editorSavedRenderProgress}
+									savedRenderMessage={editorSavedRenderMessage}
 									hasSavedRender={hasSavedRender}
 									ref={playerRef}
 								/>
