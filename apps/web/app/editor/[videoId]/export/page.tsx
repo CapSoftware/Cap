@@ -5,6 +5,7 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { hasCameraRecording } from "@/lib/editor-camera";
 import type { ProjectConfiguration } from "../../types/project-config";
 import { createDefaultConfig } from "../../utils/defaults";
 import { ExportClient } from "./export-client";
@@ -55,6 +56,7 @@ export default async function ExportPage(props: ExportPageProps) {
 		.select({
 			id: videos.id,
 			ownerId: videos.ownerId,
+			bucket: videos.bucket,
 			name: videos.name,
 			duration: videos.duration,
 			width: videos.width,
@@ -75,9 +77,16 @@ export default async function ExportPage(props: ExportPageProps) {
 	const videoHeight = video.height ?? 1080;
 	const sourceType = (video.source as { type: string } | null)?.type;
 	const isWebStudio = sourceType === "webStudio";
+	const hasCamera = isWebStudio
+		? await hasCameraRecording({
+				videoId: video.id,
+				ownerId: video.ownerId,
+				bucketId: video.bucket,
+			})
+		: false;
 
 	const videoUrl = `/api/playlist?videoId=${video.id}&videoType=mp4&variant=original`;
-	const cameraUrl = isWebStudio
+	const cameraUrl = hasCamera
 		? `/api/playlist?videoId=${video.id}&videoType=camera&variant=original`
 		: null;
 

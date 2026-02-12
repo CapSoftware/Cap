@@ -5,6 +5,7 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { hasCameraRecording } from "@/lib/editor-camera";
 import { Editor } from "../components/Editor";
 import type { ProjectConfiguration } from "../types/project-config";
 import { createDefaultConfig } from "../utils/defaults";
@@ -13,10 +14,15 @@ interface EditorPageProps {
 	params: Promise<{ videoId: string }>;
 }
 
+interface LoadedProjectConfig {
+	config: ProjectConfiguration;
+	updatedAt: string | null;
+}
+
 async function getProjectConfig(
 	videoId: string,
 	duration: number,
-): Promise<ProjectConfiguration> {
+): Promise<LoadedProjectConfig> {
 	try {
 		const cookieStore = await cookies();
 		const response = await fetch(
@@ -31,11 +37,15 @@ async function getProjectConfig(
 		if (response.ok) {
 			const data = await response.json();
 			if (data.config) {
-				return data.config as ProjectConfiguration;
+				return {
+					config: data.config as ProjectConfiguration,
+					updatedAt:
+						typeof data.updatedAt === "string" ? data.updatedAt : null,
+				};
 			}
 		}
 	} catch {}
-	return createDefaultConfig(duration);
+	return { config: createDefaultConfig(duration), updatedAt: null };
 }
 
 export default async function EditorPage(props: EditorPageProps) {
@@ -51,6 +61,7 @@ export default async function EditorPage(props: EditorPageProps) {
 		.select({
 			id: videos.id,
 			ownerId: videos.ownerId,
+			bucket: videos.bucket,
 			name: videos.name,
 			duration: videos.duration,
 			width: videos.width,
@@ -70,15 +81,23 @@ export default async function EditorPage(props: EditorPageProps) {
 	const videoHeight = video.height ?? 1080;
 	const sourceType = (video.source as { type: string } | null)?.type;
 	const isWebStudio = sourceType === "webStudio";
+	const hasCamera = isWebStudio
+		? await hasCameraRecording({
+				videoId: video.id,
+				ownerId: video.ownerId,
+				bucketId: video.bucket,
+			})
+		: false;
 
 	const videoUrl = `/api/playlist?videoId=${video.id}&videoType=mp4&variant=original`;
-	const cameraUrl = isWebStudio
+	const cameraUrl = hasCamera
 		? `/api/playlist?videoId=${video.id}&videoType=camera&variant=original`
 		: null;
 
-	let initialConfig = await getProjectConfig(videoId, videoDuration);
+	const projectData = await getProjectConfig(videoId, videoDuration);
+	let initialConfig = projectData.config;
 
-	if (isWebStudio && initialConfig.camera?.hide) {
+	if (hasCamera && initialConfig.camera?.hide) {
 		initialConfig = {
 			...initialConfig,
 			camera: { ...initialConfig.camera, hide: false },
@@ -99,6 +118,7 @@ export default async function EditorPage(props: EditorPageProps) {
 			videoUrl={videoUrl}
 			cameraUrl={cameraUrl}
 			initialConfig={initialConfig}
+			initialProjectUpdatedAt={projectData.updatedAt}
 		/>
 	);
 }
