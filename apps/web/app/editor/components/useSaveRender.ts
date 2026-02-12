@@ -31,7 +31,16 @@ export interface SaveRender {
 	cancel: () => void;
 }
 
-export function useSaveRender(videoId: string): SaveRender {
+interface UseSaveRenderOptions {
+	getExpectedUpdatedAt: () => string | null;
+	onProjectSaved: (config: ProjectConfiguration, updatedAt: string) => void;
+	onProjectConflict: (config: ProjectConfiguration, updatedAt: string) => void;
+}
+
+export function useSaveRender(
+	videoId: string,
+	options: UseSaveRenderOptions,
+): SaveRender {
 	const [saveState, setSaveState] = useState<SaveState>(IDLE_STATE);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [hasSavedRender, setHasSavedRender] = useState(false);
@@ -39,6 +48,19 @@ export function useSaveRender(videoId: string): SaveRender {
 	const wasCancelledRef = useRef(false);
 	const processingStartRef = useRef<number | null>(null);
 	const mountedRef = useRef(true);
+	const getExpectedUpdatedAtRef = useRef(options.getExpectedUpdatedAt);
+	const onProjectSavedRef = useRef(options.onProjectSaved);
+	const onProjectConflictRef = useRef(options.onProjectConflict);
+
+	useEffect(() => {
+		getExpectedUpdatedAtRef.current = options.getExpectedUpdatedAt;
+		onProjectSavedRef.current = options.onProjectSaved;
+		onProjectConflictRef.current = options.onProjectConflict;
+	}, [
+		options.getExpectedUpdatedAt,
+		options.onProjectConflict,
+		options.onProjectSaved,
+	]);
 
 	useEffect(() => {
 		mountedRef.current = true;
@@ -174,7 +196,11 @@ export function useSaveRender(videoId: string): SaveRender {
 			fetch(`/api/editor/${videoId}/save`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ config: configToSave, force: shouldForce }),
+				body: JSON.stringify({
+					config: configToSave,
+					force: shouldForce,
+					expectedUpdatedAt: getExpectedUpdatedAtRef.current(),
+				}),
 			})
 				.then(async (response) => {
 					if (!mountedRef.current) return;
@@ -182,7 +208,27 @@ export function useSaveRender(videoId: string): SaveRender {
 					if (!response.ok) {
 						const data = (await response.json().catch(() => ({}))) as {
 							error?: string;
+							code?: string;
+							config?: ProjectConfiguration;
+							updatedAt?: string;
 						};
+
+						if (
+							response.status === 409 &&
+							data.code === "CONFIG_CONFLICT" &&
+							data.config &&
+							typeof data.updatedAt === "string"
+						) {
+							onProjectConflictRef.current(data.config, data.updatedAt);
+							setSaveState({
+								status: "ERROR",
+								progress: 0,
+								message: null,
+								error: "This tab synced to newer changes from another tab.",
+							});
+							return;
+						}
+
 						setSaveState({
 							status: "ERROR",
 							progress: 0,
@@ -199,9 +245,18 @@ export function useSaveRender(videoId: string): SaveRender {
 							message?: string | null;
 							error?: string | null;
 						} | null;
+						updatedAt?: string | null;
+						configSaved?: boolean;
 					};
 
 					if (!mountedRef.current) return;
+
+					if (
+						data.configSaved !== false &&
+						typeof data.updatedAt === "string"
+					) {
+						onProjectSavedRef.current(configToSave, data.updatedAt);
+					}
 
 					const status = data.status ?? "QUEUED";
 					processingStartRef.current = null;
