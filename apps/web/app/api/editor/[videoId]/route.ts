@@ -37,7 +37,7 @@ const getVideoWithOwnership = (videoId: Video.VideoId, userId: string) =>
 		});
 	});
 
-export async function GET(request: NextRequest, context: RouteContext) {
+export async function GET(_request: NextRequest, context: RouteContext) {
 	const { videoId } = await context.params;
 
 	const program = Effect.gen(function* () {
@@ -95,6 +95,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
 const SaveConfigInput = Schema.Struct({
 	config: ProjectConfiguration,
+	expectedUpdatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export async function PUT(request: NextRequest, context: RouteContext) {
@@ -112,7 +113,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 		return Response.json({ error: "Invalid config format" }, { status: 400 });
 	}
 
-	const { config } = parseResult.right;
+	const { config, expectedUpdatedAt } = parseResult.right;
 
 	const typedVideoId = videoId as Video.VideoId;
 
@@ -128,19 +129,49 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 			return { error: "Video not found", status: 404 } as const;
 		}
 
-		const { isOwner } = maybeVideoInfo.value;
+		const { video, isOwner } = maybeVideoInfo.value;
 		if (!isOwner) {
 			return { error: "Forbidden", status: 403 } as const;
 		}
 
 		const editorProjects = yield* VideoEditorProjects;
+		const currentProject = yield* editorProjects.getOrCreate(
+			typedVideoId,
+			user.id as User.UserId,
+			video.duration ?? 0,
+		);
+		const currentUpdatedAt = currentProject.updatedAt.toISOString();
+
+		if (!expectedUpdatedAt || expectedUpdatedAt !== currentUpdatedAt) {
+			return {
+				error: "Editor config is out of date",
+				code: "CONFIG_CONFLICT",
+				status: 409,
+				config: currentProject.config,
+				updatedAt: currentUpdatedAt,
+			} as const;
+		}
+
 		yield* editorProjects.save(
 			typedVideoId,
 			user.id as User.UserId,
 			config as ProjectConfigurationType,
 		);
 
-		return { success: true, status: 200 } as const;
+		const maybeUpdatedProject = yield* editorProjects.getByVideoId(
+			typedVideoId,
+			user.id as User.UserId,
+		);
+
+		if (Option.isNone(maybeUpdatedProject)) {
+			return { error: "Internal server error", status: 500 } as const;
+		}
+
+		return {
+			success: true,
+			status: 200,
+			updatedAt: maybeUpdatedProject.value.updatedAt.toISOString(),
+		} as const;
 	}).pipe(
 		Effect.provide(VideoEditorProjects.Default),
 		Effect.catchAll((error) =>
@@ -159,11 +190,17 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 		return Response.json(
 			{
 				error: result.error,
+				...("code" in result ? { code: result.code } : {}),
+				...("config" in result ? { config: result.config } : {}),
+				...("updatedAt" in result ? { updatedAt: result.updatedAt } : {}),
 				...(details ? { details } : {}),
 			},
 			{ status: result.status },
 		);
 	}
 
-	return Response.json({ success: true }, { status: 200 });
+	return Response.json(
+		{ success: true, updatedAt: result.updatedAt },
+		{ status: 200 },
+	);
 }
