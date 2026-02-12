@@ -2,9 +2,29 @@ import { clamp, isFiniteNumber, toEven } from "./math";
 import type {
 	NormalizedRenderConfig,
 	RenderCameraSpec,
+	RenderInnerRect,
 	RenderSpec,
 } from "./types";
 import { ASPECT_RATIO_VALUES } from "./types";
+
+function normalizeVideoCrop(
+	crop: NormalizedRenderConfig["background"]["crop"],
+	sourceWidth: number,
+	sourceHeight: number,
+): RenderInnerRect {
+	if (!crop) {
+		return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+	}
+
+	const maxX = Math.max(0, sourceWidth - 2);
+	const maxY = Math.max(0, sourceHeight - 2);
+	const x = clamp(Math.round(crop.x), 0, maxX);
+	const y = clamp(Math.round(crop.y), 0, maxY);
+	const width = clamp(Math.round(crop.width), 2, sourceWidth - x);
+	const height = clamp(Math.round(crop.height), 2, sourceHeight - y);
+
+	return { x, y, width, height };
+}
 
 export function computeRenderSpec(
 	config: NormalizedRenderConfig,
@@ -18,7 +38,14 @@ export function computeRenderSpec(
 		isFiniteNumber(sourceHeight) && sourceHeight > 0 ? sourceHeight : 9,
 	);
 
-	const sourceRatio = safeSourceWidth / safeSourceHeight;
+	const videoCrop = normalizeVideoCrop(
+		config.background.crop,
+		safeSourceWidth,
+		safeSourceHeight,
+	);
+	const baseWidth = toEven(videoCrop.width);
+	const baseHeight = toEven(videoCrop.height);
+	const sourceRatio = baseWidth / baseHeight;
 	const targetRatio = config.aspectRatio
 		? (() => {
 				const [w, h] = ASPECT_RATIO_VALUES[config.aspectRatio];
@@ -26,14 +53,14 @@ export function computeRenderSpec(
 			})()
 		: sourceRatio;
 
-	let outputWidth = safeSourceWidth;
-	let outputHeight = safeSourceHeight;
+	let outputWidth = baseWidth;
+	let outputHeight = baseHeight;
 
 	if (Math.abs(targetRatio - sourceRatio) > 0.0001) {
 		if (targetRatio > sourceRatio) {
-			outputWidth = toEven(safeSourceHeight * targetRatio);
+			outputWidth = toEven(baseHeight * targetRatio);
 		} else {
-			outputHeight = toEven(safeSourceWidth / targetRatio);
+			outputHeight = toEven(baseWidth / targetRatio);
 		}
 	}
 
@@ -89,6 +116,7 @@ export function computeRenderSpec(
 			width: innerWidth,
 			height: innerHeight,
 		},
+		videoCrop,
 		backgroundSpec: config.background.source,
 		maskSpec: {
 			shape: "roundedRect",
