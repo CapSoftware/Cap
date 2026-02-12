@@ -26,6 +26,36 @@ function normalizeVideoCrop(
 	return { x, y, width, height };
 }
 
+function fitContainedInnerRect(
+	containerWidth: number,
+	containerHeight: number,
+	contentRatio: number,
+): Pick<RenderInnerRect, "width" | "height"> {
+	let width = containerWidth;
+	let height = containerHeight;
+
+	if (containerWidth / containerHeight > contentRatio) {
+		height = containerHeight;
+		width = toEven(height * contentRatio);
+		if (width > containerWidth) {
+			width = containerWidth;
+			height = toEven(width / contentRatio);
+		}
+	} else {
+		width = containerWidth;
+		height = toEven(width / contentRatio);
+		if (height > containerHeight) {
+			height = containerHeight;
+			width = toEven(height * contentRatio);
+		}
+	}
+
+	return {
+		width: clamp(width, 2, containerWidth),
+		height: clamp(height, 2, containerHeight),
+	};
+}
+
 export function computeRenderSpec(
 	config: NormalizedRenderConfig,
 	sourceWidth: number,
@@ -64,22 +94,6 @@ export function computeRenderSpec(
 		}
 	}
 
-	const paddingPercent = clamp(config.background.padding, 0, 40);
-	const innerScale = Math.max(0.05, 1 - (paddingPercent / 100) * 2);
-	const innerWidth = toEven(outputWidth * innerScale);
-	const innerHeight = toEven(outputHeight * innerScale);
-	const innerX = Math.round((outputWidth - innerWidth) / 2);
-	const innerY = Math.round((outputHeight - innerHeight) / 2);
-
-	const rounding = clamp(config.background.rounding, 0, 100);
-	const roundingMultiplier =
-		config.background.roundingType === "rounded" ? 1 : 0.8;
-	const radiusPx = Math.round(
-		(Math.min(innerWidth, innerHeight) / 2) *
-			(rounding / 100) *
-			roundingMultiplier,
-	);
-
 	const shadowAmount = clamp(config.background.shadow, 0, 100);
 	const shadowEnabled = shadowAmount > 0;
 	const shadowSize = clamp(config.background.advancedShadow.size, 0, 100);
@@ -101,6 +115,51 @@ export function computeRenderSpec(
 				).toFixed(4),
 			)
 		: 0;
+
+	const paddingPercent = clamp(config.background.padding, 0, 40);
+	const innerScale = Math.max(0.05, 1 - (paddingPercent / 100) * 2);
+	const paddedInnerWidth = toEven(outputWidth * innerScale);
+	const paddedInnerHeight = toEven(outputHeight * innerScale);
+	const contentRatio = videoCrop.width / videoCrop.height;
+	const initialInnerSize = fitContainedInnerRect(
+		paddedInnerWidth,
+		paddedInnerHeight,
+		contentRatio,
+	);
+	let fitContainerWidth = paddedInnerWidth;
+	let fitContainerHeight = paddedInnerHeight;
+
+	if (shadowEnabled && Math.abs(targetRatio - sourceRatio) > 0.0001) {
+		const insetX = Math.ceil(spreadPx + blurPx * 0.6);
+		const insetY = Math.ceil(spreadPx + blurPx * 0.6 + Math.max(0, offsetY));
+
+		if (initialInnerSize.width >= paddedInnerWidth - 1) {
+			fitContainerWidth = Math.max(2, paddedInnerWidth - insetX * 2);
+		}
+
+		if (initialInnerSize.height >= paddedInnerHeight - 1) {
+			fitContainerHeight = Math.max(2, paddedInnerHeight - insetY * 2);
+		}
+	}
+
+	const innerSize = fitContainedInnerRect(
+		fitContainerWidth,
+		fitContainerHeight,
+		contentRatio,
+	);
+	const innerWidth = innerSize.width;
+	const innerHeight = innerSize.height;
+	const innerX = Math.round((outputWidth - innerWidth) / 2);
+	const innerY = Math.round((outputHeight - innerHeight) / 2);
+
+	const rounding = clamp(config.background.rounding, 0, 100);
+	const roundingMultiplier =
+		config.background.roundingType === "rounded" ? 1 : 0.8;
+	const radiusPx = Math.round(
+		(Math.min(innerWidth, innerHeight) / 2) *
+			(rounding / 100) *
+			roundingMultiplier,
+	);
 
 	let cameraSpec: RenderCameraSpec | undefined;
 	if (config.camera && !config.camera.hide) {
