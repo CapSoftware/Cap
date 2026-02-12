@@ -1144,13 +1144,13 @@ function Page() {
 	createEffect(() => {
 		const data = recordings.data;
 		if (!data) {
-			setRecordingsStore(reconcile([]));
+			setRecordingsStore(reconcile([], { key: "path" }));
 			return;
 		}
 		const mapped = data
 			.slice(0, 20)
 			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
-		setRecordingsStore(reconcile(mapped));
+		setRecordingsStore(reconcile(mapped, { key: "path" }));
 	});
 	const recordingsData = () => recordingsStore;
 
@@ -1160,10 +1160,10 @@ function Page() {
 	createEffect(() => {
 		const data = screenshots.data;
 		if (!data) {
-			setScreenshotsStore(reconcile([]));
+			setScreenshotsStore(reconcile([], { key: "path" }));
 			return;
 		}
-		setScreenshotsStore(reconcile(data.slice(0, 20)));
+		setScreenshotsStore(reconcile(data.slice(0, 20), { key: "path" }));
 	});
 	const screenshotsData = () => screenshotsStore;
 
