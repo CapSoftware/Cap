@@ -52,10 +52,19 @@ function createMockCanvas() {
 	return { canvas, mockCtx, calls };
 }
 
+function createMockVideo() {
+	return {
+		readyState: 2,
+		videoWidth: 1920,
+		videoHeight: 1080,
+	} as unknown as HTMLVideoElement;
+}
+
 const testSpec: RenderSpec = {
 	outputWidth: 1920,
 	outputHeight: 1080,
 	innerRect: { x: 100, y: 100, width: 1720, height: 880 },
+	videoCrop: { x: 0, y: 0, width: 1920, height: 1080 },
 	backgroundSpec: { type: "color", value: [30, 30, 30], alpha: 1 },
 	maskSpec: { shape: "roundedRect", roundingType: "rounded", radiusPx: 20 },
 	shadowSpec: {
@@ -87,6 +96,7 @@ describe("EditorRenderer", () => {
 			spec: testSpec,
 			resolveBackgroundPath: (p) => p,
 		});
+		renderer.setVideoSource(createMockVideo());
 
 		renderer.render();
 
@@ -107,6 +117,7 @@ describe("EditorRenderer", () => {
 			spec: testSpec,
 			resolveBackgroundPath: (p) => p,
 		});
+		renderer.setVideoSource(createMockVideo());
 
 		renderer.render();
 
@@ -137,6 +148,7 @@ describe("EditorRenderer", () => {
 			spec: testSpec,
 			resolveBackgroundPath: (p) => p,
 		});
+		renderer.setVideoSource(createMockVideo());
 
 		const newSpec: RenderSpec = {
 			...testSpec,
