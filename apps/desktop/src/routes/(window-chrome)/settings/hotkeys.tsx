@@ -82,6 +82,9 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 
 	const actions = () =>
 		[
+			"screenshotDisplay",
+			"screenshotWindow",
+			"screenshotArea",
 			"openRecordingPicker",
 			"stopRecording",
 			"restartRecording",
@@ -90,9 +93,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 			"openRecordingPickerDisplay",
 			"openRecordingPickerWindow",
 			"openRecordingPickerArea",
-			"screenshotDisplay",
-			"screenshotWindow",
-			"screenshotArea",
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (
