@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect } from "react";
+import { splitSegmentAtSourceTime } from "../utils/timeline";
 import { useEditorContext } from "./context";
 
 const FRAME_DURATION = 1 / 30;
@@ -57,55 +58,28 @@ export function useEditorShortcuts() {
 	const splitAtPlayhead = useCallback(() => {
 		if (!project.timeline?.segments) return;
 
-		const currentTime = editorState.playbackTime;
-		const segments = project.timeline.segments;
-
-		let segmentIndex = -1;
-		let accumulatedTime = 0;
-
-		for (const [i, segment] of segments.entries()) {
-			const segmentDuration = (segment.end - segment.start) / segment.timescale;
-			if (
-				currentTime >= accumulatedTime &&
-				currentTime < accumulatedTime + segmentDuration
-			) {
-				segmentIndex = i;
-				break;
-			}
-			accumulatedTime += segmentDuration;
-		}
-
-		const segment = segments[segmentIndex];
-		if (segmentIndex === -1 || !segment) return;
-		const segmentStartTime = accumulatedTime;
-		const relativeTime = currentTime - segmentStartTime;
-		const splitPoint = segment.start + relativeTime * segment.timescale;
-
-		if (
-			splitPoint <= segment.start + 0.01 ||
-			splitPoint >= segment.end - 0.01
-		) {
-			return;
-		}
-
-		const firstHalf = { ...segment, end: splitPoint };
-		const secondHalf = { ...segment, start: splitPoint };
-
-		const newSegments = [
-			...segments.slice(0, segmentIndex),
-			firstHalf,
-			secondHalf,
-			...segments.slice(segmentIndex + 1),
-		];
+		const result = splitSegmentAtSourceTime(
+			project.timeline.segments,
+			editorState.playbackTime,
+		);
+		if (!result) return;
 
 		setProject({
 			...project,
 			timeline: {
 				...project.timeline,
-				segments: newSegments,
+				segments: result.segments,
 			},
 		});
-	}, [editorState.playbackTime, project, setProject]);
+
+		setEditorState((state) => ({
+			...state,
+			timeline: {
+				...state.timeline,
+				selection: { type: "clip", indices: [result.selectionIndex] },
+			},
+		}));
+	}, [editorState.playbackTime, project, setProject, setEditorState]);
 
 	useEffect(() => {
 		function handleKeyDown(e: KeyboardEvent) {
@@ -167,7 +141,7 @@ export function useEditorShortcuts() {
 				return;
 			}
 
-			if (e.key === "s" && !isMod) {
+			if ((e.key === "s" || e.key === "c") && !isMod) {
 				e.preventDefault();
 				splitAtPlayhead();
 				return;
