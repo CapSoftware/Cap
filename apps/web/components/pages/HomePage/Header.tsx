@@ -71,8 +71,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 	const headerContent = getHeaderContent();
 
 	return (
-		<div className="mt-[110px] mb-10 sm:mb-[150px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[20vh]">
-			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
+		<div className="mt-[90px] mb-[60px] sm:mb-[100px] md:mb-[160px] w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[140px] xl:min-h-[700px]">
+			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-0">
 				<div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
 					<div className="flex flex-col text-left w-full max-w-[650px]">
 						<motion.h1
