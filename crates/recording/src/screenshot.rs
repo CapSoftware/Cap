@@ -2,7 +2,7 @@ use crate::sources::screen_capture::ScreenCaptureTarget;
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 use anyhow::anyhow;
-use image::RgbImage;
+use image::{DynamicImage, RgbImage, RgbaImage};
 #[cfg(target_os = "macos")]
 use scap_ffmpeg::AsFFmpeg;
 use std::sync::{Arc, Mutex};
@@ -98,8 +98,142 @@ fn rgb_from_rgba(
     RgbImage::from_raw(width as u32, height as u32, rgb)
 }
 
+fn rgba_from_raw(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    bytes_per_row: usize,
+    order: ChannelOrder,
+) -> Option<RgbaImage> {
+    let row_bytes = width.checked_mul(4)?;
+    if bytes_per_row < row_bytes {
+        return None;
+    }
+
+    let required_len = height.checked_mul(bytes_per_row)?;
+    if data.len() < required_len {
+        return None;
+    }
+
+    let width_stride = width.checked_mul(4)?;
+    let rgba_len = height.checked_mul(width_stride)?;
+    let mut rgba = vec![0u8; rgba_len];
+
+    for y in 0..height {
+        let src_start = y.checked_mul(bytes_per_row)?;
+        let src_end = src_start.checked_add(row_bytes)?;
+        let dst_start = y.checked_mul(width_stride)?;
+        let dst_end = dst_start.checked_add(width_stride)?;
+
+        let src_row = data.get(src_start..src_end)?;
+        let dst_row = rgba.get_mut(dst_start..dst_end)?;
+
+        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+            let (r, b) = match order {
+                ChannelOrder::Rgba => (src[0], src[2]),
+                ChannelOrder::Bgra => (src[2], src[0]),
+            };
+
+            dst[0] = r;
+            dst[1] = src[1];
+            dst[2] = b;
+            dst[3] = src[3];
+        }
+    }
+
+    RgbaImage::from_raw(width as u32, height as u32, rgba)
+}
+
+fn apply_window_rounded_corners(image: RgbImage, target: &ScreenCaptureTarget) -> RgbaImage {
+    let width = image.width();
+    let height = image.height();
+
+    let corner_radius = window_corner_radius_px(target);
+
+    if corner_radius <= 0.0 {
+        return image::buffer::ConvertBuffer::convert(&image);
+    }
+
+    let fw = width as f32;
+    let fh = height as f32;
+    let mut rgba = RgbaImage::new(width, height);
+
+    for (x, y, rgb_pixel) in image.enumerate_pixels() {
+        let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, corner_radius);
+        rgba.put_pixel(
+            x,
+            y,
+            image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+        );
+    }
+
+    rgba
+}
+
+fn window_corner_radius_px(target: &ScreenCaptureTarget) -> f32 {
+    match target {
+        ScreenCaptureTarget::Window { id } => {
+            let scale = scap_targets::Window::from_id(id)
+                .and_then(|w| w.display())
+                .and_then(|d| {
+                    let physical = d.physical_size()?.width();
+                    let logical = d.logical_size()?.width();
+                    if logical > 0.0 {
+                        Some(physical / logical)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(1.0);
+
+            #[cfg(target_os = "macos")]
+            {
+                (10.0 * scale) as f32
+            }
+            #[cfg(target_os = "windows")]
+            {
+                (8.0 * scale) as f32
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                let _ = scale;
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn rounded_corner_alpha(fx: f32, fy: f32, fw: f32, fh: f32, radius: f32) -> u8 {
+    let dx = if fx < radius {
+        radius - fx
+    } else if fx > fw - radius {
+        fx - (fw - radius)
+    } else {
+        return 255;
+    };
+
+    let dy = if fy < radius {
+        radius - fy
+    } else if fy > fh - radius {
+        fy - (fh - radius)
+    } else {
+        return 255;
+    };
+
+    let dist = (dx * dx + dy * dy).sqrt();
+
+    if dist <= radius - 0.5 {
+        255
+    } else if dist >= radius + 0.5 {
+        0
+    } else {
+        ((radius + 0.5 - dist).clamp(0.0, 1.0) * 255.0) as u8
+    }
+}
+
 #[cfg(target_os = "macos")]
-fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
+fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
     use core_graphics::display::{
         CGDisplayCreateImage, CGDisplayCreateImageForRect, kCGWindowImageBoundsIgnoreFraming,
     };
@@ -207,10 +341,18 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
     let cf_data: CFData = cg_image.data();
     let data = cf_data.bytes();
 
-    let image = rgb_from_rgba(data, width, height, bytes_per_row, ChannelOrder::Bgra)?;
+    let is_window = matches!(target, ScreenCaptureTarget::Window { .. });
+
+    let result = if is_window {
+        let rgba = rgba_from_raw(data, width, height, bytes_per_row, ChannelOrder::Bgra)?;
+        DynamicImage::ImageRgba8(rgba)
+    } else {
+        let rgb = rgb_from_rgba(data, width, height, bytes_per_row, ChannelOrder::Bgra)?;
+        DynamicImage::ImageRgb8(rgb)
+    };
 
     debug!("Fast capture completed in {:?}", start.elapsed());
-    Some(image)
+    Some(result)
 }
 
 #[cfg(target_os = "windows")]
@@ -274,6 +416,27 @@ fn frame_to_rgb(frame: &Frame) -> anyhow::Result<RgbImage> {
         order,
     )
     .ok_or_else(|| anyhow!("Failed to create RgbImage"))
+}
+
+#[cfg(target_os = "windows")]
+fn frame_to_rgba(frame: &Frame) -> anyhow::Result<RgbaImage> {
+    let buffer = frame
+        .as_buffer()
+        .map_err(|e| anyhow!("Failed to get buffer: {e:?}"))?;
+
+    let order = match buffer.pixel_format() {
+        PixelFormat::R8G8B8A8Unorm => ChannelOrder::Rgba,
+        PixelFormat::B8G8R8A8Unorm => ChannelOrder::Bgra,
+    };
+
+    rgba_from_raw(
+        buffer.data(),
+        buffer.width() as usize,
+        buffer.height() as usize,
+        buffer.stride() as usize,
+        order,
+    )
+    .ok_or_else(|| anyhow!("Failed to create RgbaImage"))
 }
 
 #[cfg(target_os = "windows")]
@@ -568,7 +731,7 @@ fn gdi_or_error(
 }
 
 #[cfg(target_os = "windows")]
-fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
+fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
     use std::sync::mpsc::sync_channel;
 
     if !windows_fast_path_available() {
@@ -576,6 +739,7 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
     }
 
     let start = std::time::Instant::now();
+    let is_window = matches!(target, ScreenCaptureTarget::Window { .. });
 
     let item = match target.clone() {
         ScreenCaptureTarget::Display { id } => {
@@ -605,8 +769,13 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
         settings,
         {
             move |frame| {
-                let res = frame_to_rgb(&frame);
-                let _ = tx.try_send(res);
+                if is_window {
+                    let res = frame_to_rgba(&frame);
+                    let _ = tx.try_send(res.map(DynamicImage::ImageRgba8));
+                } else {
+                    let res = frame_to_rgb(&frame);
+                    let _ = tx.try_send(res.map(DynamicImage::ImageRgb8));
+                }
                 Ok(())
             }
         },
@@ -625,7 +794,7 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
     Some(image)
 }
 
-pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
     #[cfg(target_os = "macos")]
     {
         if let Some(image) = try_fast_capture(&target) {
@@ -641,7 +810,8 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
                 &target,
                 anyhow!("Windows.Graphics.Capture not supported on this system"),
             )?;
-            return crop_area_if_needed(fallback_image, &target, false);
+            return crop_area_if_needed(fallback_image, &target, false)
+                .map(|img| finalize_screenshot(img, &target));
         }
 
         if let Some(image) = try_fast_capture(&target) {
@@ -839,7 +1009,8 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
             ) => {
                 let fallback_image =
                     gdi_or_error(&target, anyhow!("Failed to create capturer: {e:?}"))?;
-                return crop_area_if_needed(fallback_image, &target, false);
+                return crop_area_if_needed(fallback_image, &target, false)
+                    .map(|img| finalize_screenshot(img, &target));
             }
             Err(e) => return Err(anyhow!("Failed to create capturer: {e:?}")),
         }
@@ -854,7 +1025,8 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
     #[cfg(target_os = "windows")]
     if let Err(e) = capturer.start() {
         let fallback_image = gdi_or_error(&target, anyhow!("Failed to start capturer: {e:?}"))?;
-        return crop_area_if_needed(fallback_image, &target, false);
+        return crop_area_if_needed(fallback_image, &target, false)
+            .map(|img| finalize_screenshot(img, &target));
     }
 
     let result = match tokio::time::timeout(Duration::from_secs(2), rx).await {
@@ -879,7 +1051,8 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         Ok(img) => img,
         Err(err) => {
             let fallback_image = gdi_or_error(&target, err)?;
-            return crop_area_if_needed(fallback_image, &target, false);
+            return crop_area_if_needed(fallback_image, &target, false)
+                .map(|img| finalize_screenshot(img, &target));
         }
     };
 
@@ -894,7 +1067,15 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
 
     let final_image = crop_area_if_needed(image, &target, skip_crop)?;
 
-    Ok(final_image)
+    Ok(finalize_screenshot(final_image, &target))
+}
+
+fn finalize_screenshot(image: RgbImage, target: &ScreenCaptureTarget) -> DynamicImage {
+    if matches!(target, ScreenCaptureTarget::Window { .. }) {
+        DynamicImage::ImageRgba8(apply_window_rounded_corners(image, target))
+    } else {
+        DynamicImage::ImageRgb8(image)
+    }
 }
 
 fn crop_area_if_needed(
