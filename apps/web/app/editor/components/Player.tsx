@@ -7,6 +7,7 @@ import {
 import { EditorRenderer } from "@cap/editor-renderer";
 import { Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { getAudioPlaybackGain } from "../utils/audio";
 import { resolveBackgroundAssetPath } from "../utils/backgrounds";
 import { useEditorContext } from "./context";
 import { PlayerControls } from "./PlayerControls";
@@ -28,6 +29,9 @@ export function Player() {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const rendererRef = useRef<EditorRenderer | null>(null);
 	const rafIdRef = useRef<number>(0);
+	const audioContextRef = useRef<AudioContext | null>(null);
+	const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+	const audioGainRef = useRef<GainNode | null>(null);
 
 	const spec = useMemo(() => {
 		const normalized = normalizeConfigForRender(project);
@@ -82,6 +86,60 @@ export function Player() {
 			videoEl.removeEventListener("loadeddata", onLoaded);
 		};
 	}, [videoRef]);
+
+	useEffect(() => {
+		const videoEl = videoRef.current;
+		if (!videoEl) return;
+
+		const AudioContextCtor =
+			window.AudioContext ||
+			(window as unknown as { webkitAudioContext?: typeof AudioContext })
+				.webkitAudioContext;
+
+		if (!AudioContextCtor) return;
+
+		try {
+			const context = audioContextRef.current ?? new AudioContextCtor();
+			audioContextRef.current = context;
+
+			if (!audioSourceRef.current || !audioGainRef.current) {
+				const source = context.createMediaElementSource(videoEl);
+				const gain = context.createGain();
+				source.connect(gain);
+				gain.connect(context.destination);
+				audioSourceRef.current = source;
+				audioGainRef.current = gain;
+			}
+		} catch {}
+
+		return () => {
+			const context = audioContextRef.current;
+			audioContextRef.current = null;
+			audioSourceRef.current = null;
+			audioGainRef.current = null;
+			context?.close().catch(() => undefined);
+		};
+	}, [videoRef]);
+
+	useEffect(() => {
+		if (!editorState.playing) return;
+		audioContextRef.current?.resume().catch(() => undefined);
+	}, [editorState.playing]);
+
+	useEffect(() => {
+		const videoEl = videoRef.current;
+		if (!videoEl) return;
+
+		const gain = getAudioPlaybackGain(project.audio);
+		videoEl.muted = gain <= 0;
+		videoEl.volume = Math.min(1, Math.max(0, gain));
+
+		const context = audioContextRef.current;
+		const gainNode = audioGainRef.current;
+		if (context && gainNode) {
+			gainNode.gain.setValueAtTime(gain, context.currentTime);
+		}
+	}, [project.audio, videoRef]);
 
 	useEffect(() => {
 		if (!cameraUrl) return;
