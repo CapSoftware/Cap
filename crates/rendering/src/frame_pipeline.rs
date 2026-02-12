@@ -428,7 +428,9 @@ pub async fn finish_encoder(
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
 ) -> Result<RenderedFrame, RenderingError> {
-    let previous_pending = session.pipelined_readback.take_pending();
+    if let Some(prev) = session.pipelined_readback.take_pending() {
+        let _ = prev.wait(device).await;
+    }
 
     session.pipelined_readback.perform_resize_if_needed(device);
 
@@ -442,28 +444,10 @@ pub async fn finish_encoder(
         .pipelined_readback
         .submit_readback(device, queue, texture, uniforms, encoder)?;
 
-    let result = if let Some(pending) = previous_pending {
-        pending.wait(device).await?
-    } else {
-        let pending = session
-            .pipelined_readback
-            .take_pending()
-            .expect("just submitted a readback");
-        let frame = pending.wait(device).await?;
+    let pending = session
+        .pipelined_readback
+        .take_pending()
+        .expect("just submitted a readback");
 
-        let prime_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Pipeline Priming Encoder"),
-        });
-        session.pipelined_readback.submit_readback(
-            device,
-            queue,
-            texture,
-            uniforms,
-            prime_encoder,
-        )?;
-
-        frame
-    };
-
-    Ok(result)
+    pending.wait(device).await
 }
