@@ -1064,6 +1064,8 @@ function Page() {
 	});
 
 	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
+	createTauriEventListener(events.recordingStarted, () => recordings.refetch());
+	createTauriEventListener(events.recordingStopped, () => recordings.refetch());
 
 	const handleReupload = async (path: string) => {
 		setReuploadingPaths((prev) => new Set([...prev, path]));
