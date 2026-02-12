@@ -8,7 +8,7 @@ import {
 	faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Check, Copy, Globe2 } from "lucide-react";
+import { Check, Copy, Globe2, Pencil } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -326,8 +326,8 @@ export const ShareHeader = ({
 						</div>
 					</div>
 					{user !== null && (
-						<div className="flex space-x-2">
-							<div>
+						<div className="flex flex-col items-start gap-1">
+							<div className="flex flex-wrap gap-2 items-center">
 								<div className="flex gap-2 items-center">
 									{data.password && (
 										<FontAwesomeIcon
@@ -345,38 +345,44 @@ export const ShareHeader = ({
 											}, 2000);
 										}}
 									>
-										{getDisplayLink()}
+										<span className="truncate max-w-[150px] sm:max-w-none">
+											{getDisplayLink()}
+										</span>
 										{linkCopied ? (
-											<Check className="ml-2 w-4 h-4 svgpathanimation" />
+											<Check className="ml-2 w-4 h-4 shrink-0 svgpathanimation" />
 										) : (
-											<Copy className="ml-2 w-4 h-4" />
+											<Copy className="ml-2 w-4 h-4 shrink-0" />
 										)}
 									</Button>
 								</div>
-								{userIsOwnerAndNotPro && (
-									<button
-										type="button"
-										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
-										onClick={() => setUpgradeModalOpen(true)}
-									>
-										<Globe2 className="mr-1 w-4 h-4" />
-										Connect a custom domain
-									</button>
-								)}
-							</div>
-							{user !== null && (
-								<div className="hidden md:flex gap-2">
+								{isOwner && (
 									<Button
+										variant="white"
 										onClick={() => {
-											push("/dashboard/caps?page=1");
+											push(`/editor/${data.id}`);
 										}}
 									>
-										<span className="hidden text-sm text-white lg:block">
-											Go to
-										</span>{" "}
-										Dashboard
+										Edit Video
+										<Pencil className="ml-1 w-4 h-4 shrink-0" />
 									</Button>
-								</div>
+								)}
+								<Button
+									onClick={() => {
+										push("/dashboard/caps?page=1");
+									}}
+								>
+									Dashboard
+								</Button>
+							</div>
+							{userIsOwnerAndNotPro && (
+								<button
+									type="button"
+									className="flex items-center text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
+									onClick={() => setUpgradeModalOpen(true)}
+								>
+									<Globe2 className="mr-1 w-4 h-4" />
+									Connect a custom domain
+								</button>
 							)}
 						</div>
 					)}
