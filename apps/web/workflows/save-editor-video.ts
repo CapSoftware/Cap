@@ -11,6 +11,7 @@ import type { ProjectConfiguration } from "@/app/editor/types/project-config";
 import {
 	createEditorSavedRenderState,
 	type EditorSavedRenderState,
+	getEditorSavedRenderState,
 } from "@/lib/editor-saved-render";
 import { runPromise } from "@/lib/server";
 
@@ -59,6 +60,21 @@ interface MediaServerStartAndPollResult {
 	result?: MediaServerProcessResult;
 	notFoundErrorMessage?: string;
 }
+
+interface MediaServerEditorProcessStatus {
+	phase: string;
+	progress: number;
+	message?: string;
+	error?: string;
+	metadata?: MediaServerProcessResult["metadata"];
+}
+
+type ProgressUpdateHandler = (
+	status: Pick<
+		MediaServerEditorProcessStatus,
+		"phase" | "progress" | "message"
+	>,
+) => Promise<void>;
 
 const editorProcessPathCandidates = [
 	"/video/editor/process",
@@ -176,6 +192,38 @@ function getEncodingProgress(message: string | undefined): number | null {
 	}
 
 	return Math.min(100, Math.max(0, value));
+}
+
+function normalizePolledProgress(progress: number): number {
+	if (!Number.isFinite(progress)) {
+		return 0;
+	}
+
+	return Math.min(99, Math.max(0, progress));
+}
+
+function getMessageForPhase(
+	phase: MediaServerEditorProcessStatus["phase"],
+	fallbackMessage: string | null,
+): string {
+	if (fallbackMessage) {
+		return fallbackMessage;
+	}
+
+	switch (phase) {
+		case "queued":
+			return "Queued saved changes";
+		case "downloading":
+			return "Downloading source video...";
+		case "probing":
+			return "Analyzing source video...";
+		case "processing":
+			return "Rendering saved changes...";
+		case "uploading":
+			return "Uploading saved video...";
+		default:
+			return "Rendering saved changes...";
+	}
 }
 
 function createMediaServerConnectionError(
@@ -377,6 +425,58 @@ async function persistRenderState(
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
+async function persistPolledRenderState(
+	videoId: string,
+	sourceKey: string,
+	outputKey: string,
+	status: Pick<
+		MediaServerEditorProcessStatus,
+		"phase" | "progress" | "message"
+	>,
+): Promise<void> {
+	const [video] = await db()
+		.select({ metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId))
+		.limit(1);
+
+	if (!video) {
+		throw new FatalError("Video does not exist");
+	}
+
+	const currentMetadata = (video.metadata as VideoMetadata | null) || {};
+	const currentRenderState = getEditorSavedRenderState(currentMetadata);
+	const nextRenderState = createEditorSavedRenderState({
+		status: "PROCESSING",
+		sourceKey: currentRenderState?.sourceKey ?? sourceKey,
+		outputKey: currentRenderState?.outputKey ?? outputKey,
+		progress: normalizePolledProgress(status.progress),
+		message: getMessageForPhase(status.phase, status.message ?? null),
+		error: null,
+		requestedAt: currentRenderState?.requestedAt ?? new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+	});
+
+	if (
+		currentRenderState?.status === nextRenderState.status &&
+		currentRenderState.progress === nextRenderState.progress &&
+		currentRenderState.message === nextRenderState.message &&
+		currentRenderState.error === nextRenderState.error
+	) {
+		return;
+	}
+
+	await db()
+		.update(videos)
+		.set({
+			metadata: {
+				...currentMetadata,
+				editorSavedRender: nextRenderState,
+			},
+		})
+		.where(eq(videos.id, videoId as Video.VideoId));
+}
+
 async function processOnMediaServer(
 	payload: SaveEditorVideoWorkflowPayload,
 ): Promise<MediaServerProcessResult> {
@@ -431,6 +531,14 @@ async function processOnMediaServer(
 		rewrittenRequestBody !== requestBody;
 
 	let notFoundErrorMessage: string | null = null;
+	const onProgressUpdate: ProgressUpdateHandler = async (status) => {
+		await persistPolledRenderState(
+			payload.videoId,
+			payload.sourceKey,
+			payload.outputKey,
+			status,
+		);
+	};
 
 	for (const processPath of editorProcessPathCandidates) {
 		try {
@@ -438,6 +546,7 @@ async function processOnMediaServer(
 				mediaServerUrl,
 				processPath,
 				requestBody,
+				onProgressUpdate,
 			);
 
 			if (primaryResult.notFoundErrorMessage) {
@@ -462,6 +571,7 @@ async function processOnMediaServer(
 				mediaServerUrl,
 				processPath,
 				rewrittenRequestBody,
+				onProgressUpdate,
 			);
 
 			if (rewrittenResult.notFoundErrorMessage) {
@@ -490,6 +600,7 @@ async function startAndPollEditorProcess(
 	mediaServerUrl: string,
 	processPath: string,
 	requestBody: string,
+	onProgressUpdate: ProgressUpdateHandler,
 ): Promise<MediaServerStartAndPollResult> {
 	const startResult = await startEditorProcess(
 		mediaServerUrl,
@@ -507,7 +618,12 @@ async function startAndPollEditorProcess(
 	}
 
 	return {
-		result: await pollForCompletion(mediaServerUrl, processPath, jobId),
+		result: await pollForCompletion(
+			mediaServerUrl,
+			processPath,
+			jobId,
+			onProgressUpdate,
+		),
 	};
 }
 
@@ -515,6 +631,7 @@ async function pollForCompletion(
 	mediaServerUrl: string,
 	processPath: string,
 	jobId: string,
+	onProgressUpdate: ProgressUpdateHandler,
 ): Promise<MediaServerProcessResult> {
 	let consecutiveConnectionFailures = 0;
 	let lastStatusSignature = "";
@@ -551,13 +668,7 @@ async function pollForCompletion(
 			continue;
 		}
 
-		const status = (await response.json()) as {
-			phase: string;
-			progress: number;
-			message?: string;
-			error?: string;
-			metadata?: MediaServerProcessResult["metadata"];
-		};
+		const status = (await response.json()) as MediaServerEditorProcessStatus;
 
 		if (status.phase === "complete") {
 			if (!status.metadata) {
@@ -587,6 +698,11 @@ async function pollForCompletion(
 		if (statusSignature !== lastStatusSignature) {
 			lastStatusSignature = statusSignature;
 			lastStatusChangedAt = Date.now();
+			await onProgressUpdate({
+				phase: status.phase,
+				progress: progressValue,
+				message: status.message,
+			});
 			continue;
 		}
 
