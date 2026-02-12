@@ -1,21 +1,10 @@
 "use client";
 
 import { Switch } from "@cap/ui";
-import {
-	ArrowLeft,
-	Camera,
-	Image as ImageIcon,
-	MessageSquare,
-	MousePointer2,
-	Volume2,
-} from "lucide-react";
+import { ArrowLeft, Camera, Image as ImageIcon, Volume2 } from "lucide-react";
 import NextImage from "next/image";
-import { useCallback, useState } from "react";
-import type {
-	AspectRatio,
-	BackgroundSource,
-	CursorAnimationStyle,
-} from "../types/project-config";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { AspectRatio, BackgroundSource } from "../types/project-config";
 import {
 	BACKGROUND_COLORS,
 	BACKGROUND_GRADIENTS,
@@ -28,15 +17,18 @@ import {
 } from "../utils/backgrounds";
 import { useEditorContext } from "./context";
 
-const TABS = [
+const TABS_WITH_CAMERA = [
 	{ id: "background", icon: ImageIcon, label: "Background" },
 	{ id: "camera", icon: Camera, label: "Camera" },
 	{ id: "audio", icon: Volume2, label: "Audio" },
-	{ id: "cursor", icon: MousePointer2, label: "Cursor" },
-	{ id: "captions", icon: MessageSquare, label: "Captions" },
 ] as const;
 
-type TabId = (typeof TABS)[number]["id"];
+const TABS_WITHOUT_CAMERA = [
+	{ id: "background", icon: ImageIcon, label: "Background" },
+	{ id: "audio", icon: Volume2, label: "Audio" },
+] as const;
+
+type TabId = "background" | "camera" | "audio";
 
 const ASPECT_RATIOS: Array<{ value: AspectRatio; label: string }> = [
 	{ value: "wide", label: "16:9" },
@@ -44,24 +36,6 @@ const ASPECT_RATIOS: Array<{ value: AspectRatio; label: string }> = [
 	{ value: "square", label: "1:1" },
 	{ value: "classic", label: "4:3" },
 	{ value: "tall", label: "3:4" },
-];
-
-const CURSOR_STYLES: Array<{
-	value: typeof CursorAnimationStyle.Type;
-	label: string;
-	description: string;
-}> = [
-	{
-		value: "slow",
-		label: "Slow",
-		description: "Gentle follow with higher inertia",
-	},
-	{
-		value: "mellow",
-		label: "Mellow",
-		description: "Balanced smoothing for tutorials",
-	},
-	{ value: "custom", label: "Custom", description: "Manually tune physics" },
 ];
 
 interface SliderProps {
@@ -642,174 +616,21 @@ function AudioPanel() {
 	);
 }
 
-function CursorPanel() {
-	const { project, setProject } = useEditorContext();
-	const cursor = project.cursor;
-
-	return (
-		<div className="flex flex-col gap-6">
-			<Field
-				label="Show Cursor"
-				action={
-					<Switch
-						checked={!cursor.hide}
-						onCheckedChange={(checked) =>
-							setProject({
-								...project,
-								cursor: { ...cursor, hide: !checked },
-							})
-						}
-					/>
-				}
-			>
-				<p className="text-xs text-gray-10">Toggle cursor visibility</p>
-			</Field>
-
-			{!cursor.hide && (
-				<>
-					<Field label="Cursor Type">
-						<div className="flex gap-2">
-							{(["auto", "pointer", "circle"] as const).map((type) => (
-								<button
-									type="button"
-									key={type}
-									onClick={() =>
-										setProject({
-											...project,
-											cursor: { ...cursor, type },
-										})
-									}
-									className={`px-3 py-1.5 text-sm rounded-lg border transition-colors capitalize ${
-										cursor.type === type
-											? "border-blue-8 bg-blue-3 text-blue-11"
-											: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
-									}`}
-								>
-									{type}
-								</button>
-							))}
-						</div>
-					</Field>
-
-					<Field label="Size">
-						<Slider
-							value={cursor.size}
-							onChange={(value) =>
-								setProject({
-									...project,
-									cursor: { ...cursor, size: value },
-								})
-							}
-							min={20}
-							max={300}
-							formatLabel={(v) => `${v}%`}
-						/>
-					</Field>
-
-					<Field
-						label="Hide When Idle"
-						action={
-							<Switch
-								checked={cursor.hideWhenIdle}
-								onCheckedChange={(checked) =>
-									setProject({
-										...project,
-										cursor: { ...cursor, hideWhenIdle: checked },
-									})
-								}
-							/>
-						}
-					>
-						<p className="text-xs text-gray-10">Fade cursor after inactivity</p>
-					</Field>
-
-					{cursor.hideWhenIdle && (
-						<Field label="Idle Delay">
-							<Slider
-								value={cursor.hideWhenIdleDelay}
-								onChange={(value) =>
-									setProject({
-										...project,
-										cursor: { ...cursor, hideWhenIdleDelay: value },
-									})
-								}
-								min={0.5}
-								max={5}
-								step={0.1}
-								formatLabel={(v) => `${v.toFixed(1)}s`}
-							/>
-						</Field>
-					)}
-
-					<Field label="Movement Style">
-						<div className="flex flex-col gap-2">
-							{CURSOR_STYLES.map(({ value, label, description }) => (
-								<button
-									type="button"
-									key={value}
-									onClick={() =>
-										setProject({
-											...project,
-											cursor: { ...cursor, animationStyle: value },
-										})
-									}
-									className={`p-3 text-left rounded-lg border transition-colors ${
-										cursor.animationStyle === value
-											? "border-blue-8 bg-blue-3"
-											: "border-gray-4 bg-gray-2 hover:border-gray-6"
-									}`}
-								>
-									<div className="text-sm font-medium text-gray-12">
-										{label}
-									</div>
-									<div className="text-xs text-gray-10">{description}</div>
-								</button>
-							))}
-						</div>
-					</Field>
-				</>
-			)}
-		</div>
-	);
-}
-
-function CaptionsPanel() {
-	const { project } = useEditorContext();
-	const captions = project.captions;
-
-	return (
-		<div className="flex flex-col gap-6">
-			{captions ? (
-				<Field
-					label="Captions"
-					action={
-						<Switch
-							checked={captions.settings.enabled}
-							onCheckedChange={() => {}}
-						/>
-					}
-				>
-					<p className="text-xs text-gray-10">
-						Enable captions overlay on video
-					</p>
-				</Field>
-			) : (
-				<div className="flex flex-col items-center justify-center py-8 text-center">
-					<MessageSquare className="size-8 text-gray-8 mb-3" />
-					<p className="text-sm text-gray-11">No captions available</p>
-					<p className="text-xs text-gray-10 mt-1">
-						Generate captions from the video page
-					</p>
-				</div>
-			)}
-		</div>
-	);
-}
-
 export function ConfigSidebar() {
 	const [activeTab, setActiveTab] = useState<TabId>("background");
-	const { editorState, setEditorState, saveRender } = useEditorContext();
+	const { editorState, setEditorState, saveRender, cameraUrl } =
+		useEditorContext();
 	const isSaving = saveRender.isSaving;
+	const tabs = useMemo(
+		() => (cameraUrl ? TABS_WITH_CAMERA : TABS_WITHOUT_CAMERA),
+		[cameraUrl],
+	);
+
+	useEffect(() => {
+		if (!tabs.some((tab) => tab.id === activeTab)) {
+			setActiveTab("background");
+		}
+	}, [activeTab, tabs]);
 
 	const clearSelection = useCallback(() => {
 		setEditorState((state) => ({
@@ -845,10 +666,6 @@ export function ConfigSidebar() {
 				return <CameraPanel />;
 			case "audio":
 				return <AudioPanel />;
-			case "cursor":
-				return <CursorPanel />;
-			case "captions":
-				return <CaptionsPanel />;
 			default:
 				return null;
 		}
@@ -857,7 +674,7 @@ export function ConfigSidebar() {
 	return (
 		<div className="flex flex-col min-h-0 shrink-0 w-full lg:flex-1 lg:max-w-[24rem] max-h-[50vh] max-h-[60dvh] lg:max-h-none overflow-hidden rounded-xl bg-gray-1 border border-gray-4">
 			<div className="flex items-center h-12 sm:h-14 border-b border-gray-4 shrink-0">
-				{TABS.map(({ id, icon: Icon, label }) => (
+				{tabs.map(({ id, icon: Icon, label }) => (
 					<button
 						type="button"
 						key={id}
