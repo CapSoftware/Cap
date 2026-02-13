@@ -7,6 +7,7 @@ import {
 	createSignal,
 	Index,
 	type JSX,
+	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
@@ -223,6 +224,12 @@ export function Timeline() {
 	let pendingSeekFrame: number | null = null;
 	let seekRafId: number | null = null;
 	let seekInFlight = false;
+
+	onCleanup(() => {
+		if (zoomRafId !== null) cancelAnimationFrame(zoomRafId);
+		if (scrollRafId !== null) cancelAnimationFrame(scrollRafId);
+		if (seekRafId !== null) cancelAnimationFrame(seekRafId);
+	});
 
 	function flushPendingZoom() {
 		if (pendingZoomDelta === 0 || pendingZoomOrigin === null) {
