@@ -417,6 +417,8 @@ pub struct AVAssetReaderDecoder {
 }
 
 impl AVAssetReaderDecoder {
+    const INITIAL_WARM_DECODER_COUNT: usize = 2;
+
     fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         let keyframe_index = cap_video_decode::avassetreader::KeyframeIndex::build(&path).ok();
         let fps = keyframe_index
@@ -449,7 +451,10 @@ impl AVAssetReaderDecoder {
         let mut decoders = vec![primary_instance];
 
         let initial_positions = pool_manager.positions();
-        for pos in initial_positions.iter().skip(1) {
+        let warm_decoder_count = Self::INITIAL_WARM_DECODER_COUNT
+            .max(1)
+            .min(initial_positions.len());
+        for pos in initial_positions.iter().take(warm_decoder_count).skip(1) {
             let start_time = pos.position_secs;
             match DecoderInstance::new(
                 path.clone(),
@@ -496,11 +501,65 @@ impl AVAssetReaderDecoder {
         })
     }
 
+    fn ensure_decoder_available(&mut self, decoder_id: usize) -> usize {
+        if decoder_id < self.decoders.len() {
+            return decoder_id;
+        }
+
+        let Some(template) = self.decoders.first() else {
+            return 0;
+        };
+        let template_path = template.path.clone();
+        let template_tokio_handle = template.tokio_handle.clone();
+        let template_keyframe_index = template.keyframe_index.clone();
+
+        while self.decoders.len() <= decoder_id {
+            let next_id = self.decoders.len();
+            let Some(position) = self
+                .pool_manager
+                .positions()
+                .iter()
+                .find(|p| p.id == next_id)
+                .map(|p| p.position_secs)
+            else {
+                break;
+            };
+
+            match DecoderInstance::new(
+                template_path.clone(),
+                template_tokio_handle.clone(),
+                position,
+                template_keyframe_index.clone(),
+            ) {
+                Ok(instance) => {
+                    self.decoders.push(instance);
+                    tracing::info!(
+                        decoder_id = next_id,
+                        position_secs = position,
+                        total_decoders = self.decoders.len(),
+                        "Lazily initialized decoder instance"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        decoder_id = next_id,
+                        position_secs = position,
+                        error = %e,
+                        "Failed to lazily initialize decoder instance"
+                    );
+                    break;
+                }
+            }
+        }
+
+        decoder_id.min(self.decoders.len().saturating_sub(1))
+    }
+
     fn select_best_decoder(&mut self, requested_time: f32) -> (usize, bool) {
         let (best_id, _distance, needs_reset) =
             self.pool_manager.find_best_decoder_for_time(requested_time);
 
-        let decoder_idx = best_id.min(self.decoders.len().saturating_sub(1));
+        let decoder_idx = self.ensure_decoder_available(best_id);
 
         if needs_reset && decoder_idx < self.decoders.len() {
             self.decoders[decoder_idx].reset(requested_time);
