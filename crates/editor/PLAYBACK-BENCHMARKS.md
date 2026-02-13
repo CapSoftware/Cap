@@ -85,6 +85,7 @@ node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-mat
 
 # Analyze bottlenecks from matrix results
 node scripts/analyze-playback-matrix-bottlenecks.js --input /path/to/json-results --output /tmp/playback-bottlenecks.md --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
+node scripts/analyze-playback-matrix-bottlenecks.js --input /path/to/json-results --output /tmp/playback-bottlenecks.md --output-json /tmp/playback-bottlenecks.json --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
 ```
 
 #### Decode Performance Benchmark

@@ -116,6 +116,7 @@ function main() {
 	const statusPath = path.join(options.outputDir, "playback-matrix-status.md");
 	const validationPath = path.join(options.outputDir, "playback-matrix-validation.json");
 	const bottleneckPath = path.join(options.outputDir, "playback-bottlenecks.md");
+	const bottleneckJsonPath = path.join(options.outputDir, "playback-bottlenecks.json");
 
 	const aggregateArgs = ["scripts/aggregate-playback-benchmarks.js"];
 	const statusArgs = ["scripts/build-playback-matrix-report.js"];
@@ -148,6 +149,8 @@ function main() {
 		analyzeArgs.push(
 			"--output",
 			bottleneckPath,
+			"--output-json",
+			bottleneckJsonPath,
 			"--target-fps",
 			String(options.targetFps),
 			"--max-scrub-p95-ms",
@@ -180,6 +183,7 @@ function main() {
 	console.log(`Validation JSON: ${validationPath}`);
 	if (options.analyze) {
 		console.log(`Bottleneck analysis: ${bottleneckPath}`);
+		console.log(`Bottleneck analysis JSON: ${bottleneckJsonPath}`);
 	}
 	if (options.publishTarget) {
 		console.log(`Published target: ${options.publishTarget}`);
