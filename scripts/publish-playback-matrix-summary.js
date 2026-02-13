@@ -8,6 +8,7 @@ function parseArgs(argv) {
 		aggregateMd: null,
 		statusMd: null,
 		bottlenecksMd: null,
+		comparisonMd: null,
 		validationJson: null,
 		target: path.resolve("crates/editor/PLAYBACK-BENCHMARKS.md"),
 	};
@@ -31,6 +32,10 @@ function parseArgs(argv) {
 			options.bottlenecksMd = path.resolve(argv[++i] ?? "");
 			continue;
 		}
+		if (arg === "--comparison-md") {
+			options.comparisonMd = path.resolve(argv[++i] ?? "");
+			continue;
+		}
 		if (arg === "--validation-json") {
 			options.validationJson = path.resolve(argv[++i] ?? "");
 			continue;
@@ -46,7 +51,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--target <playback-benchmarks-path>]
+	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--comparison-md <path>] [--target <playback-benchmarks-path>]
 
 Prepends a matrix summary section into PLAYBACK-BENCHMARKS.md benchmark history region.`);
 }
@@ -57,7 +62,13 @@ function ensureFile(filePath, label) {
 	}
 }
 
-function buildSummarySection(aggregateMd, statusMd, validationJson, bottlenecksMd) {
+function buildSummarySection(
+	aggregateMd,
+	statusMd,
+	validationJson,
+	bottlenecksMd,
+	comparisonMd,
+) {
 	const now = new Date().toISOString();
 	const validation = JSON.parse(validationJson);
 	const status = validation.passed ? "✅ MATRIX PASS" : "❌ MATRIX FAIL";
@@ -99,6 +110,12 @@ function buildSummarySection(aggregateMd, statusMd, validationJson, bottlenecksM
 		markdown += `${bottlenecksMd.trim()}\n\n`;
 		markdown += "</details>\n\n";
 	}
+	if (comparisonMd) {
+		markdown +=
+			"<details>\n<summary>Baseline vs Candidate Comparison</summary>\n\n";
+		markdown += `${comparisonMd.trim()}\n\n`;
+		markdown += "</details>\n\n";
+	}
 
 	return markdown;
 }
@@ -115,10 +132,7 @@ function writeToBenchmarkHistory(targetFile, summaryMd) {
 
 	const insertPos = start + markerStart.length;
 	const updated =
-		current.slice(0, insertPos) +
-		"\n\n" +
-		summaryMd +
-		current.slice(end);
+		current.slice(0, insertPos) + "\n\n" + summaryMd + current.slice(end);
 	fs.writeFileSync(targetFile, updated, "utf8");
 }
 
@@ -135,6 +149,9 @@ function main() {
 	if (options.bottlenecksMd) {
 		ensureFile(options.bottlenecksMd, "Bottlenecks markdown");
 	}
+	if (options.comparisonMd) {
+		ensureFile(options.comparisonMd, "Comparison markdown");
+	}
 	ensureFile(options.target, "Target");
 
 	const aggregateMd = fs.readFileSync(options.aggregateMd, "utf8");
@@ -143,11 +160,15 @@ function main() {
 	const bottlenecksMd = options.bottlenecksMd
 		? fs.readFileSync(options.bottlenecksMd, "utf8")
 		: null;
+	const comparisonMd = options.comparisonMd
+		? fs.readFileSync(options.comparisonMd, "utf8")
+		: null;
 	const summaryMd = buildSummarySection(
 		aggregateMd,
 		statusMd,
 		validationJson,
 		bottlenecksMd,
+		comparisonMd,
 	);
 	writeToBenchmarkHistory(options.target, summaryMd);
 	console.log(`Published matrix summary into ${options.target}`);
