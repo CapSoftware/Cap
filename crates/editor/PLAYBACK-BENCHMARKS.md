@@ -101,6 +101,12 @@ cargo run -p cap-recording --example playback-test-runner -- full --fps 60 --ben
 cargo run -p cap-recording --example playback-test-runner -- scrub --fps 60 --benchmark-output --notes "platform=<platform> gpu=<gpu> scenario=scrub"
 ```
 
+Automated helper for machine runs:
+
+```bash
+node scripts/run-playback-benchmark-matrix.js --platform macos-13 --gpu apple-silicon --output-dir /tmp/playback-matrix --fps 60 --input-dir /tmp/cap-real-device-tests
+```
+
 | Platform | GPU Class | MP4 Full | Fragmented Full | MP4 Scrub | Fragmented Scrub | Notes |
 |----------|-----------|----------|-----------------|-----------|------------------|-------|
 | macOS 13+ | Apple Silicon | ☐ | ☐ | ☐ | ☐ | |
