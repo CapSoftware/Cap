@@ -84,6 +84,8 @@ node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --ou
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --output-json /tmp/playback-matrix-final/playback-finalize-summary.json
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250 --publish-target /workspace/crates/editor/PLAYBACK-BENCHMARKS.md
 
+Finalize summary JSON includes generated timestamp, artifact paths, settings, pass/fail flags, and git branch/commit metadata when available.
+
 # Publish matrix artifacts into this benchmark history
 node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md --status-md /tmp/playback-matrix-final/playback-matrix-status.md --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json --bottlenecks-md /tmp/playback-matrix-final/playback-bottlenecks.md
 node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md --status-md /tmp/playback-matrix-final/playback-matrix-status.md --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json --comparison-md /tmp/playback-matrix-final/playback-comparison.md --comparison-json /tmp/playback-matrix-final/playback-comparison.json

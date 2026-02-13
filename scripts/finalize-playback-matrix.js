@@ -147,6 +147,14 @@ function run(command, args) {
 	}
 }
 
+function readCommandOutput(command, args) {
+	const result = spawnSync(command, args, { encoding: "utf8" });
+	if (result.status !== 0) {
+		return null;
+	}
+	return result.stdout.trim() || null;
+}
+
 function main() {
 	const options = parseArgs(process.argv);
 	if (options.help) {
@@ -304,10 +312,20 @@ function main() {
 		options.compareBaselineInputs.length > 0
 			? JSON.parse(fs.readFileSync(comparisonJsonPath, "utf8"))
 			: null;
+	const gitBranch = readCommandOutput("git", [
+		"rev-parse",
+		"--abbrev-ref",
+		"HEAD",
+	]);
+	const gitCommit = readCommandOutput("git", ["rev-parse", "HEAD"]);
 	const summary = {
 		generatedAt: new Date().toISOString(),
 		inputs: options.inputs,
 		outputDir: options.outputDir,
+		git: {
+			branch: gitBranch,
+			commit: gitCommit,
+		},
 		artifacts: {
 			aggregatePath,
 			statusPath,
