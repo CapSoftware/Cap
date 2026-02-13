@@ -404,6 +404,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Enables strict failure when comparison processing yields zero comparable rows.
    - `scripts/finalize-playback-matrix.js` forwards zero-comparison gating option in integrated compare flows.
 
+52. **Added warmup-stage seek handling before playback loop entry (2026-02-13)**
+   - Warmup loop now consumes seek updates immediately instead of waiting for playback loop start.
+   - Seek during warmup now resets warmup timers/buffer state and updates frame/audio playhead targets immediately.
+   - Improves responsiveness when users seek while playback is still warming up.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -551,6 +556,7 @@ Decoder Pipeline:
 55. Stabilized comparison output ordering with deterministic sorting for comparison rows and coverage-delta sections.
 56. Extended finalize and publish summaries with comparison count rollups (compared rows, regressions, missing/candidate-only/insufficient-sample counts).
 57. Added optional zero-comparison gating (`--fail-on-zero-compared`) for compare/finalize flows and surfaced zero-compare policy in comparison/published summaries.
+58. Added warmup-stage seek handling to apply seeks immediately while playback warmup is in progress.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -579,6 +585,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison count rollup fields for compared rows, regressions, and coverage deltas.
 - `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize comparison count rollups when finalize summary metadata is attached.
 - `scripts/publish-playback-matrix-summary.js`: added optional baseline-vs-candidate comparison artifact attachment in published summaries.
+- `crates/editor/src/playback.rs`: warmup loop now handles seek updates immediately, resetting warmup state and updating frame/audio targets before playback loop entry.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
