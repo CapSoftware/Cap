@@ -224,6 +224,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Produces prioritized optimization backlog from real matrix evidence.
    - Supports structured JSON output for automation and regression tracking.
 
+16. **Added baseline-vs-candidate comparator for regression gating (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` compares candidate matrix outputs against baseline outputs.
+   - Flags regressions when FPS drops or startup/scrub latency increase beyond configured tolerance.
+   - Exits non-zero on regressions so matrix-driven optimization loops can be gated automatically.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -328,6 +333,7 @@ Decoder Pipeline:
 17. Added one-shot finalization script for aggregate + status + validation outputs.
 18. Added benchmark history publisher script for finalized matrix artifacts.
 19. Added matrix bottleneck analysis script for prioritized FPS optimization follow-up.
+20. Added baseline-vs-candidate comparison script to gate regressions in optimization loops.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -348,6 +354,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: added one-shot matrix artifact finalization workflow.
 - `scripts/publish-playback-matrix-summary.js`: added matrix artifact publisher into PLAYBACK-BENCHMARKS history region.
 - `scripts/analyze-playback-matrix-bottlenecks.js`: added prioritized bottleneck analysis output from matrix JSON evidence.
+- `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
