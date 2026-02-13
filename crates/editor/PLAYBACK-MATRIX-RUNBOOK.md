@@ -71,6 +71,12 @@ After collecting all machine folders into a shared root:
 node scripts/aggregate-playback-benchmarks.js --input /path/to/all-machine-results --output /tmp/playback-matrix-aggregate.md
 ```
 
+Validate matrix completeness:
+
+```bash
+node scripts/validate-playback-matrix.js --input /path/to/all-machine-results --require-formats mp4,fragmented
+```
+
 ## Evidence checklist
 
 1. Confirm all matrix rows exist.

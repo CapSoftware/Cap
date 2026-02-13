@@ -66,6 +66,12 @@ Aggregate JSON outputs from multiple machines:
 node scripts/aggregate-playback-benchmarks.js --input /path/to/json-results --output /tmp/playback-benchmark-aggregate.md
 ```
 
+Validate matrix coverage and required formats:
+
+```bash
+node scripts/validate-playback-matrix.js --input /path/to/json-results --require-formats mp4,fragmented
+```
+
 #### Decode Performance Benchmark
 
 ```bash
