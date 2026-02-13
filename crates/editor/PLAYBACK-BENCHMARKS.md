@@ -65,6 +65,9 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 
 # With custom FPS and iterations
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --iterations 50
+
+# Emit machine-readable JSON with startup/scrub metrics
+cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --sequential-frames 180 --random-samples 120 --output-json /tmp/decode-benchmark.json
 ```
 
 #### Combined Workflow (Recording → Playback)
