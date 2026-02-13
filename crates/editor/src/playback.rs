@@ -261,7 +261,7 @@ impl Playback {
             let mut scheduled_in_flight_frames: HashSet<u32> = HashSet::new();
 >>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
-            let dynamic_prefetch_ahead = fps.clamp(30, 90);
+            let dynamic_prefetch_ahead = fps.clamp(30, 90).min(PREFETCH_BUFFER_SIZE as u32);
             let dynamic_prefetch_behind = (fps / 4).clamp(8, 24);
             let dynamic_parallel_tasks = if fps >= 60 {
                 6
