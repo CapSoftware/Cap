@@ -181,6 +181,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/run-playback-benchmark-matrix.js` runs `full` and `scrub` scenarios with tagged notes and JSON output.
    - Automatically generates aggregate markdown for each machine run directory.
 
+11. **Added matrix completeness validator (2026-02-13)**
+   - `scripts/validate-playback-matrix.js` validates required platform/gpu/scenario cells.
+   - Supports required format checks per cell (mp4 + fragmented).
+
 ---
 
 ## Root Cause Analysis Archive
@@ -280,6 +284,7 @@ Decoder Pipeline:
 12. Added JSON report output support to playback-test-runner for benchmark evidence collection.
 13. Added cross-platform benchmark JSON aggregation utility script.
 14. Added matrix execution helper script for full + scrub benchmark runs per platform/GPU.
+15. Added matrix validation script for required cell and format coverage checks.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -295,6 +300,7 @@ Decoder Pipeline:
 - `crates/recording/examples/playback-test-runner.rs`: added `--json-output` to emit structured benchmark reports.
 - `scripts/aggregate-playback-benchmarks.js`: added markdown aggregation for multiple playback benchmark JSON artifacts.
 - `scripts/run-playback-benchmark-matrix.js`: added orchestrated full/scrub benchmark runner with per-machine aggregate generation.
+- `scripts/validate-playback-matrix.js`: added required matrix cell/format validation for aggregated evidence.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
