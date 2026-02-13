@@ -188,6 +188,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/validate-playback-matrix.js` validates required platform/gpu/scenario cells.
    - Supports required format checks per cell (mp4 + fragmented).
    - Root `package.json` now exposes `bench:playback:*` script aliases for matrix, aggregate, and validate flows.
+   - Can emit structured validation JSON for artifact upload and automation.
 
 ---
 

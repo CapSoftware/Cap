@@ -70,6 +70,7 @@ Validate matrix coverage and required formats:
 
 ```bash
 node scripts/validate-playback-matrix.js --input /path/to/json-results --require-formats mp4,fragmented
+node scripts/validate-playback-matrix.js --input /path/to/json-results --require-formats mp4,fragmented --output-json /tmp/playback-matrix-validation.json
 ```
 
 #### Decode Performance Benchmark
