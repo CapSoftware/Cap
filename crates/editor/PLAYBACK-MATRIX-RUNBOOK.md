@@ -151,7 +151,8 @@ pnpm bench:playback:publish -- \
   --status-md /tmp/playback-matrix-final/playback-matrix-status.md \
   --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json \
   --comparison-md /tmp/playback-matrix-final/playback-comparison.md \
-  --comparison-json /tmp/playback-matrix-final/playback-comparison.json
+  --comparison-json /tmp/playback-matrix-final/playback-comparison.json \
+  --finalize-summary-json /tmp/playback-matrix-final/playback-finalize-summary.json
 ```
 
 Generate bottleneck analysis for optimization backlog:
