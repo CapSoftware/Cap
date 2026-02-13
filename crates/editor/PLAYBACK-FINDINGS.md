@@ -430,6 +430,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Prefetch scheduler now tracks active frame numbers locally and uses this set for duplicate scheduling checks.
    - Reduces repeated shared lock reads in prefetch hot-path while preserving cross-thread in-flight visibility.
 
+58. **Batched warmup prefetch queue consumption (2026-02-13)**
+   - Warmup stage now drains all immediately available prefetched frames on each receive wake-up.
+   - Improves warmup readiness convergence by reducing one-frame-per-iteration queue handling overhead.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -583,6 +587,7 @@ Decoder Pipeline:
 61. Scaled warmup idle poll interval with frame budget to reduce warmup fallback latency under sparse frame arrival.
 62. Retained in-flight prefetch markers for small frame-request shifts to avoid duplicate decode scheduling during active prefetch execution.
 63. Added local in-flight frame tracking in prefetch scheduler to reduce lock-heavy duplicate-check lookups on scheduling hot-path.
+64. Batched warmup prefetch queue consumption to reduce warmup staging overhead and improve contiguous warmup-fill responsiveness.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -615,6 +620,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: warmup loop fallback polling now scales with frame budget instead of fixed 100ms sleep to improve responsiveness without busy waiting.
 - `crates/editor/src/playback.rs`: frame-request rebases now preserve in-flight marker sets unless in-flight futures are explicitly reset for backward/large seek changes.
 - `crates/editor/src/playback.rs`: prefetch scheduler now uses a local in-flight frame set for duplicate scheduling checks and mirrors it into shared generation-keyed in-flight markers for playback coordination.
+- `crates/editor/src/playback.rs`: warmup prefetch receive path now drains immediately queued prefetched frames in batches to accelerate warmup buffer population.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.

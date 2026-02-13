@@ -574,17 +574,28 @@ impl Playback {
 
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
-                        if prefetched.generation == seek_generation {
-                            if insert_prefetched_frame(
-                                &mut prefetch_buffer,
-                                prefetched,
-                                frame_number,
-                            ) {
+                        let mut next_prefetched = Some(prefetched);
+
+                        loop {
+                            let Some(prefetched) = next_prefetched.take() else {
+                                break;
+                            };
+
+                            if prefetched.generation == seek_generation
+                                && insert_prefetched_frame(
+                                    &mut prefetch_buffer,
+                                    prefetched,
+                                    frame_number,
+                                )
+                            {
                                 warmup_buffer_changed = true;
                             }
-                            if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
-                                first_frame_time = Some(Instant::now());
-                            }
+
+                            next_prefetched = prefetch_rx.try_recv().ok();
+                        }
+
+                        if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
+                            first_frame_time = Some(Instant::now());
                         }
                     }
                     _ = seek_rx.changed() => {
