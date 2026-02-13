@@ -98,6 +98,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 # Test specific categories
 cargo run -p cap-recording --example playback-test-runner -- decoder
 cargo run -p cap-recording --example playback-test-runner -- playback
+cargo run -p cap-recording --example playback-test-runner -- scrub
 cargo run -p cap-recording --example playback-test-runner -- audio-sync
 cargo run -p cap-recording --example playback-test-runner -- camera-sync
 
@@ -148,6 +149,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Initial warmup now creates only a small subset of decoder instances.
    - Additional decoder instances are initialized lazily when scrub patterns request them.
    - Failed lazy init falls back safely to currently available decoders.
+
+4. **Playback benchmark runner now captures scrub and startup metrics (2026-02-13)**
+   - Added `scrub` benchmark mode to `playback-test-runner`.
+   - Playback result now includes first-frame decode and startup-to-first-frame latency.
+   - Scrub result now reports seek p50/p95/p99 and seek failure counts.
 
 ---
 
@@ -241,6 +247,7 @@ Decoder Pipeline:
 5. Updated Tauri seek/playhead commands to forward seeks into active playback handle.
 6. Removed frontend timeline stop/start cycle when seeking while playing.
 7. Reduced AVAssetReader eager pool warmup and added lazy decoder instantiation for additional pool slots.
+8. Extended playback benchmark tooling with scrub mode and startup latency metrics.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -248,6 +255,8 @@ Decoder Pipeline:
 - `apps/desktop/src-tauri/src/lib.rs`: forward `seek_to` and `set_playhead_position` into active playback handle.
 - `apps/desktop/src/routes/editor/Timeline/index.tsx`: seek while playing now sends direct `seekTo` without playback restart.
 - `crates/rendering/src/decoder/avassetreader.rs`: lower eager decoder warmup and lazy pool growth.
+- `crates/recording/examples/playback-test-runner.rs`: added scrub command and startup/scrub latency metrics.
+- `crates/editor/PLAYBACK-BENCHMARKS.md`: updated benchmark reference and metric definitions.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
