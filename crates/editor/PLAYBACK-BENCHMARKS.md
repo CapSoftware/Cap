@@ -84,6 +84,7 @@ node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --ou
 node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --min-samples-per-row 3
 node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-parse-errors
 node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-zero-compared
+node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-skipped-files
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --output-json /tmp/playback-matrix-final/playback-finalize-summary.json
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250 --publish-target /workspace/crates/editor/PLAYBACK-BENCHMARKS.md
 
@@ -109,6 +110,7 @@ node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-res
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --min-samples-per-row 3
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-parse-errors
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-zero-compared
+node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-skipped-files
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-comparison.md --output-json /tmp/playback-comparison.json
 
 Comparison output reports both baseline rows missing in candidate and candidate-only rows not present in baseline.
@@ -116,6 +118,7 @@ Comparison table also reports baseline/candidate run counts per row when multipl
 Comparison JSON summary includes `failureReasons` and `gateOutcomes` fields for automation-friendly gate diagnostics.
 Minimum sample gating is applied against metrics that are actually comparable for the row (for example, scrub samples are not required for rows with no scrub metric comparison).
 Comparison JSON also includes baseline/candidate file parsing stats and optional parse-error gating support.
+Comparison can optionally gate on skipped input files via `--fail-on-skipped-files`.
 ```
 
 #### Decode Performance Benchmark
