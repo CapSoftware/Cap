@@ -111,7 +111,7 @@ fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_fra
         let far_ahead_frame = buffer
             .iter()
             .rev()
-            .find(|(frame, _)| **frame > current_frame + PREFETCH_BUFFER_SIZE as u32)
+            .find(|(frame, _)| **frame > current_frame.saturating_add(PREFETCH_BUFFER_SIZE as u32))
             .map(|(frame, _)| *frame);
 
         if let Some(frame) = far_ahead_frame {
