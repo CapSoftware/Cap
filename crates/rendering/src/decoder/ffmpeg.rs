@@ -339,6 +339,10 @@ impl FfmpegDecoder {
                         reply,
                     } in pending_requests
                     {
+                        if reply.is_closed() {
+                            continue;
+                        }
+
                         let last_sent_number =
                             sw_last_sent_frame.borrow().as_ref().map(|f| f.number);
                         let is_backward_seek = last_sent_number
@@ -388,12 +392,21 @@ impl FfmpegDecoder {
                             sw_cache.clear();
                         }
 
+                        if reply.is_closed() {
+                            continue;
+                        }
+
+                        let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                        let reply_for_respond = reply_cell.clone();
+
                         let mut respond = {
                             let last_sent_frame = sw_last_sent_frame.clone();
                             Some(move |data: OutputFrame| {
                                 let frame_number = data.number;
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                if reply.send(data.frame).is_err() {
+                                if let Some(reply) = reply_for_respond.borrow_mut().take()
+                                    && reply.send(data.frame).is_err()
+                                {
                                     log::warn!(
                                         "Failed to send decoded frame {frame_number}: receiver dropped"
                                     );
@@ -434,6 +447,11 @@ impl FfmpegDecoder {
                         let mut exit = false;
 
                         for frame in &mut sw_frames {
+                            if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                                respond.take();
+                                break;
+                            }
+
                             let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
                                 continue;
                             };
@@ -644,6 +662,10 @@ impl FfmpegDecoder {
                     reply,
                 } in pending_requests
                 {
+                    if reply.is_closed() {
+                        continue;
+                    }
+
                     let last_sent_number = last_sent_frame.borrow().as_ref().map(|f| f.number);
                     let is_backward_seek = last_sent_number
                         .map(|last| requested_frame < last)
@@ -693,12 +715,21 @@ impl FfmpegDecoder {
                         cache.clear();
                     }
 
+                    if reply.is_closed() {
+                        continue;
+                    }
+
+                    let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                    let reply_for_respond = reply_cell.clone();
+
                     let mut respond = {
                         let last_sent_frame = last_sent_frame.clone();
                         Some(move |data: OutputFrame| {
                             let frame_number = data.number;
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            if reply.send(data.frame).is_err() {
+                            if let Some(reply) = reply_for_respond.borrow_mut().take()
+                                && reply.send(data.frame).is_err()
+                            {
                                 log::warn!(
                                     "Failed to send decoded frame {frame_number}: receiver dropped"
                                 );
@@ -738,6 +769,11 @@ impl FfmpegDecoder {
                     let mut exit = false;
 
                     for frame in &mut frames {
+                        if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                            respond.take();
+                            break;
+                        }
+
                         let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
                             continue;
                         };
