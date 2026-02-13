@@ -130,6 +130,7 @@ export const TimelineSegment = Schema.Struct({
 	timescale: Schema.Number,
 	start: Schema.Number,
 	end: Schema.Number,
+	muted: Schema.optional(Schema.Boolean),
 });
 export type TimelineSegment = typeof TimelineSegment.Type;
 
