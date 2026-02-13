@@ -532,7 +532,7 @@ impl Playback {
                     Some(prefetched) = prefetch_rx.recv() => {
                         if prefetched.generation == seek_generation {
                             insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
-                            if first_frame_time.is_none() {
+                            if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
                                 first_frame_time = Some(Instant::now());
                             }
                         }
@@ -890,7 +890,7 @@ impl Playback {
                         total_frames_skipped += skipped as u64;
                         skip_events = skip_events.saturating_add(1);
 
-                        prefetch_buffer.retain(|frame, _| *frame >= frame_number);
+                        prune_prefetch_buffer_before_frame(&mut prefetch_buffer, frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                         if has_audio
