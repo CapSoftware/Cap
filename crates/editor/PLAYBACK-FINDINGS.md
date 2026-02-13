@@ -254,6 +254,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Finalization can now produce aggregate/status/validation/bottleneck artifacts and run baseline-vs-candidate gating in one command.
    - Keeps optimization loops strict by failing finalize runs when regression tolerances are exceeded.
 
+22. **Made in-flight tracking generation-aware to avoid seek races (2026-02-13)**
+   - Shared in-flight frame tracking now keys entries by `(seek_generation, frame_number)`.
+   - Prevents old-generation decode completions from removing new-generation in-flight markers for the same frame number.
+   - Improves seek correctness under rapid repeated seeks to nearby frame ranges.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -364,6 +369,7 @@ Decoder Pipeline:
 23. Restricted in-flight prefetch buffering to current frame or newer frames during frame wait path.
 24. Expanded benchmark comparison gating to support multi-input baseline/candidate matrix sets.
 25. Added optional baseline comparison gating inside matrix finalization workflow.
+26. Made shared in-flight frame tracking generation-aware to prevent cross-seek marker collisions.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -390,6 +396,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
 - `scripts/compare-playback-benchmark-runs.js`: comparison gating now accepts multiple baseline and candidate inputs for aggregated matrix regression checks.
 - `scripts/finalize-playback-matrix.js`: finalization now supports optional baseline comparison gating and threshold controls in the same pass.
+- `crates/editor/src/playback.rs`: in-flight frame markers now include seek generation to prevent old decode paths from clearing current-generation markers.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
