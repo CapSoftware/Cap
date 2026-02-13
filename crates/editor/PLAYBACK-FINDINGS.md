@@ -184,6 +184,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/run-playback-benchmark-matrix.js` runs `full` and `scrub` scenarios with tagged notes and JSON output.
    - Automatically generates aggregate markdown for each machine run directory.
    - Performs per-machine post-run validation for required scenarios and optional format requirements.
+   - Supports scenario subset reruns via `--scenarios` for faster targeted validation.
 
 11. **Added matrix completeness validator (2026-02-13)**
    - `scripts/validate-playback-matrix.js` validates required platform/gpu/scenario cells.
