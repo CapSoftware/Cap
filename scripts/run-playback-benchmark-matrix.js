@@ -14,6 +14,7 @@ function parseArgs(argv) {
 		inputDir: null,
 		validate: true,
 		requireFormats: [],
+		scenarios: ["full", "scrub"],
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -65,6 +66,18 @@ function parseArgs(argv) {
 				.filter(Boolean);
 			continue;
 		}
+		if (arg === "--scenarios") {
+			const value = argv[++i] ?? "";
+			const scenarios = value
+				.split(",")
+				.map((entry) => entry.trim().toLowerCase())
+				.filter(Boolean);
+			if (scenarios.length === 0) {
+				throw new Error("Invalid --scenarios value");
+			}
+			options.scenarios = scenarios;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -72,7 +85,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/run-playback-benchmark-matrix.js --platform <name> --gpu <name> --output-dir <dir> [--fps 60] [--recording-path <path>] [--input-dir <path>] [--require-formats mp4,fragmented]
+	console.log(`Usage: node scripts/run-playback-benchmark-matrix.js --platform <name> --gpu <name> --output-dir <dir> [--fps 60] [--recording-path <path>] [--input-dir <path>] [--require-formats mp4,fragmented] [--scenarios full,scrub]
 
 Runs playback benchmark matrix scenarios and writes JSON outputs.
 
@@ -86,6 +99,7 @@ Optional:
   --recording-path  Specific recording path
   --input-dir       Recording discovery directory
   --require-formats Required formats for local validation (comma-separated)
+  --scenarios       Scenarios to run (comma-separated; default: full,scrub)
   --skip-validate   Skip post-run validation`);
 }
 
@@ -139,6 +153,12 @@ function validateOptions(options) {
 	if (!options.platform || !options.gpu || !options.outputDir) {
 		throw new Error("Missing required options: --platform, --gpu, --output-dir");
 	}
+	const validScenarios = new Set(["full", "scrub", "decoder", "playback", "audio-sync", "camera-sync"]);
+	for (const scenario of options.scenarios) {
+		if (!validScenarios.has(scenario)) {
+			throw new Error(`Unsupported scenario: ${scenario}`);
+		}
+	}
 
 	const absoluteOutputDir = path.resolve(options.outputDir);
 	options.outputDir = absoluteOutputDir;
@@ -157,8 +177,9 @@ function main() {
 	validateOptions(options);
 
 	console.log(`Running matrix for platform=${options.platform} gpu=${options.gpu}`);
-	run("cargo", scenarioArgs(options, "full"));
-	run("cargo", scenarioArgs(options, "scrub"));
+	for (const scenario of options.scenarios) {
+		run("cargo", scenarioArgs(options, scenario));
+	}
 
 	const aggregatePath = path.join(
 		options.outputDir,
@@ -185,11 +206,13 @@ function main() {
 			"--no-default-matrix",
 			"--output-json",
 			validationJsonPath,
-			"--require-cell",
-			`${options.platform}:${options.gpu}:full`,
-			"--require-cell",
-			`${options.platform}:${options.gpu}:scrub`,
 		];
+		for (const scenario of options.scenarios) {
+			validateArgs.push(
+				"--require-cell",
+				`${options.platform}:${options.gpu}:${scenario}`,
+			);
+		}
 
 		if (options.requireFormats.length > 0) {
 			validateArgs.push("--require-formats", options.requireFormats.join(","));
