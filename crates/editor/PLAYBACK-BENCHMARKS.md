@@ -81,6 +81,7 @@ node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-
 node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --allow-fps-drop 2 --allow-startup-increase-ms 25 --allow-scrub-p95-increase-ms 5
 node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --allow-missing-candidate
 node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-candidate-only
+node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --min-samples-per-row 3
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --output-json /tmp/playback-matrix-final/playback-finalize-summary.json
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250 --publish-target /workspace/crates/editor/PLAYBACK-BENCHMARKS.md
 
@@ -100,6 +101,7 @@ node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-res
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results-a --baseline /path/to/baseline-results-b --candidate /path/to/candidate-results-a --candidate /path/to/candidate-results-b --output /tmp/playback-comparison.md
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --allow-missing-candidate
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-candidate-only
+node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --min-samples-per-row 3
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-comparison.md --output-json /tmp/playback-comparison.json
 
 Comparison output reports both baseline rows missing in candidate and candidate-only rows not present in baseline.

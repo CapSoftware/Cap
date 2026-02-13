@@ -14,6 +14,7 @@ function parseArgs(argv) {
 		allowScrubP95IncreaseMs: 5,
 		allowMissingCandidate: false,
 		failOnCandidateOnly: false,
+		minSamplesPerRow: 1,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -75,6 +76,14 @@ function parseArgs(argv) {
 			options.failOnCandidateOnly = true;
 			continue;
 		}
+		if (arg === "--min-samples-per-row") {
+			const value = Number.parseInt(argv[++i] ?? "", 10);
+			if (!Number.isFinite(value) || value < 1) {
+				throw new Error("Invalid --min-samples-per-row value");
+			}
+			options.minSamplesPerRow = value;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -82,7 +91,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1]
 
 Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
@@ -216,6 +225,7 @@ function compareMetrics(baselineRows, candidateRows, options) {
 	const comparisons = [];
 	const missingCandidateRows = [];
 	const candidateOnlyRows = [];
+	const insufficientSampleRows = [];
 
 	for (const [key, baseline] of baselineRows) {
 		const candidate = candidateRows.get(key);
@@ -248,6 +258,38 @@ function compareMetrics(baselineRows, candidateRows, options) {
 		const scrubDelta = delta(candidate.scrubP95Max, baseline.scrubP95Max);
 
 		const regressions = [];
+		const fpsMinSamples = Math.min(
+			baseline.fpsSampleCount,
+			candidate.fpsSampleCount,
+		);
+		const startupMinSamples = Math.min(
+			baseline.startupSampleCount,
+			candidate.startupSampleCount,
+		);
+		const scrubMinSamples = Math.min(
+			baseline.scrubSampleCount,
+			candidate.scrubSampleCount,
+		);
+		const effectiveSampleCount = Math.min(
+			fpsMinSamples,
+			startupMinSamples,
+			scrubMinSamples,
+		);
+		if (effectiveSampleCount < options.minSamplesPerRow) {
+			insufficientSampleRows.push({
+				platform: candidate.platform,
+				gpu: candidate.gpu,
+				scenario: candidate.scenario,
+				recording: candidate.recording,
+				format: candidate.format,
+				effectiveSampleCount,
+				requiredSampleCount: options.minSamplesPerRow,
+			});
+			regressions.push(
+				`insufficient_samples=${effectiveSampleCount}/${options.minSamplesPerRow}`,
+			);
+		}
+
 		if (fpsDelta !== null && fpsDelta < -options.allowFpsDrop) {
 			regressions.push(`fps_drop=${formatNumber(fpsDelta)}`);
 		}
@@ -269,6 +311,10 @@ function compareMetrics(baselineRows, candidateRows, options) {
 			format: candidate.format,
 			baselineReportCount: baseline.reportCount,
 			candidateReportCount: candidate.reportCount,
+			fpsMinSamples,
+			startupMinSamples,
+			scrubMinSamples,
+			effectiveSampleCount,
 			fpsDelta,
 			startupDelta,
 			scrubDelta,
@@ -277,13 +323,19 @@ function compareMetrics(baselineRows, candidateRows, options) {
 	}
 
 	comparisons.sort((a, b) => b.regressions.length - a.regressions.length);
-	return { comparisons, missingCandidateRows, candidateOnlyRows };
+	return {
+		comparisons,
+		missingCandidateRows,
+		candidateOnlyRows,
+		insufficientSampleRows,
+	};
 }
 
 function toMarkdown(
 	comparisons,
 	missingCandidateRows,
 	candidateOnlyRows,
+	insufficientSampleRows,
 	options,
 ) {
 	const regressions = comparisons.filter(
@@ -294,7 +346,8 @@ function toMarkdown(
 	md += `Generated: ${new Date().toISOString()}\n\n`;
 	md += `Tolerance: fps_drop<=${options.allowFpsDrop}, startup_increase<=${options.allowStartupIncreaseMs}ms, scrub_p95_increase<=${options.allowScrubP95IncreaseMs}ms\n\n`;
 	md += `Coverage gate: missing_candidate=${options.allowMissingCandidate ? "allow" : "fail"}, candidate_only=${options.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
-	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}\n\n`;
+	md += `Sample gate: min_samples_per_row>=${options.minSamplesPerRow}\n\n`;
+	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}, insufficient sample rows: ${insufficientSampleRows.length}\n\n`;
 	if (missingCandidateRows.length > 0) {
 		md += "## Missing Candidate Rows\n\n";
 		md += "| Platform | GPU | Scenario | Recording | Format |\n";
@@ -313,11 +366,21 @@ function toMarkdown(
 		}
 		md += "\n";
 	}
+	if (insufficientSampleRows.length > 0) {
+		md += "## Insufficient Sample Rows\n\n";
+		md +=
+			"| Platform | GPU | Scenario | Recording | Format | Effective Samples | Required Samples |\n";
+		md += "|---|---|---|---|---|---:|---:|\n";
+		for (const row of insufficientSampleRows) {
+			md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.effectiveSampleCount} | ${row.requiredSampleCount} |\n`;
+		}
+		md += "\n";
+	}
 	md +=
-		"| Platform | GPU | Scenario | Recording | Format | B Runs | C Runs | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
-	md += "|---|---|---|---|---|---:|---:|---:|---:|---:|---|\n";
+		"| Platform | GPU | Scenario | Recording | Format | B Runs | C Runs | F Samples | S Samples | Q Samples | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
+	md += "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|\n";
 	for (const row of comparisons) {
-		md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.baselineReportCount} | ${row.candidateReportCount} | ${formatNumber(row.fpsDelta)} | ${formatNumber(row.startupDelta)} | ${formatNumber(row.scrubDelta)} | ${row.regressions.length > 0 ? row.regressions.join(", ") : "none"} |\n`;
+		md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.baselineReportCount} | ${row.candidateReportCount} | ${row.fpsMinSamples} | ${row.startupMinSamples} | ${row.scrubMinSamples} | ${formatNumber(row.fpsDelta)} | ${formatNumber(row.startupDelta)} | ${formatNumber(row.scrubDelta)} | ${row.regressions.length > 0 ? row.regressions.join(", ") : "none"} |\n`;
 	}
 	md += "\n";
 	return md;
@@ -327,6 +390,7 @@ function buildJsonOutput(
 	comparisons,
 	missingCandidateRows,
 	candidateOnlyRows,
+	insufficientSampleRows,
 	options,
 ) {
 	const regressions = comparisons.filter(
@@ -340,12 +404,14 @@ function buildJsonOutput(
 			allowScrubP95IncreaseMs: options.allowScrubP95IncreaseMs,
 			allowMissingCandidate: options.allowMissingCandidate,
 			failOnCandidateOnly: options.failOnCandidateOnly,
+			minSamplesPerRow: options.minSamplesPerRow,
 		},
 		summary: {
 			comparedRows: comparisons.length,
 			regressions: regressions.length,
 			missingCandidateRows: missingCandidateRows.length,
 			candidateOnlyRows: candidateOnlyRows.length,
+			insufficientSampleRows: insufficientSampleRows.length,
 			passed:
 				regressions.length === 0 &&
 				(options.allowMissingCandidate || missingCandidateRows.length === 0) &&
@@ -354,6 +420,7 @@ function buildJsonOutput(
 		regressions,
 		missingCandidateRows,
 		candidateOnlyRows,
+		insufficientSampleRows,
 		comparisons,
 	};
 }
@@ -386,18 +453,24 @@ function main() {
 
 	const baselineRows = collectMetrics(baselineFiles);
 	const candidateRows = collectMetrics(candidateFiles);
-	const { comparisons, missingCandidateRows, candidateOnlyRows } =
-		compareMetrics(baselineRows, candidateRows, options);
+	const {
+		comparisons,
+		missingCandidateRows,
+		candidateOnlyRows,
+		insufficientSampleRows,
+	} = compareMetrics(baselineRows, candidateRows, options);
 	const markdown = toMarkdown(
 		comparisons,
 		missingCandidateRows,
 		candidateOnlyRows,
+		insufficientSampleRows,
 		options,
 	);
 	const outputJson = buildJsonOutput(
 		comparisons,
 		missingCandidateRows,
 		candidateOnlyRows,
+		insufficientSampleRows,
 		options,
 	);
 
