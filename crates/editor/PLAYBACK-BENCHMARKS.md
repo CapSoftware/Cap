@@ -75,6 +75,9 @@ node scripts/validate-playback-matrix.js --input /path/to/json-results --require
 
 # Finalize aggregate + status + validation artifacts
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented
+
+# Publish matrix artifacts into this benchmark history
+node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md --status-md /tmp/playback-matrix-final/playback-matrix-status.md --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json
 ```
 
 #### Decode Performance Benchmark

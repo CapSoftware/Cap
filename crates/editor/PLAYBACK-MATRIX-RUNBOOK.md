@@ -112,6 +112,15 @@ One-shot finalize command:
 pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented
 ```
 
+Publish finalized artifacts into benchmark history:
+
+```bash
+pnpm bench:playback:publish -- \
+  --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md \
+  --status-md /tmp/playback-matrix-final/playback-matrix-status.md \
+  --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json
+```
+
 ## Evidence checklist
 
 1. Confirm all matrix rows exist.
