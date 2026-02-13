@@ -4,6 +4,7 @@ use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
 use cap_rendering::decoder::spawn_decoder;
 use chrono::{Local, Utc};
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -45,6 +46,9 @@ struct Cli {
     benchmark_output: bool,
 
     #[arg(long, global = true)]
+    json_output: Option<PathBuf>,
+
+    #[arg(long, global = true)]
     notes: Option<String>,
 }
 
@@ -65,7 +69,7 @@ const SCRUB_SEEK_WARNING_MS: f64 = 40.0;
 const AUDIO_VIDEO_SYNC_TOLERANCE_MS: f64 = 100.0;
 const CAMERA_SYNC_TOLERANCE_MS: f64 = 100.0;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct DecoderTestResult {
     passed: bool,
     decoder_type: String,
@@ -77,7 +81,7 @@ struct DecoderTestResult {
     errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct PlaybackTestResult {
     passed: bool,
     segment_index: usize,
@@ -100,7 +104,7 @@ struct PlaybackTestResult {
     errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct ScrubTestResult {
     passed: bool,
     segment_index: usize,
@@ -116,7 +120,7 @@ struct ScrubTestResult {
     errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct AudioSyncTestResult {
     passed: bool,
     segment_index: usize,
@@ -134,7 +138,7 @@ struct AudioSyncTestResult {
     errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct CameraSyncTestResult {
     passed: bool,
     segment_index: usize,
@@ -150,7 +154,7 @@ struct CameraSyncTestResult {
     errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct RecordingTestReport {
     recording_path: PathBuf,
     recording_name: String,
@@ -1010,11 +1014,29 @@ async fn run_tests_on_recording(
     Ok(report)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 struct SystemInfo {
     os: String,
     arch: String,
     cpu: String,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonBenchmarkSummary {
+    total_recordings: usize,
+    passed_recordings: usize,
+    failed_recordings: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonBenchmarkOutput {
+    generated_at_utc: String,
+    local_time: String,
+    command: String,
+    notes: Option<String>,
+    system: SystemInfo,
+    summary: JsonBenchmarkSummary,
+    reports: Vec<RecordingTestReport>,
 }
 
 impl SystemInfo {
@@ -1380,6 +1402,41 @@ fn write_benchmark_to_file(benchmark_md: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn write_json_output_to_file(
+    output_path: &Path,
+    reports: &[RecordingTestReport],
+    notes: Option<&str>,
+    command: &str,
+) -> anyhow::Result<()> {
+    let passed = reports.iter().filter(|r| r.overall_passed).count();
+    let total = reports.len();
+    let failed = total.saturating_sub(passed);
+
+    let output = JsonBenchmarkOutput {
+        generated_at_utc: Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        local_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        command: command.to_string(),
+        notes: notes.map(ToString::to_string),
+        system: SystemInfo::collect(),
+        summary: JsonBenchmarkSummary {
+            total_recordings: total,
+            passed_recordings: passed,
+            failed_recordings: failed,
+        },
+        reports: reports.to_vec(),
+    };
+
+    let json = serde_json::to_string_pretty(&output)?;
+    fs::write(output_path, json)?;
+
+    println!(
+        "\n✅ JSON benchmark results written to {}",
+        output_path.display()
+    );
+
+    Ok(())
+}
+
 fn print_summary(reports: &[RecordingTestReport]) {
     println!("\n{}", "=".repeat(70));
     println!("PLAYBACK TEST SUMMARY");
@@ -1423,6 +1480,18 @@ fn print_summary(reports: &[RecordingTestReport]) {
     println!();
 }
 
+fn command_name(command: Option<&Commands>) -> &'static str {
+    match command {
+        Some(Commands::Decoder) => "decoder",
+        Some(Commands::Playback) => "playback",
+        Some(Commands::Scrub) => "scrub",
+        Some(Commands::AudioSync) => "audio-sync",
+        Some(Commands::CameraSync) => "camera-sync",
+        Some(Commands::Full) | None => "full",
+        Some(Commands::List) => "list",
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -1434,7 +1503,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(Commands::List) = cli.command {
+    if matches!(cli.command.as_ref(), Some(Commands::List)) {
         let recordings = discover_recordings(&cli.input_dir);
         if recordings.is_empty() {
             println!("No recordings found in {}", cli.input_dir.display());
@@ -1468,16 +1537,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let (run_decoder, run_playback, run_scrub, run_audio_sync, run_camera_sync) = match cli.command
-    {
-        Some(Commands::Decoder) => (true, false, false, false, false),
-        Some(Commands::Playback) => (false, true, false, false, false),
-        Some(Commands::Scrub) => (false, false, true, false, false),
-        Some(Commands::AudioSync) => (false, false, false, true, false),
-        Some(Commands::CameraSync) => (false, false, false, false, true),
-        Some(Commands::Full) | None => (true, true, true, true, true),
-        Some(Commands::List) => unreachable!(),
-    };
+    let (run_decoder, run_playback, run_scrub, run_audio_sync, run_camera_sync) =
+        match cli.command.as_ref() {
+            Some(Commands::Decoder) => (true, false, false, false, false),
+            Some(Commands::Playback) => (false, true, false, false, false),
+            Some(Commands::Scrub) => (false, false, true, false, false),
+            Some(Commands::AudioSync) => (false, false, false, true, false),
+            Some(Commands::CameraSync) => (false, false, false, false, true),
+            Some(Commands::Full) | None => (true, true, true, true, true),
+            Some(Commands::List) => unreachable!(),
+        };
 
     println!("\nCap Playback Test Runner");
     println!("{}", "=".repeat(40));
@@ -1517,30 +1586,30 @@ async fn main() -> anyhow::Result<()> {
 
     print_summary(&reports);
 
-    if cli.benchmark_output {
-        let command = format!(
-            "cargo run -p cap-recording --example playback-test-runner -- {} --fps {}{}",
-            match cli.command {
-                Some(Commands::Decoder) => "decoder",
-                Some(Commands::Playback) => "playback",
-                Some(Commands::Scrub) => "scrub",
-                Some(Commands::AudioSync) => "audio-sync",
-                Some(Commands::CameraSync) => "camera-sync",
-                Some(Commands::Full) | None => "full",
-                Some(Commands::List) => "list",
-            },
-            cli.fps,
-            cli.recording_path
-                .as_ref()
-                .map(|p| format!(" --recording-path {}", p.display()))
-                .unwrap_or_default(),
-        );
+    let command = format!(
+        "cargo run -p cap-recording --example playback-test-runner -- {} --fps {}{}",
+        command_name(cli.command.as_ref()),
+        cli.fps,
+        cli.recording_path
+            .as_ref()
+            .map(|p| format!(" --recording-path {}", p.display()))
+            .unwrap_or_default(),
+    );
 
+    if cli.benchmark_output {
         let benchmark_md =
             generate_benchmark_markdown(&reports, cli.notes.as_deref(), command.trim());
 
         if let Err(e) = write_benchmark_to_file(&benchmark_md) {
             tracing::error!("Failed to write benchmark results: {}", e);
+        }
+    }
+
+    if let Some(output_path) = &cli.json_output {
+        if let Err(e) =
+            write_json_output_to_file(output_path, &reports, cli.notes.as_deref(), command.trim())
+        {
+            tracing::error!("Failed to write JSON benchmark results: {}", e);
         }
     }
 
