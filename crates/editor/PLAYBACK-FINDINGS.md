@@ -144,6 +144,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Added seek channel to `PlaybackHandle` and playback loop.
    - `seek_to` and `set_playhead_position` commands now forward seek requests to active playback.
    - Timeline seek no longer tears down and recreates playback while playing.
+   - Seek signaling now uses watch semantics so only latest frame target is consumed under heavy scrub load.
 
 3. **Lazy decoder pool warmup on macOS AVAssetReader (2026-02-13)**
    - Initial warmup now creates only a small subset of decoder instances.
