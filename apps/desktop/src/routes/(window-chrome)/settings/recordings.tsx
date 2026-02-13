@@ -477,7 +477,13 @@ function RecordingItem(props: {
 				</Show>
 				<TooltipIconButton
 					tooltipText="Open recording bundle"
-					onClick={() => revealItemInDir(`${props.recording.path}/`)}
+					onClick={() => {
+						const path =
+							mode() === "instant"
+								? `${props.recording.path}/content/output.mp4`
+								: `${props.recording.path}/`;
+						revealItemInDir(path);
+					}}
 				>
 					<IconLucideFolder class="size-4" />
 				</TooltipIconButton>

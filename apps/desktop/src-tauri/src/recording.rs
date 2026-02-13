@@ -1374,7 +1374,16 @@ pub async fn take_screenshot(
 
     let image_width = image.width();
     let image_height = image.height();
-    let image_data = image.into_raw();
+    let channels: u32 = match &image {
+        image::DynamicImage::ImageRgba8(_) => 4,
+        _ => 3,
+    };
+    let color_type = if channels == 4 {
+        image::ColorType::Rgba8
+    } else {
+        image::ColorType::Rgb8
+    };
+    let image_data = image.into_bytes();
 
     let filename = project_name.replace(":", ".");
     let filename = format!("{}.cap", sanitize_filename::sanitize(&filename));
@@ -1400,6 +1409,7 @@ pub async fn take_screenshot(
             data: image_data.clone(),
             width: image_width,
             height: image_height,
+            channels,
             created_at: Instant::now(),
         },
     );
@@ -1464,7 +1474,7 @@ pub async fn take_screenshot(
                 &image_data,
                 image_width,
                 image_height,
-                image::ColorType::Rgb8.into(),
+                color_type.into(),
             )
             .map_err(|e| format!("Failed to encode PNG: {e}"))
         })

@@ -200,10 +200,17 @@ export function BackgroundSettingsPopover() {
 		<Popover
 			placement="bottom-start"
 			open={activePopover() === "background"}
-			onOpenChange={(open) => setActivePopover(open ? "background" : null)}
+			onOpenChange={(open) => {
+				if (!open && activePopover() === "background") setActivePopover(null);
+			}}
 		>
-			<Popover.Trigger
+			<Popover.Anchor
 				as={EditorButton}
+				onClick={() =>
+					setActivePopover(
+						activePopover() === "background" ? null : "background",
+					)
+				}
 				leftIcon={<IconCapImage class="size-4" />}
 				tooltipText="Background"
 				kbd={["B"]}

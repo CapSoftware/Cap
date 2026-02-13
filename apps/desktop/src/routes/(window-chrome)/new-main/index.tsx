@@ -726,6 +726,50 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		[],
 	);
 
+	let savedScrollTop = 0;
+	let restoringScroll = false;
+
+	createEffect(() => {
+		search();
+		savedScrollTop = 0;
+	});
+
+	const preservesScroll =
+		props.variant === "recording" || props.variant === "screenshot";
+
+	onMount(() => {
+		if (!preservesScroll) return;
+
+		const container = scrollContainerRef;
+		if (!container) return;
+
+		const onScroll = () => {
+			if (!restoringScroll) {
+				savedScrollTop = container.scrollTop;
+			}
+		};
+		container.addEventListener("scroll", onScroll, { passive: true });
+
+		const observer = new MutationObserver(() => {
+			if (
+				savedScrollTop > 0 &&
+				Math.abs(container.scrollTop - savedScrollTop) > 1
+			) {
+				restoringScroll = true;
+				container.scrollTop = savedScrollTop;
+				requestAnimationFrame(() => {
+					restoringScroll = false;
+				});
+			}
+		});
+		observer.observe(container, { childList: true, subtree: true });
+
+		onCleanup(() => {
+			container.removeEventListener("scroll", onScroll);
+			observer.disconnect();
+		});
+	});
+
 	return (
 		<div class="flex flex-col w-full h-full min-h-0">
 			<div class="flex gap-3 justify-between items-center mt-3">
@@ -1020,6 +1064,8 @@ function Page() {
 	});
 
 	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
+	createTauriEventListener(events.recordingStarted, () => recordings.refetch());
+	createTauriEventListener(events.recordingStopped, () => recordings.refetch());
 
 	const handleReupload = async (path: string) => {
 		setReuploadingPaths((prev) => new Set([...prev, path]));
@@ -1098,13 +1144,13 @@ function Page() {
 	createEffect(() => {
 		const data = recordings.data;
 		if (!data) {
-			setRecordingsStore(reconcile([]));
+			setRecordingsStore(reconcile([], { key: "path" }));
 			return;
 		}
 		const mapped = data
 			.slice(0, 20)
 			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
-		setRecordingsStore(reconcile(mapped));
+		setRecordingsStore(reconcile(mapped, { key: "path" }));
 	});
 	const recordingsData = () => recordingsStore;
 
@@ -1114,10 +1160,10 @@ function Page() {
 	createEffect(() => {
 		const data = screenshots.data;
 		if (!data) {
-			setScreenshotsStore(reconcile([]));
+			setScreenshotsStore(reconcile([], { key: "path" }));
 			return;
 		}
-		setScreenshotsStore(reconcile(data.slice(0, 20)));
+		setScreenshotsStore(reconcile(data.slice(0, 20), { key: "path" }));
 	});
 	const screenshotsData = () => screenshotsStore;
 

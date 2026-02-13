@@ -190,8 +190,9 @@ export const Navbar = ({ stars }: NavbarProps) => {
 														</NavigationMenuContent>
 													</>
 												) : (
-													<Link href={link.href} legacyBehavior passHref>
-														<NavigationMenuLink
+													<NavigationMenuLink asChild>
+														<Link
+															href={link.href}
 															className={classNames(
 																navigationMenuTriggerStyle(),
 																pathname === link.href
@@ -201,8 +202,8 @@ export const Navbar = ({ stars }: NavbarProps) => {
 															)}
 														>
 															{link.label}
-														</NavigationMenuLink>
-													</Link>
+														</Link>
+													</NavigationMenuLink>
 												)}
 											</NavigationMenuItem>
 										))}

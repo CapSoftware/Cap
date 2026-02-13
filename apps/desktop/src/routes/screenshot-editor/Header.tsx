@@ -5,7 +5,7 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { createEffect, createMemo, onCleanup, Show, Suspense } from "solid-js";
+import { createEffect, onCleanup, Suspense } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
@@ -37,29 +37,6 @@ export function Header() {
 	const path = () => ctx.editorInstance()?.path ?? "";
 
 	const { exportImage, isExporting } = useScreenshotExport();
-
-	const showStylingControls = createMemo(() => {
-		const source = project.background.source;
-		const sourceType = source.type;
-
-		if (sourceType === "wallpaper") {
-			return source.path !== null && source.path !== "";
-		}
-		if (sourceType === "image") {
-			return source.path !== null && source.path !== "";
-		}
-		if (sourceType === "gradient") {
-			return true;
-		}
-		if (sourceType === "color") {
-			const alpha = source.alpha ?? 255;
-			if (alpha === 0) return false;
-			const value = source.value;
-			const isWhite = value[0] === 255 && value[1] === 255 && value[2] === 255;
-			return !(isWhite && alpha === 255);
-		}
-		return false;
-	});
 
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -122,12 +99,10 @@ export function Header() {
 				<AnnotationTools />
 				<div class="w-px h-6 bg-gray-4 mx-1" />
 				<BackgroundSettingsPopover />
-				<Show when={showStylingControls()}>
-					<PaddingPopover />
-					<RoundingPopover />
-					<ShadowPopover />
-					<BorderPopover />
-				</Show>
+				<PaddingPopover />
+				<RoundingPopover />
+				<ShadowPopover />
+				<BorderPopover />
 			</div>
 
 			<div

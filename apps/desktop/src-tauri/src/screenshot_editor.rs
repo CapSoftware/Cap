@@ -113,6 +113,7 @@ impl ScreenshotEditorInstances {
                     if let Some(frame) = pending_frame {
                         let width = frame.width;
                         let height = frame.height;
+                        let channels = frame.channels;
 
                         if width > MAX_DIMENSION || height > MAX_DIMENSION {
                             return Err(format!(
@@ -122,7 +123,7 @@ impl ScreenshotEditorInstances {
 
                         let expected_len = width
                             .checked_mul(height)
-                            .and_then(|p| p.checked_mul(3))
+                            .and_then(|p| p.checked_mul(channels))
                             .ok_or_else(|| {
                                 format!("Image dimensions overflow: {width}x{height}")
                             })?;
@@ -133,16 +134,26 @@ impl ScreenshotEditorInstances {
 
                         if data.len() != expected_len {
                             return Err(format!(
-                                "Image data length mismatch: expected {expected_len} bytes for {width}x{height} frame, got {}",
+                                "Image data length mismatch: expected {expected_len} bytes for {width}x{height}x{channels} frame, got {}",
                                 data.len()
                             ));
                         }
 
-                        let rgb_img = RgbImage::from_raw(width, height, data).ok_or_else(|| {
-                            format!("Invalid RGB data for {width}x{height} frame")
-                        })?;
-                        let rgba_img: image::RgbaImage = rgb_img.convert();
-                        (rgba_img.into_raw(), width, height)
+                        let rgba_data = if channels == 4 {
+                            let rgba_img = image::RgbaImage::from_raw(width, height, data)
+                                .ok_or_else(|| {
+                                    format!("Invalid RGBA data for {width}x{height} frame")
+                                })?;
+                            rgba_img.into_raw()
+                        } else {
+                            let rgb_img =
+                                RgbImage::from_raw(width, height, data).ok_or_else(|| {
+                                    format!("Invalid RGB data for {width}x{height} frame")
+                                })?;
+                            let rgba_img: image::RgbaImage = rgb_img.convert();
+                            rgba_img.into_raw()
+                        };
+                        (rgba_data, width, height)
                     } else {
                         let image_path = if path.is_dir() {
                             let original = path.join("original.png");

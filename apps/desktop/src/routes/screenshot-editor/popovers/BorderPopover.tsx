@@ -17,10 +17,15 @@ export function BorderPopover() {
 		<Popover
 			placement="bottom-start"
 			open={activePopover() === "border"}
-			onOpenChange={(open) => setActivePopover(open ? "border" : null)}
+			onOpenChange={(open) => {
+				if (!open && activePopover() === "border") setActivePopover(null);
+			}}
 		>
-			<Popover.Trigger
+			<Popover.Anchor
 				as={EditorButton}
+				onClick={() =>
+					setActivePopover(activePopover() === "border" ? null : "border")
+				}
 				leftIcon={<IconCapSquare class="size-4" />}
 				tooltipText="Border"
 				kbd={["E"]}
