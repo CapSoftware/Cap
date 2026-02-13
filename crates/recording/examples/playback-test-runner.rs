@@ -1492,6 +1492,53 @@ fn command_name(command: Option<&Commands>) -> &'static str {
     }
 }
 
+fn shell_quote(value: &str) -> String {
+    let is_safe = value
+        .chars()
+        .all(|char| char.is_ascii_alphanumeric() || "-_./:=,".contains(char));
+    if is_safe {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
+fn build_command_string(cli: &Cli) -> String {
+    let mut command = format!(
+        "cargo run -p cap-recording --example playback-test-runner -- {} --fps {}",
+        command_name(cli.command.as_ref()),
+        cli.fps
+    );
+
+    if let Some(path) = &cli.recording_path {
+        command.push_str(" --recording-path ");
+        command.push_str(&shell_quote(path.to_string_lossy().as_ref()));
+    } else {
+        command.push_str(" --input-dir ");
+        command.push_str(&shell_quote(cli.input_dir.to_string_lossy().as_ref()));
+    }
+
+    if cli.verbose {
+        command.push_str(" --verbose");
+    }
+
+    if cli.benchmark_output {
+        command.push_str(" --benchmark-output");
+    }
+
+    if let Some(path) = &cli.json_output {
+        command.push_str(" --json-output ");
+        command.push_str(&shell_quote(path.to_string_lossy().as_ref()));
+    }
+
+    if let Some(notes) = &cli.notes {
+        command.push_str(" --notes ");
+        command.push_str(&shell_quote(notes));
+    }
+
+    command
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -1586,15 +1633,7 @@ async fn main() -> anyhow::Result<()> {
 
     print_summary(&reports);
 
-    let command = format!(
-        "cargo run -p cap-recording --example playback-test-runner -- {} --fps {}{}",
-        command_name(cli.command.as_ref()),
-        cli.fps,
-        cli.recording_path
-            .as_ref()
-            .map(|p| format!(" --recording-path {}", p.display()))
-            .unwrap_or_default(),
-    );
+    let command = build_command_string(&cli);
 
     if cli.benchmark_output {
         let benchmark_md =
