@@ -516,7 +516,7 @@ impl Playback {
                     playback_anchor_start = Instant::now();
                     playback_anchor_frame = seek_frame;
                     pending_seek_observation = Some((seek_frame, Instant::now()));
-                    prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                    prefetch_buffer.clear();
                     frame_cache.cache.clear();
                     let _ = seek_generation_tx.send(seek_generation);
                     let _ = frame_request_tx.send(frame_number);
@@ -568,7 +568,7 @@ impl Playback {
                         playback_anchor_start = Instant::now();
                         playback_anchor_frame = seek_frame;
                         pending_seek_observation = Some((seek_frame, Instant::now()));
-                        prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        prefetch_buffer.clear();
                         frame_cache.cache.clear();
                         let _ = seek_generation_tx.send(seek_generation);
                         let _ = frame_request_tx.send(frame_number);
