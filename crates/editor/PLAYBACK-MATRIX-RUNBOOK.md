@@ -158,6 +158,9 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 
 # multiple baseline/candidate directories can be provided
 pnpm bench:playback:compare -- --baseline /path/to/baseline-a --baseline /path/to/baseline-b --candidate /path/to/candidate-a --candidate /path/to/candidate-b --output /tmp/playback-matrix-final/playback-comparison.md
+
+# optional: allow missing candidate rows while still checking metric regressions
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --allow-missing-candidate
 ```
 
 ## Evidence checklist

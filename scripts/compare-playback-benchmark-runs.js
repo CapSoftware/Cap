@@ -11,6 +11,7 @@ function parseArgs(argv) {
 		allowFpsDrop: 2,
 		allowStartupIncreaseMs: 25,
 		allowScrubP95IncreaseMs: 5,
+		allowMissingCandidate: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -60,6 +61,10 @@ function parseArgs(argv) {
 			options.allowScrubP95IncreaseMs = value;
 			continue;
 		}
+		if (arg === "--allow-missing-candidate") {
+			options.allowMissingCandidate = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -67,7 +72,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate]
 
 Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
@@ -172,8 +177,22 @@ function formatNumber(value, digits = 2) {
 	return value === null ? "n/a" : value.toFixed(digits);
 }
 
-function compareMetrics(baselineRows, candidateRows, options) {
+function compareMetrics(baselineRows, candidateRows) {
 	const comparisons = [];
+	const missingCandidateRows = [];
+
+	for (const [key, baseline] of baselineRows) {
+		const candidate = candidateRows.get(key);
+		if (!candidate) {
+			missingCandidateRows.push({
+				platform: baseline.platform,
+				gpu: baseline.gpu,
+				scenario: baseline.scenario,
+				recording: baseline.recording,
+				format: baseline.format,
+			});
+		}
+	}
 
 	for (const [key, candidate] of candidateRows) {
 		const baseline = baselineRows.get(key);
@@ -211,10 +230,10 @@ function compareMetrics(baselineRows, candidateRows, options) {
 	}
 
 	comparisons.sort((a, b) => b.regressions.length - a.regressions.length);
-	return comparisons;
+	return { comparisons, missingCandidateRows };
 }
 
-function toMarkdown(comparisons, options) {
+function toMarkdown(comparisons, missingCandidateRows, options) {
 	const regressions = comparisons.filter(
 		(entry) => entry.regressions.length > 0,
 	);
@@ -222,7 +241,16 @@ function toMarkdown(comparisons, options) {
 	md += "# Playback Benchmark Comparison\n\n";
 	md += `Generated: ${new Date().toISOString()}\n\n`;
 	md += `Tolerance: fps_drop<=${options.allowFpsDrop}, startup_increase<=${options.allowStartupIncreaseMs}ms, scrub_p95_increase<=${options.allowScrubP95IncreaseMs}ms\n\n`;
-	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}\n\n`;
+	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}\n\n`;
+	if (missingCandidateRows.length > 0) {
+		md += "## Missing Candidate Rows\n\n";
+		md += "| Platform | GPU | Scenario | Recording | Format |\n";
+		md += "|---|---|---|---|---|\n";
+		for (const row of missingCandidateRows) {
+			md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} |\n`;
+		}
+		md += "\n";
+	}
 	md +=
 		"| Platform | GPU | Scenario | Recording | Format | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
 	md += "|---|---|---|---|---|---:|---:|---:|---|\n";
@@ -261,8 +289,11 @@ function main() {
 
 	const baselineRows = collectMetrics(baselineFiles);
 	const candidateRows = collectMetrics(candidateFiles);
-	const comparisons = compareMetrics(baselineRows, candidateRows, options);
-	const markdown = toMarkdown(comparisons, options);
+	const { comparisons, missingCandidateRows } = compareMetrics(
+		baselineRows,
+		candidateRows,
+	);
+	const markdown = toMarkdown(comparisons, missingCandidateRows, options);
 
 	if (options.output) {
 		fs.writeFileSync(options.output, markdown, "utf8");
@@ -271,7 +302,10 @@ function main() {
 		process.stdout.write(markdown);
 	}
 
-	if (comparisons.some((entry) => entry.regressions.length > 0)) {
+	if (
+		comparisons.some((entry) => entry.regressions.length > 0) ||
+		(!options.allowMissingCandidate && missingCandidateRows.length > 0)
+	) {
 		process.exit(1);
 	}
 }
