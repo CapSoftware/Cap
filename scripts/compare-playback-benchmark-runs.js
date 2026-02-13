@@ -185,6 +185,7 @@ function formatNumber(value, digits = 2) {
 function compareMetrics(baselineRows, candidateRows) {
 	const comparisons = [];
 	const missingCandidateRows = [];
+	const candidateOnlyRows = [];
 
 	for (const [key, baseline] of baselineRows) {
 		const candidate = candidateRows.get(key);
@@ -201,7 +202,16 @@ function compareMetrics(baselineRows, candidateRows) {
 
 	for (const [key, candidate] of candidateRows) {
 		const baseline = baselineRows.get(key);
-		if (!baseline) continue;
+		if (!baseline) {
+			candidateOnlyRows.push({
+				platform: candidate.platform,
+				gpu: candidate.gpu,
+				scenario: candidate.scenario,
+				recording: candidate.recording,
+				format: candidate.format,
+			});
+			continue;
+		}
 
 		const fpsDelta = delta(candidate.fpsMin, baseline.fpsMin);
 		const startupDelta = delta(candidate.startupAvg, baseline.startupAvg);
@@ -235,10 +245,15 @@ function compareMetrics(baselineRows, candidateRows) {
 	}
 
 	comparisons.sort((a, b) => b.regressions.length - a.regressions.length);
-	return { comparisons, missingCandidateRows };
+	return { comparisons, missingCandidateRows, candidateOnlyRows };
 }
 
-function toMarkdown(comparisons, missingCandidateRows, options) {
+function toMarkdown(
+	comparisons,
+	missingCandidateRows,
+	candidateOnlyRows,
+	options,
+) {
 	const regressions = comparisons.filter(
 		(entry) => entry.regressions.length > 0,
 	);
@@ -246,12 +261,21 @@ function toMarkdown(comparisons, missingCandidateRows, options) {
 	md += "# Playback Benchmark Comparison\n\n";
 	md += `Generated: ${new Date().toISOString()}\n\n`;
 	md += `Tolerance: fps_drop<=${options.allowFpsDrop}, startup_increase<=${options.allowStartupIncreaseMs}ms, scrub_p95_increase<=${options.allowScrubP95IncreaseMs}ms\n\n`;
-	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}\n\n`;
+	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}\n\n`;
 	if (missingCandidateRows.length > 0) {
 		md += "## Missing Candidate Rows\n\n";
 		md += "| Platform | GPU | Scenario | Recording | Format |\n";
 		md += "|---|---|---|---|---|\n";
 		for (const row of missingCandidateRows) {
+			md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} |\n`;
+		}
+		md += "\n";
+	}
+	if (candidateOnlyRows.length > 0) {
+		md += "## Candidate-Only Rows\n\n";
+		md += "| Platform | GPU | Scenario | Recording | Format |\n";
+		md += "|---|---|---|---|---|\n";
+		for (const row of candidateOnlyRows) {
 			md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} |\n`;
 		}
 		md += "\n";
@@ -266,7 +290,12 @@ function toMarkdown(comparisons, missingCandidateRows, options) {
 	return md;
 }
 
-function buildJsonOutput(comparisons, missingCandidateRows, options) {
+function buildJsonOutput(
+	comparisons,
+	missingCandidateRows,
+	candidateOnlyRows,
+	options,
+) {
 	const regressions = comparisons.filter(
 		(entry) => entry.regressions.length > 0,
 	);
@@ -282,12 +311,14 @@ function buildJsonOutput(comparisons, missingCandidateRows, options) {
 			comparedRows: comparisons.length,
 			regressions: regressions.length,
 			missingCandidateRows: missingCandidateRows.length,
+			candidateOnlyRows: candidateOnlyRows.length,
 			passed:
 				regressions.length === 0 &&
 				(options.allowMissingCandidate || missingCandidateRows.length === 0),
 		},
 		regressions,
 		missingCandidateRows,
+		candidateOnlyRows,
 		comparisons,
 	};
 }
@@ -320,14 +351,18 @@ function main() {
 
 	const baselineRows = collectMetrics(baselineFiles);
 	const candidateRows = collectMetrics(candidateFiles);
-	const { comparisons, missingCandidateRows } = compareMetrics(
-		baselineRows,
-		candidateRows,
+	const { comparisons, missingCandidateRows, candidateOnlyRows } =
+		compareMetrics(baselineRows, candidateRows);
+	const markdown = toMarkdown(
+		comparisons,
+		missingCandidateRows,
+		candidateOnlyRows,
+		options,
 	);
-	const markdown = toMarkdown(comparisons, missingCandidateRows, options);
 	const outputJson = buildJsonOutput(
 		comparisons,
 		missingCandidateRows,
+		candidateOnlyRows,
 		options,
 	);
 

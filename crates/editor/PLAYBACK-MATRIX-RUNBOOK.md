@@ -168,6 +168,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 
 # emit structured JSON alongside markdown for automation
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-matrix-final/playback-comparison.md --output-json /tmp/playback-matrix-final/playback-comparison.json
+
+# compare output now includes both missing-candidate rows and candidate-only rows
 ```
 
 ## Evidence checklist
