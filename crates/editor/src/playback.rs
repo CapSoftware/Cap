@@ -388,6 +388,10 @@ impl Playback {
                 .mul_f64(4.0)
                 .max(Duration::from_millis(20))
                 .min(Duration::from_millis(80));
+            let in_flight_poll_interval = frame_duration
+                .mul_f64(0.25)
+                .max(Duration::from_millis(1))
+                .min(Duration::from_millis(4));
             let mut frame_number = self.start_frame_number;
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
@@ -571,7 +575,7 @@ impl Playback {
                                             prefetch_buffer.push_back(prefetched);
                                         }
                                     }
-                                    _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                                    _ = tokio::time::sleep(in_flight_poll_interval) => {
                                         let still_in_flight = main_in_flight
                                             .read()
                                             .map(|guard| guard.contains(&frame_number))
