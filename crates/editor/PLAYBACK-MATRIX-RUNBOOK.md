@@ -44,13 +44,20 @@ node scripts/run-playback-benchmark-matrix.js \
   --output-dir "$OUT_DIR" \
   --fps 60 \
   --require-formats mp4,fragmented \
+  --scenarios full,scrub \
   --input-dir "$INPUT_DIR"
 ```
 
 Equivalent shortcut:
 
 ```bash
-pnpm bench:playback:matrix -- --platform "<platform-label>" --gpu "<gpu-label>" --output-dir "$OUT_DIR" --fps 60 --require-formats mp4,fragmented --input-dir "$INPUT_DIR"
+pnpm bench:playback:matrix -- --platform "<platform-label>" --gpu "<gpu-label>" --output-dir "$OUT_DIR" --fps 60 --require-formats mp4,fragmented --scenarios full,scrub --input-dir "$INPUT_DIR"
+```
+
+Rerun only scrub scenario for a machine:
+
+```bash
+pnpm bench:playback:matrix -- --platform "<platform-label>" --gpu "<gpu-label>" --output-dir "$OUT_DIR" --fps 60 --scenarios scrub --input-dir "$INPUT_DIR"
 ```
 
 Examples:
