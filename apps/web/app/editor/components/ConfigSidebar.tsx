@@ -1,7 +1,13 @@
 "use client";
 
 import { Switch } from "@cap/ui";
-import { ArrowLeft, Camera, Image as ImageIcon, Volume2 } from "lucide-react";
+import {
+	ArrowLeft,
+	Camera,
+	Image as ImageIcon,
+	Volume2,
+	VolumeX,
+} from "lucide-react";
 import NextImage from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AspectRatio, BackgroundSource } from "../types/project-config";
@@ -669,23 +675,83 @@ function AudioPanel() {
 					}
 				/>
 			</Field>
+		</div>
+	);
+}
 
-			<Field label="System Audio Volume">
+const SPEED_PRESETS = [
+	{ label: "0.5x", value: 0.5 },
+	{ label: "1x", value: 1 },
+	{ label: "1.5x", value: 1.5 },
+	{ label: "2x", value: 2 },
+] as const;
+
+function ClipPanel() {
+	const { project, setProject, editorState } = useEditorContext();
+	const selection = editorState.timeline.selection;
+	const segments = project.timeline?.segments;
+	const selectedIndex = selection?.indices[0] ?? -1;
+
+	const selectedSegment =
+		selectedIndex >= 0 && segments ? segments[selectedIndex] : null;
+
+	if (!selectedSegment || selectedIndex < 0) return null;
+
+	const updateSegment = (patch: Partial<typeof selectedSegment>) => {
+		if (!segments) return;
+		const updated = [...segments];
+		const current = updated[selectedIndex];
+		if (!current) return;
+		updated[selectedIndex] = { ...current, ...patch };
+		setProject({
+			...project,
+			timeline: project.timeline
+				? { ...project.timeline, segments: updated }
+				: null,
+		});
+	};
+
+	return (
+		<div className="flex flex-col gap-6">
+			<Field
+				label="Mute Clip"
+				icon={<VolumeX className="size-4" />}
+				action={
+					<Switch
+						checked={selectedSegment.muted ?? false}
+						onCheckedChange={(checked) => updateSegment({ muted: checked })}
+					/>
+				}
+			>
+				<p className="text-xs text-gray-10">Silence audio for this clip only</p>
+			</Field>
+
+			<Field label="Speed">
+				<div className="flex gap-2">
+					{SPEED_PRESETS.map((preset) => (
+						<button
+							type="button"
+							key={preset.value}
+							onClick={() => updateSegment({ timescale: preset.value })}
+							className={`flex-1 px-2 py-1.5 text-xs rounded-lg border transition-colors ${
+								selectedSegment.timescale === preset.value
+									? "border-blue-8 bg-blue-3 text-blue-11"
+									: "border-gray-4 bg-gray-2 text-gray-11 hover:border-gray-6"
+							}`}
+						>
+							{preset.label}
+						</button>
+					))}
+				</div>
 				<Slider
-					value={audio.systemVolumeDb}
+					value={selectedSegment.timescale}
 					onChange={(value) =>
-						setProject({
-							...project,
-							audio: { ...audio, systemVolumeDb: value },
-						})
+						updateSegment({ timescale: Math.round(value * 100) / 100 })
 					}
-					min={-30}
-					max={10}
-					step={0.1}
-					disabled={audio.mute}
-					formatLabel={(v) =>
-						v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
-					}
+					min={0.25}
+					max={4}
+					step={0.05}
+					formatLabel={(v) => `${v.toFixed(2)}x`}
 				/>
 			</Field>
 		</div>
@@ -718,19 +784,16 @@ export function ConfigSidebar() {
 	const renderPanel = () => {
 		if (editorState.timeline.selection) {
 			return (
-				<div className="flex flex-col items-center justify-center py-8 text-center">
-					<p className="text-sm text-gray-11">Clip selected</p>
-					<p className="text-xs text-gray-10 mt-1">
-						Click away to edit project settings
-					</p>
+				<div className="flex flex-col gap-6">
 					<button
 						type="button"
 						onClick={clearSelection}
-						className="flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs text-gray-11 hover:text-gray-12 bg-gray-3 hover:bg-gray-4 rounded-md transition-colors"
+						className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-11 hover:text-gray-12 bg-gray-3 hover:bg-gray-4 rounded-md transition-colors self-start"
 					>
 						<ArrowLeft className="size-3" />
 						Back to settings
 					</button>
+					<ClipPanel />
 				</div>
 			);
 		}
