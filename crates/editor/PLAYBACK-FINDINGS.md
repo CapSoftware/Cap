@@ -200,6 +200,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/finalize-playback-matrix.js` generates aggregate markdown, status markdown, and validation JSON in one command.
    - Supports optional required format enforcement during finalization.
 
+14. **Added matrix summary publisher (2026-02-13)**
+   - `scripts/publish-playback-matrix-summary.js` injects finalized matrix artifacts into playback benchmark history.
+   - Keeps matrix evidence updates consistent and repeatable.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -302,6 +306,7 @@ Decoder Pipeline:
 15. Added matrix validation script for required cell and format coverage checks.
 16. Added matrix status report generator for concise artifact summaries.
 17. Added one-shot finalization script for aggregate + status + validation outputs.
+18. Added benchmark history publisher script for finalized matrix artifacts.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -320,6 +325,7 @@ Decoder Pipeline:
 - `scripts/validate-playback-matrix.js`: added required matrix cell/format validation for aggregated evidence.
 - `scripts/build-playback-matrix-report.js`: added concise matrix status report generation from JSON benchmark outputs.
 - `scripts/finalize-playback-matrix.js`: added one-shot matrix artifact finalization workflow.
+- `scripts/publish-playback-matrix-summary.js`: added matrix artifact publisher into PLAYBACK-BENCHMARKS history region.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
