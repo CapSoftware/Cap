@@ -78,6 +78,7 @@ node scripts/validate-playback-matrix.js --input /path/to/json-results --require
 # Finalize aggregate + status + validation artifacts
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
+node scripts/finalize-playback-matrix.js --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --allow-fps-drop 2 --allow-startup-increase-ms 25 --allow-scrub-p95-increase-ms 5
 node scripts/finalize-playback-matrix.js --input /path/to/json-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250 --publish-target /workspace/crates/editor/PLAYBACK-BENCHMARKS.md
 
 # Publish matrix artifacts into this benchmark history
