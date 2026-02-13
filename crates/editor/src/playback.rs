@@ -3,7 +3,7 @@ use cap_audio::{
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
-use cap_project::{ProjectConfiguration, XY};
+use cap_project::{ClipOffsets, ProjectConfiguration, XY};
 use cap_rendering::{
     DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
     spring_mass_damper::SpringMassDamperSimulationConfig,
@@ -16,7 +16,7 @@ use cpal::{
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
@@ -173,6 +173,14 @@ fn count_contiguous_prefetched_frames(
     contiguous
 }
 
+fn build_clip_offsets_lookup(project: &ProjectConfiguration) -> HashMap<u32, ClipOffsets> {
+    project
+        .clips
+        .iter()
+        .map(|clip| (clip.index, clip.offsets))
+        .collect()
+}
+
 impl Playback {
     pub async fn start(
         mut self,
@@ -270,6 +278,7 @@ impl Playback {
             let mut active_generation = *prefetch_seek_generation.borrow();
 
             let mut cached_project = prefetch_project.borrow().clone();
+            let mut prefetch_clip_offsets = build_clip_offsets_lookup(&cached_project);
             info!(
                 dynamic_prefetch_ahead,
 <<<<<<< HEAD
@@ -289,6 +298,7 @@ impl Playback {
 
                 if prefetch_project.has_changed().unwrap_or(false) {
                     cached_project = prefetch_project.borrow_and_update().clone();
+                    prefetch_clip_offsets = build_clip_offsets_lookup(&cached_project);
                 }
 
                 if prefetch_seek_generation.has_changed().unwrap_or(false) {
@@ -384,11 +394,9 @@ impl Playback {
                         && let Some(segment_media) =
                             prefetch_segment_medias.get(segment.recording_clip as usize)
                     {
-                        let clip_offsets = cached_project
-                            .clips
-                            .iter()
-                            .find(|v| v.index == segment.recording_clip)
-                            .map(|v| v.offsets)
+                        let clip_offsets = prefetch_clip_offsets
+                            .get(&segment.recording_clip)
+                            .copied()
                             .unwrap_or_default();
 
                         let decoders = segment_media.decoders.clone();
@@ -455,11 +463,9 @@ impl Playback {
                             && let Some(segment_media) =
                                 prefetch_segment_medias.get(segment.recording_clip as usize)
                         {
-                            let clip_offsets = cached_project
-                                .clips
-                                .iter()
-                                .find(|v| v.index == segment.recording_clip)
-                                .map(|v| v.offsets)
+                            let clip_offsets = prefetch_clip_offsets
+                                .get(&segment.recording_clip)
+                                .copied()
                                 .unwrap_or_default();
 
                             let decoders = segment_media.decoders.clone();
@@ -722,6 +728,7 @@ impl Playback {
             let mut playback_anchor_start = Instant::now();
             let mut playback_anchor_frame = frame_number;
             let mut cached_project = self.project.borrow().clone();
+            let mut playback_clip_offsets = build_clip_offsets_lookup(&cached_project);
 
             'playback: loop {
                 if seek_rx.has_changed().unwrap_or(false) {
@@ -747,6 +754,7 @@ impl Playback {
 
                 if self.project.has_changed().unwrap_or(false) {
                     cached_project = self.project.borrow_and_update().clone();
+                    playback_clip_offsets = build_clip_offsets_lookup(&cached_project);
                 }
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
                     if prefetched.generation == seek_generation {
@@ -918,11 +926,9 @@ impl Playback {
                                 continue;
                             };
 
-                            let clip_offsets = cached_project
-                                .clips
-                                .iter()
-                                .find(|v| v.index == segment.recording_clip)
-                                .map(|v| v.offsets)
+                            let clip_offsets = playback_clip_offsets
+                                .get(&segment.recording_clip)
+                                .copied()
                                 .unwrap_or_default();
 
                             if let Ok(mut guard) = playback_decode_in_flight.write() {
