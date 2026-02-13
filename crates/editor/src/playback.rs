@@ -18,7 +18,10 @@ use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
     num::NonZeroUsize,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -358,6 +361,7 @@ impl Playback {
         });
 
         tokio::spawn(async move {
+            let playback_task_start = Instant::now();
             let duration = if let Some(timeline) = &self.project.borrow().timeline {
                 timeline.duration()
             } else {
@@ -387,6 +391,7 @@ impl Playback {
 
             let mut total_frames_rendered = 0u64;
             let mut _total_frames_skipped = 0u64;
+            let mut first_render_logged = false;
 
             let warmup_target_frames = 20usize;
             let warmup_after_first_timeout = Duration::from_millis(1000);
@@ -726,6 +731,14 @@ impl Playback {
                         .await;
 
                     total_frames_rendered += 1;
+                    if !first_render_logged {
+                        first_render_logged = true;
+                        info!(
+                            first_render_latency_ms =
+                                playback_task_start.elapsed().as_secs_f64() * 1000.0,
+                            "Playback rendered first frame"
+                        );
+                    }
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
@@ -819,6 +832,7 @@ impl AudioPlayback {
         }
 
         std::thread::spawn(move || {
+            let audio_thread_start = Instant::now();
             let host = cpal::default_host();
             let device = match host.default_output_device() {
                 Some(d) => d,
@@ -933,6 +947,10 @@ impl AudioPlayback {
                 }
             };
 
+            info!(
+                startup_prepare_ms = audio_thread_start.elapsed().as_secs_f64() * 1000.0,
+                "Audio stream prepared, starting playback stream"
+            );
             if let Err(e) = stream.play() {
                 error!(
                     "Failed to play audio stream: {}. Skipping audio playback.",
@@ -1103,6 +1121,8 @@ impl AudioPlayback {
             let mut latency_corrector = LatencyCorrector::new(static_latency_hint, latency_config);
             let initial_compensation_secs = latency_corrector.initial_compensation_secs();
             let device_sample_rate = sample_rate;
+            let stream_build_start = Instant::now();
+            let callback_started = Arc::new(AtomicBool::new(false));
 
             {
                 let project_snapshot = project.borrow();
@@ -1140,6 +1160,7 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
+            let callback_started_for_stream = callback_started.clone();
 
             #[cfg(target_os = "windows")]
             const FIXED_LATENCY_SECS: f64 = 0.08;
@@ -1159,6 +1180,13 @@ impl AudioPlayback {
             let stream_result = device.build_output_stream(
                 &config,
                 move |buffer: &mut [T], info| {
+                    if !callback_started_for_stream.swap(true, Ordering::Relaxed) {
+                        info!(
+                            startup_to_callback_ms =
+                                stream_build_start.elapsed().as_secs_f64() * 1000.0,
+                            "Audio output callback started"
+                        );
+                    }
                     #[cfg(not(target_os = "windows"))]
                     let latency_secs = latency_corrector.update_from_callback(info);
                     #[cfg(target_os = "windows")]
