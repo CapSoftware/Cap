@@ -631,7 +631,7 @@ impl Playback {
                                         if prefetched.frame_number == frame_number {
                                             found_frame = Some(prefetched);
                                             break;
-                                        } else if prefetched.frame_number >= self.start_frame_number {
+                                        } else if prefetched.frame_number >= frame_number {
                                             prefetch_buffer.push_back(prefetched);
                                         }
                                     }
