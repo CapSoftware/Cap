@@ -39,6 +39,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "30")]
     fps: u32,
 
+    #[arg(long, global = true, default_value_t = STARTUP_TO_FIRST_FRAME_WARNING_MS)]
+    startup_threshold_ms: f64,
+
     #[arg(long, global = true)]
     verbose: bool,
 
@@ -66,6 +69,7 @@ enum Commands {
 const FPS_TOLERANCE: f64 = 2.0;
 const DECODE_LATENCY_WARNING_MS: f64 = 50.0;
 const SCRUB_SEEK_WARNING_MS: f64 = 40.0;
+const STARTUP_TO_FIRST_FRAME_WARNING_MS: f64 = 250.0;
 const AUDIO_VIDEO_SYNC_TOLERANCE_MS: f64 = 100.0;
 const CAMERA_SYNC_TOLERANCE_MS: f64 = 100.0;
 
@@ -101,6 +105,8 @@ struct PlaybackTestResult {
     fps_ok: bool,
     jitter_ms: f64,
     decode_latency_ok: bool,
+    startup_latency_ok: bool,
+    startup_threshold_ms: f64,
     errors: Vec<String>,
 }
 
@@ -242,6 +248,12 @@ impl RecordingTestReport {
             }
             if !result.decode_latency_ok {
                 println!("      WARN: Decode latency exceeds {DECODE_LATENCY_WARNING_MS}ms!");
+            }
+            if !result.startup_latency_ok {
+                println!(
+                    "      WARN: Startup-to-first-frame exceeds {:.1}ms!",
+                    result.startup_threshold_ms
+                );
             }
             for err in &result.errors {
                 println!("      ERROR: {err}");
@@ -390,12 +402,14 @@ async fn test_playback(
     meta: &StudioRecordingMeta,
     segment_index: usize,
     fps: u32,
+    startup_threshold_ms: f64,
     verbose: bool,
 ) -> PlaybackTestResult {
     let playback_start = Instant::now();
     let mut result = PlaybackTestResult {
         segment_index,
         expected_fps: fps as f64,
+        startup_threshold_ms,
         ..Default::default()
     };
 
@@ -496,9 +510,11 @@ async fn test_playback(
     result.fps_ok = (result.effective_fps - result.expected_fps).abs() <= FPS_TOLERANCE
         || result.effective_fps >= result.expected_fps;
     result.decode_latency_ok = result.p95_decode_time_ms <= DECODE_LATENCY_WARNING_MS;
+    result.startup_latency_ok = result.startup_to_first_frame_ms <= startup_threshold_ms;
 
     result.passed = result.fps_ok
         && result.decode_latency_ok
+        && result.startup_latency_ok
         && result.failed_frames == 0
         && result.decoded_frames > 0;
 
@@ -880,6 +896,7 @@ fn discover_recordings(input_dir: &Path) -> Vec<PathBuf> {
 async fn run_tests_on_recording(
     recording_path: &Path,
     fps: u32,
+    startup_threshold_ms: f64,
     run_decoder: bool,
     run_playback: bool,
     run_scrub: bool,
@@ -969,8 +986,15 @@ async fn run_tests_on_recording(
             if verbose {
                 println!("  Testing playback for segment {segment_idx}...");
             }
-            let playback_result =
-                test_playback(&meta, studio_meta.as_ref(), segment_idx, fps, verbose).await;
+            let playback_result = test_playback(
+                &meta,
+                studio_meta.as_ref(),
+                segment_idx,
+                fps,
+                startup_threshold_ms,
+                verbose,
+            )
+            .await;
             report.playback_results.push(playback_result);
         }
 
@@ -1082,6 +1106,13 @@ fn get_failure_tags(report: &RecordingTestReport) -> Vec<String> {
     if report.playback_results.iter().any(|r| !r.decode_latency_ok) {
         tags.push("LATENCY".to_string());
     }
+    if report
+        .playback_results
+        .iter()
+        .any(|r| !r.startup_latency_ok)
+    {
+        tags.push("STARTUP".to_string());
+    }
     if report.scrub_results.iter().any(|r| !r.seek_latency_ok) {
         tags.push("SCRUB_LATENCY".to_string());
     }
@@ -1191,7 +1222,7 @@ fn report_to_markdown(report: &RecordingTestReport) -> String {
         ));
         md.push_str(&format!(
             "| ↳ Startup | {} | first_decode={:.1}ms startup_to_first={:.1}ms |\n",
-            if result.startup_to_first_frame_ms > 0.0 {
+            if result.startup_latency_ok {
                 "✅"
             } else {
                 "❌"
@@ -1505,9 +1536,10 @@ fn shell_quote(value: &str) -> String {
 
 fn build_command_string(cli: &Cli) -> String {
     let mut command = format!(
-        "cargo run -p cap-recording --example playback-test-runner -- {} --fps {}",
+        "cargo run -p cap-recording --example playback-test-runner -- {} --fps {} --startup-threshold-ms {:.1}",
         command_name(cli.command.as_ref()),
-        cli.fps
+        cli.fps,
+        cli.startup_threshold_ms
     );
 
     if let Some(path) = &cli.recording_path {
@@ -1598,9 +1630,10 @@ async fn main() -> anyhow::Result<()> {
     println!("\nCap Playback Test Runner");
     println!("{}", "=".repeat(40));
     println!(
-        "Testing {} recording(s) at {} FPS",
+        "Testing {} recording(s) at {} FPS (startup threshold: {:.1}ms)",
         recordings.len(),
-        cli.fps
+        cli.fps,
+        cli.startup_threshold_ms
     );
     println!();
 
@@ -1612,6 +1645,7 @@ async fn main() -> anyhow::Result<()> {
         match run_tests_on_recording(
             recording_path,
             cli.fps,
+            cli.startup_threshold_ms,
             run_decoder,
             run_playback,
             run_scrub,

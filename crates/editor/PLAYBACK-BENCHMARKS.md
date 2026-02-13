@@ -10,6 +10,7 @@ This document tracks performance benchmarks for Cap's playback and decoding syst
 |--------|--------|-----------|
 | Decoder Init | <200ms | - |
 | Decode Latency (p95) | <50ms | - |
+| Startup to First Frame | <250ms | configurable |
 | Effective FPS | ≥30 fps | ±2 fps |
 | Decode Jitter | <10ms | - |
 | Scrub Seek Latency (p95) | <40ms | - |
@@ -42,6 +43,7 @@ This document tracks performance benchmarks for Cap's playback and decoding syst
 ```bash
 # Run full playback validation on recordings from real-device-test-runner
 cargo run -p cap-recording --example playback-test-runner -- full
+cargo run -p cap-recording --example playback-test-runner -- full --startup-threshold-ms 250
 
 # Run specific test categories
 cargo run -p cap-recording --example playback-test-runner -- decoder
@@ -118,9 +120,9 @@ cargo run -p cap-recording --example playback-test-runner -- scrub --fps 60 --be
 Automated helper for machine runs:
 
 ```bash
-node scripts/run-playback-benchmark-matrix.js --platform macos-13 --gpu apple-silicon --output-dir /tmp/playback-matrix --fps 60 --input-dir /tmp/cap-real-device-tests
-node scripts/run-playback-benchmark-matrix.js --platform windows-11 --gpu nvidia-discrete --output-dir /tmp/playback-matrix-windows-nvidia --fps 60 --require-formats mp4,fragmented --input-dir /tmp/cap-real-device-tests
-node scripts/run-playback-benchmark-matrix.js --platform windows-11 --gpu integrated --output-dir /tmp/playback-matrix-windows-integrated --fps 60 --scenarios scrub --input-dir /tmp/cap-real-device-tests
+node scripts/run-playback-benchmark-matrix.js --platform macos-13 --gpu apple-silicon --output-dir /tmp/playback-matrix --fps 60 --startup-threshold-ms 250 --input-dir /tmp/cap-real-device-tests
+node scripts/run-playback-benchmark-matrix.js --platform windows-11 --gpu nvidia-discrete --output-dir /tmp/playback-matrix-windows-nvidia --fps 60 --startup-threshold-ms 250 --require-formats mp4,fragmented --input-dir /tmp/cap-real-device-tests
+node scripts/run-playback-benchmark-matrix.js --platform windows-11 --gpu integrated --output-dir /tmp/playback-matrix-windows-integrated --fps 60 --startup-threshold-ms 250 --scenarios scrub --input-dir /tmp/cap-real-device-tests
 ```
 
 | Platform | GPU Class | MP4 Full | Fragmented Full | MP4 Scrub | Fragmented Scrub | Notes |
