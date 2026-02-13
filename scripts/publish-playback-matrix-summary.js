@@ -10,6 +10,7 @@ function parseArgs(argv) {
 		bottlenecksMd: null,
 		comparisonMd: null,
 		comparisonJson: null,
+		finalizeSummaryJson: null,
 		validationJson: null,
 		target: path.resolve("crates/editor/PLAYBACK-BENCHMARKS.md"),
 	};
@@ -41,6 +42,10 @@ function parseArgs(argv) {
 			options.comparisonJson = path.resolve(argv[++i] ?? "");
 			continue;
 		}
+		if (arg === "--finalize-summary-json") {
+			options.finalizeSummaryJson = path.resolve(argv[++i] ?? "");
+			continue;
+		}
 		if (arg === "--validation-json") {
 			options.validationJson = path.resolve(argv[++i] ?? "");
 			continue;
@@ -56,7 +61,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--comparison-md <path>] [--comparison-json <path>] [--target <playback-benchmarks-path>]
+	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--comparison-md <path>] [--comparison-json <path>] [--finalize-summary-json <path>] [--target <playback-benchmarks-path>]
 
 Prepends a matrix summary section into PLAYBACK-BENCHMARKS.md benchmark history region.`);
 }
@@ -74,6 +79,7 @@ function buildSummarySection(
 	bottlenecksMd,
 	comparisonMd,
 	comparisonJson,
+	finalizeSummaryJson,
 ) {
 	const now = new Date().toISOString();
 	const validation = JSON.parse(validationJson);
@@ -95,6 +101,16 @@ function buildSummarySection(
 		markdown += `- Candidate-only rows: ${comparison.summary?.candidateOnlyRows ?? "n/a"}\n\n`;
 		markdown += `- Missing candidate policy: ${comparison.tolerance?.allowMissingCandidate ? "allow" : "fail"}\n`;
 		markdown += `- Candidate-only policy: ${comparison.tolerance?.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
+	}
+	if (finalizeSummaryJson) {
+		const finalizeSummary = JSON.parse(finalizeSummaryJson);
+		markdown += `- Finalize source branch: ${finalizeSummary.git?.branch ?? "n/a"}\n`;
+		markdown += `- Finalize source commit: ${finalizeSummary.git?.commit ?? "n/a"}\n`;
+		markdown += `- Finalize validation passed: ${finalizeSummary.results?.validationPassed === true ? "true" : "false"}\n`;
+		if (finalizeSummary.results?.comparisonPassed !== null) {
+			markdown += `- Finalize comparison passed: ${finalizeSummary.results?.comparisonPassed === true ? "true" : "false"}\n`;
+		}
+		markdown += "\n";
 	}
 
 	if ((validation.missingCells?.length ?? 0) > 0) {
@@ -171,6 +187,9 @@ function main() {
 	if (options.comparisonJson) {
 		ensureFile(options.comparisonJson, "Comparison JSON");
 	}
+	if (options.finalizeSummaryJson) {
+		ensureFile(options.finalizeSummaryJson, "Finalize summary JSON");
+	}
 	ensureFile(options.target, "Target");
 
 	const aggregateMd = fs.readFileSync(options.aggregateMd, "utf8");
@@ -185,6 +204,9 @@ function main() {
 	const comparisonJson = options.comparisonJson
 		? fs.readFileSync(options.comparisonJson, "utf8")
 		: null;
+	const finalizeSummaryJson = options.finalizeSummaryJson
+		? fs.readFileSync(options.finalizeSummaryJson, "utf8")
+		: null;
 	const summaryMd = buildSummarySection(
 		aggregateMd,
 		statusMd,
@@ -192,6 +214,7 @@ function main() {
 		bottlenecksMd,
 		comparisonMd,
 		comparisonJson,
+		finalizeSummaryJson,
 	);
 	writeToBenchmarkHistory(options.target, summaryMd);
 	console.log(`Published matrix summary into ${options.target}`);

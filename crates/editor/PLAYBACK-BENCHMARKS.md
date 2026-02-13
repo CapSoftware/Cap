@@ -89,6 +89,7 @@ Finalize summary JSON includes generated timestamp, artifact paths, settings, pa
 # Publish matrix artifacts into this benchmark history
 node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md --status-md /tmp/playback-matrix-final/playback-matrix-status.md --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json --bottlenecks-md /tmp/playback-matrix-final/playback-bottlenecks.md
 node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md --status-md /tmp/playback-matrix-final/playback-matrix-status.md --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json --comparison-md /tmp/playback-matrix-final/playback-comparison.md --comparison-json /tmp/playback-matrix-final/playback-comparison.json
+node scripts/publish-playback-matrix-summary.js --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md --status-md /tmp/playback-matrix-final/playback-matrix-status.md --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json --finalize-summary-json /tmp/playback-matrix-final/playback-finalize-summary.json
 
 # Analyze bottlenecks from matrix results
 node scripts/analyze-playback-matrix-bottlenecks.js --input /path/to/json-results --output /tmp/playback-bottlenecks.md --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
