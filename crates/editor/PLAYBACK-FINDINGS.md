@@ -414,6 +414,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Enables strict failure when baseline/candidate inputs include skipped JSON files without usable benchmark payloads.
    - `scripts/finalize-playback-matrix.js` forwards skipped-file gating option in integrated compare flows.
 
+54. **Added skipped-file reason breakdown in comparison file stats (2026-02-13)**
+   - Comparison file stats now report skipped-file reasons as `skippedNoReports` and `skippedNoUsableMetrics`.
+   - Published summary now surfaces skipped-file breakdown for baseline and candidate inputs.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -563,6 +567,7 @@ Decoder Pipeline:
 57. Added optional zero-comparison gating (`--fail-on-zero-compared`) for compare/finalize flows and surfaced zero-compare policy in comparison/published summaries.
 58. Added warmup-stage seek handling to apply seeks immediately while playback warmup is in progress.
 59. Added optional skipped-file gating (`--fail-on-skipped-files`) for compare/finalize flows and surfaced skipped-file policy in comparison/published summaries.
+60. Added skipped-file reason breakdown (`skippedNoReports`, `skippedNoUsableMetrics`) into comparison file stats and published summaries.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -600,6 +605,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
 - `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-candidate-only` coverage gate and surfaced coverage gate mode in comparison markdown output.
 - `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-skipped-files` gate and parse/skip policy reporting in comparison markdown/json outputs.
+- `scripts/compare-playback-benchmark-runs.js`: comparison file stats now include skipped-file reason breakdown (`skippedNoReports`, `skippedNoUsableMetrics`).
 - `scripts/finalize-playback-matrix.js`: added passthrough support for strict `--fail-on-candidate-only` compare mode in one-shot finalize workflows.
 - `scripts/finalize-playback-matrix.js`: forwards `--fail-on-skipped-files` into compare stage and records skipped-file policy in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes candidate-only row count from comparison JSON summary.
@@ -622,6 +628,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: forwards parse-error gating and records parse-error policy in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes parse policy and baseline/candidate parse error counts.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes skipped-file policy mode from comparison tolerance settings.
+- `scripts/publish-playback-matrix-summary.js`: published comparison status now includes skipped-file breakdown counts for no-reports and no-usable-metrics cases.
 - `crates/editor/src/playback.rs`: `insert_prefetched_frame` now returns structural-change signals and warmup cache invalidation uses this signal to avoid stale contiguous counts when insert+trim keeps buffer length unchanged.
 - `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison file stats payload when comparison runs are enabled.
 - `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize baseline/candidate parse error counts from finalize summary metadata.
