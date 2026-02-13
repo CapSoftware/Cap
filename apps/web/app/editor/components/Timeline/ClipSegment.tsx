@@ -1,5 +1,6 @@
 "use client";
 
+import { VolumeX } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { TimelineSegment } from "../../types/project-config";
 import { getPeaksInRange, type WaveformData } from "../../utils/waveform";
@@ -180,11 +181,14 @@ export function ClipSegment({
 							mirror
 						/>
 					)}
-					{timescaleLabel && (
-						<div className="absolute inset-0 flex items-center justify-center">
-							<span className="text-xs text-blue-300 font-medium truncate px-2">
-								{timescaleLabel}
-							</span>
+					{(timescaleLabel || segment.muted) && (
+						<div className="absolute inset-0 flex items-center justify-center gap-1">
+							{segment.muted && <VolumeX className="size-3.5 text-blue-300" />}
+							{timescaleLabel && (
+								<span className="text-xs text-blue-300 font-medium truncate">
+									{timescaleLabel}
+								</span>
+							)}
 						</div>
 					)}
 				</div>
