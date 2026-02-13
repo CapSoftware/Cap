@@ -526,7 +526,7 @@ impl Playback {
                 .max(Duration::from_millis(200))
                 .min(Duration::from_millis(700));
             let warmup_no_frames_timeout = Duration::from_secs(5);
-            let warmup_start = Instant::now();
+            let mut warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
             let mut warmup_contiguous_prefetched = 0usize;
             let mut warmup_buffer_changed = false;
@@ -583,6 +583,27 @@ impl Playback {
                             if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
                                 first_frame_time = Some(Instant::now());
                             }
+                        }
+                    }
+                    _ = seek_rx.changed() => {
+                        let seek_frame = *seek_rx.borrow_and_update();
+                        seek_generation = seek_generation.saturating_add(1);
+                        frame_number = seek_frame;
+                        prefetch_buffer.clear();
+                        frame_cache.cache.clear();
+                        warmup_contiguous_prefetched = 0;
+                        warmup_buffer_changed = false;
+                        first_frame_time = None;
+                        warmup_start = Instant::now();
+                        let _ = seek_generation_tx.send(seek_generation);
+                        let _ = frame_request_tx.send(frame_number);
+                        let _ = playback_position_tx.send(frame_number);
+                        if has_audio
+                            && audio_playhead_tx
+                                .send(frame_number as f64 / fps_f64)
+                                .is_err()
+                        {
+                            break;
                         }
                     }
                     _ = stop_rx.changed() => {
