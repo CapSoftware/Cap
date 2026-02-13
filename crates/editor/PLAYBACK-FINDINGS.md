@@ -355,6 +355,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Warmup loop now defers contiguous-prefetch counting until first warmup frame arrival is observed.
    - Reduces avoidable buffer scan work during pre-frame warmup wait.
 
+43. **Added minimum sample-count gating for matrix comparisons (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports `--min-samples-per-row`.
+   - Comparison now flags rows with insufficient effective sample counts and reports them in markdown/JSON outputs.
+   - `scripts/finalize-playback-matrix.js` forwards minimum sample gating settings into compare stage, and publish summary now surfaces sample gating status fields.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -491,6 +496,7 @@ Decoder Pipeline:
 44. Wired finalize summary JSON into publish flow so one-shot finalize runs can publish summary metadata alongside matrix artifacts.
 45. Improved multi-input comparison aggregation by merging per-key metrics across runs and surfacing baseline/candidate run counts per comparison row.
 46. Skipped contiguous warmup coverage scans until first warmup frame observation to reduce pre-frame warmup loop scan overhead.
+47. Added minimum-sample comparison gating with `--min-samples-per-row`, insufficient-sample reporting, and finalize passthrough support.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -531,6 +537,9 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: finalize summary JSON now includes git branch and commit metadata when available.
 - `scripts/finalize-playback-matrix.js`: finalize now writes summary JSON before publish and passes `--finalize-summary-json` into publish flow.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now supports optional finalize summary JSON input and surfaces finalize source/validation metadata.
+- `scripts/compare-playback-benchmark-runs.js`: added `--min-samples-per-row`, insufficient-sample row reporting, and sample gate fields in markdown/JSON outputs.
+- `scripts/finalize-playback-matrix.js`: forwards `--min-samples-per-row` into compare stage and captures it in finalize summary settings.
+- `scripts/publish-playback-matrix-summary.js`: published comparison status now includes insufficient sample row count and minimum sample threshold fields.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.

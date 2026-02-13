@@ -129,6 +129,9 @@ pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir 
 
 # optional: fail finalize compare gate when candidate includes rows absent in baseline
 pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-candidate-only
+
+# optional: require minimum sample count per compared row
+pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --min-samples-per-row 3
 ```
 
 Finalize and publish to benchmark history in one command:
@@ -181,6 +184,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-candidate-only
 
 # when multiple inputs are provided, comparison output includes baseline/candidate run counts per row
+# optional: require minimum sample count per compared row
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --min-samples-per-row 3
 ```
 
 ## Evidence checklist
