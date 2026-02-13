@@ -209,6 +209,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 
 # optional: fail comparison gate when any input JSON is skipped (no reports/usable metrics)
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-skipped-files
+
+# comparison file stats include skipped-file breakdown (no_reports / no_usable_metrics)
 ```
 
 ## Evidence checklist

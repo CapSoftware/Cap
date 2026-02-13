@@ -108,6 +108,12 @@ function buildSummarySection(
 		markdown += `- Skipped-file policy: ${comparison.tolerance?.failOnSkippedFiles ? "fail" : "allow"}\n`;
 		markdown += `- Baseline parse errors: ${comparison.fileStats?.baseline?.parseErrors?.length ?? "n/a"}\n`;
 		markdown += `- Candidate parse errors: ${comparison.fileStats?.candidate?.parseErrors?.length ?? "n/a"}\n\n`;
+		markdown += `- Baseline skipped files: ${comparison.fileStats?.baseline?.skippedFiles ?? "n/a"}\n`;
+		markdown += `- Candidate skipped files: ${comparison.fileStats?.candidate?.skippedFiles ?? "n/a"}\n`;
+		markdown += `- Baseline skipped (no reports): ${comparison.fileStats?.baseline?.skippedNoReports ?? "n/a"}\n`;
+		markdown += `- Candidate skipped (no reports): ${comparison.fileStats?.candidate?.skippedNoReports ?? "n/a"}\n`;
+		markdown += `- Baseline skipped (no usable metrics): ${comparison.fileStats?.baseline?.skippedNoUsableMetrics ?? "n/a"}\n`;
+		markdown += `- Candidate skipped (no usable metrics): ${comparison.fileStats?.candidate?.skippedNoUsableMetrics ?? "n/a"}\n\n`;
 		const failureReasons = Array.isArray(comparison.summary?.failureReasons)
 			? comparison.summary.failureReasons
 			: [];
