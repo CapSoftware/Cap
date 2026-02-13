@@ -68,6 +68,9 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 
 # Emit machine-readable JSON with startup/scrub metrics
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --sequential-frames 180 --random-samples 120 --output-json /tmp/decode-benchmark.json
+
+# Fragmented segment input is supported by passing the display directory
+cargo run -p cap-editor --example decode-benchmark -- --video /path/to/segment/display --fps 60 --output-json /tmp/decode-benchmark-fragmented.json
 ```
 
 #### Combined Workflow (Recording → Playback)
