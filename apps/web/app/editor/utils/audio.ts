@@ -1,4 +1,7 @@
-import type { AudioConfiguration } from "../types/project-config";
+import type {
+	AudioConfiguration,
+	TimelineSegment,
+} from "../types/project-config";
 
 const MIN_DB = -30;
 
@@ -9,13 +12,13 @@ function dbToGain(db: number): number {
 
 export function getAudioPlaybackGain(audio: AudioConfiguration): number {
 	if (audio.mute) return 0;
+	return dbToGain(audio.volumeDb);
+}
 
-	const gains = [
-		dbToGain(audio.micVolumeDb),
-		dbToGain(audio.systemVolumeDb),
-	].filter((gain) => gain > 0);
-
-	if (gains.length === 0) return 0;
-
-	return gains.reduce((sum, gain) => sum + gain, 0) / gains.length;
+export function getSegmentAudioGain(
+	audio: AudioConfiguration,
+	segment: TimelineSegment,
+): number {
+	if (segment.muted) return 0;
+	return getAudioPlaybackGain(audio);
 }
