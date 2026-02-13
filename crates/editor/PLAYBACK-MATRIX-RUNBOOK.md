@@ -77,12 +77,14 @@ After collecting all machine folders into a shared root:
 
 ```bash
 node scripts/aggregate-playback-benchmarks.js --input /path/to/all-machine-results --output /tmp/playback-matrix-aggregate.md
+node scripts/build-playback-matrix-report.js --input /path/to/all-machine-results --output /tmp/playback-matrix-status.md
 ```
 
 Equivalent shortcut:
 
 ```bash
 pnpm bench:playback:aggregate -- --input /path/to/all-machine-results --output /tmp/playback-matrix-aggregate.md
+pnpm bench:playback:report -- --input /path/to/all-machine-results --output /tmp/playback-matrix-status.md
 ```
 
 Validate matrix completeness:
