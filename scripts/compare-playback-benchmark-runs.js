@@ -396,6 +396,31 @@ function buildJsonOutput(
 	const regressions = comparisons.filter(
 		(entry) => entry.regressions.length > 0,
 	);
+	const hasMissingCandidateRows = missingCandidateRows.length > 0;
+	const hasCandidateOnlyRows = candidateOnlyRows.length > 0;
+	const hasInsufficientSamples = insufficientSampleRows.length > 0;
+	const hasMetricRegressions = regressions.some((entry) =>
+		entry.regressions.some(
+			(issue) =>
+				issue.startsWith("fps_drop=") ||
+				issue.startsWith("startup_increase=") ||
+				issue.startsWith("scrub_p95_increase="),
+		),
+	);
+	const failureReasons = [];
+	if (hasMetricRegressions) {
+		failureReasons.push("metric_regression");
+	}
+	if (hasInsufficientSamples) {
+		failureReasons.push("insufficient_samples");
+	}
+	if (!options.allowMissingCandidate && hasMissingCandidateRows) {
+		failureReasons.push("missing_candidate_rows");
+	}
+	if (options.failOnCandidateOnly && hasCandidateOnlyRows) {
+		failureReasons.push("candidate_only_rows");
+	}
+	const passed = failureReasons.length === 0;
 	return {
 		generatedAt: new Date().toISOString(),
 		tolerance: {
@@ -412,10 +437,16 @@ function buildJsonOutput(
 			missingCandidateRows: missingCandidateRows.length,
 			candidateOnlyRows: candidateOnlyRows.length,
 			insufficientSampleRows: insufficientSampleRows.length,
-			passed:
-				regressions.length === 0 &&
-				(options.allowMissingCandidate || missingCandidateRows.length === 0) &&
-				(!options.failOnCandidateOnly || candidateOnlyRows.length === 0),
+			passed,
+			failureReasons,
+			gateOutcomes: {
+				metricRegressions: !hasMetricRegressions,
+				insufficientSamples: !hasInsufficientSamples,
+				missingCandidateRows:
+					options.allowMissingCandidate || !hasMissingCandidateRows,
+				candidateOnlyRows:
+					!options.failOnCandidateOnly || !hasCandidateOnlyRows,
+			},
 		},
 		regressions,
 		missingCandidateRows,
@@ -489,11 +520,7 @@ function main() {
 		console.log(`Wrote comparison JSON to ${options.outputJson}`);
 	}
 
-	if (
-		comparisons.some((entry) => entry.regressions.length > 0) ||
-		(!options.allowMissingCandidate && missingCandidateRows.length > 0) ||
-		(options.failOnCandidateOnly && candidateOnlyRows.length > 0)
-	) {
+	if (!outputJson.summary.passed) {
 		process.exit(1);
 	}
 }
