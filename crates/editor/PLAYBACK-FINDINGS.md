@@ -229,6 +229,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Flags regressions when FPS drops or startup/scrub latency increase beyond configured tolerance.
    - Exits non-zero on regressions so matrix-driven optimization loops can be gated automatically.
 
+17. **Added prefetch generation gating for live seek correctness and latency (2026-02-13)**
+   - Prefetch outputs are tagged with seek-generation IDs and stale generation frames are dropped.
+   - Seek events now advance generation and flush prefetch consumption to prevent old in-flight decode outputs from polluting post-seek playback.
+   - Reduces redundant decode/render work during aggressive scrub and improves settle reliability.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -334,6 +339,7 @@ Decoder Pipeline:
 18. Added benchmark history publisher script for finalized matrix artifacts.
 19. Added matrix bottleneck analysis script for prioritized FPS optimization follow-up.
 20. Added baseline-vs-candidate comparison script to gate regressions in optimization loops.
+21. Added seek-generation prefetch gating to drop stale decode outputs after live seek updates.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -355,6 +361,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: added matrix artifact publisher into PLAYBACK-BENCHMARKS history region.
 - `scripts/analyze-playback-matrix-bottlenecks.js`: added prioritized bottleneck analysis output from matrix JSON evidence.
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
+- `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
