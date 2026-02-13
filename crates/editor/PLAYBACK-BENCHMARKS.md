@@ -60,6 +60,12 @@ cargo run -p cap-recording --example playback-test-runner -- list
 cargo run -p cap-recording --example playback-test-runner -- full --json-output /tmp/playback-benchmark.json
 ```
 
+Aggregate JSON outputs from multiple machines:
+
+```bash
+node scripts/aggregate-playback-benchmarks.js --input /path/to/json-results --output /tmp/playback-benchmark-aggregate.md
+```
+
 #### Decode Performance Benchmark
 
 ```bash
