@@ -241,7 +241,7 @@ describe("web editor render and save integration", () => {
 		const saveButton = Array.from(container.querySelectorAll("button")).find(
 			(button) => {
 				const text = button.textContent?.replace(/\s+/g, " ").trim();
-				return text === "Save" || text === "Saving...";
+				return text === "Create shareable link" || text === "Re-save";
 			},
 		);
 		expect(saveButton).toBeDefined();
@@ -280,7 +280,7 @@ describe("web editor render and save integration", () => {
 		}
 	});
 
-	it("allows forcing a retry when save status is stuck processing", async () => {
+	it("allows forcing a retry when save status is error", async () => {
 		fetchMock.mockImplementation(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
 				const url =
@@ -291,12 +291,12 @@ describe("web editor render and save integration", () => {
 
 				if (url.endsWith("/api/editor/video-1/save") && method === "GET") {
 					return createJsonResponse({
-						status: "PROCESSING",
+						status: "ERROR",
 						renderState: {
-							status: "PROCESSING",
-							progress: 25,
-							message: "Rendering saved changes...",
-							error: null,
+							status: "ERROR",
+							progress: 0,
+							message: null,
+							error: "Save failed",
 						},
 					});
 				}
@@ -322,9 +322,6 @@ describe("web editor render and save integration", () => {
 		);
 
 		const config = createProjectConfig();
-		const confirmSpy = vi
-			.spyOn(globalThis.window, "confirm")
-			.mockReturnValue(true);
 
 		await act(async () => {
 			root.render(
@@ -363,8 +360,6 @@ describe("web editor render and save integration", () => {
 				new dom.window.MouseEvent("click", { bubbles: true }),
 			);
 		});
-
-		expect(confirmSpy).toHaveBeenCalledTimes(1);
 
 		const retrySaveRequest = fetchMock.mock.calls.find(
 			([input, init]: [RequestInfo | URL, RequestInit | undefined]) => {
