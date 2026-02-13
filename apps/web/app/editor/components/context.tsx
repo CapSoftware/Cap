@@ -12,6 +12,7 @@ import {
 import { toast } from "sonner";
 import { DEFAULT_EDITOR_STATE, type EditorState } from "../types/editor-state";
 import type { ProjectConfiguration } from "../types/project-config";
+import { getSegmentAudioGain } from "../utils/audio";
 import { createDefaultConfig } from "../utils/defaults";
 import {
 	findNextSegmentIndex,
@@ -541,7 +542,9 @@ export function EditorProvider({
 		const segments = project.timeline?.segments ?? [
 			{ start: 0, end: video.duration, timescale: 1 },
 		];
+		const audio = project.audio;
 		let animationFrameId: number;
+		let activeSegmentIndex = -1;
 
 		const syncCamera = (time: number) => {
 			const cam = cameraVideoRef.current;
@@ -549,6 +552,21 @@ export function EditorProvider({
 			if (Math.abs(cam.currentTime - time) > 0.1) {
 				cam.currentTime = time;
 			}
+		};
+
+		const applySegment = (segIndex: number) => {
+			if (segIndex === activeSegmentIndex) return;
+			activeSegmentIndex = segIndex;
+			const seg = segments[segIndex];
+			if (!seg || !videoRef.current) return;
+
+			const rate = Math.max(0.1, Math.min(16, seg.timescale));
+			videoRef.current.playbackRate = rate;
+			if (cameraVideoRef.current) cameraVideoRef.current.playbackRate = rate;
+
+			const gain = getSegmentAudioGain(audio, seg);
+			videoRef.current.muted = gain <= 0;
+			videoRef.current.volume = Math.min(1, Math.max(0, gain));
 		};
 
 		const updatePlayhead = () => {
@@ -562,12 +580,14 @@ export function EditorProvider({
 				const endTime = lastSegment?.end ?? video.duration;
 
 				if (currentSegmentIndex !== -1) {
+					applySegment(currentSegmentIndex);
 					const currentSegment = segments[currentSegmentIndex];
 					if (currentSegment && currentTime >= currentSegment.end - 0.001) {
 						const nextSegment = segments[currentSegmentIndex + 1];
 						if (nextSegment) {
 							videoRef.current.currentTime = nextSegment.start;
 							syncCamera(nextSegment.start);
+							applySegment(currentSegmentIndex + 1);
 						} else {
 							videoRef.current.pause();
 							cameraVideoRef.current?.pause();
@@ -586,6 +606,7 @@ export function EditorProvider({
 					if (nextSegment) {
 						videoRef.current.currentTime = nextSegment.start;
 						syncCamera(nextSegment.start);
+						applySegment(nextSegmentIndex);
 					} else {
 						videoRef.current.pause();
 						cameraVideoRef.current?.pause();
@@ -611,7 +632,12 @@ export function EditorProvider({
 		animationFrameId = requestAnimationFrame(updatePlayhead);
 
 		return () => cancelAnimationFrame(animationFrameId);
-	}, [editorState.playing, project.timeline?.segments, video.duration]);
+	}, [
+		editorState.playing,
+		project.timeline?.segments,
+		project.audio,
+		video.duration,
+	]);
 
 	const value: EditorContextValue = {
 		video,
