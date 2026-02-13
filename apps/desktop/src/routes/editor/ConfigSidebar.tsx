@@ -48,6 +48,7 @@ import {
 	type CursorAnimationStyle,
 	type CursorType,
 	commands,
+	type PerspectiveSegment,
 	type SceneSegment,
 	type StereoMode,
 	type TimelineSegment,
@@ -1108,6 +1109,70 @@ export function ConfigSidebar() {
 															.sort((a, b) => b - a)
 															.forEach((idx) => {
 																projectActions.deleteSceneSegment(idx);
+															});
+													}}
+													leftIcon={<IconCapTrash />}
+												>
+													Delete
+												</EditorButton>
+											</div>
+										</div>
+									</Show>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const perspectiveSelection = selection();
+									if (perspectiveSelection.type !== "perspective") return;
+
+									const segments = perspectiveSelection.indices
+										.map((idx) => ({
+											segment: project.timeline?.perspectiveSegments?.[idx],
+											index: idx,
+										}))
+										.filter((s) => s.segment !== undefined);
+
+									if (segments.length === 0) return;
+									return { selection: perspectiveSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<Show
+										when={value().segments.length > 1}
+										fallback={
+											<PerspectiveSegmentConfig
+												segment={value().segments[0].segment!}
+												segmentIndex={value().segments[0].index}
+											/>
+										}
+									>
+										<div class="space-y-4">
+											<div class="flex flex-row justify-between items-center">
+												<div class="flex gap-2 items-center">
+													<EditorButton
+														onClick={() =>
+															setEditorState("timeline", "selection", null)
+														}
+														leftIcon={<IconLucideCheck />}
+													>
+														Done
+													</EditorButton>
+													<span class="text-sm text-gray-10">
+														{value().segments.length} 3D view{" "}
+														{value().segments.length === 1
+															? "segment"
+															: "segments"}{" "}
+														selected
+													</span>
+												</div>
+												<EditorButton
+													variant="danger"
+													onClick={() => {
+														const indices = value().selection.indices;
+														[...indices]
+															.sort((a, b) => b - a)
+															.forEach((idx) => {
+																projectActions.deletePerspectiveSegment(idx);
 															});
 													}}
 													leftIcon={<IconCapTrash />}
@@ -3628,6 +3693,227 @@ function SceneSegmentConfig(props: {
 					</KTabs.List>
 				</KTabs>
 			</Field>
+		</>
+	);
+}
+
+const PERSPECTIVE_PRESETS = [
+	{ value: "slantLeft", label: "Slant Left", icon: "↗" },
+	{ value: "slantRight", label: "Slant Right", icon: "↖" },
+	{ value: "topDown", label: "Top Down", icon: "↓" },
+	{ value: "bottomUp", label: "Bottom Up", icon: "↑" },
+	{ value: "isometricLeft", label: "Iso Left", icon: "◇" },
+	{ value: "isometricRight", label: "Iso Right", icon: "◆" },
+	{ value: "custom", label: "Custom", icon: "✦" },
+] as const;
+
+const PERSPECTIVE_PRESET_DEFAULTS: Record<
+	string,
+	{
+		rotationX: number;
+		rotationY: number;
+		rotationZ: number;
+		fov: number;
+		cameraDistance: number;
+	}
+> = {
+	slantLeft: {
+		rotationX: 15,
+		rotationY: -35,
+		rotationZ: 0,
+		fov: 80,
+		cameraDistance: 40,
+	},
+	slantRight: {
+		rotationX: 15,
+		rotationY: 35,
+		rotationZ: 0,
+		fov: 80,
+		cameraDistance: 40,
+	},
+	topDown: {
+		rotationX: 45,
+		rotationY: 0,
+		rotationZ: 0,
+		fov: 80,
+		cameraDistance: 45,
+	},
+	bottomUp: {
+		rotationX: -30,
+		rotationY: 0,
+		rotationZ: 0,
+		fov: 80,
+		cameraDistance: 45,
+	},
+	isometricLeft: {
+		rotationX: 25,
+		rotationY: -30,
+		rotationZ: 0,
+		fov: 70,
+		cameraDistance: 50,
+	},
+	isometricRight: {
+		rotationX: 25,
+		rotationY: 30,
+		rotationZ: 0,
+		fov: 70,
+		cameraDistance: 50,
+	},
+};
+
+function PerspectiveSegmentConfig(props: {
+	segmentIndex: number;
+	segment: PerspectiveSegment;
+}) {
+	const { setProject, setEditorState, projectActions } = useEditorContext();
+
+	const updateField = (field: string, value: number | string) => {
+		setProject(
+			"timeline",
+			"perspectiveSegments",
+			props.segmentIndex,
+			field as keyof PerspectiveSegment,
+			value as never,
+		);
+	};
+
+	const applyPreset = (preset: string) => {
+		const defaults = PERSPECTIVE_PRESET_DEFAULTS[preset];
+		if (defaults) {
+			batch(() => {
+				updateField("preset", preset);
+				updateField("rotationX", defaults.rotationX);
+				updateField("rotationY", defaults.rotationY);
+				updateField("rotationZ", defaults.rotationZ);
+				updateField("fov", defaults.fov);
+				updateField("cameraDistance", defaults.cameraDistance);
+			});
+		} else {
+			updateField("preset", preset);
+		}
+	};
+
+	return (
+		<>
+			<div class="flex flex-row justify-between items-center">
+				<div class="flex gap-2 items-center">
+					<EditorButton
+						onClick={() => setEditorState("timeline", "selection", null)}
+						leftIcon={<IconLucideCheck />}
+					>
+						Done
+					</EditorButton>
+				</div>
+				<EditorButton
+					variant="danger"
+					onClick={() => {
+						projectActions.deletePerspectiveSegment(props.segmentIndex);
+					}}
+					leftIcon={<IconCapTrash />}
+				>
+					Delete
+				</EditorButton>
+			</div>
+			<Field name="3D Preset" icon={<IconLucideRotate3d />}>
+				<div class="grid grid-cols-3 gap-2">
+					<For each={PERSPECTIVE_PRESETS}>
+						{(preset) => (
+							<button
+								type="button"
+								class={cx(
+									"flex flex-col items-center gap-1 p-2.5 rounded-lg border transition-all duration-150 text-xs",
+									(props.segment.preset ?? "slantLeft") === preset.value
+										? "border-blue-500 bg-blue-500/10 text-blue-400"
+										: "border-gray-3 hover:border-gray-5 text-gray-11 hover:text-gray-12",
+								)}
+								onClick={() => applyPreset(preset.value)}
+							>
+								<span class="text-lg">{preset.icon}</span>
+								<span>{preset.label}</span>
+							</button>
+						)}
+					</For>
+				</div>
+			</Field>
+			<Field name="Animation" icon={<IconLucideWind />}>
+				<KTabs
+					value={props.segment.animation ?? "none"}
+					onChange={(v) => updateField("animation", v)}
+				>
+					<KTabs.List class="flex flex-col gap-3">
+						<div class="flex flex-row items-center rounded-[0.5rem] relative border">
+							<KTabs.Trigger
+								value="none"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							>
+								None
+							</KTabs.Trigger>
+							<KTabs.Trigger
+								value="zoomIn"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							>
+								Zoom In
+							</KTabs.Trigger>
+							<KTabs.Trigger
+								value="zoomOut"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							>
+								Zoom Out
+							</KTabs.Trigger>
+							<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+								<div class="flex-1 bg-gray-3" />
+							</KTabs.Indicator>
+						</div>
+					</KTabs.List>
+				</KTabs>
+			</Field>
+			<Show when={props.segment.preset === "custom"}>
+				<Field name="Rotation X" icon={<IconLucideRotate3d />}>
+					<Slider
+						value={[props.segment.rotationX ?? 15]}
+						minValue={-90}
+						maxValue={90}
+						step={1}
+						onChange={(v) => updateField("rotationX", v[0])}
+					/>
+				</Field>
+				<Field name="Rotation Y" icon={<IconLucideRotate3d />}>
+					<Slider
+						value={[props.segment.rotationY ?? -35]}
+						minValue={-90}
+						maxValue={90}
+						step={1}
+						onChange={(v) => updateField("rotationY", v[0])}
+					/>
+				</Field>
+				<Field name="Rotation Z" icon={<IconLucideRotate3d />}>
+					<Slider
+						value={[props.segment.rotationZ ?? 0]}
+						minValue={-90}
+						maxValue={90}
+						step={1}
+						onChange={(v) => updateField("rotationZ", v[0])}
+					/>
+				</Field>
+				<Field name="Field of View" icon={<IconLucideMonitor />}>
+					<Slider
+						value={[props.segment.fov ?? 45]}
+						minValue={15}
+						maxValue={90}
+						step={1}
+						onChange={(v) => updateField("fov", v[0])}
+					/>
+				</Field>
+				<Field name="Distance" icon={<IconLucideMonitor />}>
+					<Slider
+						value={[props.segment.cameraDistance ?? 25]}
+						minValue={5}
+						maxValue={100}
+						step={1}
+						onChange={(v) => updateField("cameraDistance", v[0])}
+					/>
+				</Field>
+			</Show>
 		</>
 	);
 }

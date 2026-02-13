@@ -777,6 +777,117 @@ pub struct SceneSegment {
     pub mode: SceneMode,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum PerspectiveViewPreset {
+    #[default]
+    SlantLeft,
+    SlantRight,
+    TopDown,
+    BottomUp,
+    IsometricLeft,
+    IsometricRight,
+    Custom,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum PerspectiveAnimation {
+    #[default]
+    None,
+    ZoomIn,
+    ZoomOut,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PerspectiveSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default)]
+    pub preset: PerspectiveViewPreset,
+    #[serde(default)]
+    pub animation: PerspectiveAnimation,
+    #[serde(default = "PerspectiveSegment::default_rotation_x")]
+    pub rotation_x: f64,
+    #[serde(default = "PerspectiveSegment::default_rotation_y")]
+    pub rotation_y: f64,
+    #[serde(default)]
+    pub rotation_z: f64,
+    #[serde(default = "PerspectiveSegment::default_fov")]
+    pub fov: f64,
+    #[serde(default = "PerspectiveSegment::default_zoom")]
+    pub zoom: f64,
+    #[serde(default = "PerspectiveSegment::default_camera_distance")]
+    pub camera_distance: f64,
+}
+
+impl PerspectiveSegment {
+    fn default_rotation_x() -> f64 {
+        15.0
+    }
+    fn default_rotation_y() -> f64 {
+        -35.0
+    }
+    fn default_fov() -> f64 {
+        80.0
+    }
+    fn default_zoom() -> f64 {
+        1.0
+    }
+    fn default_camera_distance() -> f64 {
+        40.0
+    }
+
+    pub fn apply_preset(&mut self) {
+        match self.preset {
+            PerspectiveViewPreset::SlantLeft => {
+                self.rotation_x = 15.0;
+                self.rotation_y = -35.0;
+                self.rotation_z = 0.0;
+                self.fov = 80.0;
+                self.camera_distance = 40.0;
+            }
+            PerspectiveViewPreset::SlantRight => {
+                self.rotation_x = 15.0;
+                self.rotation_y = 35.0;
+                self.rotation_z = 0.0;
+                self.fov = 80.0;
+                self.camera_distance = 40.0;
+            }
+            PerspectiveViewPreset::TopDown => {
+                self.rotation_x = 45.0;
+                self.rotation_y = 0.0;
+                self.rotation_z = 0.0;
+                self.fov = 80.0;
+                self.camera_distance = 45.0;
+            }
+            PerspectiveViewPreset::BottomUp => {
+                self.rotation_x = -30.0;
+                self.rotation_y = 0.0;
+                self.rotation_z = 0.0;
+                self.fov = 80.0;
+                self.camera_distance = 45.0;
+            }
+            PerspectiveViewPreset::IsometricLeft => {
+                self.rotation_x = 25.0;
+                self.rotation_y = -30.0;
+                self.rotation_z = 0.0;
+                self.fov = 70.0;
+                self.camera_distance = 50.0;
+            }
+            PerspectiveViewPreset::IsometricRight => {
+                self.rotation_x = 25.0;
+                self.rotation_y = 30.0;
+                self.rotation_z = 0.0;
+                self.fov = 70.0;
+                self.camera_distance = 50.0;
+            }
+            PerspectiveViewPreset::Custom => {}
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -788,6 +899,8 @@ pub struct TimelineConfiguration {
     pub mask_segments: Vec<MaskSegment>,
     #[serde(default)]
     pub text_segments: Vec<TextSegment>,
+    #[serde(default)]
+    pub perspective_segments: Vec<PerspectiveSegment>,
 }
 
 impl TimelineConfiguration {

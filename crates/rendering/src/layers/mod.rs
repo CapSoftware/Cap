@@ -5,6 +5,7 @@ mod captions;
 mod cursor;
 mod display;
 mod mask;
+mod perspective;
 mod text;
 
 pub use background::*;
@@ -14,4 +15,5 @@ pub use captions::*;
 pub use cursor::*;
 pub use display::*;
 pub use mask::*;
+pub use perspective::*;
 pub use text::*;

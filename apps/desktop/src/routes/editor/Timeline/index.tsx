@@ -21,6 +21,10 @@ import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
+import {
+	type PerspectiveSegmentDragState,
+	PerspectiveTrack,
+} from "./PerspectiveTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
@@ -36,6 +40,7 @@ const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	mask: <IconLucideBoxSelect class="size-4" />,
 	zoom: <IconLucideSearch class="size-4" />,
 	scene: <IconLucideVideo class="size-4" />,
+	perspective: <IconLucideRotate3d class="size-4" />,
 };
 
 type TrackDefinition = {
@@ -76,6 +81,12 @@ const trackDefinitions: TrackDefinition[] = [
 		icon: trackIcons.scene,
 		locked: false,
 	},
+	{
+		type: "perspective",
+		label: "3D View",
+		icon: trackIcons.perspective,
+		locked: false,
+	},
 ];
 
 export function Timeline() {
@@ -112,7 +123,9 @@ export function Timeline() {
 						? trackState().mask
 						: definition.type === "text"
 							? trackState().text
-							: true,
+							: definition.type === "perspective"
+								? trackState().perspective
+								: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 		}));
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
@@ -120,7 +133,8 @@ export function Timeline() {
 		2 +
 		(trackState().text ? 1 : 0) +
 		(trackState().mask ? 1 : 0) +
-		(sceneTrackVisible() ? 1 : 0);
+		(sceneTrackVisible() ? 1 : 0) +
+		(trackState().perspective ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
@@ -142,6 +156,14 @@ export function Timeline() {
 			if (!next && editorState.timeline.selection?.type === "mask") {
 				setEditorState("timeline", "selection", null);
 			}
+			return;
+		}
+
+		if (type === "perspective") {
+			setEditorState("timeline", "tracks", "perspective", next);
+			if (!next && editorState.timeline.selection?.type === "perspective") {
+				setEditorState("timeline", "selection", null);
+			}
 		}
 	}
 
@@ -160,6 +182,7 @@ export function Timeline() {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
+				perspectiveSegments: [],
 			});
 			resume();
 		}
@@ -214,6 +237,9 @@ export function Timeline() {
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
+	let perspectiveSegmentDragState = {
+		type: "idle",
+	} as PerspectiveSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -568,6 +594,16 @@ export function Timeline() {
 									<SceneTrack
 										onDragStateChanged={(v) => {
 											sceneSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+							<Show when={trackState().perspective}>
+								<TrackRow icon={trackIcons.perspective}>
+									<PerspectiveTrack
+										onDragStateChanged={(v) => {
+											perspectiveSegmentDragState = v;
 										}}
 										handleUpdatePlayhead={handleUpdatePlayhead}
 									/>

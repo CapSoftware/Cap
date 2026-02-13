@@ -86,7 +86,13 @@ export const getPreviewResolution = (
 	return { x: width, y: height };
 };
 
-export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask";
+export type TimelineTrackType =
+	| "clip"
+	| "text"
+	| "zoom"
+	| "scene"
+	| "mask"
+	| "perspective";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -417,6 +423,39 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			deletePerspectiveSegment: (segmentIndex: number) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"perspectiveSegments",
+						produce((s) => {
+							if (!s) return;
+							s.splice(segmentIndex, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			splitPerspectiveSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"perspectiveSegments",
+					produce((segments) => {
+						const segment = segments[index];
+						if (!segment) return;
+
+						const newLengths = [segment.end - segment.start - time, time];
+						if (newLengths.some((l) => l < 1)) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
 			setClipSegmentTimescale: (index: number, timescale: number) => {
 				setProject(
 					produce((project) => {
@@ -633,6 +672,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			(project.timeline?.maskSegments?.length ?? 0) > 0;
 		const initialTextTrackEnabled =
 			(project.timeline?.textSegments?.length ?? 0) > 0;
+		const initialPerspectiveTrackEnabled =
+			(project.timeline?.perspectiveSegments?.length ?? 0) > 0;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -652,7 +693,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "clip"; indices: number[] }
 					| { type: "scene"; indices: number[] }
 					| { type: "mask"; indices: number[] }
-					| { type: "text"; indices: number[] },
+					| { type: "text"; indices: number[] }
+					| { type: "perspective"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -695,6 +737,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					scene: true,
 					mask: initialMaskTrackEnabled,
 					text: initialTextTrackEnabled,
+					perspective: initialPerspectiveTrackEnabled,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},

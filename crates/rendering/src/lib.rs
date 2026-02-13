@@ -12,7 +12,7 @@ use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    MaskLayer, TextLayer,
+    MaskLayer, PerspectiveLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -32,6 +32,7 @@ mod frame_pipeline;
 pub mod iosurface_texture;
 mod layers;
 mod mask;
+mod perspective;
 mod project_recordings;
 mod scene;
 pub mod spring_mass_damper;
@@ -46,6 +47,7 @@ pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
+use perspective::*;
 use scene::*;
 use text::{PreparedText, prepare_texts};
 use zoom::*;
@@ -669,6 +671,7 @@ pub struct ProjectUniforms {
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
+    pub perspective: InterpolatedPerspective,
     pub resolution_base: XY<u32>,
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
@@ -1390,6 +1393,17 @@ impl ProjectUniforms {
             scene_segments,
         ));
 
+        let perspective_segments = project
+            .timeline
+            .as_ref()
+            .map(|t| t.perspective_segments.as_slice())
+            .unwrap_or(&[]);
+
+        let perspective = InterpolatedPerspective::new(PerspectiveSegmentsCursor::new(
+            frame_time as f64,
+            perspective_segments,
+        ));
+
         let (display, display_motion_parent) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
@@ -1767,6 +1781,7 @@ impl ProjectUniforms {
             project: project.clone(),
             zoom,
             scene,
+            perspective,
             interpolated_cursor,
             frame_rate: fps,
             frame_number,
@@ -1887,6 +1902,7 @@ pub struct RendererLayers {
     mask: MaskLayer,
     text: TextLayer,
     captions: CaptionsLayer,
+    perspective: PerspectiveLayer,
 }
 
 impl RendererLayers {
@@ -1909,6 +1925,7 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+            perspective: PerspectiveLayer::new(device),
         }
     }
 
@@ -2010,6 +2027,8 @@ impl RendererLayers {
             constants,
         );
 
+        self.perspective.prepare(&constants.queue, uniforms);
+
         Ok(())
     }
 
@@ -2060,6 +2079,18 @@ impl RendererLayers {
             session.swap_textures();
         }
 
+        if uniforms.perspective.is_active() {
+            session.swap_textures();
+
+            {
+                let mut pass = render_pass!(
+                    session.current_texture_view(),
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                );
+                drop(pass);
+            }
+        }
+
         let should_render = uniforms.scene.should_render_screen();
 
         if should_render {
@@ -2072,13 +2103,11 @@ impl RendererLayers {
             self.cursor.render(&mut pass);
         }
 
-        // Render camera-only layer when transitioning with CameraOnly mode
         if uniforms.scene.is_transitioning_camera_only() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera_only.render(&mut pass);
         }
 
-        // Also render regular camera overlay during transitions when its opacity > 0
         if uniforms.scene.should_render_camera()
             && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
@@ -2100,6 +2129,14 @@ impl RendererLayers {
         if self.captions.has_content() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.captions.render(&mut pass);
+        }
+
+        if uniforms.perspective.is_active() {
+            let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+            self.perspective
+                .render(&mut pass, device, session.current_texture_view());
+            drop(pass);
+            session.swap_textures();
         }
     }
 }
