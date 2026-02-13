@@ -1915,15 +1915,24 @@ async fn set_playhead_position(
     editor_instance: WindowEditorInstance,
     frame_number: u32,
 ) -> Result<(), String> {
-    editor_instance
-        .modify_and_emit_state(|state| {
-            state.playhead_position = frame_number;
-        })
-        .await;
+    let state_changed = {
+        let state = editor_instance.state.lock().await;
+        state.playhead_position != frame_number
+    };
 
-    let playback_handle = {
+    if state_changed {
+        editor_instance
+            .modify_and_emit_state(|state| {
+                state.playhead_position = frame_number;
+            })
+            .await;
+    }
+
+    let playback_handle = if state_changed {
         let state = editor_instance.state.lock().await;
         state.playback_task.clone()
+    } else {
+        None
     };
 
     if let Some(handle) = playback_handle {
@@ -2548,15 +2557,24 @@ async fn is_camera_window_open(app: AppHandle) -> bool {
 #[specta::specta]
 #[instrument(skip(editor_instance))]
 async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Result<(), String> {
-    editor_instance
-        .modify_and_emit_state(|state| {
-            state.playhead_position = frame_number;
-        })
-        .await;
+    let state_changed = {
+        let state = editor_instance.state.lock().await;
+        state.playhead_position != frame_number
+    };
 
-    let playback_handle = {
+    if state_changed {
+        editor_instance
+            .modify_and_emit_state(|state| {
+                state.playhead_position = frame_number;
+            })
+            .await;
+    }
+
+    let playback_handle = if state_changed {
         let state = editor_instance.state.lock().await;
         state.playback_task.clone()
+    } else {
+        None
     };
 
     if let Some(handle) = playback_handle {
