@@ -220,6 +220,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 15. **Added bottleneck analyzer for continuous FPS optimization (2026-02-13)**
    - `scripts/analyze-playback-matrix-bottlenecks.js` ranks matrix cells by FPS, startup, and scrub threshold breaches.
    - Produces prioritized optimization backlog from real matrix evidence.
+   - Supports structured JSON output for automation and regression tracking.
 
 ---
 

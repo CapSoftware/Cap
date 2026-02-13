@@ -139,6 +139,7 @@ Generate bottleneck analysis for optimization backlog:
 
 ```bash
 pnpm bench:playback:analyze -- --input /path/to/all-machine-results --output /tmp/playback-matrix-final/playback-bottlenecks.md --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
+pnpm bench:playback:analyze -- --input /path/to/all-machine-results --output /tmp/playback-matrix-final/playback-bottlenecks.md --output-json /tmp/playback-matrix-final/playback-bottlenecks.json --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
 ```
 
 ## Evidence checklist

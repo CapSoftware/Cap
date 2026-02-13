@@ -7,6 +7,7 @@ function parseArgs(argv) {
 	const options = {
 		inputs: [],
 		output: null,
+		outputJson: null,
 		targetFps: 60,
 		maxScrubP95Ms: 40,
 		maxStartupMs: 250,
@@ -29,6 +30,12 @@ function parseArgs(argv) {
 			const value = argv[++i];
 			if (!value) throw new Error("Missing value for --output");
 			options.output = path.resolve(value);
+			continue;
+		}
+		if (arg === "--output-json") {
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --output-json");
+			options.outputJson = path.resolve(value);
 			continue;
 		}
 		if (arg === "--target-fps") {
@@ -62,7 +69,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/analyze-playback-matrix-bottlenecks.js --input <file-or-dir> [--input <file-or-dir> ...] [--output <file>] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250]
+	console.log(`Usage: node scripts/analyze-playback-matrix-bottlenecks.js --input <file-or-dir> [--input <file-or-dir> ...] [--output <file>] [--output-json <file>] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250]
 
 Analyzes playback matrix JSON outputs and highlights prioritized bottlenecks.`);
 }
@@ -211,6 +218,23 @@ function buildMarkdown(issues, options) {
 	return md;
 }
 
+function buildJson(issues, options) {
+	return {
+		generatedAt: new Date().toISOString(),
+		thresholds: {
+			targetFps: options.targetFps,
+			maxScrubP95Ms: options.maxScrubP95Ms,
+			maxStartupMs: options.maxStartupMs,
+		},
+		issueCount: issues.length,
+		issues: issues.map((issue, index) => ({
+			rank: index + 1,
+			...issue,
+			recommendation: recommendation(issue, options),
+		})),
+	};
+}
+
 function main() {
 	const options = parseArgs(process.argv);
 	if (options.help) {
@@ -238,6 +262,14 @@ function main() {
 		console.log(`Wrote bottleneck analysis to ${options.output}`);
 	} else {
 		process.stdout.write(markdown);
+	}
+	if (options.outputJson) {
+		fs.writeFileSync(
+			options.outputJson,
+			JSON.stringify(buildJson(issues, options), null, 2),
+			"utf8",
+		);
+		console.log(`Wrote bottleneck analysis JSON to ${options.outputJson}`);
 	}
 }
 
