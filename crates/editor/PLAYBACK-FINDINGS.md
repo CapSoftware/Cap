@@ -346,6 +346,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Finalize now forwards `--finalize-summary-json` to `publish-playback-matrix-summary.js`.
    - Published matrix summaries can now include finalize artifact metadata in one-shot finalize runs.
 
+41. **Improved comparison aggregation across multi-input runs (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now aggregates metrics per comparison key across all contributing input reports instead of last-write-wins replacement.
+   - Comparison output now includes baseline/candidate run counts per row to surface aggregation depth.
+   - Fixed comparison regression evaluation to use explicit options parameter wiring inside compare function.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -480,6 +485,7 @@ Decoder Pipeline:
 42. Optimized contiguous prefetched-frame warmup scan using ordered map range iteration instead of repeated key lookups.
 43. Added git branch/commit metadata into finalize summary JSON artifacts for source traceability.
 44. Wired finalize summary JSON into publish flow so one-shot finalize runs can publish summary metadata alongside matrix artifacts.
+45. Improved multi-input comparison aggregation by merging per-key metrics across runs and surfacing baseline/candidate run counts per comparison row.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -501,6 +507,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: added matrix artifact publisher into PLAYBACK-BENCHMARKS history region.
 - `scripts/analyze-playback-matrix-bottlenecks.js`: added prioritized bottleneck analysis output from matrix JSON evidence.
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
+- `scripts/compare-playback-benchmark-runs.js`: fixed options wiring inside comparison regression checks and now aggregates per-key metrics across multi-input runs with run-count reporting.
 - `scripts/publish-playback-matrix-summary.js`: added optional baseline-vs-candidate comparison artifact attachment in published summaries.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
