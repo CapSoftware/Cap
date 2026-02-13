@@ -119,6 +119,12 @@ Include optimization thresholds when finalizing:
 pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
 ```
 
+Finalize and publish to benchmark history in one command:
+
+```bash
+pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250 --publish-target /workspace/crates/editor/PLAYBACK-BENCHMARKS.md
+```
+
 Publish finalized artifacts into benchmark history:
 
 ```bash
