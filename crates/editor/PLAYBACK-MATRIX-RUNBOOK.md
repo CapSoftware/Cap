@@ -120,6 +120,9 @@ pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-di
 
 # include baseline comparison gate during finalization
 pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --allow-fps-drop 2 --allow-startup-increase-ms 25 --allow-scrub-p95-increase-ms 5
+
+# optional: allow missing candidate rows during compare gate
+pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --allow-missing-candidate
 ```
 
 Finalize and publish to benchmark history in one command:

@@ -18,6 +18,7 @@ function parseArgs(argv) {
 		allowFpsDrop: 2,
 		allowStartupIncreaseMs: 25,
 		allowScrubP95IncreaseMs: 5,
+		allowMissingCandidate: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -111,6 +112,10 @@ function parseArgs(argv) {
 			options.allowScrubP95IncreaseMs = value;
 			continue;
 		}
+		if (arg === "--allow-missing-candidate") {
+			options.allowMissingCandidate = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -118,7 +123,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--publish-target <PLAYBACK-BENCHMARKS.md>]
+	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--publish-target <PLAYBACK-BENCHMARKS.md>]
 
 Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs. Optionally compares candidate inputs against baseline inputs and fails on regressions.`);
 }
@@ -207,6 +212,29 @@ function main() {
 		);
 		run("node", analyzeArgs);
 	}
+	if (options.compareBaselineInputs.length > 0) {
+		const compareArgs = ["scripts/compare-playback-benchmark-runs.js"];
+		for (const baselineInput of options.compareBaselineInputs) {
+			compareArgs.push("--baseline", baselineInput);
+		}
+		for (const candidateInput of options.inputs) {
+			compareArgs.push("--candidate", candidateInput);
+		}
+		compareArgs.push(
+			"--output",
+			comparisonPath,
+			"--allow-fps-drop",
+			String(options.allowFpsDrop),
+			"--allow-startup-increase-ms",
+			String(options.allowStartupIncreaseMs),
+			"--allow-scrub-p95-increase-ms",
+			String(options.allowScrubP95IncreaseMs),
+		);
+		if (options.allowMissingCandidate) {
+			compareArgs.push("--allow-missing-candidate");
+		}
+		run("node", compareArgs);
+	}
 	if (options.publishTarget) {
 		const publishArgs = [
 			"scripts/publish-playback-matrix-summary.js",
@@ -226,26 +254,6 @@ function main() {
 			publishArgs.push("--comparison-md", comparisonPath);
 		}
 		run("node", publishArgs);
-	}
-	if (options.compareBaselineInputs.length > 0) {
-		const compareArgs = ["scripts/compare-playback-benchmark-runs.js"];
-		for (const baselineInput of options.compareBaselineInputs) {
-			compareArgs.push("--baseline", baselineInput);
-		}
-		for (const candidateInput of options.inputs) {
-			compareArgs.push("--candidate", candidateInput);
-		}
-		compareArgs.push(
-			"--output",
-			comparisonPath,
-			"--allow-fps-drop",
-			String(options.allowFpsDrop),
-			"--allow-startup-increase-ms",
-			String(options.allowStartupIncreaseMs),
-			"--allow-scrub-p95-increase-ms",
-			String(options.allowScrubP95IncreaseMs),
-		);
-		run("node", compareArgs);
 	}
 
 	console.log(`Aggregate markdown: ${aggregatePath}`);
