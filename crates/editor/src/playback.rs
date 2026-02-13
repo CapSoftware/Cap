@@ -99,6 +99,10 @@ impl FrameCache {
         self.cache
             .put(frame_number, (segment_frames, segment_index));
     }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+    }
 }
 
 fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_frame: u32) -> bool {
@@ -672,7 +676,7 @@ impl Playback {
                         seek_generation = seek_generation.saturating_add(1);
                         frame_number = seek_frame;
                         prefetch_buffer.clear();
-                        frame_cache.cache.clear();
+                        frame_cache.clear();
                         warmup_contiguous_prefetched = 0;
                         warmup_buffer_changed = false;
                         first_frame_time = None;
@@ -693,7 +697,7 @@ impl Playback {
                         seek_generation = seek_generation.saturating_add(1);
                         frame_number = seek_frame;
                         prefetch_buffer.clear();
-                        frame_cache.cache.clear();
+                        frame_cache.clear();
                         warmup_contiguous_prefetched = 0;
                         warmup_buffer_changed = false;
                         first_frame_time = None;
@@ -732,7 +736,7 @@ impl Playback {
                     playback_anchor_frame = seek_frame;
                     pending_seek_observation = Some((seek_frame, Instant::now()));
                     prefetch_buffer.clear();
-                    frame_cache.cache.clear();
+                    frame_cache.clear();
                     let _ = seek_generation_tx.send(seek_generation);
                     let _ = frame_request_tx.send(frame_number);
                     let _ = playback_position_tx.send(frame_number);
@@ -769,7 +773,7 @@ impl Playback {
                         playback_anchor_frame = seek_frame;
                         pending_seek_observation = Some((seek_frame, Instant::now()));
                         prefetch_buffer.clear();
-                        frame_cache.cache.clear();
+                        frame_cache.clear();
                         let _ = seek_generation_tx.send(seek_generation);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
