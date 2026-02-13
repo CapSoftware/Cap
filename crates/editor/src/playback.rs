@@ -393,6 +393,7 @@ impl Playback {
             let mut total_frames_rendered = 0u64;
             let mut _total_frames_skipped = 0u64;
             let mut first_render_logged = false;
+            let mut pending_seek_observation: Option<(u32, Instant)> = None;
 
             let warmup_target_frames = 20usize;
             let warmup_after_first_timeout = Duration::from_millis(1000);
@@ -454,6 +455,7 @@ impl Playback {
                     frame_number = seek_frame;
                     playback_anchor_start = Instant::now();
                     playback_anchor_frame = seek_frame;
+                    pending_seek_observation = Some((seek_frame, Instant::now()));
                     prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                     frame_cache.cache.clear();
                     let _ = frame_request_tx.send(frame_number);
@@ -501,6 +503,7 @@ impl Playback {
                         frame_number = seek_frame;
                         playback_anchor_start = Instant::now();
                         playback_anchor_frame = seek_frame;
+                        pending_seek_observation = Some((seek_frame, Instant::now()));
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         frame_cache.cache.clear();
                         let _ = frame_request_tx.send(frame_number);
@@ -736,6 +739,17 @@ impl Playback {
                                 playback_task_start.elapsed().as_secs_f64() * 1000.0,
                             "Playback rendered first frame"
                         );
+                    }
+                    if let Some((seek_target_frame, seek_started_at)) = pending_seek_observation
+                        && frame_number >= seek_target_frame
+                    {
+                        info!(
+                            seek_target_frame,
+                            rendered_frame = frame_number,
+                            seek_settle_ms = seek_started_at.elapsed().as_secs_f64() * 1000.0,
+                            "Playback seek settled"
+                        );
+                        pending_seek_observation = None;
                     }
                 }
 
