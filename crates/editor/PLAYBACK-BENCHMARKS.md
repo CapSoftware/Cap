@@ -103,6 +103,7 @@ node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-res
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-comparison.md --output-json /tmp/playback-comparison.json
 
 Comparison output reports both baseline rows missing in candidate and candidate-only rows not present in baseline.
+Comparison table also reports baseline/candidate run counts per row when multiple JSON inputs contribute to the same key.
 ```
 
 #### Decode Performance Benchmark

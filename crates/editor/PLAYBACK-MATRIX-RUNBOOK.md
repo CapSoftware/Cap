@@ -179,6 +179,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 # compare output now includes both missing-candidate rows and candidate-only rows
 # optional: fail compare gate when candidate includes rows absent in baseline
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-candidate-only
+
+# when multiple inputs are provided, comparison output includes baseline/candidate run counts per row
 ```
 
 ## Evidence checklist
