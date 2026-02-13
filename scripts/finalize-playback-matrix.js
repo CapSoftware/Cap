@@ -14,6 +14,10 @@ function parseArgs(argv) {
 		maxStartupMs: 250,
 		analyze: true,
 		publishTarget: null,
+		compareBaselineInputs: [],
+		allowFpsDrop: 2,
+		allowStartupIncreaseMs: 25,
+		allowScrubP95IncreaseMs: 5,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -77,6 +81,36 @@ function parseArgs(argv) {
 			options.publishTarget = path.resolve(value);
 			continue;
 		}
+		if (arg === "--compare-baseline") {
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --compare-baseline");
+			options.compareBaselineInputs.push(path.resolve(value));
+			continue;
+		}
+		if (arg === "--allow-fps-drop") {
+			const value = Number.parseFloat(argv[++i] ?? "");
+			if (!Number.isFinite(value) || value < 0) {
+				throw new Error("Invalid --allow-fps-drop value");
+			}
+			options.allowFpsDrop = value;
+			continue;
+		}
+		if (arg === "--allow-startup-increase-ms") {
+			const value = Number.parseFloat(argv[++i] ?? "");
+			if (!Number.isFinite(value) || value < 0) {
+				throw new Error("Invalid --allow-startup-increase-ms value");
+			}
+			options.allowStartupIncreaseMs = value;
+			continue;
+		}
+		if (arg === "--allow-scrub-p95-increase-ms") {
+			const value = Number.parseFloat(argv[++i] ?? "");
+			if (!Number.isFinite(value) || value < 0) {
+				throw new Error("Invalid --allow-scrub-p95-increase-ms value");
+			}
+			options.allowScrubP95IncreaseMs = value;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -84,9 +118,9 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--publish-target <PLAYBACK-BENCHMARKS.md>]
+	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--publish-target <PLAYBACK-BENCHMARKS.md>]
 
-Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs.`);
+Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs. Optionally compares candidate inputs against baseline inputs and fails on regressions.`);
 }
 
 function run(command, args) {
@@ -112,11 +146,24 @@ function main() {
 		fs.mkdirSync(options.outputDir, { recursive: true });
 	}
 
-	const aggregatePath = path.join(options.outputDir, "playback-benchmark-aggregate.md");
+	const aggregatePath = path.join(
+		options.outputDir,
+		"playback-benchmark-aggregate.md",
+	);
 	const statusPath = path.join(options.outputDir, "playback-matrix-status.md");
-	const validationPath = path.join(options.outputDir, "playback-matrix-validation.json");
-	const bottleneckPath = path.join(options.outputDir, "playback-bottlenecks.md");
-	const bottleneckJsonPath = path.join(options.outputDir, "playback-bottlenecks.json");
+	const validationPath = path.join(
+		options.outputDir,
+		"playback-matrix-validation.json",
+	);
+	const bottleneckPath = path.join(
+		options.outputDir,
+		"playback-bottlenecks.md",
+	);
+	const bottleneckJsonPath = path.join(
+		options.outputDir,
+		"playback-bottlenecks.json",
+	);
+	const comparisonPath = path.join(options.outputDir, "playback-comparison.md");
 
 	const aggregateArgs = ["scripts/aggregate-playback-benchmarks.js"];
 	const statusArgs = ["scripts/build-playback-matrix-report.js"];
@@ -177,6 +224,26 @@ function main() {
 		}
 		run("node", publishArgs);
 	}
+	if (options.compareBaselineInputs.length > 0) {
+		const compareArgs = ["scripts/compare-playback-benchmark-runs.js"];
+		for (const baselineInput of options.compareBaselineInputs) {
+			compareArgs.push("--baseline", baselineInput);
+		}
+		for (const candidateInput of options.inputs) {
+			compareArgs.push("--candidate", candidateInput);
+		}
+		compareArgs.push(
+			"--output",
+			comparisonPath,
+			"--allow-fps-drop",
+			String(options.allowFpsDrop),
+			"--allow-startup-increase-ms",
+			String(options.allowStartupIncreaseMs),
+			"--allow-scrub-p95-increase-ms",
+			String(options.allowScrubP95IncreaseMs),
+		);
+		run("node", compareArgs);
+	}
 
 	console.log(`Aggregate markdown: ${aggregatePath}`);
 	console.log(`Status markdown: ${statusPath}`);
@@ -187,6 +254,9 @@ function main() {
 	}
 	if (options.publishTarget) {
 		console.log(`Published target: ${options.publishTarget}`);
+	}
+	if (options.compareBaselineInputs.length > 0) {
+		console.log(`Comparison report: ${comparisonPath}`);
 	}
 }
 
