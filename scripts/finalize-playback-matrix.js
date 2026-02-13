@@ -336,6 +336,7 @@ function main() {
 			comparisonPassed: comparison ? comparison.summary?.passed === true : null,
 			comparisonFailureReasons: comparison?.summary?.failureReasons ?? null,
 			comparisonGateOutcomes: comparison?.summary?.gateOutcomes ?? null,
+			comparisonFileStats: comparison?.fileStats ?? null,
 		},
 	};
 	fs.writeFileSync(summaryJsonPath, JSON.stringify(summary, null, 2), "utf8");
