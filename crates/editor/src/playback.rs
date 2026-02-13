@@ -70,6 +70,7 @@ struct PrefetchedFrame {
     frame_number: u32,
     segment_frames: DecodedSegmentFrames,
     segment_index: u32,
+    generation: u64,
 }
 
 struct FrameCache {
@@ -131,6 +132,8 @@ impl Playback {
             tokio_mpsc::channel::<PrefetchedFrame>(PREFETCH_BUFFER_SIZE * 2);
         let (frame_request_tx, mut frame_request_rx) = watch::channel(self.start_frame_number);
         let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
+        let (seek_generation_tx, mut seek_generation_rx) = watch::channel(0u64);
+        seek_generation_rx.borrow_and_update();
 
         let in_flight_frames: Arc<RwLock<HashSet<u32>>> = Arc::new(RwLock::new(HashSet::new()));
         let prefetch_in_flight = in_flight_frames.clone();
@@ -138,6 +141,7 @@ impl Playback {
 
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
+        let mut prefetch_seek_generation = seek_generation_rx.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
         let (prefetch_duration, has_timeline) =
             if let Some(timeline) = &self.project.borrow().timeline {
@@ -156,7 +160,7 @@ impl Playback {
             }
             type PrefetchFuture = std::pin::Pin<
                 Box<
-                    dyn std::future::Future<Output = (u32, u32, Option<DecodedSegmentFrames>)>
+                    dyn std::future::Future<Output = (u32, u32, u64, Option<DecodedSegmentFrames>)>
                         + Send,
                 >,
             >;
@@ -175,6 +179,7 @@ impl Playback {
                 PARALLEL_DECODE_TASKS
             };
             let initial_parallel_tasks = dynamic_parallel_tasks.min(4);
+            let mut active_generation = *prefetch_seek_generation.borrow();
 
             let mut cached_project = prefetch_project.borrow().clone();
             info!(
@@ -189,6 +194,22 @@ impl Playback {
 
                 if prefetch_project.has_changed().unwrap_or(false) {
                     cached_project = prefetch_project.borrow_and_update().clone();
+                }
+
+                if prefetch_seek_generation.has_changed().unwrap_or(false) {
+                    let generation = *prefetch_seek_generation.borrow_and_update();
+                    if generation != active_generation {
+                        active_generation = generation;
+                        next_prefetch_frame = *frame_request_rx.borrow();
+                        frames_decoded = 0;
+                        prefetched_behind.clear();
+
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.clear();
+                        }
+
+                        in_flight = FuturesUnordered::new();
+                    }
                 }
 
                 if let Ok(true) = frame_request_rx.has_changed() {
@@ -263,6 +284,7 @@ impl Playback {
                         let hide_camera = cached_project.camera.hide;
                         let segment_index = segment.recording_clip;
                         let is_initial = frames_decoded < 10;
+                        let generation = active_generation;
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.insert(frame_num);
@@ -282,7 +304,7 @@ impl Playback {
                                     .get_frames(segment_time as f32, !hide_camera, clip_offsets)
                                     .await
                             };
-                            (frame_num, segment_index, result)
+                            (frame_num, segment_index, generation, result)
                         }));
                     }
 
@@ -327,6 +349,7 @@ impl Playback {
                             let decoders = segment_media.decoders.clone();
                             let hide_camera = cached_project.camera.hide;
                             let segment_index = segment.recording_clip;
+                            let generation = active_generation;
 
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.insert(behind_frame);
@@ -337,7 +360,7 @@ impl Playback {
                                 let result = decoders
                                     .get_frames(segment_time as f32, !hide_camera, clip_offsets)
                                     .await;
-                                (behind_frame, segment_index, result)
+                                (behind_frame, segment_index, generation, result)
                             }));
                         }
                     }
@@ -346,10 +369,15 @@ impl Playback {
                 tokio::select! {
                     biased;
 
-                    Some((frame_num, segment_index, result)) = in_flight.next() => {
+                    Some((frame_num, segment_index, generation, result)) = in_flight.next() => {
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.remove(&frame_num);
                         }
+
+                        if generation != active_generation {
+                            continue;
+                        }
+
                         frames_decoded = frames_decoded.saturating_add(1);
 
                         if let Some(segment_frames) = result {
@@ -357,6 +385,7 @@ impl Playback {
                                 frame_number: frame_num,
                                 segment_frames,
                                 segment_index,
+                                generation,
                             }).await;
                         } else if frames_decoded <= 5 {
                             warn!(
@@ -407,6 +436,7 @@ impl Playback {
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
+            let mut seek_generation = 0u64;
             let base_skip_threshold = (fps / 6).clamp(6, 16);
             let mut late_streak = 0u32;
             let mut skip_events = 0u64;
@@ -453,7 +483,7 @@ impl Playback {
 
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
-                        if prefetched.frame_number >= frame_number {
+                        if prefetched.generation == seek_generation && prefetched.frame_number >= frame_number {
                             prefetch_buffer.push_back(prefetched);
                             if first_frame_time.is_none() {
                                 first_frame_time = Some(Instant::now());
@@ -481,12 +511,14 @@ impl Playback {
             'playback: loop {
                 if seek_rx.has_changed().unwrap_or(false) {
                     let seek_frame = *seek_rx.borrow_and_update();
+                    seek_generation = seek_generation.saturating_add(1);
                     frame_number = seek_frame;
                     playback_anchor_start = Instant::now();
                     playback_anchor_frame = seek_frame;
                     pending_seek_observation = Some((seek_frame, Instant::now()));
                     prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                     frame_cache.cache.clear();
+                    let _ = seek_generation_tx.send(seek_generation);
                     let _ = frame_request_tx.send(frame_number);
                     let _ = playback_position_tx.send(frame_number);
                     if has_audio
@@ -502,7 +534,9 @@ impl Playback {
                     cached_project = self.project.borrow_and_update().clone();
                 }
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
-                    if prefetched.frame_number >= frame_number {
+                    if prefetched.generation == seek_generation
+                        && prefetched.frame_number >= frame_number
+                    {
                         prefetch_buffer.push_back(prefetched);
                         while prefetch_buffer.len() > PREFETCH_BUFFER_SIZE {
                             if let Some(idx) = prefetch_buffer
@@ -529,12 +563,14 @@ impl Playback {
                     _ = stop_rx.changed() => break 'playback,
                     _ = seek_rx.changed() => {
                         let seek_frame = *seek_rx.borrow_and_update();
+                        seek_generation = seek_generation.saturating_add(1);
                         frame_number = seek_frame;
                         playback_anchor_start = Instant::now();
                         playback_anchor_frame = seek_frame;
                         pending_seek_observation = Some((seek_frame, Instant::now()));
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         frame_cache.cache.clear();
+                        let _ = seek_generation_tx.send(seek_generation);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                         if has_audio
@@ -589,6 +625,9 @@ impl Playback {
                                 tokio::select! {
                                     _ = stop_rx.changed() => break 'playback,
                                     Some(prefetched) = prefetch_rx.recv() => {
+                                        if prefetched.generation != seek_generation {
+                                            continue;
+                                        }
                                         if prefetched.frame_number == frame_number {
                                             found_frame = Some(prefetched);
                                             break;
@@ -636,6 +675,11 @@ impl Playback {
                                 tokio::time::timeout(frame_fetch_timeout, prefetch_rx.recv()).await;
 
                             if let Ok(Some(prefetched)) = wait_result {
+                                if prefetched.generation != seek_generation {
+                                    frame_number = frame_number.saturating_add(1);
+                                    total_frames_skipped += 1;
+                                    continue;
+                                }
                                 if prefetched.frame_number == frame_number {
                                     Some((
                                         Arc::new(prefetched.segment_frames),
