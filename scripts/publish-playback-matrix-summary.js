@@ -105,6 +105,7 @@ function buildSummarySection(
 		markdown += `- Candidate-only policy: ${comparison.tolerance?.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
 		markdown += `- Parse error policy: ${comparison.tolerance?.failOnParseErrors ? "fail" : "allow"}\n`;
 		markdown += `- Zero-compare policy: ${comparison.tolerance?.failOnZeroCompared ? "fail" : "allow"}\n`;
+		markdown += `- Skipped-file policy: ${comparison.tolerance?.failOnSkippedFiles ? "fail" : "allow"}\n`;
 		markdown += `- Baseline parse errors: ${comparison.fileStats?.baseline?.parseErrors?.length ?? "n/a"}\n`;
 		markdown += `- Candidate parse errors: ${comparison.fileStats?.candidate?.parseErrors?.length ?? "n/a"}\n\n`;
 		const failureReasons = Array.isArray(comparison.summary?.failureReasons)

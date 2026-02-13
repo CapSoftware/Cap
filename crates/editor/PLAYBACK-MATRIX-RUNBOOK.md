@@ -141,6 +141,9 @@ pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir 
 
 # optional: fail comparison gate when no comparable rows remain
 pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-zero-compared
+
+# optional: fail comparison gate when any input JSON is skipped
+pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-skipped-files
 ```
 
 Finalize and publish to benchmark history in one command:
@@ -203,6 +206,9 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 
 # optional: fail comparison gate when no comparable rows remain after filtering
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-zero-compared
+
+# optional: fail comparison gate when any input JSON is skipped (no reports/usable metrics)
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-skipped-files
 ```
 
 ## Evidence checklist

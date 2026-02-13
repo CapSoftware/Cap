@@ -17,6 +17,7 @@ function parseArgs(argv) {
 		minSamplesPerRow: 1,
 		failOnParseErrors: false,
 		failOnZeroCompared: false,
+		failOnSkippedFiles: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -94,6 +95,10 @@ function parseArgs(argv) {
 			options.failOnZeroCompared = true;
 			continue;
 		}
+		if (arg === "--fail-on-skipped-files") {
+			options.failOnSkippedFiles = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -101,7 +106,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--fail-on-parse-errors] [--fail-on-zero-compared]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--fail-on-parse-errors] [--fail-on-zero-compared] [--fail-on-skipped-files]
 
 Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
@@ -425,6 +430,7 @@ function toMarkdown(
 	md += `Sample gate: min_samples_per_row>=${options.minSamplesPerRow}\n\n`;
 	md += `Parse gate: parse_errors=${options.failOnParseErrors ? "fail" : "allow"}\n\n`;
 	md += `Zero-compare gate: compared_rows=${options.failOnZeroCompared ? "fail_if_zero" : "allow"}\n\n`;
+	md += `Skipped-file gate: skipped_files=${options.failOnSkippedFiles ? "fail" : "allow"}\n\n`;
 	md += `Baseline files: total=${baselineStats.totalFiles}, parsed=${baselineStats.parsedFiles}, usable=${baselineStats.usableFiles}, skipped=${baselineStats.skippedFiles}, parse_errors=${baselineStats.parseErrors.length}\n`;
 	md += `Candidate files: total=${candidateStats.totalFiles}, parsed=${candidateStats.parsedFiles}, usable=${candidateStats.usableFiles}, skipped=${candidateStats.skippedFiles}, parse_errors=${candidateStats.parseErrors.length}\n\n`;
 	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}, insufficient sample rows: ${insufficientSampleRows.length}\n\n`;
@@ -528,6 +534,12 @@ function buildJsonOutput(
 	if (options.failOnZeroCompared && comparisons.length === 0) {
 		failureReasons.push("zero_compared_rows");
 	}
+	if (
+		options.failOnSkippedFiles &&
+		(baselineStats.skippedFiles > 0 || candidateStats.skippedFiles > 0)
+	) {
+		failureReasons.push("skipped_files");
+	}
 	const passed = failureReasons.length === 0;
 	return {
 		generatedAt: new Date().toISOString(),
@@ -540,6 +552,7 @@ function buildJsonOutput(
 			minSamplesPerRow: options.minSamplesPerRow,
 			failOnParseErrors: options.failOnParseErrors,
 			failOnZeroCompared: options.failOnZeroCompared,
+			failOnSkippedFiles: options.failOnSkippedFiles,
 		},
 		fileStats: {
 			baseline: baselineStats,
@@ -565,6 +578,10 @@ function buildJsonOutput(
 					(baselineStats.parseErrors.length === 0 &&
 						candidateStats.parseErrors.length === 0),
 				zeroComparedRows: !options.failOnZeroCompared || comparisons.length > 0,
+				skippedFiles:
+					!options.failOnSkippedFiles ||
+					(baselineStats.skippedFiles === 0 &&
+						candidateStats.skippedFiles === 0),
 			},
 		},
 		regressions,
