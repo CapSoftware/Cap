@@ -133,6 +133,9 @@ pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir 
 
 # optional: require minimum sample count per compared row
 pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --min-samples-per-row 3
+
+# optional: fail comparison gate when any input JSON fails to parse
+pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-parse-errors
 ```
 
 Finalize and publish to benchmark history in one command:
@@ -190,6 +193,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 
 # comparison JSON includes failureReasons and gateOutcomes for automation
 # minimum sample gating uses metrics that are actually comparable for each row
+# optional: fail comparison gate when any input JSON fails to parse
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-parse-errors
 ```
 
 ## Evidence checklist
