@@ -396,10 +396,12 @@ impl Playback {
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
-            let aggressive_skip_threshold = 10u32;
+            let base_skip_threshold = (fps / 6).clamp(6, 16);
+            let mut late_streak = 0u32;
+            let mut skip_events = 0u64;
 
             let mut total_frames_rendered = 0u64;
-            let mut _total_frames_skipped = 0u64;
+            let mut total_frames_skipped = 0u64;
             let mut first_render_logged = false;
             let mut pending_seek_observation: Option<(u32, Instant)> = None;
 
@@ -604,7 +606,7 @@ impl Playback {
                                     ))
                                 } else {
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 }
                             }
@@ -623,12 +625,12 @@ impl Playback {
                                 } else {
                                     prefetch_buffer.push_back(prefetched);
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 }
                             } else {
                                 frame_number = frame_number.saturating_add(1);
-                                _total_frames_skipped += 1;
+                                total_frames_skipped += 1;
                                 continue;
                             }
                         } else {
@@ -669,7 +671,7 @@ impl Playback {
                                         guard.remove(&frame_number);
                                     }
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 },
                                 data = segment_media
@@ -775,15 +777,20 @@ impl Playback {
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
+                    late_streak = late_streak.saturating_add(1);
+                    let threshold_reduction = (late_streak / 12).min(base_skip_threshold);
+                    let dynamic_skip_threshold =
+                        base_skip_threshold.saturating_sub(threshold_reduction);
 
-                    if frames_behind <= aggressive_skip_threshold {
+                    if frames_behind <= dynamic_skip_threshold {
                         continue;
                     }
 
                     let skipped = frames_behind.saturating_sub(1);
                     if skipped > 0 {
                         frame_number += skipped;
-                        _total_frames_skipped += skipped as u64;
+                        total_frames_skipped += skipped as u64;
+                        skip_events = skip_events.saturating_add(1);
 
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
@@ -795,9 +802,28 @@ impl Playback {
                         {
                             break 'playback;
                         }
+
+                        if skipped >= fps.saturating_div(2) || skip_events % 120 == 0 {
+                            info!(
+                                skipped_frames = skipped,
+                                frames_behind,
+                                dynamic_skip_threshold,
+                                late_streak,
+                                total_frames_skipped,
+                                skip_events,
+                                "Playback applied frame skip catch-up"
+                            );
+                        }
                     }
+                } else {
+                    late_streak = 0;
                 }
             }
+
+            info!(
+                total_frames_rendered,
+                total_frames_skipped, skip_events, "Playback loop completed"
+            );
 
             stop_tx.send(true).ok();
 
