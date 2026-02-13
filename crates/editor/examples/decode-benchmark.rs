@@ -4,11 +4,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 
 const DEFAULT_DURATION_SECS: f32 = 60.0;
 
 fn get_video_duration(path: &Path) -> f32 {
+    if path.is_dir() {
+        return get_fragmented_video_duration(path);
+    }
+
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -33,6 +38,94 @@ fn get_video_duration(path: &Path) -> f32 {
             DEFAULT_DURATION_SECS
         }
     }
+}
+
+fn get_fragmented_video_duration(path: &Path) -> f32 {
+    let init_segment = path.join("init.mp4");
+    if !init_segment.exists() {
+        eprintln!(
+            "Warning: Fragmented input {} missing init.mp4",
+            path.display()
+        );
+        return DEFAULT_DURATION_SECS;
+    }
+
+    let mut fragments: Vec<PathBuf> = match fs::read_dir(path) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|entry| entry.extension().is_some_and(|ext| ext == "m4s"))
+            .collect(),
+        Err(error) => {
+            eprintln!(
+                "Warning: Failed to read fragmented directory {}: {}",
+                path.display(),
+                error
+            );
+            return DEFAULT_DURATION_SECS;
+        }
+    };
+    fragments.sort();
+
+    if fragments.is_empty() {
+        eprintln!(
+            "Warning: Fragmented input {} has no .m4s segments",
+            path.display()
+        );
+        return DEFAULT_DURATION_SECS;
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let combined_path =
+        std::env::temp_dir().join(format!("cap-decode-benchmark-combined-{timestamp}.mp4"));
+
+    let mut combined_data = match fs::read(&init_segment) {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!(
+                "Warning: Failed to read init segment {}: {}",
+                init_segment.display(),
+                error
+            );
+            return DEFAULT_DURATION_SECS;
+        }
+    };
+
+    for fragment in fragments {
+        match fs::read(&fragment) {
+            Ok(data) => combined_data.extend(data),
+            Err(error) => {
+                eprintln!(
+                    "Warning: Failed to read segment {}: {}",
+                    fragment.display(),
+                    error
+                );
+                return DEFAULT_DURATION_SECS;
+            }
+        }
+    }
+
+    if let Err(error) = fs::write(&combined_path, &combined_data) {
+        eprintln!(
+            "Warning: Failed to write combined fragmented video {}: {}",
+            combined_path.display(),
+            error
+        );
+        return DEFAULT_DURATION_SECS;
+    }
+
+    let duration = get_video_duration(&combined_path);
+    if let Err(error) = fs::remove_file(&combined_path) {
+        eprintln!(
+            "Warning: Failed to remove temporary combined file {}: {}",
+            combined_path.display(),
+            error
+        );
+    }
+    duration
 }
 
 #[derive(Debug, Clone)]

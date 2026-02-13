@@ -162,6 +162,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 6. **Decode benchmark now supports machine-readable evidence output (2026-02-13)**
    - `decode-benchmark` supports `--output-json` for structured metric capture.
    - Added sequential frame and random sample count controls to scale benchmark depth per hardware class.
+   - Supports fragmented segment directories for duration-aware benchmarking.
 
 ---
 
