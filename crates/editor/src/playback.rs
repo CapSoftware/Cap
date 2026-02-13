@@ -405,11 +405,19 @@ impl Playback {
             let mut first_render_logged = false;
             let mut pending_seek_observation: Option<(u32, Instant)> = None;
 
-            let warmup_target_frames = 20usize;
-            let warmup_after_first_timeout = Duration::from_millis(1000);
+            let warmup_target_frames = (fps.saturating_div(4)).clamp(8, 16) as usize;
+            let warmup_after_first_timeout = frame_duration
+                .mul_f64((warmup_target_frames as f64) * 2.0)
+                .max(Duration::from_millis(200))
+                .min(Duration::from_millis(700));
             let warmup_no_frames_timeout = Duration::from_secs(5);
             let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
+            info!(
+                warmup_target_frames,
+                warmup_after_first_timeout_ms = warmup_after_first_timeout.as_secs_f64() * 1000.0,
+                "Playback warmup configuration"
+            );
 
             while !*stop_rx.borrow() {
                 let should_start = if let Some(first_time) = first_frame_time {
