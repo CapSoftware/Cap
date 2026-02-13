@@ -327,6 +327,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Avoids treating sparse/non-contiguous prefetched entries as equivalent to contiguous startup readiness.
    - Reduces early playback start jitter risk when warmup buffer is fragmented.
 
+37. **Added finalize summary JSON artifact output (2026-02-13)**
+   - `scripts/finalize-playback-matrix.js` now supports optional `--output-json`.
+   - Finalize now emits `playback-finalize-summary.json` by default in output directory.
+   - Summary JSON includes artifact paths, settings, and validation/comparison pass flags for automation.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -457,6 +462,7 @@ Decoder Pipeline:
 38. Added candidate-only row count reporting in published matrix summary comparison status bullets.
 39. Updated playback warmup start condition to require contiguous prefetched frame coverage from current frame.
 40. Added comparison policy mode reporting (allow/fail) for missing-candidate and candidate-only coverage in published matrix summaries.
+41. Added finalize summary JSON artifact output with artifact/settings/result metadata for automation workflows.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -491,6 +497,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes missing-candidate and candidate-only coverage policy modes from comparison JSON tolerance settings.
 - `crates/editor/src/playback.rs`: warmup readiness now requires contiguous prefetched frame coverage from current frame instead of raw buffer length threshold.
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
+- `scripts/finalize-playback-matrix.js`: added optional `--output-json` and default finalize summary JSON emission with artifact path and pass/fail metadata.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now surfaces comparison gate status/summary metrics when comparison JSON is provided.
