@@ -155,6 +155,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Playback result now includes first-frame decode and startup-to-first-frame latency.
    - Scrub result now reports seek p50/p95/p99 and seek failure counts.
 
+5. **Playback runtime emits startup latency signals (2026-02-13)**
+   - Playback loop now logs first rendered frame latency.
+   - Audio stream setup now logs startup preparation time and first callback latency.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -248,6 +252,7 @@ Decoder Pipeline:
 6. Removed frontend timeline stop/start cycle when seeking while playing.
 7. Reduced AVAssetReader eager pool warmup and added lazy decoder instantiation for additional pool slots.
 8. Extended playback benchmark tooling with scrub mode and startup latency metrics.
+9. Added playback runtime startup telemetry logs for first frame and audio callback bring-up.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -257,6 +262,7 @@ Decoder Pipeline:
 - `crates/rendering/src/decoder/avassetreader.rs`: lower eager decoder warmup and lazy pool growth.
 - `crates/recording/examples/playback-test-runner.rs`: added scrub command and startup/scrub latency metrics.
 - `crates/editor/PLAYBACK-BENCHMARKS.md`: updated benchmark reference and metric definitions.
+- `crates/editor/src/playback.rs`: added first-render and audio-callback startup latency logging.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
