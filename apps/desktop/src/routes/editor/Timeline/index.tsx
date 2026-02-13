@@ -332,7 +332,9 @@ export function Timeline() {
 			const rawTime =
 				secsPerPixel() * (e.clientX - left) + transform().position;
 			const newTime = Math.min(Math.max(0, rawTime), totalDuration());
-			const targetFrame = Math.round(newTime * FPS);
+			const total = totalDuration();
+			const maxFrame = Math.max(0, Math.ceil(total * FPS) - 1);
+			const targetFrame = Math.min(Math.round(newTime * FPS), maxFrame);
 			scheduleSeek(targetFrame);
 
 			setEditorState("playbackTime", newTime);
