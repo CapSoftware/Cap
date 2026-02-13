@@ -450,6 +450,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Playback loop now uses change-aware frame-request signaling instead of unconditional watch broadcasts.
    - Reduces redundant prefetch wakeups and channel churn when requested frame value does not change.
 
+63. **Removed duplicate keyed-buffer lookups during prefetch insert (2026-02-13)**
+   - Prefetch buffer insertion now uses a single `BTreeMap::entry` match to detect insertion and store new frames.
+   - Eliminates the prior contains-check plus entry-insert double lookup in prefetch hot path.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -608,6 +612,7 @@ Decoder Pipeline:
 66. Bounded behind-prefetch dedupe tracking window to avoid unbounded growth and preserve lookup efficiency over long sessions.
 67. Cached clip-offset lookups for prefetch and direct-decode scheduling to replace repeated linear clip scans on decode hot paths.
 68. Deduplicated frame-request watch updates so unchanged frame requests no longer trigger redundant watch notifications.
+69. Replaced contains+entry prefetch insertion with single-entry map insertion to remove duplicate keyed-buffer lookups in frame-insert hot path.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -645,6 +650,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: behind-prefetch dedupe tracking now uses a bounded eviction-ordered window to prevent unbounded set growth during long playback.
 - `crates/editor/src/playback.rs`: prefetch and playback direct-decode paths now use cached clip-offset maps rebuilt on project updates, avoiding repeated clip list linear searches.
 - `crates/editor/src/playback.rs`: frame-request updates now use `watch::Sender::send_if_modified` across playback/warmup/skip paths to avoid redundant unchanged-frame notifications.
+- `crates/editor/src/playback.rs`: prefetch insertion now uses single `BTreeMap::entry` insertion path instead of separate contains-check + insert lookup.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.

@@ -139,8 +139,13 @@ fn insert_prefetched_frame(
     }
 
     let frame_number = prefetched.frame_number;
-    let inserted_new = !buffer.contains_key(&frame_number);
-    buffer.entry(frame_number).or_insert(prefetched);
+    let inserted_new = match buffer.entry(frame_number) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(prefetched);
+            true
+        }
+        std::collections::btree_map::Entry::Occupied(_) => false,
+    };
     let trimmed = trim_prefetch_buffer(buffer, current_frame);
     inserted_new || trimmed
 }
