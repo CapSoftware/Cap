@@ -395,6 +395,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/compare-playback-benchmark-runs.js` now deterministically sorts comparison, missing, candidate-only, and insufficient-sample rows.
    - Keeps markdown/JSON outputs stable across repeated runs with identical inputs.
 
+50. **Extended finalize summary with comparison count rollups (2026-02-13)**
+   - `scripts/finalize-playback-matrix.js` now captures comparison count rollups in summary results (compared rows, regressions, missing/candidate-only/insufficient-sample counts).
+   - `scripts/publish-playback-matrix-summary.js` now surfaces these finalize comparison counts in published summaries.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -540,6 +544,7 @@ Decoder Pipeline:
 53. Updated keyed prefetch insert helper to emit structural-change signals for warmup contiguous coverage cache invalidation.
 54. Extended finalize summary and publish output with comparison file stats (including parse error counts).
 55. Stabilized comparison output ordering with deterministic sorting for comparison rows and coverage-delta sections.
+56. Extended finalize and publish summaries with comparison count rollups (compared rows, regressions, missing/candidate-only/insufficient-sample counts).
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -563,6 +568,8 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
 - `scripts/compare-playback-benchmark-runs.js`: fixed options wiring inside comparison regression checks and now aggregates per-key metrics across multi-input runs with run-count reporting.
 - `scripts/compare-playback-benchmark-runs.js`: comparison row sets are now deterministically sorted for stable markdown/json artifact diffs.
+- `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison count rollup fields for compared rows, regressions, and coverage deltas.
+- `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize comparison count rollups when finalize summary metadata is attached.
 - `scripts/publish-playback-matrix-summary.js`: added optional baseline-vs-candidate comparison artifact attachment in published summaries.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
