@@ -255,12 +255,19 @@ impl Playback {
                 PARALLEL_DECODE_TASKS
             };
             let initial_parallel_tasks = dynamic_parallel_tasks.min(4);
+            let prefetch_idle_poll_interval = Duration::from_secs_f64(1.0 / fps_f64)
+                .mul_f64(0.25)
+                .max(Duration::from_millis(2))
+                .min(Duration::from_millis(8));
             let mut active_generation = *prefetch_seek_generation.borrow();
 
             let mut cached_project = prefetch_project.borrow().clone();
             info!(
                 dynamic_prefetch_ahead,
-                dynamic_prefetch_behind, dynamic_parallel_tasks, "Prefetch window configuration"
+                dynamic_prefetch_behind,
+                dynamic_parallel_tasks,
+                prefetch_idle_poll_interval_ms = prefetch_idle_poll_interval.as_secs_f64() * 1000.0,
+                "Prefetch window configuration"
             );
 
             loop {
@@ -468,7 +475,7 @@ impl Playback {
                         }
                     }
 
-                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                    _ = tokio::time::sleep(prefetch_idle_poll_interval), if in_flight.is_empty() => {}
                 }
             }
         });
