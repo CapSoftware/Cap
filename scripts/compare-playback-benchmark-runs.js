@@ -414,6 +414,10 @@ function compareMetrics(baselineRows, candidateRows, options) {
 	};
 }
 
+function escapeTableCell(value) {
+	return String(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+}
+
 function toMarkdown(
 	comparisons,
 	missingCandidateRows,
@@ -446,10 +450,10 @@ function toMarkdown(
 		md += "| Side | File | Error |\n";
 		md += "|---|---|---|\n";
 		for (const entry of baselineStats.parseErrors.slice(0, 20)) {
-			md += `| baseline | ${entry.file} | ${entry.error.replace(/\|/g, "\\|")} |\n`;
+			md += `| baseline | ${escapeTableCell(entry.file)} | ${escapeTableCell(entry.error)} |\n`;
 		}
 		for (const entry of candidateStats.parseErrors.slice(0, 20)) {
-			md += `| candidate | ${entry.file} | ${entry.error.replace(/\|/g, "\\|")} |\n`;
+			md += `| candidate | ${escapeTableCell(entry.file)} | ${escapeTableCell(entry.error)} |\n`;
 		}
 		md += "\n";
 	}
