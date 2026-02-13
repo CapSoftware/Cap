@@ -365,6 +365,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Prevents scrub sample requirements from incorrectly failing non-scrub comparison rows.
    - Comparison output now includes compared metric count and effective sample count per row.
 
+45. **Extended finalize summary comparison diagnostics (2026-02-13)**
+   - `scripts/finalize-playback-matrix.js` now includes comparison failure reasons and gate outcomes in summary results.
+   - `scripts/publish-playback-matrix-summary.js` now surfaces finalize comparison failure reasons when present.
+
 44. **Cached warmup contiguous coverage counts during warmup (2026-02-13)**
    - Warmup loop now recomputes contiguous prefetched coverage only when warmup buffer content changes.
    - Avoids repeated contiguous scans on idle warmup iterations.
@@ -513,6 +517,7 @@ Decoder Pipeline:
 48. Cached warmup contiguous coverage values and only recomputed contiguous scan when warmup buffer changed.
 49. Added comparison JSON gate diagnostics (`failureReasons`, `gateOutcomes`) and surfaced failure reasons in published summary output.
 50. Corrected minimum sample gating semantics to only count comparable metrics and added compared-metric/effective-sample columns in comparison output.
+51. Extended finalize summary and publish output with comparison failure reasons and gate outcome metadata.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -559,6 +564,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes insufficient sample row count and minimum sample threshold fields.
 - `scripts/compare-playback-benchmark-runs.js`: comparison JSON summary now includes explicit `failureReasons` and `gateOutcomes` fields.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes comparison failure reasons when present.
+- `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison failure reasons and gate outcome fields in results metadata.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: warmup contiguous coverage counts are now cached and recomputed only on warmup buffer changes.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
