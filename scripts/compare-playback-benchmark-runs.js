@@ -264,6 +264,16 @@ function formatNumber(value, digits = 2) {
 	return value === null ? "n/a" : value.toFixed(digits);
 }
 
+function compareCoverageRows(a, b) {
+	return (
+		a.platform.localeCompare(b.platform) ||
+		a.gpu.localeCompare(b.gpu) ||
+		a.scenario.localeCompare(b.scenario) ||
+		a.recording.localeCompare(b.recording) ||
+		a.format.localeCompare(b.format)
+	);
+}
+
 function compareMetrics(baselineRows, candidateRows, options) {
 	const comparisons = [];
 	const missingCandidateRows = [];
@@ -375,7 +385,13 @@ function compareMetrics(baselineRows, candidateRows, options) {
 		});
 	}
 
-	comparisons.sort((a, b) => b.regressions.length - a.regressions.length);
+	comparisons.sort(
+		(a, b) =>
+			b.regressions.length - a.regressions.length || compareCoverageRows(a, b),
+	);
+	missingCandidateRows.sort(compareCoverageRows);
+	candidateOnlyRows.sort(compareCoverageRows);
+	insufficientSampleRows.sort(compareCoverageRows);
 	return {
 		comparisons,
 		missingCandidateRows,
