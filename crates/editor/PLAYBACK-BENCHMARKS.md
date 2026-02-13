@@ -12,6 +12,7 @@ This document tracks performance benchmarks for Cap's playback and decoding syst
 | Decode Latency (p95) | <50ms | - |
 | Effective FPS | ≥30 fps | ±2 fps |
 | Decode Jitter | <10ms | - |
+| Scrub Seek Latency (p95) | <40ms | - |
 | A/V Sync (mic↔video) | <100ms | - |
 | A/V Sync (system↔video) | <100ms | - |
 | Camera-Display Drift | <100ms | - |
@@ -20,6 +21,7 @@ This document tracks performance benchmarks for Cap's playback and decoding syst
 
 - **Decoder Tests**: Init time, hardware acceleration detection, fallback handling
 - **Playback Tests**: Sequential decode, frame retrieval, latency percentiles
+- **Scrub Tests**: Random access seek decode latency and seek failure rate
 - **Audio Sync Tests**: Mic-video sync, system audio-video sync
 - **Camera Sync Tests**: Camera-display drift, frame count alignment
 - **Decode Benchmark**: Creation, sequential, seek, and random access performance
@@ -44,6 +46,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 # Run specific test categories
 cargo run -p cap-recording --example playback-test-runner -- decoder
 cargo run -p cap-recording --example playback-test-runner -- playback
+cargo run -p cap-recording --example playback-test-runner -- scrub
 cargo run -p cap-recording --example playback-test-runner -- audio-sync
 cargo run -p cap-recording --example playback-test-runner -- camera-sync
 
@@ -106,6 +109,19 @@ cargo run -p cap-recording --example playback-test-runner -- full
 | **P50/P95/P99** | Latency percentiles | Sorted distribution |
 | **Effective FPS** | Actual decode throughput | frames / elapsed_time |
 | **Jitter** | Decode time variance (std dev) | sqrt(variance) |
+| **First Decode** | Decode latency for first successful frame | elapsed from first frame request |
+| **Startup to First** | Time from playback test start to first decoded frame | elapsed since playback test start |
+
+### Scrub Metrics
+
+| Metric | Description | How Measured |
+|--------|-------------|--------------|
+| **Seek Operations** | Total random seek attempts | Fixed operation count per segment |
+| **Successful Seeks** | Seeks returning a decoded frame | Count of non-None seek decodes |
+| **Failed Seeks** | Seeks returning no frame | Count of None seek decodes |
+| **Avg Seek Time** | Mean random seek decode latency | Avg of seek decode times |
+| **P50/P95/P99 Seek** | Seek latency percentiles | Sorted seek time distribution |
+| **Max Seek Time** | Worst seek decode latency | Max of seek decode times |
 
 ### Audio Sync Metrics
 
