@@ -123,6 +123,9 @@ pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir 
 
 # optional: allow missing candidate rows during compare gate
 pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --allow-missing-candidate
+
+# optional: fail finalize compare gate when candidate includes rows absent in baseline
+pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-candidate-only
 ```
 
 Finalize and publish to benchmark history in one command:
@@ -170,6 +173,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-matrix-final/playback-comparison.md --output-json /tmp/playback-matrix-final/playback-comparison.json
 
 # compare output now includes both missing-candidate rows and candidate-only rows
+# optional: fail compare gate when candidate includes rows absent in baseline
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-candidate-only
 ```
 
 ## Evidence checklist
