@@ -15,6 +15,7 @@ function parseArgs(argv) {
 		analyze: true,
 		publishTarget: null,
 		compareBaselineInputs: [],
+		outputJson: null,
 		allowFpsDrop: 2,
 		allowStartupIncreaseMs: 25,
 		allowScrubP95IncreaseMs: 5,
@@ -83,6 +84,12 @@ function parseArgs(argv) {
 			options.publishTarget = path.resolve(value);
 			continue;
 		}
+		if (arg === "--output-json") {
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --output-json");
+			options.outputJson = path.resolve(value);
+			continue;
+		}
 		if (arg === "--compare-baseline") {
 			const value = argv[++i];
 			if (!value) throw new Error("Missing value for --compare-baseline");
@@ -128,7 +135,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--publish-target <PLAYBACK-BENCHMARKS.md>]
+	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--output-json <file>] [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--publish-target <PLAYBACK-BENCHMARKS.md>]
 
 Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs. Optionally compares candidate inputs against baseline inputs and fails on regressions.`);
 }
@@ -178,6 +185,9 @@ function main() {
 		options.outputDir,
 		"playback-comparison.json",
 	);
+	const summaryJsonPath =
+		options.outputJson ??
+		path.join(options.outputDir, "playback-finalize-summary.json");
 
 	const aggregateArgs = ["scripts/aggregate-playback-benchmarks.js"];
 	const statusArgs = ["scripts/build-playback-matrix-report.js"];
@@ -289,6 +299,47 @@ function main() {
 		console.log(`Comparison report: ${comparisonPath}`);
 		console.log(`Comparison JSON: ${comparisonJsonPath}`);
 	}
+	const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
+	const comparison =
+		options.compareBaselineInputs.length > 0
+			? JSON.parse(fs.readFileSync(comparisonJsonPath, "utf8"))
+			: null;
+	const summary = {
+		generatedAt: new Date().toISOString(),
+		inputs: options.inputs,
+		outputDir: options.outputDir,
+		artifacts: {
+			aggregatePath,
+			statusPath,
+			validationPath,
+			bottleneckPath: options.analyze ? bottleneckPath : null,
+			bottleneckJsonPath: options.analyze ? bottleneckJsonPath : null,
+			comparisonPath:
+				options.compareBaselineInputs.length > 0 ? comparisonPath : null,
+			comparisonJsonPath:
+				options.compareBaselineInputs.length > 0 ? comparisonJsonPath : null,
+		},
+		settings: {
+			requireFormats: options.requireFormats,
+			targetFps: options.targetFps,
+			maxScrubP95Ms: options.maxScrubP95Ms,
+			maxStartupMs: options.maxStartupMs,
+			analyze: options.analyze,
+			publishTarget: options.publishTarget,
+			compareBaselineInputs: options.compareBaselineInputs,
+			allowFpsDrop: options.allowFpsDrop,
+			allowStartupIncreaseMs: options.allowStartupIncreaseMs,
+			allowScrubP95IncreaseMs: options.allowScrubP95IncreaseMs,
+			allowMissingCandidate: options.allowMissingCandidate,
+			failOnCandidateOnly: options.failOnCandidateOnly,
+		},
+		results: {
+			validationPassed: validation.passed === true,
+			comparisonPassed: comparison ? comparison.summary?.passed === true : null,
+		},
+	};
+	fs.writeFileSync(summaryJsonPath, JSON.stringify(summary, null, 2), "utf8");
+	console.log(`Finalize summary JSON: ${summaryJsonPath}`);
 }
 
 try {
