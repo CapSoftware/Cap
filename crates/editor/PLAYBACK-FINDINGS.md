@@ -313,6 +313,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/publish-playback-matrix-summary.js` now includes candidate-only row count from comparison JSON in published matrix summary bullets.
    - Keeps published matrix evidence aligned with expanded comparison coverage diagnostics.
 
+34. **Added strict candidate-only gating option for comparison workflows (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports `--fail-on-candidate-only`.
+   - When enabled, comparison exits non-zero if candidate contains rows not present in baseline.
+   - `scripts/finalize-playback-matrix.js` now forwards the same strict option in integrated compare flows.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -439,6 +444,7 @@ Decoder Pipeline:
 34. Added comparison gate status fields to published matrix summary entries via comparison JSON attachment.
 35. Tightened keyed prefetch buffer warmup timing and skip-path pruning behavior using map-aware helper usage in playback loop.
 36. Expanded baseline-vs-candidate comparison outputs with candidate-only row reporting.
+37. Added strict `fail-on-candidate-only` gating option for compare/finalize matrix comparison workflows.
 37. Added candidate-only row count reporting in published matrix summary comparison status bullets.
 
 **Changes Made**:
@@ -468,6 +474,8 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added structured comparison JSON output with pass/fail summary and regression detail payload.
 - `scripts/compare-playback-benchmark-runs.js`: comparison outputs now include candidate-only rows in addition to missing-candidate coverage deltas.
 - `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
+- `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-candidate-only` coverage gate and surfaced coverage gate mode in comparison markdown output.
+- `scripts/finalize-playback-matrix.js`: added passthrough support for strict `--fail-on-candidate-only` compare mode in one-shot finalize workflows.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes candidate-only row count from comparison JSON summary.
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
