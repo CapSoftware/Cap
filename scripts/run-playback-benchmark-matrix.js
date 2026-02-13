@@ -12,6 +12,8 @@ function parseArgs(argv) {
 		fps: 60,
 		recordingPath: null,
 		inputDir: null,
+		validate: true,
+		requireFormats: [],
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -51,6 +53,18 @@ function parseArgs(argv) {
 			options.inputDir = argv[++i] ?? null;
 			continue;
 		}
+		if (arg === "--skip-validate") {
+			options.validate = false;
+			continue;
+		}
+		if (arg === "--require-formats") {
+			const value = argv[++i] ?? "";
+			options.requireFormats = value
+				.split(",")
+				.map((entry) => entry.trim().toLowerCase())
+				.filter(Boolean);
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -58,7 +72,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/run-playback-benchmark-matrix.js --platform <name> --gpu <name> --output-dir <dir> [--fps 60] [--recording-path <path>] [--input-dir <path>]
+	console.log(`Usage: node scripts/run-playback-benchmark-matrix.js --platform <name> --gpu <name> --output-dir <dir> [--fps 60] [--recording-path <path>] [--input-dir <path>] [--require-formats mp4,fragmented]
 
 Runs playback benchmark matrix scenarios and writes JSON outputs.
 
@@ -70,7 +84,9 @@ Required:
 Optional:
   --fps           FPS for benchmark runs (default: 60)
   --recording-path  Specific recording path
-  --input-dir       Recording discovery directory`);
+  --input-dir       Recording discovery directory
+  --require-formats Required formats for local validation (comma-separated)
+  --skip-validate   Skip post-run validation`);
 }
 
 function run(command, args) {
@@ -156,6 +172,26 @@ function main() {
 		aggregatePath,
 	]);
 	console.log(`Aggregate markdown: ${aggregatePath}`);
+
+	if (options.validate) {
+		const validateArgs = [
+			"scripts/validate-playback-matrix.js",
+			"--input",
+			options.outputDir,
+			"--no-default-matrix",
+			"--require-cell",
+			`${options.platform}:${options.gpu}:full`,
+			"--require-cell",
+			`${options.platform}:${options.gpu}:scrub`,
+		];
+
+		if (options.requireFormats.length > 0) {
+			validateArgs.push("--require-formats", options.requireFormats.join(","));
+		}
+
+		run("node", validateArgs);
+		console.log("Matrix run validation passed");
+	}
 }
 
 try {

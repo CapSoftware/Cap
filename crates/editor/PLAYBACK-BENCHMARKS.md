@@ -111,6 +111,7 @@ Automated helper for machine runs:
 
 ```bash
 node scripts/run-playback-benchmark-matrix.js --platform macos-13 --gpu apple-silicon --output-dir /tmp/playback-matrix --fps 60 --input-dir /tmp/cap-real-device-tests
+node scripts/run-playback-benchmark-matrix.js --platform windows-11 --gpu nvidia-discrete --output-dir /tmp/playback-matrix-windows-nvidia --fps 60 --require-formats mp4,fragmented --input-dir /tmp/cap-real-device-tests
 ```
 
 | Platform | GPU Class | MP4 Full | Fragmented Full | MP4 Scrub | Fragmented Scrub | Notes |
