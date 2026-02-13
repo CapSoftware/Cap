@@ -142,6 +142,12 @@ pnpm bench:playback:analyze -- --input /path/to/all-machine-results --output /tm
 pnpm bench:playback:analyze -- --input /path/to/all-machine-results --output /tmp/playback-matrix-final/playback-bottlenecks.md --output-json /tmp/playback-matrix-final/playback-bottlenecks.json --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
 ```
 
+Compare candidate run against baseline and fail on regressions:
+
+```bash
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-matrix-final/playback-comparison.md --allow-fps-drop 2 --allow-startup-increase-ms 25 --allow-scrub-p95-increase-ms 5
+```
+
 ## Evidence checklist
 
 1. Confirm all matrix rows exist.
