@@ -987,13 +987,16 @@ export function Player() {
 						</div>
 						<div
 							ref={cropViewportRef}
-							className="relative mx-auto w-full max-h-[70vh] overflow-hidden rounded-lg border border-gray-4 bg-black"
-							style={{ aspectRatio: `${sourceWidth} / ${sourceHeight}` }}
+							className="relative mx-auto overflow-hidden rounded-lg border border-gray-4 bg-black"
+							style={{
+								aspectRatio: `${sourceWidth} / ${sourceHeight}`,
+								width: `min(100%, 70vh * ${sourceWidth / sourceHeight})`,
+							}}
 						>
 							<video
 								ref={cropPreviewVideoRef}
 								src={videoUrl}
-								className="w-full h-full block object-fill pointer-events-none"
+								className="w-full h-full block object-contain pointer-events-none"
 								preload="auto"
 								playsInline
 								muted

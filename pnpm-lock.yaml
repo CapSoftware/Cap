@@ -302,8 +302,84 @@ importers:
         specifier: ^3.109.1
         version: 3.114.8(@cloudflare/workers-types@4.20250507.0)
 
+  apps/extension:
+    dependencies:
+      '@cap/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@cap/web-domain':
+        specifier: workspace:*
+        version: link:../../packages/web-domain
+      '@effect/platform':
+        specifier: ^0.92.1
+        version: 0.92.1(effect@3.18.4)
+      '@effect/rpc':
+        specifier: ^0.71.0
+        version: 0.71.0(@effect/platform@0.92.1(effect@3.18.4))(effect@3.18.4)
+      '@radix-ui/colors':
+        specifier: ^3.0.0
+        version: 3.0.0
+      '@remotion/webcodecs':
+        specifier: ^4.0.291
+        version: 4.0.298
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      effect:
+        specifier: ^3.18.4
+        version: 3.18.4
+      framer-motion:
+        specifier: ^11.13.1
+        version: 11.18.2(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+      lucide-react:
+        specifier: ^0.525.0
+        version: 0.525.0(react@19.1.1)
+      react:
+        specifier: 19.1.1
+        version: 19.1.1
+      react-dom:
+        specifier: 19.1.1
+        version: 19.1.1(react@19.1.1)
+      sonner:
+        specifier: ^2.0.3
+        version: 2.0.3(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+    devDependencies:
+      '@types/react':
+        specifier: 19.1.13
+        version: 19.1.13
+      '@types/react-dom':
+        specifier: 19.1.9
+        version: 19.1.9(@types/react@19.1.13)
+      '@vitejs/plugin-react':
+        specifier: ^4.0.3
+        version: 4.4.1(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
+      autoprefixer:
+        specifier: ^10.4.14
+        version: 10.4.21(postcss@8.5.3)
+      postcss:
+        specifier: ^8.4.23
+        version: 8.5.3
+      tailwindcss:
+        specifier: ^3
+        version: 3.4.17(ts-node@10.9.2(@swc/core@1.15.5(@swc/helpers@0.5.17))(@swc/wasm@1.15.5)(@types/node@22.15.17)(typescript@5.8.3))
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+      vite:
+        specifier: ^6.3.5
+        version: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+
   apps/media-server:
     dependencies:
+      '@cap/editor-render-spec':
+        specifier: workspace:*
+        version: link:../../packages/editor-render-spec
+      '@cap/editor-renderer':
+        specifier: workspace:*
+        version: link:../../packages/editor-renderer
+      '@napi-rs/canvas':
+        specifier: ^0.1.68
+        version: 0.1.92
       hono:
         specifier: ^4.7.1
         version: 4.7.8
@@ -311,6 +387,12 @@ importers:
         specifier: ^3.24.2
         version: 3.25.76
     devDependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.700.0
+        version: 3.804.0
+      '@aws-sdk/s3-request-presigner':
+        specifier: ^3.700.0
+        version: 3.804.0
       '@types/bun':
         specifier: latest
         version: 1.3.6
@@ -393,6 +475,12 @@ importers:
       '@cap/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@cap/editor-render-spec':
+        specifier: workspace:*
+        version: link:../../packages/editor-render-spec
+      '@cap/editor-renderer':
+        specifier: workspace:*
+        version: link:../../packages/editor-renderer
       '@cap/env':
         specifier: workspace:*
         version: link:../../packages/env
@@ -1058,6 +1146,41 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
+
+  packages/editor-render-spec:
+    dependencies:
+      zod:
+        specifier: ^3
+        version: 3.25.76
+    devDependencies:
+      tsconfig:
+        specifier: workspace:*
+        version: link:../tsconfig
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.15.17)(@vitest/ui@3.2.4)(jiti@2.6.1)(jsdom@26.1.0)(terser@5.44.0)(yaml@2.8.1)
+
+  packages/editor-renderer:
+    dependencies:
+      '@cap/editor-render-spec':
+        specifier: workspace:*
+        version: link:../editor-render-spec
+    devDependencies:
+      '@napi-rs/canvas':
+        specifier: ^0.1.70
+        version: 0.1.92
+      tsconfig:
+        specifier: workspace:*
+        version: link:../tsconfig
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.15.17)(@vitest/ui@3.2.4)(jiti@2.6.1)(jsdom@26.1.0)(terser@5.44.0)(yaml@2.8.1)
 
   packages/env:
     dependencies:
@@ -4079,6 +4202,76 @@ packages:
 
   '@mux/playback-core@0.29.0':
     resolution: {integrity: sha512-Bd12B1pW/1o6+Z+FXIs0ejlS5ejzApCX4sTd/Jn/bqxmOYA2tR7HjTq856hSGd441WtJQmfm/aNT5oDK9UyTSA==}
+
+  '@napi-rs/canvas-android-arm64@0.1.92':
+    resolution: {integrity: sha512-rDOtq53ujfOuevD5taxAuIFALuf1QsQWZe1yS/N4MtT+tNiDBEdjufvQRPWZ11FubL2uwgP8ApYU3YOaNu1ZsQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [android]
+
+  '@napi-rs/canvas-darwin-arm64@0.1.92':
+    resolution: {integrity: sha512-4PT6GRGCr7yMRehp42x0LJb1V0IEy1cDZDDayv7eKbFUIGbPFkV7CRC9Bee5MPkjg1EB4ZPXXUyy3gjQm7mR8Q==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@napi-rs/canvas-darwin-x64@0.1.92':
+    resolution: {integrity: sha512-5e/3ZapP7CqPtDcZPtmowCsjoyQwuNMMD7c0GKPtZQ8pgQhLkeq/3fmk0HqNSD1i227FyJN/9pDrhw/UMTkaWA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.92':
+    resolution: {integrity: sha512-j6KaLL9iir68lwpzzY+aBGag1PZp3+gJE2mQ3ar4VJVmyLRVOh+1qsdNK1gfWoAVy5w6U7OEYFrLzN2vOFUSng==}
+    engines: {node: '>= 10'}
+    cpu: [arm]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.92':
+    resolution: {integrity: sha512-s3NlnJMHOSotUYVoTCoC1OcomaChFdKmZg0VsHFeIkeHbwX0uPHP4eCX1irjSfMykyvsGHTQDfBAtGYuqxCxhQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-arm64-musl@0.1.92':
+    resolution: {integrity: sha512-xV0GQnukYq5qY+ebkAwHjnP2OrSGBxS3vSi1zQNQj0bkXU6Ou+Tw7JjCM7pZcQ28MUyEBS1yKfo7rc7ip2IPFQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.92':
+    resolution: {integrity: sha512-+GKvIFbQ74eB/TopEdH6XIXcvOGcuKvCITLGXy7WLJAyNp3Kdn1ncjxg91ihatBaPR+t63QOE99yHuIWn3UQ9w==}
+    engines: {node: '>= 10'}
+    cpu: [riscv64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-x64-gnu@0.1.92':
+    resolution: {integrity: sha512-tFd6MwbEhZ1g64iVY2asV+dOJC+GT3Yd6UH4G3Hp0/VHQ6qikB+nvXEULskFYZ0+wFqlGPtXjG1Jmv7sJy+3Ww==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-x64-musl@0.1.92':
+    resolution: {integrity: sha512-uSuqeSveB/ZGd72VfNbHCSXO9sArpZTvznMVsb42nqPP7gBGEH6NJQ0+hmF+w24unEmxBhPYakP/Wiosm16KkA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.92':
+    resolution: {integrity: sha512-20SK5AU/OUNz9ZuoAPj5ekWai45EIBDh/XsdrVZ8le/pJVlhjFU3olbumSQUXRFn7lBRS+qwM8kA//uLaDx6iQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@napi-rs/canvas-win32-x64-msvc@0.1.92':
+    resolution: {integrity: sha512-KEhyZLzq1MXCNlXybz4k25MJmHFp+uK1SIb8yJB0xfrQjz5aogAMhyseSzewo+XxAq3OAOdyKvfHGNzT3w1RPg==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
+  '@napi-rs/canvas@0.1.92':
+    resolution: {integrity: sha512-q7ZaUCJkEU5BeOdE7fBx1XWRd2T5Ady65nxq4brMf5L4cE1VV/ACq5w9Z5b/IVJs8CwSSIwc30nlthH0gFo4Ig==}
+    engines: {node: '>= 10'}
 
   '@napi-rs/wasm-runtime@0.2.9':
     resolution: {integrity: sha512-OKRBiajrrxB9ATokgEQoG87Z25c67pCpYcCwmXYX8PBftC9pBfN18gnm/fh1wurSLEKIAt+QRFLFCQISrb66Jg==}
@@ -7665,9 +7858,6 @@ packages:
   '@types/normalize-package-data@2.4.4':
     resolution: {integrity: sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA==}
 
-  '@types/prop-types@15.7.14':
-    resolution: {integrity: sha512-gNMvNH49DJ7OJYv+KAKn0Xp45p8PLl6zo2YnvDIbTd4J6MER2BmWN49TG7n9LvkyihINxeKW8+3bfS2yDC9dzQ==}
-
   '@types/qs@6.9.18':
     resolution: {integrity: sha512-kK7dgTYDyGqS+e2Q4aK9X3D7q234CIZ1Bv0q/7Z5IwRDoADNU81xXJK/YVyLbLTZCoIwUoDoffFeF+p/eIklAA==}
 
@@ -7685,9 +7875,6 @@ packages:
   '@types/react-tooltip@4.2.4':
     resolution: {integrity: sha512-UzjzmgY/VH3Str6DcAGTLMA1mVVhGOyARNTANExrirtp+JgxhaIOVDxq4TIRmpSi4voLv+w4HA9CC5GvhhCA0A==}
     deprecated: This is a stub types definition. react-tooltip provides its own type definitions, so you do not need this installed.
-
-  '@types/react@18.3.21':
-    resolution: {integrity: sha512-gXLBtmlcRJeT09/sI4PxVwyrku6SaNUj/6cMubjE6T6XdY1fDmBL7r0nX0jbSZPU/Xr0KuwLLZh6aOYY5d91Xw==}
 
   '@types/react@19.1.13':
     resolution: {integrity: sha512-hHkbU/eoO3EG5/MZkuFSKmYqPbSVk5byPFa3e7y/8TybHiLMACgI8seVYlicwk7H5K/rI2px9xrQp/C+AUDTiQ==}
@@ -18903,6 +19090,53 @@ snapshots:
       hls.js: 1.5.20
       mux-embed: 5.9.0
 
+  '@napi-rs/canvas-android-arm64@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-darwin-arm64@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-darwin-x64@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm64-musl@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-linux-x64-gnu@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-linux-x64-musl@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas-win32-x64-msvc@0.1.92':
+    optional: true
+
+  '@napi-rs/canvas@0.1.92':
+    optionalDependencies:
+      '@napi-rs/canvas-android-arm64': 0.1.92
+      '@napi-rs/canvas-darwin-arm64': 0.1.92
+      '@napi-rs/canvas-darwin-x64': 0.1.92
+      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.92
+      '@napi-rs/canvas-linux-arm64-gnu': 0.1.92
+      '@napi-rs/canvas-linux-arm64-musl': 0.1.92
+      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.92
+      '@napi-rs/canvas-linux-x64-gnu': 0.1.92
+      '@napi-rs/canvas-linux-x64-musl': 0.1.92
+      '@napi-rs/canvas-win32-arm64-msvc': 0.1.92
+      '@napi-rs/canvas-win32-x64-msvc': 0.1.92
+
   '@napi-rs/wasm-runtime@0.2.9':
     dependencies:
       '@emnapi/core': 1.7.1
@@ -23023,8 +23257,6 @@ snapshots:
 
   '@types/normalize-package-data@2.4.4': {}
 
-  '@types/prop-types@15.7.14': {}
-
   '@types/qs@6.9.18': {}
 
   '@types/range-parser@1.2.7': {}
@@ -23035,7 +23267,7 @@ snapshots:
 
   '@types/react-responsive-masonry@2.6.0':
     dependencies:
-      '@types/react': 18.3.21
+      '@types/react': 19.1.13
 
   '@types/react-tooltip@4.2.4(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
     dependencies:
@@ -23043,11 +23275,6 @@ snapshots:
     transitivePeerDependencies:
       - react
       - react-dom
-
-  '@types/react@18.3.21':
-    dependencies:
-      '@types/prop-types': 15.7.14
-      csstype: 3.1.3
 
   '@types/react@19.1.13':
     dependencies:
@@ -23455,6 +23682,17 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@vitejs/plugin-react@4.4.1(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))':
+    dependencies:
+      '@babel/core': 7.27.1
+      '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.27.1)
+      '@babel/plugin-transform-react-jsx-source': 7.27.1(@babel/core@7.27.1)
+      '@types/babel__core': 7.20.5
+      react-refresh: 0.17.0
+      vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+    transitivePeerDependencies:
+      - supports-color
+
   '@vitest/coverage-v8@3.2.4(vitest@3.2.4)':
     dependencies:
       '@ampproject/remapping': 2.3.0
@@ -23511,6 +23749,14 @@ snapshots:
       magic-string: 0.30.19
     optionalDependencies:
       vite: 6.3.5(@types/node@20.17.43)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+
+  '@vitest/mocker@3.2.4(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))':
+    dependencies:
+      '@vitest/spy': 3.2.4
+      estree-walker: 3.0.3
+      magic-string: 0.30.19
+    optionalDependencies:
+      vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
 
   '@vitest/pretty-format@2.0.5':
     dependencies:
@@ -32199,6 +32445,27 @@ snapshots:
       - tsx
       - yaml
 
+  vite-node@3.2.4(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1):
+    dependencies:
+      cac: 6.7.14
+      debug: 4.4.3(supports-color@8.1.1)
+      es-module-lexer: 1.7.0
+      pathe: 2.0.3
+      vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+    transitivePeerDependencies:
+      - '@types/node'
+      - jiti
+      - less
+      - lightningcss
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - supports-color
+      - terser
+      - tsx
+      - yaml
+
   vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)):
     dependencies:
       '@babel/core': 7.27.1
@@ -32371,6 +32638,50 @@ snapshots:
     optionalDependencies:
       '@types/debug': 4.1.12
       '@types/node': 20.17.43
+      '@vitest/ui': 3.2.4(vitest@3.2.4)
+      jsdom: 26.1.0
+    transitivePeerDependencies:
+      - jiti
+      - less
+      - lightningcss
+      - msw
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - supports-color
+      - terser
+      - tsx
+      - yaml
+
+  vitest@3.2.4(@types/debug@4.1.12)(@types/node@22.15.17)(@vitest/ui@3.2.4)(jiti@2.6.1)(jsdom@26.1.0)(terser@5.44.0)(yaml@2.8.1):
+    dependencies:
+      '@types/chai': 5.2.3
+      '@vitest/expect': 3.2.4
+      '@vitest/mocker': 3.2.4(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
+      '@vitest/pretty-format': 3.2.4
+      '@vitest/runner': 3.2.4
+      '@vitest/snapshot': 3.2.4
+      '@vitest/spy': 3.2.4
+      '@vitest/utils': 3.2.4
+      chai: 5.2.0
+      debug: 4.4.3(supports-color@8.1.1)
+      expect-type: 1.2.1
+      magic-string: 0.30.19
+      pathe: 2.0.3
+      picomatch: 4.0.3
+      std-env: 3.9.0
+      tinybench: 2.9.0
+      tinyexec: 0.3.2
+      tinyglobby: 0.2.15
+      tinypool: 1.1.1
+      tinyrainbow: 2.0.0
+      vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+      vite-node: 3.2.4(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@types/debug': 4.1.12
+      '@types/node': 22.15.17
       '@vitest/ui': 3.2.4(vitest@3.2.4)
       jsdom: 26.1.0
     transitivePeerDependencies:
