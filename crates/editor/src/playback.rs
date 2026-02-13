@@ -521,6 +521,8 @@ impl Playback {
             let warmup_no_frames_timeout = Duration::from_secs(5);
             let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
+            let mut warmup_contiguous_prefetched = 0usize;
+            let mut warmup_buffer_changed = false;
             info!(
                 warmup_target_frames,
                 warmup_after_first_timeout_ms = warmup_after_first_timeout.as_secs_f64() * 1000.0,
@@ -528,12 +530,16 @@ impl Playback {
             );
 
             while !*stop_rx.borrow() {
-                let contiguous_prefetched = if first_frame_time.is_some() {
-                    count_contiguous_prefetched_frames(
+                if first_frame_time.is_some() && warmup_buffer_changed {
+                    warmup_contiguous_prefetched = count_contiguous_prefetched_frames(
                         &prefetch_buffer,
                         frame_number,
                         warmup_target_frames,
-                    )
+                    );
+                    warmup_buffer_changed = false;
+                }
+                let contiguous_prefetched = if first_frame_time.is_some() {
+                    warmup_contiguous_prefetched
                 } else {
                     0
                 };
@@ -560,7 +566,11 @@ impl Playback {
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
                         if prefetched.generation == seek_generation {
+                            let pre_insert_len = prefetch_buffer.len();
                             insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
+                            if prefetch_buffer.len() != pre_insert_len {
+                                warmup_buffer_changed = true;
+                            }
                             if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
                                 first_frame_time = Some(Instant::now());
                             }
