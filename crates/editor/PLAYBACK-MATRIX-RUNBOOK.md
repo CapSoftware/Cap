@@ -69,6 +69,7 @@ Each run directory contains:
 - timestamped `full` scenario JSON
 - timestamped `scrub` scenario JSON
 - `<platform>-<gpu>-aggregate.md` summary table
+- `<platform>-<gpu>-validation.json` matrix validation result
 
 ## Cross-machine aggregation
 

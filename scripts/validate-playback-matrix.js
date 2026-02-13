@@ -20,6 +20,7 @@ function parseArgs(argv) {
 		requiredCells: [],
 		requiredFormats: [],
 		useDefaultMatrix: true,
+		outputJson: null,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -57,6 +58,12 @@ function parseArgs(argv) {
 			options.useDefaultMatrix = false;
 			continue;
 		}
+		if (arg === "--output-json") {
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --output-json");
+			options.outputJson = path.resolve(value);
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -74,7 +81,7 @@ function parseCell(value) {
 }
 
 function printUsage() {
-	console.log(`Usage: node scripts/validate-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] [--require-cell platform:gpu:scenario ...] [--require-formats mp4,fragmented]
+	console.log(`Usage: node scripts/validate-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] [--require-cell platform:gpu:scenario ...] [--require-formats mp4,fragmented] [--output-json <path>]
 
 Validates that required benchmark matrix cells are present in playback benchmark JSON results.
 
@@ -83,6 +90,7 @@ Options:
   --require-cell         Required cell as platform:gpu:scenario (repeatable)
   --require-formats      Comma-separated required formats per cell
   --no-default-matrix    Disable built-in required matrix
+  --output-json          Write validation result JSON file
   --help, -h             Show help`);
 }
 
@@ -200,8 +208,22 @@ function main() {
 		}
 	}
 
-	console.log(`Validated ${requiredCells.length} required cells`);
-	console.log(`Observed ${observed.size} unique cells`);
+	const validationResult = {
+		validatedCells: requiredCells.length,
+		observedCells: observed.size,
+		requiredFormats: options.requiredFormats,
+		missingCells,
+		formatFailures,
+		passed: missingCells.length === 0 && formatFailures.length === 0,
+	};
+
+	if (options.outputJson) {
+		fs.writeFileSync(options.outputJson, JSON.stringify(validationResult, null, 2));
+		console.log(`Validation JSON: ${options.outputJson}`);
+	}
+
+	console.log(`Validated ${validationResult.validatedCells} required cells`);
+	console.log(`Observed ${validationResult.observedCells} unique cells`);
 
 	if (missingCells.length > 0) {
 		console.log("Missing required cells:");
@@ -219,7 +241,7 @@ function main() {
 		}
 	}
 
-	if (missingCells.length > 0 || formatFailures.length > 0) {
+	if (!validationResult.passed) {
 		process.exit(1);
 	}
 

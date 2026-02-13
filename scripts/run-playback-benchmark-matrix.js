@@ -174,11 +174,17 @@ function main() {
 	console.log(`Aggregate markdown: ${aggregatePath}`);
 
 	if (options.validate) {
+		const validationJsonPath = path.join(
+			options.outputDir,
+			`${options.platform}-${options.gpu}-validation.json`,
+		);
 		const validateArgs = [
 			"scripts/validate-playback-matrix.js",
 			"--input",
 			options.outputDir,
 			"--no-default-matrix",
+			"--output-json",
+			validationJsonPath,
 			"--require-cell",
 			`${options.platform}:${options.gpu}:full`,
 			"--require-cell",
@@ -191,6 +197,7 @@ function main() {
 
 		run("node", validateArgs);
 		console.log("Matrix run validation passed");
+		console.log(`Validation JSON: ${validationJsonPath}`);
 	}
 }
 
