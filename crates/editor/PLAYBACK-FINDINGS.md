@@ -168,6 +168,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Frontend seek calls are requestAnimationFrame-batched.
    - Only the latest pending seek frame is sent while an async seek is in-flight.
 
+8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
+   - `playback-test-runner` supports `--json-output` for structured report emission.
+   - JSON output includes command metadata, system info, summary, and per-recording test detail.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -264,6 +268,7 @@ Decoder Pipeline:
 9. Added playback runtime startup telemetry logs for first frame and audio callback bring-up.
 10. Enhanced decode benchmark example with structured JSON output and configurable sample depth.
 11. Added timeline seek dispatch coalescing to reduce seek command storms during drag.
+12. Added JSON report output support to playback-test-runner for benchmark evidence collection.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -276,6 +281,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: added first-render and audio-callback startup latency logging.
 - `crates/editor/examples/decode-benchmark.rs`: added `--output-json`, startup metrics, and configurable sequential/random sampling.
 - `apps/desktop/src/routes/editor/Timeline/index.tsx`: added requestAnimationFrame-based seek coalescing with in-flight protection.
+- `crates/recording/examples/playback-test-runner.rs`: added `--json-output` to emit structured benchmark reports.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
