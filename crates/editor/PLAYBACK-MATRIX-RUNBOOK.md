@@ -106,6 +106,12 @@ Equivalent shortcut:
 pnpm bench:playback:validate -- --input /path/to/all-machine-results --require-formats mp4,fragmented
 ```
 
+One-shot finalize command:
+
+```bash
+pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented
+```
+
 ## Evidence checklist
 
 1. Confirm all matrix rows exist.
