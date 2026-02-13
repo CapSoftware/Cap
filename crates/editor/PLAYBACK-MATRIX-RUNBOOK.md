@@ -114,6 +114,8 @@ pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-di
 pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --output-json /tmp/playback-matrix-final/playback-finalize-summary.json
 ```
 
+Finalize summary JSON includes artifact paths, gate outcomes, settings, and git branch/commit metadata when available.
+
 Include optimization thresholds when finalizing:
 
 ```bash
