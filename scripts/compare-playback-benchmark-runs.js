@@ -15,6 +15,7 @@ function parseArgs(argv) {
 		allowMissingCandidate: false,
 		failOnCandidateOnly: false,
 		minSamplesPerRow: 1,
+		failOnParseErrors: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -84,6 +85,10 @@ function parseArgs(argv) {
 			options.minSamplesPerRow = value;
 			continue;
 		}
+		if (arg === "--fail-on-parse-errors") {
+			options.failOnParseErrors = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -91,7 +96,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--fail-on-parse-errors]
 
 Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
@@ -141,14 +146,38 @@ function maximum(values) {
 
 function collectMetrics(files) {
 	const accumulators = new Map();
+	const stats = {
+		totalFiles: files.length,
+		parsedFiles: 0,
+		usableFiles: 0,
+		skippedFiles: 0,
+		parseErrors: [],
+	};
 
 	for (const filePath of files) {
-		const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+		let parsed;
+		try {
+			parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+			stats.parsedFiles += 1;
+		} catch (error) {
+			stats.parseErrors.push({
+				file: filePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			continue;
+		}
+
+		if (!Array.isArray(parsed.reports) || parsed.reports.length === 0) {
+			stats.skippedFiles += 1;
+			continue;
+		}
+
 		const notes = parseNotes(parsed.notes);
 		const platform = notes.platform ?? "unknown";
 		const gpu = notes.gpu ?? "unknown";
 		const scenario = notes.scenario ?? "unspecified";
 		const reports = Array.isArray(parsed.reports) ? parsed.reports : [];
+		let fileContributedRows = false;
 
 		for (const report of reports) {
 			const key = `${platform}|${gpu}|${scenario}|${report.recording_name ?? "unknown"}|${report.is_fragmented ? "fragmented" : "mp4"}`;
@@ -169,6 +198,13 @@ function collectMetrics(files) {
 			const scrubP95Values = scrub
 				.map((entry) => entry.p95_seek_time_ms)
 				.filter((entry) => typeof entry === "number");
+			const hasUsableMetrics =
+				fpsValues.length > 0 ||
+				startupValues.length > 0 ||
+				scrubP95Values.length > 0;
+			if (!hasUsableMetrics) {
+				continue;
+			}
 
 			const existing = accumulators.get(key) ?? {
 				key,
@@ -187,6 +223,13 @@ function collectMetrics(files) {
 			existing.startupSamples.push(...startupValues);
 			existing.scrubP95Samples.push(...scrubP95Values);
 			accumulators.set(key, existing);
+			fileContributedRows = true;
+		}
+
+		if (fileContributedRows) {
+			stats.usableFiles += 1;
+		} else {
+			stats.skippedFiles += 1;
 		}
 	}
 
@@ -209,7 +252,7 @@ function collectMetrics(files) {
 		});
 	}
 
-	return rows;
+	return { rows, stats };
 }
 
 function delta(candidate, baseline) {
@@ -346,6 +389,8 @@ function toMarkdown(
 	missingCandidateRows,
 	candidateOnlyRows,
 	insufficientSampleRows,
+	baselineStats,
+	candidateStats,
 	options,
 ) {
 	const regressions = comparisons.filter(
@@ -357,7 +402,25 @@ function toMarkdown(
 	md += `Tolerance: fps_drop<=${options.allowFpsDrop}, startup_increase<=${options.allowStartupIncreaseMs}ms, scrub_p95_increase<=${options.allowScrubP95IncreaseMs}ms\n\n`;
 	md += `Coverage gate: missing_candidate=${options.allowMissingCandidate ? "allow" : "fail"}, candidate_only=${options.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
 	md += `Sample gate: min_samples_per_row>=${options.minSamplesPerRow}\n\n`;
+	md += `Parse gate: parse_errors=${options.failOnParseErrors ? "fail" : "allow"}\n\n`;
+	md += `Baseline files: total=${baselineStats.totalFiles}, parsed=${baselineStats.parsedFiles}, usable=${baselineStats.usableFiles}, skipped=${baselineStats.skippedFiles}, parse_errors=${baselineStats.parseErrors.length}\n`;
+	md += `Candidate files: total=${candidateStats.totalFiles}, parsed=${candidateStats.parsedFiles}, usable=${candidateStats.usableFiles}, skipped=${candidateStats.skippedFiles}, parse_errors=${candidateStats.parseErrors.length}\n\n`;
 	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}, insufficient sample rows: ${insufficientSampleRows.length}\n\n`;
+	if (
+		baselineStats.parseErrors.length > 0 ||
+		candidateStats.parseErrors.length > 0
+	) {
+		md += "## Parse Errors\n\n";
+		md += "| Side | File | Error |\n";
+		md += "|---|---|---|\n";
+		for (const entry of baselineStats.parseErrors.slice(0, 20)) {
+			md += `| baseline | ${entry.file} | ${entry.error.replace(/\|/g, "\\|")} |\n`;
+		}
+		for (const entry of candidateStats.parseErrors.slice(0, 20)) {
+			md += `| candidate | ${entry.file} | ${entry.error.replace(/\|/g, "\\|")} |\n`;
+		}
+		md += "\n";
+	}
 	if (missingCandidateRows.length > 0) {
 		md += "## Missing Candidate Rows\n\n";
 		md += "| Platform | GPU | Scenario | Recording | Format |\n";
@@ -402,6 +465,8 @@ function buildJsonOutput(
 	missingCandidateRows,
 	candidateOnlyRows,
 	insufficientSampleRows,
+	baselineStats,
+	candidateStats,
 	options,
 ) {
 	const regressions = comparisons.filter(
@@ -431,6 +496,13 @@ function buildJsonOutput(
 	if (options.failOnCandidateOnly && hasCandidateOnlyRows) {
 		failureReasons.push("candidate_only_rows");
 	}
+	if (
+		options.failOnParseErrors &&
+		(baselineStats.parseErrors.length > 0 ||
+			candidateStats.parseErrors.length > 0)
+	) {
+		failureReasons.push("parse_errors");
+	}
 	const passed = failureReasons.length === 0;
 	return {
 		generatedAt: new Date().toISOString(),
@@ -441,6 +513,11 @@ function buildJsonOutput(
 			allowMissingCandidate: options.allowMissingCandidate,
 			failOnCandidateOnly: options.failOnCandidateOnly,
 			minSamplesPerRow: options.minSamplesPerRow,
+			failOnParseErrors: options.failOnParseErrors,
+		},
+		fileStats: {
+			baseline: baselineStats,
+			candidate: candidateStats,
 		},
 		summary: {
 			comparedRows: comparisons.length,
@@ -457,6 +534,10 @@ function buildJsonOutput(
 					options.allowMissingCandidate || !hasMissingCandidateRows,
 				candidateOnlyRows:
 					!options.failOnCandidateOnly || !hasCandidateOnlyRows,
+				parseErrors:
+					!options.failOnParseErrors ||
+					(baselineStats.parseErrors.length === 0 &&
+						candidateStats.parseErrors.length === 0),
 			},
 		},
 		regressions,
@@ -493,8 +574,10 @@ function main() {
 		throw new Error("No candidate JSON files found");
 	}
 
-	const baselineRows = collectMetrics(baselineFiles);
-	const candidateRows = collectMetrics(candidateFiles);
+	const baselineCollected = collectMetrics(baselineFiles);
+	const candidateCollected = collectMetrics(candidateFiles);
+	const baselineRows = baselineCollected.rows;
+	const candidateRows = candidateCollected.rows;
 	const {
 		comparisons,
 		missingCandidateRows,
@@ -506,6 +589,8 @@ function main() {
 		missingCandidateRows,
 		candidateOnlyRows,
 		insufficientSampleRows,
+		baselineCollected.stats,
+		candidateCollected.stats,
 		options,
 	);
 	const outputJson = buildJsonOutput(
@@ -513,6 +598,8 @@ function main() {
 		missingCandidateRows,
 		candidateOnlyRows,
 		insufficientSampleRows,
+		baselineCollected.stats,
+		candidateCollected.stats,
 		options,
 	);
 

@@ -103,6 +103,9 @@ function buildSummarySection(
 		markdown += `- Minimum samples per row: ${comparison.tolerance?.minSamplesPerRow ?? "n/a"}\n\n`;
 		markdown += `- Missing candidate policy: ${comparison.tolerance?.allowMissingCandidate ? "allow" : "fail"}\n`;
 		markdown += `- Candidate-only policy: ${comparison.tolerance?.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
+		markdown += `- Parse error policy: ${comparison.tolerance?.failOnParseErrors ? "fail" : "allow"}\n`;
+		markdown += `- Baseline parse errors: ${comparison.fileStats?.baseline?.parseErrors?.length ?? "n/a"}\n`;
+		markdown += `- Candidate parse errors: ${comparison.fileStats?.candidate?.parseErrors?.length ?? "n/a"}\n\n`;
 		const failureReasons = Array.isArray(comparison.summary?.failureReasons)
 			? comparison.summary.failureReasons
 			: [];

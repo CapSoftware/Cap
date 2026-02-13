@@ -377,6 +377,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/compare-playback-benchmark-runs.js` now emits `failureReasons` and `gateOutcomes` in summary JSON.
    - `scripts/publish-playback-matrix-summary.js` now surfaces comparison failure reasons when present.
 
+46. **Added parse-error gating and parse stats to comparison flows (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports `--fail-on-parse-errors`.
+   - Comparison JSON now includes baseline/candidate file parsing stats and parse error entries.
+   - `scripts/finalize-playback-matrix.js` now forwards parse-error gating option to compare stage; published summary surfaces parse policy and parse error counts.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -518,6 +523,7 @@ Decoder Pipeline:
 49. Added comparison JSON gate diagnostics (`failureReasons`, `gateOutcomes`) and surfaced failure reasons in published summary output.
 50. Corrected minimum sample gating semantics to only count comparable metrics and added compared-metric/effective-sample columns in comparison output.
 51. Extended finalize summary and publish output with comparison failure reasons and gate outcome metadata.
+52. Added comparison parse-error gating (`--fail-on-parse-errors`) with parse stats surfaced in comparison JSON, finalize settings, and published summaries.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -565,6 +571,9 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: comparison JSON summary now includes explicit `failureReasons` and `gateOutcomes` fields.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes comparison failure reasons when present.
 - `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison failure reasons and gate outcome fields in results metadata.
+- `scripts/compare-playback-benchmark-runs.js`: added parse-error gating and baseline/candidate file parse stats/parse error entries in JSON output.
+- `scripts/finalize-playback-matrix.js`: forwards parse-error gating and records parse-error policy in finalize summary settings.
+- `scripts/publish-playback-matrix-summary.js`: published comparison status now includes parse policy and baseline/candidate parse error counts.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: warmup contiguous coverage counts are now cached and recomputed only on warmup buffer changes.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
