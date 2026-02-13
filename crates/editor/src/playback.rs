@@ -16,7 +16,7 @@ use cpal::{
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet},
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
@@ -99,6 +99,39 @@ impl FrameCache {
         self.cache
             .put(frame_number, (segment_frames, segment_index));
     }
+}
+
+fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_frame: u32) {
+    while buffer.len() > PREFETCH_BUFFER_SIZE {
+        let far_ahead_frame = buffer
+            .iter()
+            .rev()
+            .find(|(frame, _)| **frame > current_frame + PREFETCH_BUFFER_SIZE as u32)
+            .map(|(frame, _)| *frame);
+
+        if let Some(frame) = far_ahead_frame {
+            buffer.remove(&frame);
+            continue;
+        }
+
+        let Some(oldest_frame) = buffer.keys().next().copied() else {
+            break;
+        };
+        buffer.remove(&oldest_frame);
+    }
+}
+
+fn insert_prefetched_frame(
+    buffer: &mut BTreeMap<u32, PrefetchedFrame>,
+    prefetched: PrefetchedFrame,
+    current_frame: u32,
+) {
+    if prefetched.frame_number < current_frame {
+        return;
+    }
+
+    buffer.entry(prefetched.frame_number).or_insert(prefetched);
+    trim_prefetch_buffer(buffer, current_frame);
 }
 
 impl Playback {
@@ -436,8 +469,7 @@ impl Playback {
                 .max(Duration::from_millis(1))
                 .min(Duration::from_millis(4));
             let mut frame_number = self.start_frame_number;
-            let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
-                VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
+            let mut prefetch_buffer: BTreeMap<u32, PrefetchedFrame> = BTreeMap::new();
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
             let mut seek_generation = 0u64;
             let base_skip_threshold = (fps / 6).clamp(6, 16);
@@ -486,8 +518,8 @@ impl Playback {
 
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
-                        if prefetched.generation == seek_generation && prefetched.frame_number >= frame_number {
-                            prefetch_buffer.push_back(prefetched);
+                        if prefetched.generation == seek_generation {
+                            insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
                             if first_frame_time.is_none() {
                                 first_frame_time = Some(Instant::now());
                             }
@@ -502,10 +534,6 @@ impl Playback {
                     }
                 }
             }
-
-            prefetch_buffer
-                .make_contiguous()
-                .sort_by_key(|p| p.frame_number);
 
             let mut playback_anchor_start = Instant::now();
             let mut playback_anchor_frame = frame_number;
@@ -537,25 +565,8 @@ impl Playback {
                     cached_project = self.project.borrow_and_update().clone();
                 }
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
-                    if prefetched.generation == seek_generation
-                        && prefetched.frame_number >= frame_number
-                    {
-                        prefetch_buffer.push_back(prefetched);
-                        while prefetch_buffer.len() > PREFETCH_BUFFER_SIZE {
-                            if let Some(idx) = prefetch_buffer
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, p)| {
-                                    p.frame_number > frame_number + PREFETCH_BUFFER_SIZE as u32
-                                })
-                                .max_by_key(|(_, p)| p.frame_number)
-                                .map(|(i, _)| i)
-                            {
-                                prefetch_buffer.remove(idx);
-                            } else {
-                                prefetch_buffer.pop_front();
-                            }
-                        }
+                    if prefetched.generation == seek_generation {
+                        insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
                     }
                 }
 
@@ -603,12 +614,7 @@ impl Playback {
                     was_cached = true;
                     Some(cached)
                 } else {
-                    let prefetched_idx = prefetch_buffer
-                        .iter()
-                        .position(|p| p.frame_number == frame_number);
-
-                    if let Some(idx) = prefetched_idx {
-                        let prefetched = prefetch_buffer.remove(idx).unwrap();
+                    if let Some(prefetched) = prefetch_buffer.remove(&frame_number) {
                         Some((
                             Arc::new(prefetched.segment_frames),
                             prefetched.segment_index,
@@ -640,7 +646,7 @@ impl Playback {
                                             found_frame = Some(prefetched);
                                             break;
                                         } else if prefetched.frame_number >= frame_number {
-                                            prefetch_buffer.push_back(prefetched);
+                                            insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
                                         }
                                     }
                                     _ = tokio::time::sleep(in_flight_poll_interval) => {
@@ -665,11 +671,7 @@ impl Playback {
                                     prefetched.segment_index,
                                 ))
                             } else {
-                                let prefetched_idx = prefetch_buffer
-                                    .iter()
-                                    .position(|p| p.frame_number == frame_number);
-                                if let Some(idx) = prefetched_idx {
-                                    let prefetched = prefetch_buffer.remove(idx).unwrap();
+                                if let Some(prefetched) = prefetch_buffer.remove(&frame_number) {
                                     Some((
                                         Arc::new(prefetched.segment_frames),
                                         prefetched.segment_index,
@@ -698,7 +700,11 @@ impl Playback {
                                         prefetched.segment_index,
                                     ))
                                 } else {
-                                    prefetch_buffer.push_back(prefetched);
+                                    insert_prefetched_frame(
+                                        &mut prefetch_buffer,
+                                        prefetched,
+                                        frame_number,
+                                    );
                                     frame_number = frame_number.saturating_add(1);
                                     total_frames_skipped += 1;
                                     continue;
@@ -871,7 +877,7 @@ impl Playback {
                         total_frames_skipped += skipped as u64;
                         skip_events = skip_events.saturating_add(1);
 
-                        prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        prefetch_buffer.retain(|frame, _| *frame >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                         if has_audio
