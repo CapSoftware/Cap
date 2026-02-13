@@ -152,12 +152,16 @@ fn count_contiguous_prefetched_frames(
     limit: usize,
 ) -> usize {
     let mut contiguous = 0usize;
-    while contiguous < limit {
-        let frame = start_frame.saturating_add(contiguous as u32);
-        if !buffer.contains_key(&frame) {
+    let mut expected_frame = start_frame;
+    for (frame, _) in buffer.range(start_frame..) {
+        if *frame != expected_frame {
             break;
         }
         contiguous += 1;
+        if contiguous >= limit {
+            break;
+        }
+        expected_frame = expected_frame.saturating_add(1);
     }
     contiguous
 }
