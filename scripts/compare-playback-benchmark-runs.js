@@ -270,11 +270,20 @@ function compareMetrics(baselineRows, candidateRows, options) {
 			baseline.scrubSampleCount,
 			candidate.scrubSampleCount,
 		);
-		const effectiveSampleCount = Math.min(
-			fpsMinSamples,
-			startupMinSamples,
-			scrubMinSamples,
-		);
+		const comparableSampleCounts = [];
+		if (fpsDelta !== null) {
+			comparableSampleCounts.push(fpsMinSamples);
+		}
+		if (startupDelta !== null) {
+			comparableSampleCounts.push(startupMinSamples);
+		}
+		if (scrubDelta !== null) {
+			comparableSampleCounts.push(scrubMinSamples);
+		}
+		const effectiveSampleCount =
+			comparableSampleCounts.length > 0
+				? Math.min(...comparableSampleCounts)
+				: 0;
 		if (effectiveSampleCount < options.minSamplesPerRow) {
 			insufficientSampleRows.push({
 				platform: candidate.platform,
@@ -314,6 +323,7 @@ function compareMetrics(baselineRows, candidateRows, options) {
 			fpsMinSamples,
 			startupMinSamples,
 			scrubMinSamples,
+			comparedMetricCount: comparableSampleCounts.length,
 			effectiveSampleCount,
 			fpsDelta,
 			startupDelta,
@@ -377,10 +387,11 @@ function toMarkdown(
 		md += "\n";
 	}
 	md +=
-		"| Platform | GPU | Scenario | Recording | Format | B Runs | C Runs | F Samples | S Samples | Q Samples | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
-	md += "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|\n";
+		"| Platform | GPU | Scenario | Recording | Format | B Runs | C Runs | F Samples | S Samples | Q Samples | Metrics | Effective Samples | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
+	md +=
+		"|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n";
 	for (const row of comparisons) {
-		md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.baselineReportCount} | ${row.candidateReportCount} | ${row.fpsMinSamples} | ${row.startupMinSamples} | ${row.scrubMinSamples} | ${formatNumber(row.fpsDelta)} | ${formatNumber(row.startupDelta)} | ${formatNumber(row.scrubDelta)} | ${row.regressions.length > 0 ? row.regressions.join(", ") : "none"} |\n`;
+		md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.baselineReportCount} | ${row.candidateReportCount} | ${row.fpsMinSamples} | ${row.startupMinSamples} | ${row.scrubMinSamples} | ${row.comparedMetricCount} | ${row.effectiveSampleCount} | ${formatNumber(row.fpsDelta)} | ${formatNumber(row.startupDelta)} | ${formatNumber(row.scrubDelta)} | ${row.regressions.length > 0 ? row.regressions.join(", ") : "none"} |\n`;
 	}
 	md += "\n";
 	return md;
