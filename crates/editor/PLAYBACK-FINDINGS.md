@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-01-30
+**Last Updated**: 2026-02-13
 
 ### Performance Summary
 
@@ -60,10 +60,12 @@
 - ✅ Multi-position decoder pool for smooth scrubbing
 - ✅ Mic audio sync within tolerance
 - ✅ Camera-display sync perfect (0ms drift)
+- ✅ Editor playback now keeps a live seek channel during playback instead of stop/start restart loops
+- ✅ Audio playback defaults to low-latency streaming buffer path with bounded prefill
 
 ### Known Issues (Lower Priority)
 1. **System audio timing**: ~162ms difference inherited from recording-side timing issue
-2. **Display decoder init time**: 337ms due to multi-position pool (creates 3 decoders)
+2. **Display decoder init time**: baseline was 337ms from eager multi-decoder setup; now reduced by lazy decoder warmup but needs benchmark confirmation
 
 ---
 
@@ -73,12 +75,17 @@
 *(Update this section as you work)*
 
 - [ ] **Test fragmented mode** - Run playback tests on fragmented recordings
-- [ ] **Investigate display decoder init time** - 337ms may be optimizable
+- [ ] **Collect cross-platform benchmark evidence** - macOS 13+ and Windows GPU matrix for FPS, scrub settle, audio start latency, and A/V drift
+- [ ] **Validate lazy decoder warmup impact** - measure display decoder init and scrub settle before/after on real recordings
+- [ ] **Validate streaming audio startup/sync** - benchmark low-latency path vs legacy pre-render path across long timelines
 
 ### Completed
 - [x] **Run initial baseline** - Established current playback performance metrics (2026-01-28)
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
+- [x] **Remove seek restart churn in timeline path** - in-playback seeks now route through live playback handle (2026-02-13)
+- [x] **Switch default audio mode to low-latency streaming** - full prerender now opt-in by env flag (2026-02-13)
+- [x] **Reduce eager AVAssetReader decoder warmup** - pool now initializes lazily beyond first warm decoders (2026-02-13)
 
 ---
 
@@ -127,13 +134,36 @@ cargo run -p cap-recording --example playback-test-runner -- full
 
 ## Completed Fixes
 
-*(Document fixes here as they are implemented)*
+1. **Low-latency audio startup enabled by default (2026-02-13)**
+   - `AudioPlayback::spawn()` now selects streaming `create_stream()` path by default.
+   - Legacy full-timeline prerender path is still available via `CAP_AUDIO_PRERENDER_PLAYBACK=1`.
+   - `AudioPlaybackBuffer` is available on all platforms so Windows can use streaming sync logic.
+
+2. **In-playback seek path without stop/start (2026-02-13)**
+   - Added seek channel to `PlaybackHandle` and playback loop.
+   - `seek_to` and `set_playhead_position` commands now forward seek requests to active playback.
+   - Timeline seek no longer tears down and recreates playback while playing.
+
+3. **Lazy decoder pool warmup on macOS AVAssetReader (2026-02-13)**
+   - Initial warmup now creates only a small subset of decoder instances.
+   - Additional decoder instances are initialized lazily when scrub patterns request them.
+   - Failed lazy init falls back safely to currently available decoders.
 
 ---
 
 ## Root Cause Analysis Archive
 
-*(Document investigated issues here)*
+1. **Audio start delay from full-track prerender**
+   - Root cause: playback startup used `create_stream_prerendered()` for all sample formats, forcing full timeline audio render before output stream started.
+   - Fix direction: switch default to incremental `AudioPlaybackBuffer` path with bounded prefill and live playhead correction.
+
+2. **Scrub lag from playback restart loop**
+   - Root cause: timeline seek while playing called stop → seek → start, rebuilding playback/audio state on every interactive seek.
+   - Fix direction: add live seek channel into running playback loop and route frontend seeks to it.
+
+3. **Display decoder init inflation on macOS**
+   - Root cause: AVAssetReader decoder pool eagerly initialized multiple decoders during startup.
+   - Fix direction: reduce eager warmup and lazily instantiate additional pool decoders when scrub behavior actually needs them.
 
 ---
 
@@ -196,6 +226,37 @@ Decoder Pipeline:
 
 **Stopping point**: Where you left off, what to do next
 ```
+
+---
+
+### Session 2026-02-13 (Audio Startup + Live Seek + Lazy Decoder Warmup)
+
+**Goal**: Remove major editor playback bottlenecks affecting startup latency, scrub responsiveness, and decoder init overhead.
+
+**What was done**:
+1. Switched playback audio startup default to streaming buffer path.
+2. Kept prerender audio path behind `CAP_AUDIO_PRERENDER_PLAYBACK` as explicit fallback.
+3. Enabled `AudioPlaybackBuffer` for all platforms so Windows uses live buffering/sync path.
+4. Added a seek channel to `PlaybackHandle` and integrated seek handling into the main playback loop.
+5. Updated Tauri seek/playhead commands to forward seeks into active playback handle.
+6. Removed frontend timeline stop/start cycle when seeking while playing.
+7. Reduced AVAssetReader eager pool warmup and added lazy decoder instantiation for additional pool slots.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
+- `crates/editor/src/audio.rs`: cross-platform `AudioPlaybackBuffer`, windows-only smooth seek helper.
+- `apps/desktop/src-tauri/src/lib.rs`: forward `seek_to` and `set_playhead_position` into active playback handle.
+- `apps/desktop/src/routes/editor/Timeline/index.tsx`: seek while playing now sends direct `seekTo` without playback restart.
+- `crates/rendering/src/decoder/avassetreader.rs`: lower eager decoder warmup and lazy pool growth.
+
+**Results**:
+- ✅ `cargo +stable check -p cap-editor` passes after changes.
+- ✅ `cargo +stable check -p cap-rendering` passes after changes.
+- ✅ `pnpm --dir apps/desktop exec tsc --noEmit` passes after frontend seek changes.
+- ⚠️ `cargo +stable check -p cap-desktop` and `cargo +stable run -p cap-recording --example playback-test-runner -- list` fail in this Linux environment because `scap-targets` does not currently compile on this target (`DisplayIdImpl`/`WindowImpl` unresolved), preventing local benchmark execution here.
+- ⚠️ Cross-platform FPS/scrub/A-V benchmark evidence still pending on macOS and Windows devices with real recordings.
+
+**Stopping point**: Core playback code-path optimizations are implemented and compiling in touched crates; next step is benchmark execution on macOS 13+ and Windows GPU matrix to quantify gains.
 
 ---
 
