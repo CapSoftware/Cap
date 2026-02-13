@@ -172,6 +172,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `playback-test-runner` supports `--json-output` for structured report emission.
    - JSON output includes command metadata, system info, summary, and per-recording test detail.
 
+9. **Added JSON aggregate utility for cross-platform benchmark collation (2026-02-13)**
+   - `scripts/aggregate-playback-benchmarks.js` builds a markdown table from multiple JSON outputs.
+   - Aggregates platform/gpu/scenario-tagged runs for matrix reporting.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -269,6 +273,7 @@ Decoder Pipeline:
 10. Enhanced decode benchmark example with structured JSON output and configurable sample depth.
 11. Added timeline seek dispatch coalescing to reduce seek command storms during drag.
 12. Added JSON report output support to playback-test-runner for benchmark evidence collection.
+13. Added cross-platform benchmark JSON aggregation utility script.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -282,6 +287,7 @@ Decoder Pipeline:
 - `crates/editor/examples/decode-benchmark.rs`: added `--output-json`, startup metrics, and configurable sequential/random sampling.
 - `apps/desktop/src/routes/editor/Timeline/index.tsx`: added requestAnimationFrame-based seek coalescing with in-flight protection.
 - `crates/recording/examples/playback-test-runner.rs`: added `--json-output` to emit structured benchmark reports.
+- `scripts/aggregate-playback-benchmarks.js`: added markdown aggregation for multiple playback benchmark JSON artifacts.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
