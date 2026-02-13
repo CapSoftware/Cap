@@ -435,6 +435,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
+- `PLAYBACK-MATRIX-RUNBOOK.md` - Cross-platform playback evidence collection process
 - `../recording/FINDINGS.md` - Recording performance findings (source of test files)
 - `../recording/BENCHMARKS.md` - Recording benchmark data
 - `examples/playback-test-runner.rs` - Playback test implementation
