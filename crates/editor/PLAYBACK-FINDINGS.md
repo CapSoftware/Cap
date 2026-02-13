@@ -159,6 +159,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 5. **Playback runtime emits startup latency signals (2026-02-13)**
    - Playback loop now logs first rendered frame latency.
    - Audio stream setup now logs startup preparation time and first callback latency.
+   - Playback loop now logs seek settle latency (`seek_target_frame` to rendered frame).
 
 6. **Decode benchmark now supports machine-readable evidence output (2026-02-13)**
    - `decode-benchmark` supports `--output-json` for structured metric capture.
