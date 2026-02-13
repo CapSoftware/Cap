@@ -178,6 +178,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Catch-up skip threshold now adapts with late streak depth and logs skip event telemetry.
    - Warmup target and warmup timeout now scale with FPS, reducing startup buffering overhead.
    - Prefetch ahead/behind windows now scale with FPS to reduce unnecessary decode pressure at lower targets.
+   - Prefetch parallelism now scales with FPS target to increase decode throughput under 60fps workloads.
 
 8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
    - `playback-test-runner` supports `--json-output` for structured report emission.
