@@ -37,8 +37,6 @@ use crate::{
 
 const PREFETCH_BUFFER_SIZE: usize = 60;
 const PARALLEL_DECODE_TASKS: usize = 4;
-const MAX_PREFETCH_AHEAD: u32 = 60;
-const PREFETCH_BEHIND: u32 = 15;
 const FRAME_CACHE_SIZE: usize = 60;
 
 #[derive(Debug)]
@@ -168,8 +166,14 @@ impl Playback {
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
             const INITIAL_PARALLEL_TASKS: usize = 4;
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
+            let dynamic_prefetch_ahead = fps.clamp(30, 90);
+            let dynamic_prefetch_behind = (fps / 4).clamp(8, 24);
 
             let mut cached_project = prefetch_project.borrow().clone();
+            info!(
+                dynamic_prefetch_ahead,
+                dynamic_prefetch_behind, "Prefetch window configuration"
+            );
 
             loop {
                 if *prefetch_stop_rx.borrow() {
@@ -199,14 +203,14 @@ impl Playback {
                             in_flight_guard.clear();
                         }
 
-                        if is_backward_seek || seek_distance > MAX_PREFETCH_AHEAD / 2 {
+                        if is_backward_seek || seek_distance > dynamic_prefetch_ahead / 2 {
                             in_flight = FuturesUnordered::new();
                         }
                     }
                 }
 
                 let current_playback_frame = *playback_position_rx.borrow();
-                let max_prefetch_frame = current_playback_frame + MAX_PREFETCH_AHEAD;
+                let max_prefetch_frame = current_playback_frame + dynamic_prefetch_ahead;
 
                 let effective_parallel = if frames_decoded < RAMP_UP_AFTER_FRAMES {
                     INITIAL_PARALLEL_TASKS
@@ -279,7 +283,7 @@ impl Playback {
                 }
 
                 if in_flight.len() < effective_parallel {
-                    for behind_offset in 1..=PREFETCH_BEHIND {
+                    for behind_offset in 1..=dynamic_prefetch_behind {
                         if in_flight.len() >= effective_parallel {
                             break;
                         }

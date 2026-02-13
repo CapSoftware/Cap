@@ -177,6 +177,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - In-flight polling interval now scales with frame budget instead of fixed 5ms.
    - Catch-up skip threshold now adapts with late streak depth and logs skip event telemetry.
    - Warmup target and warmup timeout now scale with FPS, reducing startup buffering overhead.
+   - Prefetch ahead/behind windows now scale with FPS to reduce unnecessary decode pressure at lower targets.
 
 8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
    - `playback-test-runner` supports `--json-output` for structured report emission.
