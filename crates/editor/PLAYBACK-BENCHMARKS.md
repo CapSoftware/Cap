@@ -241,5 +241,6 @@ When analyzing benchmark results, focus on:
 ## Related Documentation
 
 - [Recording Benchmarks](../recording/BENCHMARKS.md) - Recording performance tracking
+- [Playback Matrix Runbook](./PLAYBACK-MATRIX-RUNBOOK.md) - Cross-platform evidence collection workflow
 - [cap-rendering/decoder](../rendering/src/decoder.rs) - Decoder implementation
 - [cap-video-decode](../video-decode/) - Platform-specific decoders
