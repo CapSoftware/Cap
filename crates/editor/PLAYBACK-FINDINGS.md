@@ -313,12 +313,16 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/publish-playback-matrix-summary.js` now includes candidate-only row count from comparison JSON in published matrix summary bullets.
    - Keeps published matrix evidence aligned with expanded comparison coverage diagnostics.
 
-34. **Added strict candidate-only gating option for comparison workflows (2026-02-13)**
+34. **Published comparison policy mode in summary output (2026-02-13)**
+   - Published matrix summary now includes comparison policy modes for missing-candidate and candidate-only coverage handling.
+   - Keeps published evidence explicit about whether coverage gaps were allowed or gated in the comparison run.
+
+35. **Added strict candidate-only gating option for comparison workflows (2026-02-13)**
    - `scripts/compare-playback-benchmark-runs.js` now supports `--fail-on-candidate-only`.
    - When enabled, comparison exits non-zero if candidate contains rows not present in baseline.
    - `scripts/finalize-playback-matrix.js` now forwards the same strict option in integrated compare flows.
 
-35. **Required contiguous prefetched frames for warmup readiness (2026-02-13)**
+36. **Required contiguous prefetched frames for warmup readiness (2026-02-13)**
    - Playback warmup readiness now checks contiguous prefetched frame coverage from current frame.
    - Avoids treating sparse/non-contiguous prefetched entries as equivalent to contiguous startup readiness.
    - Reduces early playback start jitter risk when warmup buffer is fragmented.
@@ -452,6 +456,7 @@ Decoder Pipeline:
 37. Added strict `fail-on-candidate-only` gating option for compare/finalize matrix comparison workflows.
 38. Added candidate-only row count reporting in published matrix summary comparison status bullets.
 39. Updated playback warmup start condition to require contiguous prefetched frame coverage from current frame.
+40. Added comparison policy mode reporting (allow/fail) for missing-candidate and candidate-only coverage in published matrix summaries.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -483,6 +488,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-candidate-only` coverage gate and surfaced coverage gate mode in comparison markdown output.
 - `scripts/finalize-playback-matrix.js`: added passthrough support for strict `--fail-on-candidate-only` compare mode in one-shot finalize workflows.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes candidate-only row count from comparison JSON summary.
+- `scripts/publish-playback-matrix-summary.js`: published comparison status now includes missing-candidate and candidate-only coverage policy modes from comparison JSON tolerance settings.
 - `crates/editor/src/playback.rs`: warmup readiness now requires contiguous prefetched frame coverage from current frame instead of raw buffer length threshold.
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
