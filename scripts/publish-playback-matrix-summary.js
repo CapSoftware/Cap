@@ -118,6 +118,14 @@ function buildSummarySection(
 		if (finalizeSummary.results?.comparisonPassed !== null) {
 			markdown += `- Finalize comparison passed: ${finalizeSummary.results?.comparisonPassed === true ? "true" : "false"}\n`;
 		}
+		const finalizeFailureReasons = Array.isArray(
+			finalizeSummary.results?.comparisonFailureReasons,
+		)
+			? finalizeSummary.results.comparisonFailureReasons
+			: [];
+		if (finalizeFailureReasons.length > 0) {
+			markdown += `- Finalize comparison failure reasons: ${finalizeFailureReasons.join(", ")}\n`;
+		}
 		markdown += "\n";
 	}
 
