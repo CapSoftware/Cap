@@ -22,6 +22,7 @@ function parseArgs(argv) {
 		allowMissingCandidate: false,
 		failOnCandidateOnly: false,
 		minSamplesPerRow: 1,
+		failOnParseErrors: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -137,6 +138,10 @@ function parseArgs(argv) {
 			options.minSamplesPerRow = value;
 			continue;
 		}
+		if (arg === "--fail-on-parse-errors") {
+			options.failOnParseErrors = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -144,7 +149,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--output-json <file>] [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--publish-target <PLAYBACK-BENCHMARKS.md>]
+	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--output-json <file>] [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--fail-on-parse-errors] [--publish-target <PLAYBACK-BENCHMARKS.md>]
 
 Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs. Optionally compares candidate inputs against baseline inputs and fails on regressions.`);
 }
@@ -274,6 +279,9 @@ function main() {
 		if (options.failOnCandidateOnly) {
 			compareArgs.push("--fail-on-candidate-only");
 		}
+		if (options.failOnParseErrors) {
+			compareArgs.push("--fail-on-parse-errors");
+		}
 		compareArgs.push("--min-samples-per-row", String(options.minSamplesPerRow));
 		run("node", compareArgs);
 	}
@@ -321,6 +329,7 @@ function main() {
 			allowMissingCandidate: options.allowMissingCandidate,
 			failOnCandidateOnly: options.failOnCandidateOnly,
 			minSamplesPerRow: options.minSamplesPerRow,
+			failOnParseErrors: options.failOnParseErrors,
 		},
 		results: {
 			validationPassed: validation.passed === true,
