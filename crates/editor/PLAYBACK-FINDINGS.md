@@ -259,6 +259,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Prevents old-generation decode completions from removing new-generation in-flight markers for the same frame number.
    - Improves seek correctness under rapid repeated seeks to nearby frame ranges.
 
+23. **Added comparison artifact publishing in finalize workflows (2026-02-13)**
+   - `scripts/publish-playback-matrix-summary.js` now accepts optional `--comparison-md`.
+   - `scripts/finalize-playback-matrix.js` now forwards generated comparison artifact to publishing when both compare and publish options are enabled.
+   - Keeps benchmark history entries self-contained with regression gate evidence.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -370,6 +375,7 @@ Decoder Pipeline:
 24. Expanded benchmark comparison gating to support multi-input baseline/candidate matrix sets.
 25. Added optional baseline comparison gating inside matrix finalization workflow.
 26. Made shared in-flight frame tracking generation-aware to prevent cross-seek marker collisions.
+27. Added comparison artifact attachment support in publish/finalize matrix summary workflows.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -397,6 +403,8 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: comparison gating now accepts multiple baseline and candidate inputs for aggregated matrix regression checks.
 - `scripts/finalize-playback-matrix.js`: finalization now supports optional baseline comparison gating and threshold controls in the same pass.
 - `crates/editor/src/playback.rs`: in-flight frame markers now include seek generation to prevent old decode paths from clearing current-generation markers.
+- `scripts/publish-playback-matrix-summary.js`: publish flow now supports optional comparison artifact attachment.
+- `scripts/finalize-playback-matrix.js`: finalize flow now includes comparison artifact when publishing and baseline comparison are both requested.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
