@@ -795,7 +795,14 @@ impl PlaybackHandle {
     }
 
     pub fn seek(&self, frame_number: u32) {
-        let _ = self.seek_tx.send(frame_number);
+        let _ = self.seek_tx.send_if_modified(|current_frame| {
+            if *current_frame == frame_number {
+                false
+            } else {
+                *current_frame = frame_number;
+                true
+            }
+        });
     }
 
     pub async fn receive_event(&mut self) -> watch::Ref<'_, PlaybackEvent> {
