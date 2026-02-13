@@ -399,6 +399,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/finalize-playback-matrix.js` now captures comparison count rollups in summary results (compared rows, regressions, missing/candidate-only/insufficient-sample counts).
    - `scripts/publish-playback-matrix-summary.js` now surfaces these finalize comparison counts in published summaries.
 
+51. **Added optional zero-comparison gating (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports `--fail-on-zero-compared`.
+   - Enables strict failure when comparison processing yields zero comparable rows.
+   - `scripts/finalize-playback-matrix.js` forwards zero-comparison gating option in integrated compare flows.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -545,6 +550,7 @@ Decoder Pipeline:
 54. Extended finalize summary and publish output with comparison file stats (including parse error counts).
 55. Stabilized comparison output ordering with deterministic sorting for comparison rows and coverage-delta sections.
 56. Extended finalize and publish summaries with comparison count rollups (compared rows, regressions, missing/candidate-only/insufficient-sample counts).
+57. Added optional zero-comparison gating (`--fail-on-zero-compared`) for compare/finalize flows and surfaced zero-compare policy in comparison/published summaries.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -568,6 +574,8 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
 - `scripts/compare-playback-benchmark-runs.js`: fixed options wiring inside comparison regression checks and now aggregates per-key metrics across multi-input runs with run-count reporting.
 - `scripts/compare-playback-benchmark-runs.js`: comparison row sets are now deterministically sorted for stable markdown/json artifact diffs.
+- `scripts/compare-playback-benchmark-runs.js`: added optional `--fail-on-zero-compared` and zero-compare gate diagnostics in markdown/json outputs.
+- `scripts/finalize-playback-matrix.js`: forwards `--fail-on-zero-compared` into compare stage and records policy in finalize summary settings.
 - `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison count rollup fields for compared rows, regressions, and coverage deltas.
 - `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize comparison count rollups when finalize summary metadata is attached.
 - `scripts/publish-playback-matrix-summary.js`: added optional baseline-vs-candidate comparison artifact attachment in published summaries.

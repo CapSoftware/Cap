@@ -138,6 +138,9 @@ pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir 
 
 # optional: fail comparison gate when any input JSON fails to parse
 pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-parse-errors
+
+# optional: fail comparison gate when no comparable rows remain
+pnpm bench:playback:finalize -- --input /path/to/candidate-results --output-dir /tmp/playback-matrix-final --compare-baseline /path/to/baseline-results --fail-on-zero-compared
 ```
 
 Finalize and publish to benchmark history in one command:
@@ -197,6 +200,9 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 # minimum sample gating uses metrics that are actually comparable for each row
 # optional: fail comparison gate when any input JSON fails to parse
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-parse-errors
+
+# optional: fail comparison gate when no comparable rows remain after filtering
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --fail-on-zero-compared
 ```
 
 ## Evidence checklist
