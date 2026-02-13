@@ -437,7 +437,9 @@ impl AudioResampler {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.output).unwrap();
+        if let Ok(resampler) = Self::new(self.output) {
+            *self = resampler;
+        }
     }
 
     fn current_frame_data(&self) -> &[u8] {
