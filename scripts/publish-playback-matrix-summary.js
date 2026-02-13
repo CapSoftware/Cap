@@ -7,6 +7,7 @@ function parseArgs(argv) {
 	const options = {
 		aggregateMd: null,
 		statusMd: null,
+		bottlenecksMd: null,
 		validationJson: null,
 		target: path.resolve("crates/editor/PLAYBACK-BENCHMARKS.md"),
 	};
@@ -26,6 +27,10 @@ function parseArgs(argv) {
 			options.statusMd = path.resolve(argv[++i] ?? "");
 			continue;
 		}
+		if (arg === "--bottlenecks-md") {
+			options.bottlenecksMd = path.resolve(argv[++i] ?? "");
+			continue;
+		}
 		if (arg === "--validation-json") {
 			options.validationJson = path.resolve(argv[++i] ?? "");
 			continue;
@@ -41,7 +46,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--target <playback-benchmarks-path>]
+	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--target <playback-benchmarks-path>]
 
 Prepends a matrix summary section into PLAYBACK-BENCHMARKS.md benchmark history region.`);
 }
@@ -52,7 +57,7 @@ function ensureFile(filePath, label) {
 	}
 }
 
-function buildSummarySection(aggregateMd, statusMd, validationJson) {
+function buildSummarySection(aggregateMd, statusMd, validationJson, bottlenecksMd) {
 	const now = new Date().toISOString();
 	const validation = JSON.parse(validationJson);
 	const status = validation.passed ? "✅ MATRIX PASS" : "❌ MATRIX FAIL";
@@ -89,6 +94,12 @@ function buildSummarySection(aggregateMd, statusMd, validationJson) {
 	markdown += `${aggregateMd.trim()}\n\n`;
 	markdown += "</details>\n\n";
 
+	if (bottlenecksMd) {
+		markdown += "<details>\n<summary>Bottleneck Analysis</summary>\n\n";
+		markdown += `${bottlenecksMd.trim()}\n\n`;
+		markdown += "</details>\n\n";
+	}
+
 	return markdown;
 }
 
@@ -121,12 +132,23 @@ function main() {
 	ensureFile(options.aggregateMd, "Aggregate markdown");
 	ensureFile(options.statusMd, "Status markdown");
 	ensureFile(options.validationJson, "Validation JSON");
+	if (options.bottlenecksMd) {
+		ensureFile(options.bottlenecksMd, "Bottlenecks markdown");
+	}
 	ensureFile(options.target, "Target");
 
 	const aggregateMd = fs.readFileSync(options.aggregateMd, "utf8");
 	const statusMd = fs.readFileSync(options.statusMd, "utf8");
 	const validationJson = fs.readFileSync(options.validationJson, "utf8");
-	const summaryMd = buildSummarySection(aggregateMd, statusMd, validationJson);
+	const bottlenecksMd = options.bottlenecksMd
+		? fs.readFileSync(options.bottlenecksMd, "utf8")
+		: null;
+	const summaryMd = buildSummarySection(
+		aggregateMd,
+		statusMd,
+		validationJson,
+		bottlenecksMd,
+	);
 	writeToBenchmarkHistory(options.target, summaryMd);
 	console.log(`Published matrix summary into ${options.target}`);
 }

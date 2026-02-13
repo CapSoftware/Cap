@@ -212,6 +212,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 14. **Added matrix summary publisher (2026-02-13)**
    - `scripts/publish-playback-matrix-summary.js` injects finalized matrix artifacts into playback benchmark history.
    - Keeps matrix evidence updates consistent and repeatable.
+   - Supports optional bottleneck analysis attachment in published summary.
 
 15. **Added bottleneck analyzer for continuous FPS optimization (2026-02-13)**
    - `scripts/analyze-playback-matrix-bottlenecks.js` ranks matrix cells by FPS, startup, and scrub threshold breaches.
