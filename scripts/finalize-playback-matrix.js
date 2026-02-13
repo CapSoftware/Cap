@@ -13,6 +13,7 @@ function parseArgs(argv) {
 		maxScrubP95Ms: 40,
 		maxStartupMs: 250,
 		analyze: true,
+		publishTarget: null,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -70,6 +71,12 @@ function parseArgs(argv) {
 			options.analyze = false;
 			continue;
 		}
+		if (arg === "--publish-target") {
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --publish-target");
+			options.publishTarget = path.resolve(value);
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -77,7 +84,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250]
+	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--publish-target <PLAYBACK-BENCHMARKS.md>]
 
 Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs.`);
 }
@@ -150,12 +157,32 @@ function main() {
 		);
 		run("node", analyzeArgs);
 	}
+	if (options.publishTarget) {
+		const publishArgs = [
+			"scripts/publish-playback-matrix-summary.js",
+			"--aggregate-md",
+			aggregatePath,
+			"--status-md",
+			statusPath,
+			"--validation-json",
+			validationPath,
+			"--target",
+			options.publishTarget,
+		];
+		if (options.analyze) {
+			publishArgs.push("--bottlenecks-md", bottleneckPath);
+		}
+		run("node", publishArgs);
+	}
 
 	console.log(`Aggregate markdown: ${aggregatePath}`);
 	console.log(`Status markdown: ${statusPath}`);
 	console.log(`Validation JSON: ${validationPath}`);
 	if (options.analyze) {
 		console.log(`Bottleneck analysis: ${bottleneckPath}`);
+	}
+	if (options.publishTarget) {
+		console.log(`Published target: ${options.publishTarget}`);
 	}
 }
 
