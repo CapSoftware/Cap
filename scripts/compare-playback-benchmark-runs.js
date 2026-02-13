@@ -131,7 +131,7 @@ function maximum(values) {
 }
 
 function collectMetrics(files) {
-	const rows = new Map();
+	const accumulators = new Map();
 
 	for (const filePath of files) {
 		const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -161,18 +161,43 @@ function collectMetrics(files) {
 				.map((entry) => entry.p95_seek_time_ms)
 				.filter((entry) => typeof entry === "number");
 
-			rows.set(key, {
+			const existing = accumulators.get(key) ?? {
 				key,
 				platform,
 				gpu,
 				scenario,
 				recording: report.recording_name ?? "unknown",
 				format: report.is_fragmented ? "fragmented" : "mp4",
-				fpsMin: fpsValues.length ? Math.min(...fpsValues) : null,
-				startupAvg: average(startupValues),
-				scrubP95Max: maximum(scrubP95Values),
-			});
+				reportCount: 0,
+				fpsSamples: [],
+				startupSamples: [],
+				scrubP95Samples: [],
+			};
+			existing.reportCount += 1;
+			existing.fpsSamples.push(...fpsValues);
+			existing.startupSamples.push(...startupValues);
+			existing.scrubP95Samples.push(...scrubP95Values);
+			accumulators.set(key, existing);
 		}
+	}
+
+	const rows = new Map();
+	for (const [key, row] of accumulators) {
+		rows.set(key, {
+			key,
+			platform: row.platform,
+			gpu: row.gpu,
+			scenario: row.scenario,
+			recording: row.recording,
+			format: row.format,
+			reportCount: row.reportCount,
+			fpsSampleCount: row.fpsSamples.length,
+			startupSampleCount: row.startupSamples.length,
+			scrubSampleCount: row.scrubP95Samples.length,
+			fpsMin: row.fpsSamples.length ? Math.min(...row.fpsSamples) : null,
+			startupAvg: average(row.startupSamples),
+			scrubP95Max: maximum(row.scrubP95Samples),
+		});
 	}
 
 	return rows;
@@ -187,7 +212,7 @@ function formatNumber(value, digits = 2) {
 	return value === null ? "n/a" : value.toFixed(digits);
 }
 
-function compareMetrics(baselineRows, candidateRows) {
+function compareMetrics(baselineRows, candidateRows, options) {
 	const comparisons = [];
 	const missingCandidateRows = [];
 	const candidateOnlyRows = [];
@@ -242,6 +267,8 @@ function compareMetrics(baselineRows, candidateRows) {
 			scenario: candidate.scenario,
 			recording: candidate.recording,
 			format: candidate.format,
+			baselineReportCount: baseline.reportCount,
+			candidateReportCount: candidate.reportCount,
 			fpsDelta,
 			startupDelta,
 			scrubDelta,
@@ -287,10 +314,10 @@ function toMarkdown(
 		md += "\n";
 	}
 	md +=
-		"| Platform | GPU | Scenario | Recording | Format | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
-	md += "|---|---|---|---|---|---:|---:|---:|---|\n";
+		"| Platform | GPU | Scenario | Recording | Format | B Runs | C Runs | FPS Δ | Startup Δ (ms) | Scrub p95 Δ (ms) | Regression |\n";
+	md += "|---|---|---|---|---|---:|---:|---:|---:|---:|---|\n";
 	for (const row of comparisons) {
-		md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${formatNumber(row.fpsDelta)} | ${formatNumber(row.startupDelta)} | ${formatNumber(row.scrubDelta)} | ${row.regressions.length > 0 ? row.regressions.join(", ") : "none"} |\n`;
+		md += `| ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.baselineReportCount} | ${row.candidateReportCount} | ${formatNumber(row.fpsDelta)} | ${formatNumber(row.startupDelta)} | ${formatNumber(row.scrubDelta)} | ${row.regressions.length > 0 ? row.regressions.join(", ") : "none"} |\n`;
 	}
 	md += "\n";
 	return md;
@@ -360,7 +387,7 @@ function main() {
 	const baselineRows = collectMetrics(baselineFiles);
 	const candidateRows = collectMetrics(candidateFiles);
 	const { comparisons, missingCandidateRows, candidateOnlyRows } =
-		compareMetrics(baselineRows, candidateRows);
+		compareMetrics(baselineRows, candidateRows, options);
 	const markdown = toMarkdown(
 		comparisons,
 		missingCandidateRows,
