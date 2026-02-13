@@ -426,6 +426,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Frame-request rebases now clear in-flight marker sets only for backward or large-distance seeks that also reset in-flight futures.
    - Prevents duplicate decode scheduling caused by clearing marker sets while earlier in-flight futures are still active.
 
+57. **Added local in-flight frame tracking inside prefetch scheduler (2026-02-13)**
+   - Prefetch scheduler now tracks active frame numbers locally and uses this set for duplicate scheduling checks.
+   - Reduces repeated shared lock reads in prefetch hot-path while preserving cross-thread in-flight visibility.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -578,6 +582,7 @@ Decoder Pipeline:
 60. Added skipped-file reason breakdown (`skippedNoReports`, `skippedNoUsableMetrics`) into comparison file stats and published summaries.
 61. Scaled warmup idle poll interval with frame budget to reduce warmup fallback latency under sparse frame arrival.
 62. Retained in-flight prefetch markers for small frame-request shifts to avoid duplicate decode scheduling during active prefetch execution.
+63. Added local in-flight frame tracking in prefetch scheduler to reduce lock-heavy duplicate-check lookups on scheduling hot-path.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -609,6 +614,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: warmup loop now handles seek updates immediately, resetting warmup state and updating frame/audio targets before playback loop entry.
 - `crates/editor/src/playback.rs`: warmup loop fallback polling now scales with frame budget instead of fixed 100ms sleep to improve responsiveness without busy waiting.
 - `crates/editor/src/playback.rs`: frame-request rebases now preserve in-flight marker sets unless in-flight futures are explicitly reset for backward/large seek changes.
+- `crates/editor/src/playback.rs`: prefetch scheduler now uses a local in-flight frame set for duplicate scheduling checks and mirrors it into shared generation-keyed in-flight markers for playback coordination.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.

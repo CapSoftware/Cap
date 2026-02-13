@@ -243,6 +243,7 @@ impl Playback {
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
+            let mut scheduled_in_flight_frames: HashSet<u32> = HashSet::new();
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
             let dynamic_prefetch_ahead = fps.clamp(30, 90);
             let dynamic_prefetch_behind = (fps / 4).clamp(8, 24);
@@ -282,6 +283,7 @@ impl Playback {
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.clear();
                         }
+                        scheduled_in_flight_frames.clear();
 
                         in_flight = FuturesUnordered::new();
                     }
@@ -306,6 +308,7 @@ impl Playback {
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.clear();
                             }
+                            scheduled_in_flight_frames.clear();
                             in_flight = FuturesUnordered::new();
                         }
                     }
@@ -333,11 +336,7 @@ impl Playback {
                         break;
                     }
 
-                    let already_in_flight = prefetch_in_flight
-                        .read()
-                        .map(|guard| guard.contains(&(active_generation, frame_num)))
-                        .unwrap_or(false);
-                    if already_in_flight {
+                    if scheduled_in_flight_frames.contains(&frame_num) {
                         next_prefetch_frame += 1;
                         continue;
                     }
@@ -360,6 +359,7 @@ impl Playback {
                         let is_initial = frames_decoded < 10;
                         let generation = active_generation;
 
+                        scheduled_in_flight_frames.insert(frame_num);
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.insert((generation, frame_num));
                         }
@@ -400,11 +400,7 @@ impl Playback {
                             continue;
                         }
 
-                        let already_in_flight = prefetch_in_flight
-                            .read()
-                            .map(|guard| guard.contains(&(active_generation, behind_frame)))
-                            .unwrap_or(false);
-                        if already_in_flight {
+                        if scheduled_in_flight_frames.contains(&behind_frame) {
                             continue;
                         }
 
@@ -425,6 +421,7 @@ impl Playback {
                             let segment_index = segment.recording_clip;
                             let generation = active_generation;
 
+                            scheduled_in_flight_frames.insert(behind_frame);
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.insert((generation, behind_frame));
                             }
@@ -444,6 +441,7 @@ impl Playback {
                     biased;
 
                     Some((frame_num, segment_index, generation, result)) = in_flight.next() => {
+                        scheduled_in_flight_frames.remove(&frame_num);
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.remove(&(generation, frame_num));
                         }
