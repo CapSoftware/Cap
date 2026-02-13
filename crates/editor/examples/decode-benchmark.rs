@@ -1,4 +1,6 @@
 use cap_rendering::decoder::{AsyncVideoDecoderHandle, spawn_decoder};
+use serde::Serialize;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -38,21 +40,42 @@ struct BenchmarkConfig {
     video_path: PathBuf,
     fps: u32,
     iterations: usize,
+    sequential_frames: usize,
+    random_samples: usize,
+    output_json: Option<PathBuf>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 struct BenchmarkResults {
     decoder_creation_ms: f64,
     sequential_decode_times_ms: Vec<f64>,
+    first_frame_decode_ms: f64,
+    startup_to_first_frame_ms: f64,
+    sequential_p50_ms: f64,
+    sequential_p95_ms: f64,
+    sequential_p99_ms: f64,
     sequential_fps: f64,
     sequential_failures: usize,
     seek_times_by_distance: Vec<(f32, f64)>,
     seek_failures: usize,
     random_access_times_ms: Vec<f64>,
     random_access_avg_ms: f64,
+    random_access_p50_ms: f64,
+    random_access_p95_ms: f64,
+    random_access_p99_ms: f64,
     random_access_failures: usize,
     cache_hits: usize,
     cache_misses: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkOutput {
+    video_path: PathBuf,
+    fps: u32,
+    iterations: usize,
+    sequential_frames: usize,
+    random_samples: usize,
+    results: BenchmarkResults,
 }
 
 impl BenchmarkResults {
@@ -96,6 +119,14 @@ impl BenchmarkResults {
             println!("  Avg decode time: {avg:.2}ms");
             println!("  Min decode time: {min:.2}ms");
             println!("  Max decode time: {max:.2}ms");
+            println!("  P50 decode time: {:.2}ms", self.sequential_p50_ms);
+            println!("  P95 decode time: {:.2}ms", self.sequential_p95_ms);
+            println!("  P99 decode time: {:.2}ms", self.sequential_p99_ms);
+            println!("  First frame decode: {:.2}ms", self.first_frame_decode_ms);
+            println!(
+                "  Startup to first frame: {:.2}ms",
+                self.startup_to_first_frame_ms
+            );
             println!("  Effective FPS: {:.1}", self.sequential_fps);
         }
         println!();
@@ -138,18 +169,9 @@ impl BenchmarkResults {
             println!("  Avg access time: {avg:.2}ms");
             println!("  Min access time: {min:.2}ms");
             println!("  Max access time: {max:.2}ms");
-            println!(
-                "  P50: {:.2}ms",
-                percentile(&self.random_access_times_ms, 50.0)
-            );
-            println!(
-                "  P95: {:.2}ms",
-                percentile(&self.random_access_times_ms, 95.0)
-            );
-            println!(
-                "  P99: {:.2}ms",
-                percentile(&self.random_access_times_ms, 99.0)
-            );
+            println!("  P50: {:.2}ms", self.random_access_p50_ms);
+            println!("  P95: {:.2}ms", self.random_access_p95_ms);
+            println!("  P99: {:.2}ms", self.random_access_p99_ms);
         }
         println!();
 
@@ -215,10 +237,13 @@ async fn benchmark_sequential_decode(
     fps: u32,
     frame_count: usize,
     start_time: f32,
-) -> (Vec<f64>, f64, usize) {
+) -> (Vec<f64>, f64, usize, f64, f64) {
     let mut times = Vec::with_capacity(frame_count);
     let mut failures = 0;
     let overall_start = Instant::now();
+    let mut first_frame_decode_ms = 0.0;
+    let mut startup_to_first_frame_ms = 0.0;
+    let mut first_frame_captured = false;
 
     for i in 0..frame_count {
         let time = start_time + (i as f32 / fps as f32);
@@ -227,6 +252,11 @@ async fn benchmark_sequential_decode(
             Some(_frame) => {
                 let elapsed = start.elapsed();
                 times.push(elapsed.as_secs_f64() * 1000.0);
+                if !first_frame_captured {
+                    first_frame_captured = true;
+                    first_frame_decode_ms = elapsed.as_secs_f64() * 1000.0;
+                    startup_to_first_frame_ms = overall_start.elapsed().as_secs_f64() * 1000.0;
+                }
             }
             None => {
                 failures += 1;
@@ -243,7 +273,13 @@ async fn benchmark_sequential_decode(
         0.0
     };
 
-    (times, effective_fps, failures)
+    (
+        times,
+        effective_fps,
+        failures,
+        first_frame_decode_ms,
+        startup_to_first_frame_ms,
+    )
 }
 
 async fn benchmark_seek(
@@ -308,6 +344,10 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         config.video_path.display()
     );
     println!("FPS: {}, Iterations: {}", config.fps, config.iterations);
+    println!(
+        "Sequential frames: {}, Random samples: {}",
+        config.sequential_frames, config.random_samples
+    );
     println!();
 
     println!("[1/5] Benchmarking decoder creation...");
@@ -341,12 +381,20 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     println!("Detected video duration: {video_duration:.2}s");
     println!();
 
-    println!("[3/5] Benchmarking sequential decode (100 frames from start)...");
-    let (seq_times, seq_fps, seq_failures) =
-        benchmark_sequential_decode(&decoder, config.fps, 100, 0.0).await;
+    println!(
+        "[3/5] Benchmarking sequential decode ({} frames from start)...",
+        config.sequential_frames
+    );
+    let (seq_times, seq_fps, seq_failures, first_frame_decode_ms, startup_to_first_frame_ms) =
+        benchmark_sequential_decode(&decoder, config.fps, config.sequential_frames, 0.0).await;
     results.sequential_decode_times_ms = seq_times;
     results.sequential_fps = seq_fps;
     results.sequential_failures = seq_failures;
+    results.first_frame_decode_ms = first_frame_decode_ms;
+    results.startup_to_first_frame_ms = startup_to_first_frame_ms;
+    results.sequential_p50_ms = percentile(&results.sequential_decode_times_ms, 50.0);
+    results.sequential_p95_ms = percentile(&results.sequential_decode_times_ms, 95.0);
+    results.sequential_p99_ms = percentile(&results.sequential_decode_times_ms, 99.0);
     println!("      Done: {seq_fps:.1} effective FPS");
     if seq_failures > 0 {
         println!("      Warning: {seq_failures} frames failed to decode");
@@ -370,9 +418,12 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         }
     }
 
-    println!("[5/5] Benchmarking random access (50 samples)...");
+    println!(
+        "[5/5] Benchmarking random access ({} samples)...",
+        config.random_samples
+    );
     let (random_times, random_failures) =
-        benchmark_random_access(&decoder, config.fps, video_duration, 50).await;
+        benchmark_random_access(&decoder, config.fps, video_duration, config.random_samples).await;
     results.random_access_times_ms = random_times;
     results.random_access_failures = random_failures;
     results.random_access_avg_ms = if results.random_access_times_ms.is_empty() {
@@ -381,12 +432,62 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         results.random_access_times_ms.iter().sum::<f64>()
             / results.random_access_times_ms.len() as f64
     };
+    results.random_access_p50_ms = percentile(&results.random_access_times_ms, 50.0);
+    results.random_access_p95_ms = percentile(&results.random_access_times_ms, 95.0);
+    results.random_access_p99_ms = percentile(&results.random_access_times_ms, 99.0);
     println!("      Done: {:.2}ms avg", results.random_access_avg_ms);
     if random_failures > 0 {
         println!("      Warning: {random_failures} random accesses failed");
     }
 
     results
+}
+
+fn write_json_output(config: &BenchmarkConfig, results: &BenchmarkResults) {
+    let Some(output_path) = &config.output_json else {
+        return;
+    };
+
+    let output = BenchmarkOutput {
+        video_path: config.video_path.clone(),
+        fps: config.fps,
+        iterations: config.iterations,
+        sequential_frames: config.sequential_frames,
+        random_samples: config.random_samples,
+        results: BenchmarkResults {
+            decoder_creation_ms: results.decoder_creation_ms,
+            sequential_decode_times_ms: results.sequential_decode_times_ms.clone(),
+            first_frame_decode_ms: results.first_frame_decode_ms,
+            startup_to_first_frame_ms: results.startup_to_first_frame_ms,
+            sequential_p50_ms: results.sequential_p50_ms,
+            sequential_p95_ms: results.sequential_p95_ms,
+            sequential_p99_ms: results.sequential_p99_ms,
+            sequential_fps: results.sequential_fps,
+            sequential_failures: results.sequential_failures,
+            seek_times_by_distance: results.seek_times_by_distance.clone(),
+            seek_failures: results.seek_failures,
+            random_access_times_ms: results.random_access_times_ms.clone(),
+            random_access_avg_ms: results.random_access_avg_ms,
+            random_access_p50_ms: results.random_access_p50_ms,
+            random_access_p95_ms: results.random_access_p95_ms,
+            random_access_p99_ms: results.random_access_p99_ms,
+            random_access_failures: results.random_access_failures,
+            cache_hits: results.cache_hits,
+            cache_misses: results.cache_misses,
+        },
+    };
+
+    match serde_json::to_string_pretty(&output) {
+        Ok(json) => match fs::write(output_path, json) {
+            Ok(()) => println!("Wrote benchmark JSON to {}", output_path.display()),
+            Err(error) => eprintln!(
+                "Failed to write benchmark JSON to {}: {}",
+                output_path.display(),
+                error
+            ),
+        },
+        Err(error) => eprintln!("Failed to serialize benchmark JSON output: {}", error),
+    }
 }
 
 fn main() {
@@ -397,7 +498,7 @@ fn main() {
         .position(|a| a == "--video")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>]");
+        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>] [--sequential-frames <n>] [--random-samples <n>] [--output-json <path>]");
 
     let fps = args
         .iter()
@@ -413,14 +514,38 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
 
+    let sequential_frames = args
+        .iter()
+        .position(|a| a == "--sequential-frames")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+
+    let random_samples = args
+        .iter()
+        .position(|a| a == "--random-samples")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+
+    let output_json = args
+        .iter()
+        .position(|a| a == "--output-json")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+
     let config = BenchmarkConfig {
         video_path,
         fps,
         iterations,
+        sequential_frames,
+        random_samples,
+        output_json,
     };
 
     let rt = Runtime::new().expect("Failed to create Tokio runtime");
-    let results = rt.block_on(run_full_benchmark(config));
+    let results = rt.block_on(run_full_benchmark(config.clone()));
 
     results.print_report();
+    write_json_output(&config, &results);
 }
