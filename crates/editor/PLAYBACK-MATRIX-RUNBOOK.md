@@ -111,6 +111,7 @@ One-shot finalize command:
 
 ```bash
 pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented
+pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --output-json /tmp/playback-matrix-final/playback-finalize-summary.json
 ```
 
 Include optimization thresholds when finalizing:
