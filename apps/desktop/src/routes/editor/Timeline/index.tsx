@@ -220,6 +220,9 @@ export function Timeline() {
 
 	let pendingScrollDelta = 0;
 	let scrollRafId: number | null = null;
+	let pendingSeekFrame: number | null = null;
+	let seekRafId: number | null = null;
+	let seekInFlight = false;
 
 	function flushPendingZoom() {
 		if (pendingZoomDelta === 0 || pendingZoomOrigin === null) {
@@ -265,7 +268,40 @@ export function Timeline() {
 		}
 	}
 
-	async function handleUpdatePlayhead(e: MouseEvent) {
+	function scheduleSeek(frameNumber: number) {
+		pendingSeekFrame = frameNumber;
+		if (seekRafId === null) {
+			seekRafId = requestAnimationFrame(flushPendingSeek);
+		}
+	}
+
+	async function flushPendingSeek() {
+		seekRafId = null;
+
+		if (seekInFlight || pendingSeekFrame === null) {
+			if (pendingSeekFrame !== null && seekRafId === null) {
+				seekRafId = requestAnimationFrame(flushPendingSeek);
+			}
+			return;
+		}
+
+		const frameNumber = pendingSeekFrame;
+		pendingSeekFrame = null;
+		seekInFlight = true;
+
+		try {
+			await commands.seekTo(frameNumber);
+		} catch (err) {
+			console.error("Failed to seek timeline playhead:", err);
+		} finally {
+			seekInFlight = false;
+			if (pendingSeekFrame !== null && seekRafId === null) {
+				seekRafId = requestAnimationFrame(flushPendingSeek);
+			}
+		}
+	}
+
+	function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
 		if (
 			zoomSegmentDragState.type !== "moving" &&
@@ -278,12 +314,7 @@ export function Timeline() {
 				secsPerPixel() * (e.clientX - left) + transform().position;
 			const newTime = Math.min(Math.max(0, rawTime), totalDuration());
 			const targetFrame = Math.round(newTime * FPS);
-
-			try {
-				await commands.seekTo(targetFrame);
-			} catch (err) {
-				console.error("Failed to seek timeline playhead:", err);
-			}
+			scheduleSeek(targetFrame);
 
 			setEditorState("playbackTime", newTime);
 		}
