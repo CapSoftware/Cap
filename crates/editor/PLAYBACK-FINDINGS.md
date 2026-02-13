@@ -409,6 +409,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Seek during warmup now resets warmup timers/buffer state and updates frame/audio playhead targets immediately.
    - Improves responsiveness when users seek while playback is still warming up.
 
+53. **Added optional skipped-file gating for comparison workflows (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports `--fail-on-skipped-files`.
+   - Enables strict failure when baseline/candidate inputs include skipped JSON files without usable benchmark payloads.
+   - `scripts/finalize-playback-matrix.js` forwards skipped-file gating option in integrated compare flows.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -557,6 +562,7 @@ Decoder Pipeline:
 56. Extended finalize and publish summaries with comparison count rollups (compared rows, regressions, missing/candidate-only/insufficient-sample counts).
 57. Added optional zero-comparison gating (`--fail-on-zero-compared`) for compare/finalize flows and surfaced zero-compare policy in comparison/published summaries.
 58. Added warmup-stage seek handling to apply seeks immediately while playback warmup is in progress.
+59. Added optional skipped-file gating (`--fail-on-skipped-files`) for compare/finalize flows and surfaced skipped-file policy in comparison/published summaries.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -593,7 +599,9 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: comparison outputs now include candidate-only rows in addition to missing-candidate coverage deltas.
 - `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
 - `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-candidate-only` coverage gate and surfaced coverage gate mode in comparison markdown output.
+- `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-skipped-files` gate and parse/skip policy reporting in comparison markdown/json outputs.
 - `scripts/finalize-playback-matrix.js`: added passthrough support for strict `--fail-on-candidate-only` compare mode in one-shot finalize workflows.
+- `scripts/finalize-playback-matrix.js`: forwards `--fail-on-skipped-files` into compare stage and records skipped-file policy in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes candidate-only row count from comparison JSON summary.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes missing-candidate and candidate-only coverage policy modes from comparison JSON tolerance settings.
 - `crates/editor/src/playback.rs`: warmup readiness now requires contiguous prefetched frame coverage from current frame instead of raw buffer length threshold.
@@ -613,6 +621,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added parse-error gating and baseline/candidate file parse stats/parse error entries in JSON output.
 - `scripts/finalize-playback-matrix.js`: forwards parse-error gating and records parse-error policy in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes parse policy and baseline/candidate parse error counts.
+- `scripts/publish-playback-matrix-summary.js`: published comparison status now includes skipped-file policy mode from comparison tolerance settings.
 - `crates/editor/src/playback.rs`: `insert_prefetched_frame` now returns structural-change signals and warmup cache invalidation uses this signal to avoid stale contiguous counts when insert+trim keeps buffer length unchanged.
 - `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison file stats payload when comparison runs are enabled.
 - `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize baseline/candidate parse error counts from finalize summary metadata.

@@ -24,6 +24,7 @@ function parseArgs(argv) {
 		minSamplesPerRow: 1,
 		failOnParseErrors: false,
 		failOnZeroCompared: false,
+		failOnSkippedFiles: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -147,6 +148,10 @@ function parseArgs(argv) {
 			options.failOnZeroCompared = true;
 			continue;
 		}
+		if (arg === "--fail-on-skipped-files") {
+			options.failOnSkippedFiles = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -154,7 +159,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--output-json <file>] [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--fail-on-parse-errors] [--fail-on-zero-compared] [--publish-target <PLAYBACK-BENCHMARKS.md>]
+	console.log(`Usage: node scripts/finalize-playback-matrix.js --input <file-or-dir> [--input <file-or-dir> ...] --output-dir <dir> [--output-json <file>] [--require-formats mp4,fragmented] [--target-fps 60] [--max-scrub-p95-ms 40] [--max-startup-ms 250] [--compare-baseline <file-or-dir>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only] [--min-samples-per-row 1] [--fail-on-parse-errors] [--fail-on-zero-compared] [--fail-on-skipped-files] [--publish-target <PLAYBACK-BENCHMARKS.md>]
 
 Generates aggregate markdown, status markdown, validation JSON, and bottleneck analysis for collected playback matrix outputs. Optionally compares candidate inputs against baseline inputs and fails on regressions.`);
 }
@@ -290,6 +295,9 @@ function main() {
 		if (options.failOnZeroCompared) {
 			compareArgs.push("--fail-on-zero-compared");
 		}
+		if (options.failOnSkippedFiles) {
+			compareArgs.push("--fail-on-skipped-files");
+		}
 		compareArgs.push("--min-samples-per-row", String(options.minSamplesPerRow));
 		run("node", compareArgs);
 	}
@@ -339,6 +347,7 @@ function main() {
 			minSamplesPerRow: options.minSamplesPerRow,
 			failOnParseErrors: options.failOnParseErrors,
 			failOnZeroCompared: options.failOnZeroCompared,
+			failOnSkippedFiles: options.failOnSkippedFiles,
 		},
 		results: {
 			validationPassed: validation.passed === true,
