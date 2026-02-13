@@ -168,6 +168,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 7. **Timeline seek dispatch now coalesces during drag (2026-02-13)**
    - Frontend seek calls are requestAnimationFrame-batched.
    - Only the latest pending seek frame is sent while an async seek is in-flight.
+   - Duplicate same-frame seeks are dropped in both frontend dispatch and playback seek signaling.
 
 8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
    - `playback-test-runner` supports `--json-output` for structured report emission.

@@ -224,6 +224,8 @@ export function Timeline() {
 	let pendingSeekFrame: number | null = null;
 	let seekRafId: number | null = null;
 	let seekInFlight = false;
+	let inFlightSeekFrame: number | null = null;
+	let lastCompletedSeekFrame: number | null = null;
 
 	onCleanup(() => {
 		if (zoomRafId !== null) cancelAnimationFrame(zoomRafId);
@@ -276,6 +278,13 @@ export function Timeline() {
 	}
 
 	function scheduleSeek(frameNumber: number) {
+		if (
+			frameNumber === pendingSeekFrame ||
+			frameNumber === inFlightSeekFrame ||
+			frameNumber === lastCompletedSeekFrame
+		) {
+			return;
+		}
 		pendingSeekFrame = frameNumber;
 		if (seekRafId === null) {
 			seekRafId = requestAnimationFrame(flushPendingSeek);
@@ -295,13 +304,16 @@ export function Timeline() {
 		const frameNumber = pendingSeekFrame;
 		pendingSeekFrame = null;
 		seekInFlight = true;
+		inFlightSeekFrame = frameNumber;
 
 		try {
 			await commands.seekTo(frameNumber);
+			lastCompletedSeekFrame = frameNumber;
 		} catch (err) {
 			console.error("Failed to seek timeline playhead:", err);
 		} finally {
 			seekInFlight = false;
+			inFlightSeekFrame = null;
 			if (pendingSeekFrame !== null && seekRafId === null) {
 				seekRafId = requestAnimationFrame(flushPendingSeek);
 			}
