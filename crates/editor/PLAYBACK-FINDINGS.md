@@ -364,6 +364,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Warmup loop now recomputes contiguous prefetched coverage only when warmup buffer content changes.
    - Avoids repeated contiguous scans on idle warmup iterations.
 
+45. **Added explicit comparison gate diagnostics in JSON and published summaries (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now emits `failureReasons` and `gateOutcomes` in summary JSON.
+   - `scripts/publish-playback-matrix-summary.js` now surfaces comparison failure reasons when present.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -502,6 +506,7 @@ Decoder Pipeline:
 46. Skipped contiguous warmup coverage scans until first warmup frame observation to reduce pre-frame warmup loop scan overhead.
 47. Added minimum-sample comparison gating with `--min-samples-per-row`, insufficient-sample reporting, and finalize passthrough support.
 48. Cached warmup contiguous coverage values and only recomputed contiguous scan when warmup buffer changed.
+49. Added comparison JSON gate diagnostics (`failureReasons`, `gateOutcomes`) and surfaced failure reasons in published summary output.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -545,6 +550,8 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added `--min-samples-per-row`, insufficient-sample row reporting, and sample gate fields in markdown/JSON outputs.
 - `scripts/finalize-playback-matrix.js`: forwards `--min-samples-per-row` into compare stage and captures it in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes insufficient sample row count and minimum sample threshold fields.
+- `scripts/compare-playback-benchmark-runs.js`: comparison JSON summary now includes explicit `failureReasons` and `gateOutcomes` fields.
+- `scripts/publish-playback-matrix-summary.js`: published comparison status now includes comparison failure reasons when present.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: warmup contiguous coverage counts are now cached and recomputed only on warmup buffer changes.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
