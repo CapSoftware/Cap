@@ -92,6 +92,7 @@ function buildSummarySection(
 		markdown += `- Comparison gate: ${comparisonPassed ? "✅ PASS" : "❌ FAIL"}\n`;
 		markdown += `- Comparison regressions: ${comparison.summary?.regressions ?? "n/a"}\n`;
 		markdown += `- Missing candidate rows: ${comparison.summary?.missingCandidateRows ?? "n/a"}\n\n`;
+		markdown += `- Candidate-only rows: ${comparison.summary?.candidateOnlyRows ?? "n/a"}\n\n`;
 	}
 
 	if ((validation.missingCells?.length ?? 0) > 0) {
