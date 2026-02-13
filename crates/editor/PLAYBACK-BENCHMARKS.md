@@ -119,6 +119,7 @@ Comparison JSON summary includes `failureReasons` and `gateOutcomes` fields for 
 Minimum sample gating is applied against metrics that are actually comparable for the row (for example, scrub samples are not required for rows with no scrub metric comparison).
 Comparison JSON also includes baseline/candidate file parsing stats and optional parse-error gating support.
 Comparison can optionally gate on skipped input files via `--fail-on-skipped-files`.
+Comparison file stats now include skipped-file breakdown for `no_reports` and `no_usable_metrics`.
 ```
 
 #### Decode Performance Benchmark

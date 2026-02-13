@@ -161,6 +161,8 @@ function collectMetrics(files) {
 		parsedFiles: 0,
 		usableFiles: 0,
 		skippedFiles: 0,
+		skippedNoReports: 0,
+		skippedNoUsableMetrics: 0,
 		parseErrors: [],
 	};
 
@@ -179,6 +181,7 @@ function collectMetrics(files) {
 
 		if (!Array.isArray(parsed.reports) || parsed.reports.length === 0) {
 			stats.skippedFiles += 1;
+			stats.skippedNoReports += 1;
 			continue;
 		}
 
@@ -240,6 +243,7 @@ function collectMetrics(files) {
 			stats.usableFiles += 1;
 		} else {
 			stats.skippedFiles += 1;
+			stats.skippedNoUsableMetrics += 1;
 		}
 	}
 
@@ -431,8 +435,8 @@ function toMarkdown(
 	md += `Parse gate: parse_errors=${options.failOnParseErrors ? "fail" : "allow"}\n\n`;
 	md += `Zero-compare gate: compared_rows=${options.failOnZeroCompared ? "fail_if_zero" : "allow"}\n\n`;
 	md += `Skipped-file gate: skipped_files=${options.failOnSkippedFiles ? "fail" : "allow"}\n\n`;
-	md += `Baseline files: total=${baselineStats.totalFiles}, parsed=${baselineStats.parsedFiles}, usable=${baselineStats.usableFiles}, skipped=${baselineStats.skippedFiles}, parse_errors=${baselineStats.parseErrors.length}\n`;
-	md += `Candidate files: total=${candidateStats.totalFiles}, parsed=${candidateStats.parsedFiles}, usable=${candidateStats.usableFiles}, skipped=${candidateStats.skippedFiles}, parse_errors=${candidateStats.parseErrors.length}\n\n`;
+	md += `Baseline files: total=${baselineStats.totalFiles}, parsed=${baselineStats.parsedFiles}, usable=${baselineStats.usableFiles}, skipped=${baselineStats.skippedFiles}, skipped_no_reports=${baselineStats.skippedNoReports}, skipped_no_metrics=${baselineStats.skippedNoUsableMetrics}, parse_errors=${baselineStats.parseErrors.length}\n`;
+	md += `Candidate files: total=${candidateStats.totalFiles}, parsed=${candidateStats.parsedFiles}, usable=${candidateStats.usableFiles}, skipped=${candidateStats.skippedFiles}, skipped_no_reports=${candidateStats.skippedNoReports}, skipped_no_metrics=${candidateStats.skippedNoUsableMetrics}, parse_errors=${candidateStats.parseErrors.length}\n\n`;
 	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}, insufficient sample rows: ${insufficientSampleRows.length}\n\n`;
 	if (
 		baselineStats.parseErrors.length > 0 ||
