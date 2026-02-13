@@ -8,6 +8,7 @@ function parseArgs(argv) {
 		baselineInputs: [],
 		candidateInputs: [],
 		output: null,
+		outputJson: null,
 		allowFpsDrop: 2,
 		allowStartupIncreaseMs: 25,
 		allowScrubP95IncreaseMs: 5,
@@ -35,6 +36,10 @@ function parseArgs(argv) {
 		}
 		if (arg === "--output" || arg === "-o") {
 			options.output = path.resolve(argv[++i] ?? "");
+			continue;
+		}
+		if (arg === "--output-json") {
+			options.outputJson = path.resolve(argv[++i] ?? "");
 			continue;
 		}
 		if (arg === "--allow-fps-drop") {
@@ -72,7 +77,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate]
 
 Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
@@ -261,6 +266,32 @@ function toMarkdown(comparisons, missingCandidateRows, options) {
 	return md;
 }
 
+function buildJsonOutput(comparisons, missingCandidateRows, options) {
+	const regressions = comparisons.filter(
+		(entry) => entry.regressions.length > 0,
+	);
+	return {
+		generatedAt: new Date().toISOString(),
+		tolerance: {
+			allowFpsDrop: options.allowFpsDrop,
+			allowStartupIncreaseMs: options.allowStartupIncreaseMs,
+			allowScrubP95IncreaseMs: options.allowScrubP95IncreaseMs,
+			allowMissingCandidate: options.allowMissingCandidate,
+		},
+		summary: {
+			comparedRows: comparisons.length,
+			regressions: regressions.length,
+			missingCandidateRows: missingCandidateRows.length,
+			passed:
+				regressions.length === 0 &&
+				(options.allowMissingCandidate || missingCandidateRows.length === 0),
+		},
+		regressions,
+		missingCandidateRows,
+		comparisons,
+	};
+}
+
 function main() {
 	const options = parseArgs(process.argv);
 	if (options.help) {
@@ -294,12 +325,25 @@ function main() {
 		candidateRows,
 	);
 	const markdown = toMarkdown(comparisons, missingCandidateRows, options);
+	const outputJson = buildJsonOutput(
+		comparisons,
+		missingCandidateRows,
+		options,
+	);
 
 	if (options.output) {
 		fs.writeFileSync(options.output, markdown, "utf8");
 		console.log(`Wrote comparison report to ${options.output}`);
 	} else {
 		process.stdout.write(markdown);
+	}
+	if (options.outputJson) {
+		fs.writeFileSync(
+			options.outputJson,
+			JSON.stringify(outputJson, null, 2),
+			"utf8",
+		);
+		console.log(`Wrote comparison JSON to ${options.outputJson}`);
 	}
 
 	if (
