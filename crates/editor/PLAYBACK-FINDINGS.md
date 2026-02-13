@@ -332,6 +332,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Finalize now emits `playback-finalize-summary.json` by default in output directory.
    - Summary JSON includes artifact paths, settings, and validation/comparison pass flags for automation.
 
+38. **Optimized contiguous warmup coverage scan on keyed buffer (2026-02-13)**
+   - Contiguous prefetched-frame counting now walks ordered keys via map range iteration.
+   - Reduces repeated keyed lookups during warmup readiness checks.
+   - Preserves contiguous coverage semantics while lowering per-loop lookup overhead.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -463,6 +468,7 @@ Decoder Pipeline:
 39. Updated playback warmup start condition to require contiguous prefetched frame coverage from current frame.
 40. Added comparison policy mode reporting (allow/fail) for missing-candidate and candidate-only coverage in published matrix summaries.
 41. Added finalize summary JSON artifact output with artifact/settings/result metadata for automation workflows.
+42. Optimized contiguous prefetched-frame warmup scan using ordered map range iteration instead of repeated key lookups.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -496,6 +502,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes candidate-only row count from comparison JSON summary.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes missing-candidate and candidate-only coverage policy modes from comparison JSON tolerance settings.
 - `crates/editor/src/playback.rs`: warmup readiness now requires contiguous prefetched frame coverage from current frame instead of raw buffer length threshold.
+- `crates/editor/src/playback.rs`: contiguous warmup coverage scan now uses ordered map range iteration to reduce repeated key lookup overhead.
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
 - `scripts/finalize-playback-matrix.js`: added optional `--output-json` and default finalize summary JSON emission with artifact path and pass/fail metadata.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
