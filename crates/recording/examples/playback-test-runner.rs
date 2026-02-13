@@ -53,6 +53,7 @@ enum Commands {
     Full,
     Decoder,
     Playback,
+    Scrub,
     AudioSync,
     CameraSync,
     List,
@@ -60,6 +61,7 @@ enum Commands {
 
 const FPS_TOLERANCE: f64 = 2.0;
 const DECODE_LATENCY_WARNING_MS: f64 = 50.0;
+const SCRUB_SEEK_WARNING_MS: f64 = 40.0;
 const AUDIO_VIDEO_SYNC_TOLERANCE_MS: f64 = 100.0;
 const CAMERA_SYNC_TOLERANCE_MS: f64 = 100.0;
 
@@ -82,6 +84,8 @@ struct PlaybackTestResult {
     total_frames: usize,
     decoded_frames: usize,
     failed_frames: usize,
+    first_frame_decode_time_ms: f64,
+    startup_to_first_frame_ms: f64,
     avg_decode_time_ms: f64,
     min_decode_time_ms: f64,
     max_decode_time_ms: f64,
@@ -93,6 +97,22 @@ struct PlaybackTestResult {
     fps_ok: bool,
     jitter_ms: f64,
     decode_latency_ok: bool,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScrubTestResult {
+    passed: bool,
+    segment_index: usize,
+    seek_operations: usize,
+    successful_seeks: usize,
+    failed_seeks: usize,
+    avg_seek_time_ms: f64,
+    p50_seek_time_ms: f64,
+    p95_seek_time_ms: f64,
+    p99_seek_time_ms: f64,
+    max_seek_time_ms: f64,
+    seek_latency_ok: bool,
     errors: Vec<String>,
 }
 
@@ -141,6 +161,7 @@ struct RecordingTestReport {
     has_system_audio: bool,
     decoder_results: Vec<DecoderTestResult>,
     playback_results: Vec<PlaybackTestResult>,
+    scrub_results: Vec<ScrubTestResult>,
     audio_sync_results: Vec<AudioSyncTestResult>,
     camera_sync_results: Vec<CameraSyncTestResult>,
     overall_passed: bool,
@@ -208,6 +229,10 @@ impl RecordingTestReport {
                 result.p95_decode_time_ms,
                 result.p99_decode_time_ms
             );
+            println!(
+                "      Startup: first_decode={:.1}ms startup_to_first={:.1}ms",
+                result.first_frame_decode_time_ms, result.startup_to_first_frame_ms
+            );
             if !result.fps_ok {
                 println!("      WARN: FPS outside tolerance!");
             }
@@ -216,6 +241,28 @@ impl RecordingTestReport {
             }
             for err in &result.errors {
                 println!("      ERROR: {err}");
+            }
+        }
+
+        if !self.scrub_results.is_empty() {
+            println!("\n  SCRUB TESTS:");
+            for result in &self.scrub_results {
+                let status = if result.passed { "OK" } else { "FAIL" };
+                println!(
+                    "    Segment {}: [{}] seeks={}/{} avg={:.1}ms p95={:.1}ms",
+                    result.segment_index,
+                    status,
+                    result.successful_seeks,
+                    result.seek_operations,
+                    result.avg_seek_time_ms,
+                    result.p95_seek_time_ms
+                );
+                if !result.seek_latency_ok {
+                    println!("      WARN: Scrub seek latency exceeds {SCRUB_SEEK_WARNING_MS}ms!");
+                }
+                for err in &result.errors {
+                    println!("      ERROR: {err}");
+                }
             }
         }
 
@@ -341,6 +388,7 @@ async fn test_playback(
     fps: u32,
     verbose: bool,
 ) -> PlaybackTestResult {
+    let playback_start = Instant::now();
     let mut result = PlaybackTestResult {
         segment_index,
         expected_fps: fps as f64,
@@ -384,6 +432,11 @@ async fn test_playback(
                 let decode_time_ms = start.elapsed().as_secs_f64() * 1000.0;
                 decode_times.push(decode_time_ms);
                 decoded_count += 1;
+                if decoded_count == 1 {
+                    result.first_frame_decode_time_ms = decode_time_ms;
+                    result.startup_to_first_frame_ms =
+                        playback_start.elapsed().as_secs_f64() * 1000.0;
+                }
 
                 if frame.width() == 0 || frame.height() == 0 {
                     result
@@ -444,6 +497,96 @@ async fn test_playback(
         && result.decode_latency_ok
         && result.failed_frames == 0
         && result.decoded_frames > 0;
+
+    result
+}
+
+async fn test_scrub(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    segment_index: usize,
+    fps: u32,
+    verbose: bool,
+) -> ScrubTestResult {
+    let mut result = ScrubTestResult {
+        segment_index,
+        seek_operations: 120,
+        ..Default::default()
+    };
+
+    let display_path = match meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            recording_meta.path(&segment.display.path)
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            recording_meta.path(&inner.segments[segment_index].display.path)
+        }
+    };
+
+    let decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0, false).await {
+        Ok(d) => d,
+        Err(e) => {
+            result.errors.push(format!("Failed to create decoder: {e}"));
+            return result;
+        }
+    };
+
+    let duration_secs = get_video_duration(&display_path);
+    let total_frames = (duration_secs * fps as f64).ceil() as usize;
+    if total_frames < 2 {
+        result
+            .errors
+            .push("Video duration too short for scrub benchmark".to_string());
+        return result;
+    }
+
+    let mut seek_times = Vec::with_capacity(result.seek_operations);
+
+    for operation in 0..result.seek_operations {
+        let target_frame = ((operation * 7919) % total_frames).max(1);
+        let target_time = target_frame as f32 / fps as f32;
+        let seek_start = Instant::now();
+        match decoder.get_frame(target_time).await {
+            Some(_) => {
+                let seek_time_ms = seek_start.elapsed().as_secs_f64() * 1000.0;
+                seek_times.push(seek_time_ms);
+                result.successful_seeks += 1;
+                if verbose && operation % 20 == 0 {
+                    println!(
+                        "    Scrub {} / {}: frame={} time={:.3}s seek={:.1}ms",
+                        operation + 1,
+                        result.seek_operations,
+                        target_frame,
+                        target_time,
+                        seek_time_ms
+                    );
+                }
+            }
+            None => {
+                result.failed_seeks += 1;
+                if verbose {
+                    println!(
+                        "    Scrub {} / {}: frame={} FAILED",
+                        operation + 1,
+                        result.seek_operations,
+                        target_frame
+                    );
+                }
+            }
+        }
+    }
+
+    if !seek_times.is_empty() {
+        result.avg_seek_time_ms = seek_times.iter().sum::<f64>() / seek_times.len() as f64;
+        result.p50_seek_time_ms = percentile(&seek_times, 50.0);
+        result.p95_seek_time_ms = percentile(&seek_times, 95.0);
+        result.p99_seek_time_ms = percentile(&seek_times, 99.0);
+        result.max_seek_time_ms = seek_times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    }
+
+    result.seek_latency_ok = result.p95_seek_time_ms <= SCRUB_SEEK_WARNING_MS;
+    result.passed =
+        result.seek_latency_ok && result.failed_seeks == 0 && result.successful_seeks > 0;
 
     result
 }
@@ -735,6 +878,7 @@ async fn run_tests_on_recording(
     fps: u32,
     run_decoder: bool,
     run_playback: bool,
+    run_scrub: bool,
     run_audio_sync: bool,
     run_camera_sync: bool,
     verbose: bool,
@@ -826,6 +970,15 @@ async fn run_tests_on_recording(
             report.playback_results.push(playback_result);
         }
 
+        if run_scrub {
+            if verbose {
+                println!("  Testing scrub performance for segment {segment_idx}...");
+            }
+            let scrub_result =
+                test_scrub(&meta, studio_meta.as_ref(), segment_idx, fps, verbose).await;
+            report.scrub_results.push(scrub_result);
+        }
+
         if run_audio_sync {
             if verbose {
                 println!("  Testing audio sync for segment {segment_idx}...");
@@ -848,10 +1001,11 @@ async fn run_tests_on_recording(
 
     let decoder_ok = report.decoder_results.iter().all(|r| r.passed);
     let playback_ok = report.playback_results.iter().all(|r| r.passed);
+    let scrub_ok = report.scrub_results.iter().all(|r| r.passed);
     let audio_ok = report.audio_sync_results.iter().all(|r| r.passed);
     let camera_ok = report.camera_sync_results.iter().all(|r| r.passed);
 
-    report.overall_passed = decoder_ok && playback_ok && audio_ok && camera_ok;
+    report.overall_passed = decoder_ok && playback_ok && scrub_ok && audio_ok && camera_ok;
 
     Ok(report)
 }
@@ -905,6 +1059,12 @@ fn get_failure_tags(report: &RecordingTestReport) -> Vec<String> {
     }
     if report.playback_results.iter().any(|r| !r.decode_latency_ok) {
         tags.push("LATENCY".to_string());
+    }
+    if report.scrub_results.iter().any(|r| !r.seek_latency_ok) {
+        tags.push("SCRUB_LATENCY".to_string());
+    }
+    if report.scrub_results.iter().any(|r| r.failed_seeks > 0) {
+        tags.push("SCRUB_ERRORS".to_string());
     }
     if report.playback_results.iter().any(|r| r.failed_frames > 0) {
         tags.push("DECODE_ERRORS".to_string());
@@ -1007,10 +1167,45 @@ fn report_to_markdown(report: &RecordingTestReport) -> String {
             result.p99_decode_time_ms,
             result.max_decode_time_ms
         ));
+        md.push_str(&format!(
+            "| ↳ Startup | {} | first_decode={:.1}ms startup_to_first={:.1}ms |\n",
+            if result.startup_to_first_frame_ms > 0.0 {
+                "✅"
+            } else {
+                "❌"
+            },
+            result.first_frame_decode_time_ms,
+            result.startup_to_first_frame_ms
+        ));
         if result.failed_frames > 0 {
             md.push_str(&format!(
                 "| ↳ Failed Frames | ⚠️ | {} |\n",
                 result.failed_frames
+            ));
+        }
+    }
+
+    for result in &report.scrub_results {
+        md.push_str(&format!(
+            "| Scrub Seg {} | {} | seeks={}/{} avg={:.1}ms p95={:.1}ms p99={:.1}ms |\n",
+            result.segment_index,
+            if result.passed { "✅" } else { "❌" },
+            result.successful_seeks,
+            result.seek_operations,
+            result.avg_seek_time_ms,
+            result.p95_seek_time_ms,
+            result.p99_seek_time_ms
+        ));
+        md.push_str(&format!(
+            "| ↳ Scrub Latency | {} | max={:.1}ms threshold={:.1}ms |\n",
+            if result.seek_latency_ok { "✅" } else { "❌" },
+            result.max_seek_time_ms,
+            SCRUB_SEEK_WARNING_MS
+        ));
+        if result.failed_seeks > 0 {
+            md.push_str(&format!(
+                "| ↳ Scrub Failures | ⚠️ | {} |\n",
+                result.failed_seeks
             ));
         }
     }
@@ -1202,6 +1397,7 @@ fn print_summary(reports: &[RecordingTestReport]) {
 
             let decoder_failed = report.decoder_results.iter().any(|r| !r.passed);
             let playback_failed = report.playback_results.iter().any(|r| !r.passed);
+            let scrub_failed = report.scrub_results.iter().any(|r| !r.passed);
             let audio_failed = report.audio_sync_results.iter().any(|r| !r.passed);
             let camera_failed = report.camera_sync_results.iter().any(|r| !r.passed);
 
@@ -1210,6 +1406,9 @@ fn print_summary(reports: &[RecordingTestReport]) {
             }
             if playback_failed {
                 print!(" [PLAYBACK]");
+            }
+            if scrub_failed {
+                print!(" [SCRUB]");
             }
             if audio_failed {
                 print!(" [AUDIO SYNC]");
@@ -1269,12 +1468,14 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let (run_decoder, run_playback, run_audio_sync, run_camera_sync) = match cli.command {
-        Some(Commands::Decoder) => (true, false, false, false),
-        Some(Commands::Playback) => (false, true, false, false),
-        Some(Commands::AudioSync) => (false, false, true, false),
-        Some(Commands::CameraSync) => (false, false, false, true),
-        Some(Commands::Full) | None => (true, true, true, true),
+    let (run_decoder, run_playback, run_scrub, run_audio_sync, run_camera_sync) = match cli.command
+    {
+        Some(Commands::Decoder) => (true, false, false, false, false),
+        Some(Commands::Playback) => (false, true, false, false, false),
+        Some(Commands::Scrub) => (false, false, true, false, false),
+        Some(Commands::AudioSync) => (false, false, false, true, false),
+        Some(Commands::CameraSync) => (false, false, false, false, true),
+        Some(Commands::Full) | None => (true, true, true, true, true),
         Some(Commands::List) => unreachable!(),
     };
 
@@ -1297,6 +1498,7 @@ async fn main() -> anyhow::Result<()> {
             cli.fps,
             run_decoder,
             run_playback,
+            run_scrub,
             run_audio_sync,
             run_camera_sync,
             cli.verbose,
@@ -1321,6 +1523,7 @@ async fn main() -> anyhow::Result<()> {
             match cli.command {
                 Some(Commands::Decoder) => "decoder",
                 Some(Commands::Playback) => "playback",
+                Some(Commands::Scrub) => "scrub",
                 Some(Commands::AudioSync) => "audio-sync",
                 Some(Commands::CameraSync) => "camera-sync",
                 Some(Commands::Full) | None => "full",
