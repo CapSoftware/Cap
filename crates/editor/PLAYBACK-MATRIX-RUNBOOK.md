@@ -125,7 +125,8 @@ Publish finalized artifacts into benchmark history:
 pnpm bench:playback:publish -- \
   --aggregate-md /tmp/playback-matrix-final/playback-benchmark-aggregate.md \
   --status-md /tmp/playback-matrix-final/playback-matrix-status.md \
-  --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json
+  --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json \
+  --bottlenecks-md /tmp/playback-matrix-final/playback-bottlenecks.md
 ```
 
 Generate bottleneck analysis for optimization backlog:
