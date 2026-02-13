@@ -526,6 +526,10 @@ impl Playback {
                 .max(Duration::from_millis(200))
                 .min(Duration::from_millis(700));
             let warmup_no_frames_timeout = Duration::from_secs(5);
+            let warmup_idle_poll_interval = frame_duration
+                .mul_f64(0.5)
+                .max(Duration::from_millis(8))
+                .min(Duration::from_millis(25));
             let mut warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
             let mut warmup_contiguous_prefetched = 0usize;
@@ -533,6 +537,7 @@ impl Playback {
             info!(
                 warmup_target_frames,
                 warmup_after_first_timeout_ms = warmup_after_first_timeout.as_secs_f64() * 1000.0,
+                warmup_idle_poll_interval_ms = warmup_idle_poll_interval.as_secs_f64() * 1000.0,
                 "Playback warmup configuration"
             );
 
@@ -611,7 +616,7 @@ impl Playback {
                             break;
                         }
                     }
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    _ = tokio::time::sleep(warmup_idle_poll_interval) => {
                     }
                 }
             }

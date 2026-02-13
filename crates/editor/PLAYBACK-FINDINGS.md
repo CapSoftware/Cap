@@ -418,6 +418,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Comparison file stats now report skipped-file reasons as `skippedNoReports` and `skippedNoUsableMetrics`.
    - Published summary now surfaces skipped-file breakdown for baseline and candidate inputs.
 
+55. **Scaled warmup idle poll interval by frame budget (2026-02-13)**
+   - Warmup loop fallback poll now scales with frame duration and stays in bounded low-latency range.
+   - Reduces fixed 100ms idle poll delay during warmup while avoiding high-frequency busy polling.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -568,6 +572,7 @@ Decoder Pipeline:
 58. Added warmup-stage seek handling to apply seeks immediately while playback warmup is in progress.
 59. Added optional skipped-file gating (`--fail-on-skipped-files`) for compare/finalize flows and surfaced skipped-file policy in comparison/published summaries.
 60. Added skipped-file reason breakdown (`skippedNoReports`, `skippedNoUsableMetrics`) into comparison file stats and published summaries.
+61. Scaled warmup idle poll interval with frame budget to reduce warmup fallback latency under sparse frame arrival.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -597,6 +602,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize comparison count rollups when finalize summary metadata is attached.
 - `scripts/publish-playback-matrix-summary.js`: added optional baseline-vs-candidate comparison artifact attachment in published summaries.
 - `crates/editor/src/playback.rs`: warmup loop now handles seek updates immediately, resetting warmup state and updating frame/audio targets before playback loop entry.
+- `crates/editor/src/playback.rs`: warmup loop fallback polling now scales with frame budget instead of fixed 100ms sleep to improve responsiveness without busy waiting.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
