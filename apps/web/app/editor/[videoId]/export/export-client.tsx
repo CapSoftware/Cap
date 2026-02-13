@@ -22,7 +22,7 @@ import type {
 	ProjectConfiguration,
 	TimelineSegment,
 } from "../../types/project-config";
-import { getAudioPlaybackGain } from "../../utils/audio";
+import { getAudioPlaybackGain, getSegmentAudioGain } from "../../utils/audio";
 import { resolveBackgroundAssetPath } from "../../utils/backgrounds";
 import {
 	formatTime,
@@ -132,6 +132,7 @@ function normalizeSegments(
 			end: Math.max(0, Math.min(duration, seg.end)),
 			timescale:
 				Number.isFinite(seg.timescale) && seg.timescale > 0 ? seg.timescale : 1,
+			muted: seg.muted,
 		}))
 		.filter((seg) => seg.end > seg.start)
 		.sort((a, b) => a.start - b.start);
@@ -715,6 +716,7 @@ export function ExportClient({
 
 		const stream = canvas.captureStream(fps);
 		let audioContext: AudioContext | null = null;
+		let gainNode: GainNode | null = null;
 
 		if (includeAudio) {
 			const AudioContextCtor =
@@ -728,13 +730,13 @@ export function ExportClient({
 			audioContext = new AudioContextCtor();
 			await audioContext.resume().catch(() => undefined);
 			const source = audioContext.createMediaElementSource(videoEl);
-			const gain = audioContext.createGain();
+			gainNode = audioContext.createGain();
 			const outputGain = getAudioPlaybackGain(projectConfig.audio);
 			const destination = audioContext.createMediaStreamDestination();
-			source.connect(gain);
-			gain.connect(destination);
-			gain.gain.value = outputGain;
-			videoEl.muted = outputGain <= 0;
+			source.connect(gainNode);
+			gainNode.connect(destination);
+			gainNode.gain.value = outputGain;
+			videoEl.muted = false;
 			for (const track of destination.stream.getAudioTracks()) {
 				stream.addTrack(track);
 			}
@@ -829,10 +831,15 @@ export function ExportClient({
 			);
 		}
 
-		const updatePlaybackRate = (segment: TimelineSegment) => {
+		const applySegmentSettings = (segment: TimelineSegment) => {
 			const rate = Math.max(0.1, Math.min(16, segment.timescale));
 			videoEl.playbackRate = rate;
 			if (cameraEl) cameraEl.playbackRate = rate;
+
+			if (gainNode && audioContext) {
+				const segGain = getSegmentAudioGain(projectConfig.audio, segment);
+				gainNode.gain.setValueAtTime(segGain, audioContext.currentTime);
+			}
 		};
 
 		const syncCamera = (time: number) => {
@@ -851,7 +858,7 @@ export function ExportClient({
 		renderFrame();
 		recorder.start(1000);
 
-		updatePlaybackRate(firstSegment);
+		applySegmentSettings(firstSegment);
 
 		await videoEl.play().catch(() => {
 			throw new Error("Failed to play source video");
@@ -888,7 +895,7 @@ export function ExportClient({
 				}
 				videoEl.currentTime = next.start;
 				syncCamera(next.start);
-				updatePlaybackRate(next);
+				applySegmentSettings(next);
 			} else {
 				if (currentTime >= segment.end) {
 					const next = findNextSegment(segments, currentTime);
@@ -898,9 +905,9 @@ export function ExportClient({
 					}
 					videoEl.currentTime = next.start;
 					syncCamera(next.start);
-					updatePlaybackRate(next);
+					applySegmentSettings(next);
 				} else {
-					updatePlaybackRate(segment);
+					applySegmentSettings(segment);
 				}
 			}
 
