@@ -146,6 +146,22 @@ fn prune_prefetch_buffer_before_frame(
     }
 }
 
+fn count_contiguous_prefetched_frames(
+    buffer: &BTreeMap<u32, PrefetchedFrame>,
+    start_frame: u32,
+    limit: usize,
+) -> usize {
+    let mut contiguous = 0usize;
+    while contiguous < limit {
+        let frame = start_frame.saturating_add(contiguous as u32);
+        if !buffer.contains_key(&frame) {
+            break;
+        }
+        contiguous += 1;
+    }
+    contiguous
+}
+
 impl Playback {
     pub async fn start(
         mut self,
@@ -508,8 +524,13 @@ impl Playback {
             );
 
             while !*stop_rx.borrow() {
+                let contiguous_prefetched = count_contiguous_prefetched_frames(
+                    &prefetch_buffer,
+                    frame_number,
+                    warmup_target_frames,
+                );
                 let should_start = if let Some(first_time) = first_frame_time {
-                    prefetch_buffer.len() >= warmup_target_frames
+                    contiguous_prefetched >= warmup_target_frames
                         || first_time.elapsed() > warmup_after_first_timeout
                 } else {
                     false

@@ -318,6 +318,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - When enabled, comparison exits non-zero if candidate contains rows not present in baseline.
    - `scripts/finalize-playback-matrix.js` now forwards the same strict option in integrated compare flows.
 
+35. **Required contiguous prefetched frames for warmup readiness (2026-02-13)**
+   - Playback warmup readiness now checks contiguous prefetched frame coverage from current frame.
+   - Avoids treating sparse/non-contiguous prefetched entries as equivalent to contiguous startup readiness.
+   - Reduces early playback start jitter risk when warmup buffer is fragmented.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -445,7 +450,8 @@ Decoder Pipeline:
 35. Tightened keyed prefetch buffer warmup timing and skip-path pruning behavior using map-aware helper usage in playback loop.
 36. Expanded baseline-vs-candidate comparison outputs with candidate-only row reporting.
 37. Added strict `fail-on-candidate-only` gating option for compare/finalize matrix comparison workflows.
-37. Added candidate-only row count reporting in published matrix summary comparison status bullets.
+38. Added candidate-only row count reporting in published matrix summary comparison status bullets.
+39. Updated playback warmup start condition to require contiguous prefetched frame coverage from current frame.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -477,6 +483,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added optional strict `--fail-on-candidate-only` coverage gate and surfaced coverage gate mode in comparison markdown output.
 - `scripts/finalize-playback-matrix.js`: added passthrough support for strict `--fail-on-candidate-only` compare mode in one-shot finalize workflows.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes candidate-only row count from comparison JSON summary.
+- `crates/editor/src/playback.rs`: warmup readiness now requires contiguous prefetched frame coverage from current frame instead of raw buffer length threshold.
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.
