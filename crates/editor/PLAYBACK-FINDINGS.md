@@ -209,6 +209,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/finalize-playback-matrix.js` generates aggregate markdown, status markdown, and validation JSON in one command.
    - Supports optional required format enforcement during finalization.
    - Also emits bottleneck analysis markdown using configurable FPS/scrub/startup thresholds.
+   - Can optionally publish finalized artifacts directly into benchmark history target.
 
 14. **Added matrix summary publisher (2026-02-13)**
    - `scripts/publish-playback-matrix-summary.js` injects finalized matrix artifacts into playback benchmark history.
