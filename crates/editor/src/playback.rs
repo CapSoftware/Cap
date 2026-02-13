@@ -65,7 +65,7 @@ pub enum PlaybackEvent {
 pub struct PlaybackHandle {
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
-    seek_tx: tokio_mpsc::UnboundedSender<u32>,
+    seek_tx: watch::Sender<u32>,
 }
 
 struct PrefetchedFrame {
@@ -120,7 +120,8 @@ impl Playback {
 
         let (event_tx, mut event_rx) = watch::channel(PlaybackEvent::Start);
         event_rx.borrow_and_update();
-        let (seek_tx, mut seek_rx) = tokio_mpsc::unbounded_channel::<u32>();
+        let (seek_tx, mut seek_rx) = watch::channel(self.start_frame_number);
+        seek_rx.borrow_and_update();
 
         let handle = PlaybackHandle {
             stop_tx: stop_tx.clone(),
@@ -448,12 +449,8 @@ impl Playback {
             let mut cached_project = self.project.borrow().clone();
 
             'playback: loop {
-                let mut pending_seek = None;
-                while let Ok(next_seek_frame) = seek_rx.try_recv() {
-                    pending_seek = Some(next_seek_frame);
-                }
-
-                if let Some(seek_frame) = pending_seek {
+                if seek_rx.has_changed().unwrap_or(false) {
+                    let seek_frame = *seek_rx.borrow_and_update();
                     frame_number = seek_frame;
                     playback_anchor_start = Instant::now();
                     playback_anchor_frame = seek_frame;
@@ -499,7 +496,8 @@ impl Playback {
 
                 tokio::select! {
                     _ = stop_rx.changed() => break 'playback,
-                    Some(seek_frame) = seek_rx.recv() => {
+                    _ = seek_rx.changed() => {
+                        let seek_frame = *seek_rx.borrow_and_update();
                         frame_number = seek_frame;
                         playback_anchor_start = Instant::now();
                         playback_anchor_frame = seek_frame;
