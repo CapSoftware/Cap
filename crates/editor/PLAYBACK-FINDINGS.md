@@ -175,6 +175,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Replaced fixed 200ms frame fetch waits with FPS-derived bounded timeout.
    - Reduces long stall windows on 60fps playback and improves real-time catch-up behavior.
    - In-flight polling interval now scales with frame budget instead of fixed 5ms.
+   - Catch-up skip threshold now adapts with late streak depth and logs skip event telemetry.
 
 8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
    - `playback-test-runner` supports `--json-output` for structured report emission.
