@@ -244,6 +244,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Avoids re-queueing older frames from initial start position baseline.
    - Reduces avoidable prefetch buffer churn during late playback and aggressive seek scenarios.
 
+20. **Expanded comparison gating for multi-run matrix diffs (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports multiple baseline and candidate inputs.
+   - Enables aggregate regression gating across batched machine runs instead of one directory at a time.
+   - Improves reliability of continuous optimization loops when matrix outputs are split across multiple sources.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -352,6 +357,7 @@ Decoder Pipeline:
 21. Added seek-generation prefetch gating to drop stale decode outputs after live seek updates.
 22. Cleared prefetched-frame buffer on live seek handling to avoid stale buffered frame reuse.
 23. Restricted in-flight prefetch buffering to current frame or newer frames during frame wait path.
+24. Expanded benchmark comparison gating to support multi-input baseline/candidate matrix sets.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -376,6 +382,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 - `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
 - `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
+- `scripts/compare-playback-benchmark-runs.js`: comparison gating now accepts multiple baseline and candidate inputs for aggregated matrix regression checks.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.

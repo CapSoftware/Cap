@@ -146,6 +146,9 @@ Compare candidate run against baseline and fail on regressions:
 
 ```bash
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-matrix-final/playback-comparison.md --allow-fps-drop 2 --allow-startup-increase-ms 25 --allow-scrub-p95-increase-ms 5
+
+# multiple baseline/candidate directories can be provided
+pnpm bench:playback:compare -- --baseline /path/to/baseline-a --baseline /path/to/baseline-b --candidate /path/to/candidate-a --candidate /path/to/candidate-b --output /tmp/playback-matrix-final/playback-comparison.md
 ```
 
 ## Evidence checklist

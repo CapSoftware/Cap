@@ -89,6 +89,7 @@ node scripts/analyze-playback-matrix-bottlenecks.js --input /path/to/json-result
 
 # Compare candidate against baseline and flag regressions
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-comparison.md --allow-fps-drop 2 --allow-startup-increase-ms 25 --allow-scrub-p95-increase-ms 5
+node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results-a --baseline /path/to/baseline-results-b --candidate /path/to/candidate-results-a --candidate /path/to/candidate-results-b --output /tmp/playback-comparison.md
 ```
 
 #### Decode Performance Benchmark

@@ -5,8 +5,8 @@ import path from "node:path";
 
 function parseArgs(argv) {
 	const options = {
-		baseline: null,
-		candidate: null,
+		baselineInputs: [],
+		candidateInputs: [],
 		output: null,
 		allowFpsDrop: 2,
 		allowStartupIncreaseMs: 25,
@@ -21,11 +21,15 @@ function parseArgs(argv) {
 			continue;
 		}
 		if (arg === "--baseline") {
-			options.baseline = path.resolve(argv[++i] ?? "");
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --baseline");
+			options.baselineInputs.push(path.resolve(value));
 			continue;
 		}
 		if (arg === "--candidate") {
-			options.candidate = path.resolve(argv[++i] ?? "");
+			const value = argv[++i];
+			if (!value) throw new Error("Missing value for --candidate");
+			options.candidateInputs.push(path.resolve(value));
 			continue;
 		}
 		if (arg === "--output" || arg === "-o") {
@@ -63,9 +67,9 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> --candidate <file-or-dir> [--output <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5]
 
-Compares baseline and candidate playback matrix JSON outputs and flags regressions.`);
+Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
 
 function collectJsonFiles(targetPath) {
@@ -235,12 +239,19 @@ function main() {
 		usage();
 		return;
 	}
-	if (!options.baseline || !options.candidate) {
-		throw new Error("--baseline and --candidate are required");
+	if (
+		options.baselineInputs.length === 0 ||
+		options.candidateInputs.length === 0
+	) {
+		throw new Error("At least one --baseline and one --candidate are required");
 	}
 
-	const baselineFiles = collectJsonFiles(options.baseline);
-	const candidateFiles = collectJsonFiles(options.candidate);
+	const baselineFiles = [
+		...new Set(options.baselineInputs.flatMap(collectJsonFiles)),
+	];
+	const candidateFiles = [
+		...new Set(options.candidateInputs.flatMap(collectJsonFiles)),
+	];
 	if (baselineFiles.length === 0) {
 		throw new Error("No baseline JSON files found");
 	}
