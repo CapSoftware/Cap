@@ -171,10 +171,15 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Only the latest pending seek frame is sent while an async seek is in-flight.
    - Duplicate same-frame seeks are dropped in both frontend dispatch and playback seek signaling.
 
+8. **Playback frame wait timeout now scales with target FPS (2026-02-13)**
+   - Replaced fixed 200ms frame fetch waits with FPS-derived bounded timeout.
+   - Reduces long stall windows on 60fps playback and improves real-time catch-up behavior.
+
 8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
    - `playback-test-runner` supports `--json-output` for structured report emission.
    - JSON output includes command metadata, system info, summary, and per-recording test detail.
    - Command metadata now includes input scope and output flags for reproducibility.
+   - Startup-to-first-frame threshold is configurable with `--startup-threshold-ms` and tracked as pass/fail signal.
 
 9. **Added JSON aggregate utility for cross-platform benchmark collation (2026-02-13)**
    - `scripts/aggregate-playback-benchmarks.js` builds a markdown table from multiple JSON outputs.
@@ -185,6 +190,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Automatically generates aggregate markdown for each machine run directory.
    - Performs per-machine post-run validation for required scenarios and optional format requirements.
    - Supports scenario subset reruns via `--scenarios` for faster targeted validation.
+   - Supports startup threshold tuning via `--startup-threshold-ms`.
 
 11. **Added matrix completeness validator (2026-02-13)**
    - `scripts/validate-playback-matrix.js` validates required platform/gpu/scenario cells.

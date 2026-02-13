@@ -384,6 +384,10 @@ impl Playback {
             .spawn();
 
             let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
+            let frame_fetch_timeout = frame_duration
+                .mul_f64(4.0)
+                .max(Duration::from_millis(20))
+                .min(Duration::from_millis(80));
             let mut frame_number = self.start_frame_number;
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
@@ -553,7 +557,7 @@ impl Playback {
 
                         if is_in_flight {
                             let wait_start = Instant::now();
-                            let max_wait = Duration::from_millis(200);
+                            let max_wait = frame_fetch_timeout;
                             let mut found_frame = None;
 
                             while wait_start.elapsed() < max_wait {
@@ -603,11 +607,8 @@ impl Playback {
                         } else if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
                             let _ = frame_request_tx.send(frame_number);
 
-                            let wait_result = tokio::time::timeout(
-                                Duration::from_millis(200),
-                                prefetch_rx.recv(),
-                            )
-                            .await;
+                            let wait_result =
+                                tokio::time::timeout(frame_fetch_timeout, prefetch_rx.recv()).await;
 
                             if let Ok(Some(prefetched)) = wait_result {
                                 if prefetched.frame_number == frame_number {
@@ -651,7 +652,7 @@ impl Playback {
                                 guard.insert(frame_number);
                             }
 
-                            let max_wait = Duration::from_millis(200);
+                            let max_wait = frame_fetch_timeout;
                             let data = tokio::select! {
                                 _ = stop_rx.changed() => {
                                     if let Ok(mut guard) = main_in_flight.write() {

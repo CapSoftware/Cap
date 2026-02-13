@@ -10,6 +10,7 @@ function parseArgs(argv) {
 		gpu: null,
 		outputDir: null,
 		fps: 60,
+		startupThresholdMs: 250,
 		recordingPath: null,
 		inputDir: null,
 		validate: true,
@@ -44,6 +45,14 @@ function parseArgs(argv) {
 				throw new Error("Invalid --fps value");
 			}
 			options.fps = value;
+			continue;
+		}
+		if (arg === "--startup-threshold-ms") {
+			const value = Number.parseFloat(argv[++i] ?? "");
+			if (!Number.isFinite(value) || value <= 0) {
+				throw new Error("Invalid --startup-threshold-ms value");
+			}
+			options.startupThresholdMs = value;
 			continue;
 		}
 		if (arg === "--recording-path") {
@@ -85,7 +94,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/run-playback-benchmark-matrix.js --platform <name> --gpu <name> --output-dir <dir> [--fps 60] [--recording-path <path>] [--input-dir <path>] [--require-formats mp4,fragmented] [--scenarios full,scrub]
+	console.log(`Usage: node scripts/run-playback-benchmark-matrix.js --platform <name> --gpu <name> --output-dir <dir> [--fps 60] [--startup-threshold-ms 250] [--recording-path <path>] [--input-dir <path>] [--require-formats mp4,fragmented] [--scenarios full,scrub]
 
 Runs playback benchmark matrix scenarios and writes JSON outputs.
 
@@ -96,6 +105,7 @@ Required:
 
 Optional:
   --fps           FPS for benchmark runs (default: 60)
+  --startup-threshold-ms Startup-to-first-frame threshold in ms (default: 250)
   --recording-path  Specific recording path
   --input-dir       Recording discovery directory
   --require-formats Required formats for local validation (comma-separated)
@@ -134,6 +144,8 @@ function scenarioArgs(options, scenario) {
 		scenario,
 		"--fps",
 		String(options.fps),
+		"--startup-threshold-ms",
+		String(options.startupThresholdMs),
 		"--json-output",
 		jsonOutput,
 		"--notes",
