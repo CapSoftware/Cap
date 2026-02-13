@@ -169,6 +169,10 @@ function main() {
 		"playback-bottlenecks.json",
 	);
 	const comparisonPath = path.join(options.outputDir, "playback-comparison.md");
+	const comparisonJsonPath = path.join(
+		options.outputDir,
+		"playback-comparison.json",
+	);
 
 	const aggregateArgs = ["scripts/aggregate-playback-benchmarks.js"];
 	const statusArgs = ["scripts/build-playback-matrix-report.js"];
@@ -223,6 +227,8 @@ function main() {
 		compareArgs.push(
 			"--output",
 			comparisonPath,
+			"--output-json",
+			comparisonJsonPath,
 			"--allow-fps-drop",
 			String(options.allowFpsDrop),
 			"--allow-startup-increase-ms",
@@ -268,6 +274,7 @@ function main() {
 	}
 	if (options.compareBaselineInputs.length > 0) {
 		console.log(`Comparison report: ${comparisonPath}`);
+		console.log(`Comparison JSON: ${comparisonJsonPath}`);
 	}
 }
 

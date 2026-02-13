@@ -164,6 +164,9 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-a --baseline /path/t
 
 # optional: allow missing candidate rows while still checking metric regressions
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --allow-missing-candidate
+
+# emit structured JSON alongside markdown for automation
+pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-matrix-final/playback-comparison.md --output-json /tmp/playback-matrix-final/playback-comparison.json
 ```
 
 ## Evidence checklist

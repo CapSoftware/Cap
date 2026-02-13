@@ -279,6 +279,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Prevents publish step from referencing missing comparison artifact files.
    - Added finalize passthrough support for `--allow-missing-candidate`.
 
+27. **Added structured JSON output for comparison gating (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now supports `--output-json`.
+   - Emits comparison summary/regression/missing-coverage details for automation.
+   - `scripts/finalize-playback-matrix.js` now writes comparison markdown and JSON artifacts during baseline comparison runs.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -393,11 +398,13 @@ Decoder Pipeline:
 27. Split prefetch and direct decode in-flight tracking and guarded direct decode frame usage when seek updates are pending.
 28. Added missing-candidate-row coverage gating in baseline-vs-candidate comparison script with optional override flag.
 29. Fixed finalize compare/publish ordering so comparison artifacts exist before publish attachment and added finalize support for missing-candidate override.
+30. Added structured JSON output for baseline-vs-candidate comparison script and wired finalize comparison runs to emit comparison JSON artifacts.
 26. Made shared in-flight frame tracking generation-aware to prevent cross-seek marker collisions.
 27. Added comparison artifact attachment support in publish/finalize matrix summary workflows.
 28. Split prefetch and direct decode in-flight tracking to avoid cross-path marker interference.
 29. Added missing-candidate-row gating to baseline-vs-candidate comparison workflow.
 30. Fixed finalize compare/publish ordering and propagated missing-candidate override into finalize compare flow.
+31. Added structured JSON artifact emission for baseline-vs-candidate comparison workflows.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -423,6 +430,8 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
+- `scripts/compare-playback-benchmark-runs.js`: added structured comparison JSON output with pass/fail summary and regression detail payload.
+- `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 - `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
 - `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
@@ -434,6 +443,8 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: prefetch and direct decode now use separate generation-aware in-flight sets, with combined checks in frame wait path.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports and gates missing candidate rows relative to baseline coverage.
 - `scripts/finalize-playback-matrix.js`: comparison now runs before publish in combined workflows and forwards missing-candidate override to compare step.
+- `scripts/compare-playback-benchmark-runs.js`: comparison now supports optional structured JSON output for downstream automation.
+- `scripts/finalize-playback-matrix.js`: baseline comparison in finalize now writes both markdown and JSON comparison artifacts.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
