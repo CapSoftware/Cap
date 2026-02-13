@@ -186,6 +186,8 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 # when multiple inputs are provided, comparison output includes baseline/candidate run counts per row
 # optional: require minimum sample count per compared row
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --min-samples-per-row 3
+
+# comparison JSON includes failureReasons and gateOutcomes for automation
 ```
 
 ## Evidence checklist
