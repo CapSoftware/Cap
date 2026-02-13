@@ -334,6 +334,14 @@ function main() {
 		results: {
 			validationPassed: validation.passed === true,
 			comparisonPassed: comparison ? comparison.summary?.passed === true : null,
+			comparisonComparedRows: comparison?.summary?.comparedRows ?? null,
+			comparisonRegressions: comparison?.summary?.regressions ?? null,
+			comparisonMissingCandidateRows:
+				comparison?.summary?.missingCandidateRows ?? null,
+			comparisonCandidateOnlyRows:
+				comparison?.summary?.candidateOnlyRows ?? null,
+			comparisonInsufficientSampleRows:
+				comparison?.summary?.insufficientSampleRows ?? null,
 			comparisonFailureReasons: comparison?.summary?.failureReasons ?? null,
 			comparisonGateOutcomes: comparison?.summary?.gateOutcomes ?? null,
 			comparisonFileStats: comparison?.fileStats ?? null,
