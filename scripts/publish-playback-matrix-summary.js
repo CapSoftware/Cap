@@ -99,6 +99,8 @@ function buildSummarySection(
 		markdown += `- Comparison regressions: ${comparison.summary?.regressions ?? "n/a"}\n`;
 		markdown += `- Missing candidate rows: ${comparison.summary?.missingCandidateRows ?? "n/a"}\n\n`;
 		markdown += `- Candidate-only rows: ${comparison.summary?.candidateOnlyRows ?? "n/a"}\n\n`;
+		markdown += `- Insufficient sample rows: ${comparison.summary?.insufficientSampleRows ?? "n/a"}\n`;
+		markdown += `- Minimum samples per row: ${comparison.tolerance?.minSamplesPerRow ?? "n/a"}\n\n`;
 		markdown += `- Missing candidate policy: ${comparison.tolerance?.allowMissingCandidate ? "allow" : "fail"}\n`;
 		markdown += `- Candidate-only policy: ${comparison.tolerance?.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
 	}
