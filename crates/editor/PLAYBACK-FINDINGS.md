@@ -360,6 +360,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Comparison now flags rows with insufficient effective sample counts and reports them in markdown/JSON outputs.
    - `scripts/finalize-playback-matrix.js` forwards minimum sample gating settings into compare stage, and publish summary now surfaces sample gating status fields.
 
+44. **Cached warmup contiguous coverage counts during warmup (2026-02-13)**
+   - Warmup loop now recomputes contiguous prefetched coverage only when warmup buffer content changes.
+   - Avoids repeated contiguous scans on idle warmup iterations.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -497,6 +501,7 @@ Decoder Pipeline:
 45. Improved multi-input comparison aggregation by merging per-key metrics across runs and surfacing baseline/candidate run counts per comparison row.
 46. Skipped contiguous warmup coverage scans until first warmup frame observation to reduce pre-frame warmup loop scan overhead.
 47. Added minimum-sample comparison gating with `--min-samples-per-row`, insufficient-sample reporting, and finalize passthrough support.
+48. Cached warmup contiguous coverage values and only recomputed contiguous scan when warmup buffer changed.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -541,6 +546,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: forwards `--min-samples-per-row` into compare stage and captures it in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes insufficient sample row count and minimum sample threshold fields.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
+- `crates/editor/src/playback.rs`: warmup contiguous coverage counts are now cached and recomputed only on warmup buffer changes.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now surfaces comparison gate status/summary metrics when comparison JSON is provided.
