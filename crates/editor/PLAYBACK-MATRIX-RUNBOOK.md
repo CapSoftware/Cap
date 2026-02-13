@@ -122,6 +122,12 @@ pnpm bench:playback:publish -- \
   --validation-json /tmp/playback-matrix-final/playback-matrix-validation.json
 ```
 
+Generate bottleneck analysis for optimization backlog:
+
+```bash
+pnpm bench:playback:analyze -- --input /path/to/all-machine-results --output /tmp/playback-matrix-final/playback-bottlenecks.md --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
+```
+
 ## Evidence checklist
 
 1. Confirm all matrix rows exist.

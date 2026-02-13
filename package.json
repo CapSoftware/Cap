@@ -47,6 +47,7 @@
 		"bench:playback:report": "node scripts/build-playback-matrix-report.js",
 		"bench:playback:finalize": "node scripts/finalize-playback-matrix.js",
 		"bench:playback:publish": "node scripts/publish-playback-matrix-summary.js",
+		"bench:playback:analyze": "node scripts/analyze-playback-matrix-bottlenecks.js",
 		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf",
 		"lgtm-otel": "docker run -p 3010:3000 -p 4317:4317 -p 4318:4318 --rm -it docker.io/grafana/otel-lgtm",
 		"with-env": "dotenv -e .env --"
