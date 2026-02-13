@@ -95,6 +95,8 @@ node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-res
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results-a --baseline /path/to/baseline-results-b --candidate /path/to/candidate-results-a --candidate /path/to/candidate-results-b --output /tmp/playback-comparison.md
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --allow-missing-candidate
 node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-results --candidate /path/to/candidate-results --output /tmp/playback-comparison.md --output-json /tmp/playback-comparison.json
+
+Comparison output reports both baseline rows missing in candidate and candidate-only rows not present in baseline.
 ```
 
 #### Decode Performance Benchmark

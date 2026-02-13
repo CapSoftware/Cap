@@ -304,6 +304,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Skip catch-up path now uses ordered stale-frame pruning helper instead of full-map retain filtering.
    - Reduces avoidable warmup timing noise and stale-buffer maintenance overhead in high-skip playback paths.
 
+32. **Expanded comparison outputs with candidate-only coverage visibility (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now reports candidate-only rows that do not exist in baseline.
+   - Markdown and JSON comparison outputs now include both missing-candidate and candidate-only coverage summaries.
+   - Improves matrix diff diagnostics when test coverage differs between baseline and candidate runs.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -429,6 +434,7 @@ Decoder Pipeline:
 33. Added ordered stale-frame pruning in keyed prefetch buffer to keep playback buffer aligned with current playhead.
 34. Added comparison gate status fields to published matrix summary entries via comparison JSON attachment.
 35. Tightened keyed prefetch buffer warmup timing and skip-path pruning behavior using map-aware helper usage in playback loop.
+36. Expanded baseline-vs-candidate comparison outputs with candidate-only row reporting.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -455,6 +461,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
 - `scripts/compare-playback-benchmark-runs.js`: added structured comparison JSON output with pass/fail summary and regression detail payload.
+- `scripts/compare-playback-benchmark-runs.js`: comparison outputs now include candidate-only rows in addition to missing-candidate coverage deltas.
 - `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
