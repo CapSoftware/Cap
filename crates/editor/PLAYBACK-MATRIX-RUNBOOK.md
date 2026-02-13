@@ -115,6 +115,7 @@ pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-di
 ```
 
 Finalize summary JSON includes artifact paths, gate outcomes, settings, and git branch/commit metadata when available.
+When comparison is enabled, finalize summary JSON also includes comparison failure reasons and gate outcome details.
 
 Include optimization thresholds when finalizing:
 
