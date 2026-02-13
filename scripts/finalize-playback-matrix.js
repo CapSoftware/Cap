@@ -257,7 +257,12 @@ function main() {
 			publishArgs.push("--bottlenecks-md", bottleneckPath);
 		}
 		if (options.compareBaselineInputs.length > 0) {
-			publishArgs.push("--comparison-md", comparisonPath);
+			publishArgs.push(
+				"--comparison-md",
+				comparisonPath,
+				"--comparison-json",
+				comparisonJsonPath,
+			);
 		}
 		run("node", publishArgs);
 	}

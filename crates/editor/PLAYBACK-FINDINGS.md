@@ -294,6 +294,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Uses ordered map operations to remove outdated frames efficiently.
    - Reduces stale-buffer buildup during frame skips and sustained catch-up scenarios.
 
+30. **Published comparison gate status in matrix summaries (2026-02-13)**
+   - `scripts/publish-playback-matrix-summary.js` now accepts optional `--comparison-json`.
+   - Published matrix summary now includes comparison gate pass/fail, regression count, and missing-candidate-row count when comparison JSON is provided.
+   - `scripts/finalize-playback-matrix.js` now forwards both comparison markdown and comparison JSON to publish flow.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -417,6 +422,7 @@ Decoder Pipeline:
 31. Added structured JSON artifact emission for baseline-vs-candidate comparison workflows.
 32. Replaced playback prefetch deque scans with keyed `BTreeMap` buffering for lower lookup overhead in frame acquisition path.
 33. Added ordered stale-frame pruning in keyed prefetch buffer to keep playback buffer aligned with current playhead.
+34. Added comparison gate status fields to published matrix summary entries via comparison JSON attachment.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -446,6 +452,8 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.
+- `scripts/publish-playback-matrix-summary.js`: publish flow now surfaces comparison gate status/summary metrics when comparison JSON is provided.
+- `scripts/finalize-playback-matrix.js`: finalize publish pass now forwards both comparison markdown and comparison JSON artifacts.
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 - `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
 - `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
