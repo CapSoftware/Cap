@@ -651,13 +651,13 @@ function AudioPanel() {
 				<p className="text-xs text-gray-10">Disable all audio in the video</p>
 			</Field>
 
-			<Field label="Microphone Volume">
+			<Field label="Volume">
 				<Slider
-					value={audio.micVolumeDb}
+					value={audio.volumeDb}
 					onChange={(value) =>
 						setProject({
 							...project,
-							audio: { ...audio, micVolumeDb: value },
+							audio: { ...audio, volumeDb: value },
 						})
 					}
 					min={-30}
