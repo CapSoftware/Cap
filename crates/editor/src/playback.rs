@@ -528,11 +528,15 @@ impl Playback {
             );
 
             while !*stop_rx.borrow() {
-                let contiguous_prefetched = count_contiguous_prefetched_frames(
-                    &prefetch_buffer,
-                    frame_number,
-                    warmup_target_frames,
-                );
+                let contiguous_prefetched = if first_frame_time.is_some() {
+                    count_contiguous_prefetched_frames(
+                        &prefetch_buffer,
+                        frame_number,
+                        warmup_target_frames,
+                    )
+                } else {
+                    0
+                };
                 let should_start = if let Some(first_time) = first_frame_time {
                     contiguous_prefetched >= warmup_target_frames
                         || first_time.elapsed() > warmup_after_first_timeout

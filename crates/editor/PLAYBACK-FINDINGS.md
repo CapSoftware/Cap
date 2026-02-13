@@ -351,6 +351,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Comparison output now includes baseline/candidate run counts per row to surface aggregation depth.
    - Fixed comparison regression evaluation to use explicit options parameter wiring inside compare function.
 
+42. **Skipped contiguous warmup scans before first eligible frame (2026-02-13)**
+   - Warmup loop now defers contiguous-prefetch counting until first warmup frame arrival is observed.
+   - Reduces avoidable buffer scan work during pre-frame warmup wait.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -486,6 +490,7 @@ Decoder Pipeline:
 43. Added git branch/commit metadata into finalize summary JSON artifacts for source traceability.
 44. Wired finalize summary JSON into publish flow so one-shot finalize runs can publish summary metadata alongside matrix artifacts.
 45. Improved multi-input comparison aggregation by merging per-key metrics across runs and surfacing baseline/candidate run counts per comparison row.
+46. Skipped contiguous warmup coverage scans until first warmup frame observation to reduce pre-frame warmup loop scan overhead.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -526,6 +531,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: finalize summary JSON now includes git branch and commit metadata when available.
 - `scripts/finalize-playback-matrix.js`: finalize now writes summary JSON before publish and passes `--finalize-summary-json` into publish flow.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now supports optional finalize summary JSON input and surfaces finalize source/validation metadata.
+- `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now surfaces comparison gate status/summary metrics when comparison JSON is provided.
