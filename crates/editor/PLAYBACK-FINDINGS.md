@@ -284,6 +284,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Emits comparison summary/regression/missing-coverage details for automation.
    - `scripts/finalize-playback-matrix.js` now writes comparison markdown and JSON artifacts during baseline comparison runs.
 
+28. **Switched playback prefetch buffer to keyed map storage (2026-02-13)**
+   - Playback prefetch buffer now uses `BTreeMap<u32, PrefetchedFrame>` keyed by frame number.
+   - Removes repeated linear scans over deque entries for target frame lookup in hot playback path.
+   - Retains bounded buffer behavior with deterministic far-ahead/oldest eviction.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -405,6 +410,7 @@ Decoder Pipeline:
 29. Added missing-candidate-row gating to baseline-vs-candidate comparison workflow.
 30. Fixed finalize compare/publish ordering and propagated missing-candidate override into finalize compare flow.
 31. Added structured JSON artifact emission for baseline-vs-candidate comparison workflows.
+32. Replaced playback prefetch deque scans with keyed `BTreeMap` buffering for lower lookup overhead in frame acquisition path.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -432,6 +438,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
 - `scripts/compare-playback-benchmark-runs.js`: added structured comparison JSON output with pass/fail summary and regression detail payload.
 - `scripts/finalize-playback-matrix.js`: baseline comparison flow now writes both `playback-comparison.md` and `playback-comparison.json`.
+- `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 - `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
 - `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
