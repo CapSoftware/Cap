@@ -13,6 +13,7 @@ function parseArgs(argv) {
 		allowStartupIncreaseMs: 25,
 		allowScrubP95IncreaseMs: 5,
 		allowMissingCandidate: false,
+		failOnCandidateOnly: false,
 	};
 
 	for (let i = 2; i < argv.length; i++) {
@@ -70,6 +71,10 @@ function parseArgs(argv) {
 			options.allowMissingCandidate = true;
 			continue;
 		}
+		if (arg === "--fail-on-candidate-only") {
+			options.failOnCandidateOnly = true;
+			continue;
+		}
 		throw new Error(`Unknown argument: ${arg}`);
 	}
 
@@ -77,7 +82,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate]
+	console.log(`Usage: node scripts/compare-playback-benchmark-runs.js --baseline <file-or-dir> [--baseline <file-or-dir> ...] --candidate <file-or-dir> [--candidate <file-or-dir> ...] [--output <file>] [--output-json <file>] [--allow-fps-drop 2] [--allow-startup-increase-ms 25] [--allow-scrub-p95-increase-ms 5] [--allow-missing-candidate] [--fail-on-candidate-only]
 
 Compares baseline and candidate playback matrix JSON outputs and flags regressions. Multiple --baseline and --candidate inputs are supported.`);
 }
@@ -261,6 +266,7 @@ function toMarkdown(
 	md += "# Playback Benchmark Comparison\n\n";
 	md += `Generated: ${new Date().toISOString()}\n\n`;
 	md += `Tolerance: fps_drop<=${options.allowFpsDrop}, startup_increase<=${options.allowStartupIncreaseMs}ms, scrub_p95_increase<=${options.allowScrubP95IncreaseMs}ms\n\n`;
+	md += `Coverage gate: missing_candidate=${options.allowMissingCandidate ? "allow" : "fail"}, candidate_only=${options.failOnCandidateOnly ? "fail" : "allow"}\n\n`;
 	md += `Compared rows: ${comparisons.length}, regressions: ${regressions.length}, missing candidate rows: ${missingCandidateRows.length}, candidate-only rows: ${candidateOnlyRows.length}\n\n`;
 	if (missingCandidateRows.length > 0) {
 		md += "## Missing Candidate Rows\n\n";
@@ -306,6 +312,7 @@ function buildJsonOutput(
 			allowStartupIncreaseMs: options.allowStartupIncreaseMs,
 			allowScrubP95IncreaseMs: options.allowScrubP95IncreaseMs,
 			allowMissingCandidate: options.allowMissingCandidate,
+			failOnCandidateOnly: options.failOnCandidateOnly,
 		},
 		summary: {
 			comparedRows: comparisons.length,
@@ -314,7 +321,8 @@ function buildJsonOutput(
 			candidateOnlyRows: candidateOnlyRows.length,
 			passed:
 				regressions.length === 0 &&
-				(options.allowMissingCandidate || missingCandidateRows.length === 0),
+				(options.allowMissingCandidate || missingCandidateRows.length === 0) &&
+				(!options.failOnCandidateOnly || candidateOnlyRows.length === 0),
 		},
 		regressions,
 		missingCandidateRows,
@@ -383,7 +391,8 @@ function main() {
 
 	if (
 		comparisons.some((entry) => entry.regressions.length > 0) ||
-		(!options.allowMissingCandidate && missingCandidateRows.length > 0)
+		(!options.allowMissingCandidate && missingCandidateRows.length > 0) ||
+		(options.failOnCandidateOnly && candidateOnlyRows.length > 0)
 	) {
 		process.exit(1);
 	}
