@@ -222,6 +222,9 @@ function main() {
 		if (options.analyze) {
 			publishArgs.push("--bottlenecks-md", bottleneckPath);
 		}
+		if (options.compareBaselineInputs.length > 0) {
+			publishArgs.push("--comparison-md", comparisonPath);
+		}
 		run("node", publishArgs);
 	}
 	if (options.compareBaselineInputs.length > 0) {
