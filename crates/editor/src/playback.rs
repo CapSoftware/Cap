@@ -164,15 +164,22 @@ impl Playback {
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
-            const INITIAL_PARALLEL_TASKS: usize = 4;
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
             let dynamic_prefetch_ahead = fps.clamp(30, 90);
             let dynamic_prefetch_behind = (fps / 4).clamp(8, 24);
+            let dynamic_parallel_tasks = if fps >= 60 {
+                6
+            } else if fps >= 45 {
+                5
+            } else {
+                PARALLEL_DECODE_TASKS
+            };
+            let initial_parallel_tasks = dynamic_parallel_tasks.min(4);
 
             let mut cached_project = prefetch_project.borrow().clone();
             info!(
                 dynamic_prefetch_ahead,
-                dynamic_prefetch_behind, "Prefetch window configuration"
+                dynamic_prefetch_behind, dynamic_parallel_tasks, "Prefetch window configuration"
             );
 
             loop {
@@ -213,9 +220,9 @@ impl Playback {
                 let max_prefetch_frame = current_playback_frame + dynamic_prefetch_ahead;
 
                 let effective_parallel = if frames_decoded < RAMP_UP_AFTER_FRAMES {
-                    INITIAL_PARALLEL_TASKS
+                    initial_parallel_tasks
                 } else {
-                    PARALLEL_DECODE_TASKS
+                    dynamic_parallel_tasks
                 };
 
                 while in_flight.len() < effective_parallel {
