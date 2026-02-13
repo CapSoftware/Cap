@@ -135,10 +135,12 @@ impl Playback {
         let (seek_generation_tx, mut seek_generation_rx) = watch::channel(0u64);
         seek_generation_rx.borrow_and_update();
 
-        let in_flight_frames: Arc<RwLock<HashSet<(u64, u32)>>> =
+        let prefetch_in_flight_frames: Arc<RwLock<HashSet<(u64, u32)>>> =
             Arc::new(RwLock::new(HashSet::new()));
-        let prefetch_in_flight = in_flight_frames.clone();
-        let main_in_flight = in_flight_frames;
+        let prefetch_in_flight = prefetch_in_flight_frames.clone();
+        let playback_prefetch_in_flight = prefetch_in_flight_frames;
+        let playback_decode_in_flight: Arc<RwLock<HashSet<(u64, u32)>>> =
+            Arc::new(RwLock::new(HashSet::new()));
 
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
@@ -612,10 +614,15 @@ impl Playback {
                             prefetched.segment_index,
                         ))
                     } else {
-                        let is_in_flight = main_in_flight
+                        let in_flight_key = (seek_generation, frame_number);
+                        let is_in_flight = playback_prefetch_in_flight
                             .read()
-                            .map(|guard| guard.contains(&(seek_generation, frame_number)))
-                            .unwrap_or(false);
+                            .map(|guard| guard.contains(&in_flight_key))
+                            .unwrap_or(false)
+                            || playback_decode_in_flight
+                                .read()
+                                .map(|guard| guard.contains(&in_flight_key))
+                                .unwrap_or(false);
 
                         if is_in_flight {
                             let wait_start = Instant::now();
@@ -637,10 +644,14 @@ impl Playback {
                                         }
                                     }
                                     _ = tokio::time::sleep(in_flight_poll_interval) => {
-                                        let still_in_flight = main_in_flight
+                                        let still_in_flight = playback_prefetch_in_flight
                                             .read()
-                                            .map(|guard| guard.contains(&(seek_generation, frame_number)))
-                                            .unwrap_or(false);
+                                            .map(|guard| guard.contains(&in_flight_key))
+                                            .unwrap_or(false)
+                                            || playback_decode_in_flight
+                                                .read()
+                                                .map(|guard| guard.contains(&in_flight_key))
+                                                .unwrap_or(false);
                                         if !still_in_flight {
                                             break;
                                         }
@@ -718,21 +729,20 @@ impl Playback {
                                 .map(|v| v.offsets)
                                 .unwrap_or_default();
 
-                            let in_flight_key = (seek_generation, frame_number);
-                            if let Ok(mut guard) = main_in_flight.write() {
+                            if let Ok(mut guard) = playback_decode_in_flight.write() {
                                 guard.insert(in_flight_key);
                             }
 
                             let max_wait = frame_fetch_timeout;
                             let data = tokio::select! {
                                 _ = stop_rx.changed() => {
-                                    if let Ok(mut guard) = main_in_flight.write() {
+                                    if let Ok(mut guard) = playback_decode_in_flight.write() {
                                         guard.remove(&in_flight_key);
                                     }
                                     break 'playback
                                 },
                                 _ = tokio::time::sleep(max_wait) => {
-                                    if let Ok(mut guard) = main_in_flight.write() {
+                                    if let Ok(mut guard) = playback_decode_in_flight.write() {
                                         guard.remove(&in_flight_key);
                                     }
                                     frame_number = frame_number.saturating_add(1);
@@ -742,12 +752,16 @@ impl Playback {
                                 data = segment_media
                                     .decoders
                                     .get_frames(segment_time as f32, !cached_project.camera.hide, clip_offsets) => {
-                                    if let Ok(mut guard) = main_in_flight.write() {
+                                    if let Ok(mut guard) = playback_decode_in_flight.write() {
                                         guard.remove(&in_flight_key);
                                     }
                                     data
                                 },
                             };
+
+                            if seek_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
 
                             data.map(|frames| (Arc::new(frames), segment.recording_clip))
                         }
