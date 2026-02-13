@@ -239,6 +239,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Prevents stale buffered frames from prior playback position from being reused after seek jumps.
    - Reduces unnecessary post-seek frame scans and improves settle determinism.
 
+19. **Tightened in-flight prefetch buffering to current playhead (2026-02-13)**
+   - In-flight wait path now buffers only frames at or ahead of current frame.
+   - Avoids re-queueing older frames from initial start position baseline.
+   - Reduces avoidable prefetch buffer churn during late playback and aggressive seek scenarios.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -346,6 +351,7 @@ Decoder Pipeline:
 20. Added baseline-vs-candidate comparison script to gate regressions in optimization loops.
 21. Added seek-generation prefetch gating to drop stale decode outputs after live seek updates.
 22. Cleared prefetched-frame buffer on live seek handling to avoid stale buffered frame reuse.
+23. Restricted in-flight prefetch buffering to current frame or newer frames during frame wait path.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -369,6 +375,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 - `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
+- `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
