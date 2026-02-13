@@ -113,6 +113,12 @@ One-shot finalize command:
 pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented
 ```
 
+Include optimization thresholds when finalizing:
+
+```bash
+pnpm bench:playback:finalize -- --input /path/to/all-machine-results --output-dir /tmp/playback-matrix-final --require-formats mp4,fragmented --target-fps 60 --max-scrub-p95-ms 40 --max-startup-ms 250
+```
+
 Publish finalized artifacts into benchmark history:
 
 ```bash
