@@ -188,6 +188,7 @@ pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate 
 pnpm bench:playback:compare -- --baseline /path/to/baseline-results --candidate /path/to/candidate-results --min-samples-per-row 3
 
 # comparison JSON includes failureReasons and gateOutcomes for automation
+# minimum sample gating uses metrics that are actually comparable for each row
 ```
 
 ## Evidence checklist

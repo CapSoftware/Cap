@@ -360,6 +360,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Comparison now flags rows with insufficient effective sample counts and reports them in markdown/JSON outputs.
    - `scripts/finalize-playback-matrix.js` forwards minimum sample gating settings into compare stage, and publish summary now surfaces sample gating status fields.
 
+44. **Fixed sample gating semantics for non-comparable metrics (2026-02-13)**
+   - Minimum sample checks now only consider metrics that are actually comparable for the row.
+   - Prevents scrub sample requirements from incorrectly failing non-scrub comparison rows.
+   - Comparison output now includes compared metric count and effective sample count per row.
+
 44. **Cached warmup contiguous coverage counts during warmup (2026-02-13)**
    - Warmup loop now recomputes contiguous prefetched coverage only when warmup buffer content changes.
    - Avoids repeated contiguous scans on idle warmup iterations.
@@ -507,6 +512,7 @@ Decoder Pipeline:
 47. Added minimum-sample comparison gating with `--min-samples-per-row`, insufficient-sample reporting, and finalize passthrough support.
 48. Cached warmup contiguous coverage values and only recomputed contiguous scan when warmup buffer changed.
 49. Added comparison JSON gate diagnostics (`failureReasons`, `gateOutcomes`) and surfaced failure reasons in published summary output.
+50. Corrected minimum sample gating semantics to only count comparable metrics and added compared-metric/effective-sample columns in comparison output.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -548,6 +554,7 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: finalize now writes summary JSON before publish and passes `--finalize-summary-json` into publish flow.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now supports optional finalize summary JSON input and surfaces finalize source/validation metadata.
 - `scripts/compare-playback-benchmark-runs.js`: added `--min-samples-per-row`, insufficient-sample row reporting, and sample gate fields in markdown/JSON outputs.
+- `scripts/compare-playback-benchmark-runs.js`: minimum sample checks now apply only to metrics that are comparable for each row; output now includes compared metric count and effective sample count columns.
 - `scripts/finalize-playback-matrix.js`: forwards `--min-samples-per-row` into compare stage and captures it in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes insufficient sample row count and minimum sample threshold fields.
 - `scripts/compare-playback-benchmark-runs.js`: comparison JSON summary now includes explicit `failureReasons` and `gateOutcomes` fields.

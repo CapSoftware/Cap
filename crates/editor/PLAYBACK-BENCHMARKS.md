@@ -107,6 +107,7 @@ node scripts/compare-playback-benchmark-runs.js --baseline /path/to/baseline-res
 Comparison output reports both baseline rows missing in candidate and candidate-only rows not present in baseline.
 Comparison table also reports baseline/candidate run counts per row when multiple JSON inputs contribute to the same key.
 Comparison JSON summary includes `failureReasons` and `gateOutcomes` fields for automation-friendly gate diagnostics.
+Minimum sample gating is applied against metrics that are actually comparable for the row (for example, scrub samples are not required for rows with no scrub metric comparison).
 ```
 
 #### Decode Performance Benchmark
