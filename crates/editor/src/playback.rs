@@ -134,6 +134,18 @@ fn insert_prefetched_frame(
     trim_prefetch_buffer(buffer, current_frame);
 }
 
+fn prune_prefetch_buffer_before_frame(
+    buffer: &mut BTreeMap<u32, PrefetchedFrame>,
+    current_frame: u32,
+) {
+    while let Some((frame, _)) = buffer.first_key_value() {
+        if *frame >= current_frame {
+            break;
+        }
+        buffer.pop_first();
+    }
+}
+
 impl Playback {
     pub async fn start(
         mut self,
@@ -569,6 +581,7 @@ impl Playback {
                         insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
                     }
                 }
+                prune_prefetch_buffer_before_frame(&mut prefetch_buffer, frame_number);
 
                 let frame_offset = frame_number.saturating_sub(playback_anchor_frame) as f64;
                 let next_deadline = playback_anchor_start + frame_duration.mul_f64(frame_offset);
