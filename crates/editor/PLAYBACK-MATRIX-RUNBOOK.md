@@ -46,6 +46,12 @@ node scripts/run-playback-benchmark-matrix.js \
   --input-dir "$INPUT_DIR"
 ```
 
+Equivalent shortcut:
+
+```bash
+pnpm bench:playback:matrix -- --platform "<platform-label>" --gpu "<gpu-label>" --output-dir "$OUT_DIR" --fps 60 --input-dir "$INPUT_DIR"
+```
+
 Examples:
 
 ```bash
@@ -71,10 +77,22 @@ After collecting all machine folders into a shared root:
 node scripts/aggregate-playback-benchmarks.js --input /path/to/all-machine-results --output /tmp/playback-matrix-aggregate.md
 ```
 
+Equivalent shortcut:
+
+```bash
+pnpm bench:playback:aggregate -- --input /path/to/all-machine-results --output /tmp/playback-matrix-aggregate.md
+```
+
 Validate matrix completeness:
 
 ```bash
 node scripts/validate-playback-matrix.js --input /path/to/all-machine-results --require-formats mp4,fragmented
+```
+
+Equivalent shortcut:
+
+```bash
+pnpm bench:playback:validate -- --input /path/to/all-machine-results --require-formats mp4,fragmented
 ```
 
 ## Evidence checklist
