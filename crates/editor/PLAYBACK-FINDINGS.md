@@ -164,6 +164,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Added sequential frame and random sample count controls to scale benchmark depth per hardware class.
    - Supports fragmented segment directories for duration-aware benchmarking.
 
+7. **Timeline seek dispatch now coalesces during drag (2026-02-13)**
+   - Frontend seek calls are requestAnimationFrame-batched.
+   - Only the latest pending seek frame is sent while an async seek is in-flight.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -259,6 +263,7 @@ Decoder Pipeline:
 8. Extended playback benchmark tooling with scrub mode and startup latency metrics.
 9. Added playback runtime startup telemetry logs for first frame and audio callback bring-up.
 10. Enhanced decode benchmark example with structured JSON output and configurable sample depth.
+11. Added timeline seek dispatch coalescing to reduce seek command storms during drag.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -270,6 +275,7 @@ Decoder Pipeline:
 - `crates/editor/PLAYBACK-BENCHMARKS.md`: updated benchmark reference and metric definitions.
 - `crates/editor/src/playback.rs`: added first-render and audio-callback startup latency logging.
 - `crates/editor/examples/decode-benchmark.rs`: added `--output-json`, startup metrics, and configurable sequential/random sampling.
+- `apps/desktop/src/routes/editor/Timeline/index.tsx`: added requestAnimationFrame-based seek coalescing with in-flight protection.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
