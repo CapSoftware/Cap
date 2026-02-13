@@ -55,6 +55,9 @@ cargo run -p cap-recording --example playback-test-runner -- --recording-path /p
 
 # List available recordings
 cargo run -p cap-recording --example playback-test-runner -- list
+
+# Emit machine-readable JSON report
+cargo run -p cap-recording --example playback-test-runner -- full --json-output /tmp/playback-benchmark.json
 ```
 
 #### Decode Performance Benchmark
