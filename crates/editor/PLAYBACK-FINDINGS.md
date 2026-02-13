@@ -341,6 +341,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/finalize-playback-matrix.js` now records git branch and commit SHA in finalize summary JSON output.
    - Improves traceability of benchmark artifacts to exact source revision.
 
+40. **Wired finalize summary artifact into publish flow (2026-02-13)**
+   - `scripts/finalize-playback-matrix.js` now generates finalize summary JSON before publish step.
+   - Finalize now forwards `--finalize-summary-json` to `publish-playback-matrix-summary.js`.
+   - Published matrix summaries can now include finalize artifact metadata in one-shot finalize runs.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -474,6 +479,7 @@ Decoder Pipeline:
 41. Added finalize summary JSON artifact output with artifact/settings/result metadata for automation workflows.
 42. Optimized contiguous prefetched-frame warmup scan using ordered map range iteration instead of repeated key lookups.
 43. Added git branch/commit metadata into finalize summary JSON artifacts for source traceability.
+44. Wired finalize summary JSON into publish flow so one-shot finalize runs can publish summary metadata alongside matrix artifacts.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -511,6 +517,8 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: warmup first-frame timing now only starts after eligible prefetched frame insertion, and skip catch-up now reuses ordered stale-prune helper.
 - `scripts/finalize-playback-matrix.js`: added optional `--output-json` and default finalize summary JSON emission with artifact path and pass/fail metadata.
 - `scripts/finalize-playback-matrix.js`: finalize summary JSON now includes git branch and commit metadata when available.
+- `scripts/finalize-playback-matrix.js`: finalize now writes summary JSON before publish and passes `--finalize-summary-json` into publish flow.
+- `scripts/publish-playback-matrix-summary.js`: publish flow now supports optional finalize summary JSON input and surfaces finalize source/validation metadata.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
 - `crates/editor/src/playback.rs`: added ordered pruning of stale prefetched frames below current playhead to reduce stale buffer overhead during catch-up.
 - `scripts/publish-playback-matrix-summary.js`: publish flow now surfaces comparison gate status/summary metrics when comparison JSON is provided.

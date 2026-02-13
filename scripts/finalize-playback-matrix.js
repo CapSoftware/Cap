@@ -267,46 +267,6 @@ function main() {
 		}
 		run("node", compareArgs);
 	}
-	if (options.publishTarget) {
-		const publishArgs = [
-			"scripts/publish-playback-matrix-summary.js",
-			"--aggregate-md",
-			aggregatePath,
-			"--status-md",
-			statusPath,
-			"--validation-json",
-			validationPath,
-			"--target",
-			options.publishTarget,
-		];
-		if (options.analyze) {
-			publishArgs.push("--bottlenecks-md", bottleneckPath);
-		}
-		if (options.compareBaselineInputs.length > 0) {
-			publishArgs.push(
-				"--comparison-md",
-				comparisonPath,
-				"--comparison-json",
-				comparisonJsonPath,
-			);
-		}
-		run("node", publishArgs);
-	}
-
-	console.log(`Aggregate markdown: ${aggregatePath}`);
-	console.log(`Status markdown: ${statusPath}`);
-	console.log(`Validation JSON: ${validationPath}`);
-	if (options.analyze) {
-		console.log(`Bottleneck analysis: ${bottleneckPath}`);
-		console.log(`Bottleneck analysis JSON: ${bottleneckJsonPath}`);
-	}
-	if (options.publishTarget) {
-		console.log(`Published target: ${options.publishTarget}`);
-	}
-	if (options.compareBaselineInputs.length > 0) {
-		console.log(`Comparison report: ${comparisonPath}`);
-		console.log(`Comparison JSON: ${comparisonJsonPath}`);
-	}
 	const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
 	const comparison =
 		options.compareBaselineInputs.length > 0
@@ -357,6 +317,47 @@ function main() {
 		},
 	};
 	fs.writeFileSync(summaryJsonPath, JSON.stringify(summary, null, 2), "utf8");
+	if (options.publishTarget) {
+		const publishArgs = [
+			"scripts/publish-playback-matrix-summary.js",
+			"--aggregate-md",
+			aggregatePath,
+			"--status-md",
+			statusPath,
+			"--validation-json",
+			validationPath,
+			"--target",
+			options.publishTarget,
+		];
+		if (options.analyze) {
+			publishArgs.push("--bottlenecks-md", bottleneckPath);
+		}
+		if (options.compareBaselineInputs.length > 0) {
+			publishArgs.push(
+				"--comparison-md",
+				comparisonPath,
+				"--comparison-json",
+				comparisonJsonPath,
+			);
+		}
+		publishArgs.push("--finalize-summary-json", summaryJsonPath);
+		run("node", publishArgs);
+	}
+
+	console.log(`Aggregate markdown: ${aggregatePath}`);
+	console.log(`Status markdown: ${statusPath}`);
+	console.log(`Validation JSON: ${validationPath}`);
+	if (options.analyze) {
+		console.log(`Bottleneck analysis: ${bottleneckPath}`);
+		console.log(`Bottleneck analysis JSON: ${bottleneckJsonPath}`);
+	}
+	if (options.publishTarget) {
+		console.log(`Published target: ${options.publishTarget}`);
+	}
+	if (options.compareBaselineInputs.length > 0) {
+		console.log(`Comparison report: ${comparisonPath}`);
+		console.log(`Comparison JSON: ${comparisonJsonPath}`);
+	}
 	console.log(`Finalize summary JSON: ${summaryJsonPath}`);
 }
 
