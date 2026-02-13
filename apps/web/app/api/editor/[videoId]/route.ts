@@ -110,7 +110,12 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 
 	const parseResult = Schema.decodeUnknownEither(SaveConfigInput)(body);
 	if (parseResult._tag === "Left") {
-		return Response.json({ error: "Invalid config format" }, { status: 400 });
+		const details = String(parseResult.left);
+		console.error("Invalid config format:", details);
+		return Response.json(
+			{ error: "Invalid config format", details },
+			{ status: 400 },
+		);
 	}
 
 	const { config, expectedUpdatedAt } = parseResult.right;

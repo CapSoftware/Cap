@@ -3,7 +3,6 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videoEditorProjects, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { normalizeConfigForRender } from "@cap/editor-render-spec";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { Schema } from "effect";
@@ -89,27 +88,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
 	const parsedBody = Schema.decodeUnknownEither(SaveBody)(body);
 	if (parsedBody._tag === "Left") {
-		return Response.json({ error: "Invalid config format" }, { status: 400 });
+		const details = String(parsedBody.left);
+		console.error("Invalid config format (save):", details);
+		return Response.json(
+			{ error: "Invalid config format", details },
+			{ status: 400 },
+		);
 	}
 
 	const config = parsedBody.right.config as ProjectConfigurationType;
 	const force = parsedBody.right.force === true;
 	const expectedUpdatedAt = parsedBody.right.expectedUpdatedAt ?? null;
-
-	const normalized = normalizeConfigForRender(config);
-	const errors = normalized.issues.filter(
-		(issue) => issue.severity === "error",
-	);
-	if (errors.length > 0) {
-		return Response.json(
-			{
-				error: "Unsupported editor config",
-				code: "UNSUPPORTED_CONFIG",
-				issues: errors,
-			},
-			{ status: 400 },
-		);
-	}
 
 	const [video] = await db()
 		.select({

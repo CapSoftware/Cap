@@ -60,3 +60,44 @@ export function createDefaultConfig(
 		},
 	};
 }
+
+export function normalizeStoredConfig(raw: unknown): ProjectConfiguration {
+	const stored = (raw ?? {}) as Record<string, unknown>;
+	const bg = (stored.background ?? {}) as Record<string, unknown>;
+	const cam = (stored.camera ?? {}) as Record<string, unknown>;
+	const aud = (stored.audio ?? {}) as Record<string, unknown>;
+	const cur = (stored.cursor ?? {}) as Record<string, unknown>;
+
+	return {
+		aspectRatio:
+			stored.aspectRatio !== undefined
+				? (stored.aspectRatio as ProjectConfiguration["aspectRatio"])
+				: DEFAULT_PROJECT_CONFIG.aspectRatio,
+		background: {
+			...DEFAULT_PROJECT_CONFIG.background,
+			...bg,
+			source: bg.source ?? DEFAULT_PROJECT_CONFIG.background.source,
+		} as ProjectConfiguration["background"],
+		camera: {
+			...DEFAULT_PROJECT_CONFIG.camera,
+			...cam,
+			position: cam.position ?? DEFAULT_PROJECT_CONFIG.camera.position,
+		} as ProjectConfiguration["camera"],
+		audio: {
+			...DEFAULT_PROJECT_CONFIG.audio,
+			...aud,
+		} as ProjectConfiguration["audio"],
+		cursor: {
+			...DEFAULT_PROJECT_CONFIG.cursor,
+			...cur,
+		} as ProjectConfiguration["cursor"],
+		timeline:
+			stored.timeline !== undefined
+				? (stored.timeline as ProjectConfiguration["timeline"])
+				: DEFAULT_PROJECT_CONFIG.timeline,
+		captions:
+			stored.captions !== undefined
+				? (stored.captions as ProjectConfiguration["captions"])
+				: DEFAULT_PROJECT_CONFIG.captions,
+	};
+}

@@ -5,7 +5,7 @@ import type { User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option } from "effect";
 import type { ProjectConfiguration } from "../types/project-config";
-import { createDefaultConfig } from "../utils/defaults";
+import { createDefaultConfig, normalizeStoredConfig } from "../utils/defaults";
 
 export interface EditorProject {
 	id: string;
@@ -48,7 +48,7 @@ export class VideoEditorProjects extends Effect.Service<VideoEditorProjects>()(
 							id: existing.id,
 							videoId: existing.videoId as Video.VideoId,
 							ownerId: existing.ownerId as User.UserId,
-							config: existing.config as ProjectConfiguration,
+							config: normalizeStoredConfig(existing.config),
 							createdAt: existing.createdAt,
 							updatedAt: existing.updatedAt,
 						} satisfies EditorProject;
@@ -116,7 +116,7 @@ export class VideoEditorProjects extends Effect.Service<VideoEditorProjects>()(
 										id: p.id,
 										videoId: p.videoId as Video.VideoId,
 										ownerId: p.ownerId as User.UserId,
-										config: p.config as ProjectConfiguration,
+										config: normalizeStoredConfig(p.config),
 										createdAt: p.createdAt,
 										updatedAt: p.updatedAt,
 									}) satisfies EditorProject,
