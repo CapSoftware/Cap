@@ -234,6 +234,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Seek events now advance generation and flush prefetch consumption to prevent old in-flight decode outputs from polluting post-seek playback.
    - Reduces redundant decode/render work during aggressive scrub and improves settle reliability.
 
+18. **Flushed prefetched-frame buffer on seek generation changes (2026-02-13)**
+   - Live seek handling now clears prefetch buffer immediately on seek events.
+   - Prevents stale buffered frames from prior playback position from being reused after seek jumps.
+   - Reduces unnecessary post-seek frame scans and improves settle determinism.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -340,6 +345,7 @@ Decoder Pipeline:
 19. Added matrix bottleneck analysis script for prioritized FPS optimization follow-up.
 20. Added baseline-vs-candidate comparison script to gate regressions in optimization loops.
 21. Added seek-generation prefetch gating to drop stale decode outputs after live seek updates.
+22. Cleared prefetched-frame buffer on live seek handling to avoid stale buffered frame reuse.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -362,6 +368,7 @@ Decoder Pipeline:
 - `scripts/analyze-playback-matrix-bottlenecks.js`: added prioritized bottleneck analysis output from matrix JSON evidence.
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
+- `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
