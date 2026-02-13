@@ -210,6 +210,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - `scripts/publish-playback-matrix-summary.js` injects finalized matrix artifacts into playback benchmark history.
    - Keeps matrix evidence updates consistent and repeatable.
 
+15. **Added bottleneck analyzer for continuous FPS optimization (2026-02-13)**
+   - `scripts/analyze-playback-matrix-bottlenecks.js` ranks matrix cells by FPS, startup, and scrub threshold breaches.
+   - Produces prioritized optimization backlog from real matrix evidence.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -313,6 +317,7 @@ Decoder Pipeline:
 16. Added matrix status report generator for concise artifact summaries.
 17. Added one-shot finalization script for aggregate + status + validation outputs.
 18. Added benchmark history publisher script for finalized matrix artifacts.
+19. Added matrix bottleneck analysis script for prioritized FPS optimization follow-up.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -332,6 +337,7 @@ Decoder Pipeline:
 - `scripts/build-playback-matrix-report.js`: added concise matrix status report generation from JSON benchmark outputs.
 - `scripts/finalize-playback-matrix.js`: added one-shot matrix artifact finalization workflow.
 - `scripts/publish-playback-matrix-summary.js`: added matrix artifact publisher into PLAYBACK-BENCHMARKS history region.
+- `scripts/analyze-playback-matrix-bottlenecks.js`: added prioritized bottleneck analysis output from matrix JSON evidence.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
