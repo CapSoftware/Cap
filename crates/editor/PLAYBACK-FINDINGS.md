@@ -159,6 +159,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Playback loop now logs first rendered frame latency.
    - Audio stream setup now logs startup preparation time and first callback latency.
 
+6. **Decode benchmark now supports machine-readable evidence output (2026-02-13)**
+   - `decode-benchmark` supports `--output-json` for structured metric capture.
+   - Added sequential frame and random sample count controls to scale benchmark depth per hardware class.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -253,6 +257,7 @@ Decoder Pipeline:
 7. Reduced AVAssetReader eager pool warmup and added lazy decoder instantiation for additional pool slots.
 8. Extended playback benchmark tooling with scrub mode and startup latency metrics.
 9. Added playback runtime startup telemetry logs for first frame and audio callback bring-up.
+10. Enhanced decode benchmark example with structured JSON output and configurable sample depth.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -263,6 +268,7 @@ Decoder Pipeline:
 - `crates/recording/examples/playback-test-runner.rs`: added scrub command and startup/scrub latency metrics.
 - `crates/editor/PLAYBACK-BENCHMARKS.md`: updated benchmark reference and metric definitions.
 - `crates/editor/src/playback.rs`: added first-render and audio-callback startup latency logging.
+- `crates/editor/examples/decode-benchmark.rs`: added `--output-json`, startup metrics, and configurable sequential/random sampling.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
