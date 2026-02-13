@@ -269,6 +269,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Prevents prefetch-side clear/reset paths from clearing direct decode in-flight markers.
    - In-flight wait logic now checks both sets and direct decode outputs are dropped when a pending seek is detected before frame use.
 
+25. **Added comparison coverage gating for missing candidate rows (2026-02-13)**
+   - `scripts/compare-playback-benchmark-runs.js` now reports baseline rows that are missing in candidate runs.
+   - Comparison now fails by default when candidate coverage is missing baseline rows.
+   - Optional `--allow-missing-candidate` flag keeps metric regression checks while allowing partial candidate matrices.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -381,9 +386,11 @@ Decoder Pipeline:
 25. Added optional baseline comparison gating inside matrix finalization workflow.
 26. Made in-flight frame tracking generation-aware to prevent cross-seek marker collisions.
 27. Split prefetch and direct decode in-flight tracking and guarded direct decode frame usage when seek updates are pending.
+28. Added missing-candidate-row coverage gating in baseline-vs-candidate comparison script with optional override flag.
 26. Made shared in-flight frame tracking generation-aware to prevent cross-seek marker collisions.
 27. Added comparison artifact attachment support in publish/finalize matrix summary workflows.
 28. Split prefetch and direct decode in-flight tracking to avoid cross-path marker interference.
+29. Added missing-candidate-row gating to baseline-vs-candidate comparison workflow.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -407,6 +414,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added regression-aware baseline/candidate comparison with configurable FPS/startup/scrub tolerances.
 - `scripts/publish-playback-matrix-summary.js`: added optional baseline-vs-candidate comparison artifact attachment in published summaries.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
+- `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `crates/editor/src/playback.rs`: added seek-generation tagging for prefetched frames so stale in-flight decode results are ignored after seek generation advances.
 - `crates/editor/src/playback.rs`: seek handling now clears prefetched frame buffer on generation changes to guarantee stale buffered frames are discarded immediately.
 - `crates/editor/src/playback.rs`: in-flight prefetch wait path now only buffers frames at or ahead of current frame to reduce stale buffer accumulation.
@@ -416,6 +424,7 @@ Decoder Pipeline:
 - `scripts/publish-playback-matrix-summary.js`: publish flow now supports optional comparison artifact attachment.
 - `scripts/finalize-playback-matrix.js`: finalize flow now includes comparison artifact when publishing and baseline comparison are both requested.
 - `crates/editor/src/playback.rs`: prefetch and direct decode now use separate generation-aware in-flight sets, with combined checks in frame wait path.
+- `scripts/compare-playback-benchmark-runs.js`: comparison now reports and gates missing candidate rows relative to baseline coverage.
 
 **Results**:
 - ✅ `cargo +stable check -p cap-editor` passes after changes.
