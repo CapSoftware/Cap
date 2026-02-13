@@ -7,7 +7,6 @@ use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, Timelin
 use ffmpeg::{
     ChannelLayout, Dictionary, format as avformat, frame::Audio as FFAudio, software::resampling,
 };
-#[cfg(not(target_os = "windows"))]
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Observer, Producer},
@@ -248,14 +247,12 @@ impl AudioRenderer {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
 pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
     frame_buffer: AudioRenderer,
     resampler: AudioResampler,
     resampled_buffer: HeapRb<T>,
 }
 
-#[cfg(not(target_os = "windows"))]
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 512;
 
@@ -293,6 +290,19 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.resampler.reset();
         self.resampled_buffer.clear();
+        self.frame_buffer.set_playhead(playhead, project);
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn set_playhead_smooth(&mut self, playhead: f64, project: &ProjectConfiguration) {
+        let current_playhead = self.frame_buffer.elapsed_samples_to_playhead();
+        let drift = (playhead - current_playhead).abs();
+
+        if drift > 0.2 {
+            self.set_playhead(playhead, project);
+            return;
+        }
+
         self.frame_buffer.set_playhead(playhead, project);
     }
 
@@ -426,7 +436,6 @@ impl AudioResampler {
         })
     }
 
-    #[cfg(not(target_os = "windows"))]
     pub fn reset(&mut self) {
         *self = Self::new(self.output).unwrap();
     }

@@ -1,6 +1,6 @@
-use cap_audio::FromSampleBytes;
-#[cfg(not(target_os = "windows"))]
-use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
+use cap_audio::{
+    FromSampleBytes, LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint,
+};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
@@ -8,7 +8,6 @@ use cap_rendering::{
     DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
-#[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
     SampleFormat,
@@ -28,7 +27,6 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-#[cfg(not(target_os = "windows"))]
 use crate::audio::AudioPlaybackBuffer;
 use crate::{
     audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
@@ -64,6 +62,7 @@ pub enum PlaybackEvent {
 pub struct PlaybackHandle {
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
+    seek_tx: tokio_mpsc::UnboundedSender<u32>,
 }
 
 struct PrefetchedFrame {
@@ -118,10 +117,12 @@ impl Playback {
 
         let (event_tx, mut event_rx) = watch::channel(PlaybackEvent::Start);
         event_rx.borrow_and_update();
+        let (seek_tx, mut seek_rx) = tokio_mpsc::unbounded_channel::<u32>();
 
         let handle = PlaybackHandle {
             stop_tx: stop_tx.clone(),
             event_rx,
+            seek_tx,
         };
 
         let (prefetch_tx, mut prefetch_rx) =
@@ -437,10 +438,33 @@ impl Playback {
                 .make_contiguous()
                 .sort_by_key(|p| p.frame_number);
 
-            let start = Instant::now();
+            let mut playback_anchor_start = Instant::now();
+            let mut playback_anchor_frame = frame_number;
             let mut cached_project = self.project.borrow().clone();
 
             'playback: loop {
+                let mut pending_seek = None;
+                while let Ok(next_seek_frame) = seek_rx.try_recv() {
+                    pending_seek = Some(next_seek_frame);
+                }
+
+                if let Some(seek_frame) = pending_seek {
+                    frame_number = seek_frame;
+                    playback_anchor_start = Instant::now();
+                    playback_anchor_frame = seek_frame;
+                    prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                    frame_cache.cache.clear();
+                    let _ = frame_request_tx.send(frame_number);
+                    let _ = playback_position_tx.send(frame_number);
+                    if has_audio
+                        && audio_playhead_tx
+                            .send(frame_number as f64 / fps_f64)
+                            .is_err()
+                    {
+                        break 'playback;
+                    }
+                }
+
                 if self.project.has_changed().unwrap_or(false) {
                     cached_project = self.project.borrow_and_update().clone();
                 }
@@ -465,11 +489,28 @@ impl Playback {
                     }
                 }
 
-                let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
-                let next_deadline = start + frame_duration.mul_f64(frame_offset);
+                let frame_offset = frame_number.saturating_sub(playback_anchor_frame) as f64;
+                let next_deadline = playback_anchor_start + frame_duration.mul_f64(frame_offset);
 
                 tokio::select! {
                     _ = stop_rx.changed() => break 'playback,
+                    Some(seek_frame) = seek_rx.recv() => {
+                        frame_number = seek_frame;
+                        playback_anchor_start = Instant::now();
+                        playback_anchor_frame = seek_frame;
+                        prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        frame_cache.cache.clear();
+                        let _ = frame_request_tx.send(frame_number);
+                        let _ = playback_position_tx.send(frame_number);
+                        if has_audio
+                            && audio_playhead_tx
+                                .send(frame_number as f64 / fps_f64)
+                                .is_err()
+                        {
+                            break 'playback;
+                        }
+                        continue;
+                    }
                     _ = tokio::time::sleep_until(next_deadline) => {}
                 }
 
@@ -699,8 +740,8 @@ impl Playback {
                     break 'playback;
                 }
 
-                let expected_frame = self.start_frame_number
-                    + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+                let expected_frame = playback_anchor_frame
+                    + (playback_anchor_start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
@@ -742,6 +783,10 @@ impl PlaybackHandle {
         self.stop_tx.send(true).ok();
     }
 
+    pub fn seek(&self, frame_number: u32) {
+        let _ = self.seek_tx.send(frame_number);
+    }
+
     pub async fn receive_event(&mut self) -> watch::Ref<'_, PlaybackEvent> {
         self.event_rx.changed().await.ok();
         self.event_rx.borrow_and_update()
@@ -759,6 +804,12 @@ struct AudioPlayback {
 }
 
 impl AudioPlayback {
+    fn use_prerendered_audio() -> bool {
+        std::env::var("CAP_AUDIO_PRERENDER_PLAYBACK")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     fn spawn(self) -> bool {
         let handle = tokio::runtime::Handle::current();
 
@@ -787,26 +838,80 @@ impl AudioPlayback {
                 }
             };
 
+            let use_prerendered_audio = Self::use_prerendered_audio();
             let duration_secs = self.duration_secs;
+            if use_prerendered_audio {
+                info!("Using pre-rendered audio playback mode");
+            } else {
+                info!("Using low-latency streaming audio playback mode");
+            }
 
             let result = match supported_config.sample_format() {
                 SampleFormat::I16 => {
-                    self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
+                    if use_prerendered_audio {
+                        self.create_stream_prerendered::<i16>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                        )
+                    } else {
+                        self.create_stream::<i16>(device, supported_config)
+                    }
                 }
                 SampleFormat::I32 => {
-                    self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
+                    if use_prerendered_audio {
+                        self.create_stream_prerendered::<i32>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                        )
+                    } else {
+                        self.create_stream::<i32>(device, supported_config)
+                    }
                 }
                 SampleFormat::F32 => {
-                    self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
+                    if use_prerendered_audio {
+                        self.create_stream_prerendered::<f32>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                        )
+                    } else {
+                        self.create_stream::<f32>(device, supported_config)
+                    }
                 }
                 SampleFormat::I64 => {
-                    self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
+                    if use_prerendered_audio {
+                        self.create_stream_prerendered::<i64>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                        )
+                    } else {
+                        self.create_stream::<i64>(device, supported_config)
+                    }
                 }
                 SampleFormat::U8 => {
-                    self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
+                    if use_prerendered_audio {
+                        self.create_stream_prerendered::<u8>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                        )
+                    } else {
+                        self.create_stream::<u8>(device, supported_config)
+                    }
                 }
                 SampleFormat::F64 => {
-                    self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
+                    if use_prerendered_audio {
+                        self.create_stream_prerendered::<f64>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                        )
+                    } else {
+                        self.create_stream::<f64>(device, supported_config)
+                    }
                 }
                 format => {
                     error!(
@@ -843,7 +948,6 @@ impl AudioPlayback {
         true
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[allow(dead_code)]
     fn create_stream<T>(
         self,
