@@ -172,6 +172,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 8. **Playback benchmark runner now supports JSON evidence export (2026-02-13)**
    - `playback-test-runner` supports `--json-output` for structured report emission.
    - JSON output includes command metadata, system info, summary, and per-recording test detail.
+   - Command metadata now includes input scope and output flags for reproducibility.
 
 9. **Added JSON aggregate utility for cross-platform benchmark collation (2026-02-13)**
    - `scripts/aggregate-playback-benchmarks.js` builds a markdown table from multiple JSON outputs.
