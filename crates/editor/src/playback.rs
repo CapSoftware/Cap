@@ -16,7 +16,7 @@ use cpal::{
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
@@ -243,6 +243,11 @@ impl Playback {
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
+<<<<<<< HEAD
+=======
+            let mut prefetched_behind_order: VecDeque<u32> = VecDeque::new();
+            let mut scheduled_in_flight_frames: HashSet<u32> = HashSet::new();
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
             let dynamic_prefetch_ahead = fps.clamp(30, 90);
             let dynamic_prefetch_behind = (fps / 4).clamp(8, 24);
@@ -254,12 +259,27 @@ impl Playback {
                 PARALLEL_DECODE_TASKS
             };
             let initial_parallel_tasks = dynamic_parallel_tasks.min(4);
+<<<<<<< HEAD
+=======
+            let prefetch_idle_poll_interval = Duration::from_secs_f64(1.0 / fps_f64)
+                .mul_f64(0.25)
+                .max(Duration::from_millis(2))
+                .min(Duration::from_millis(8));
+            let prefetched_behind_capacity = (dynamic_prefetch_behind as usize).saturating_mul(8);
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
             let mut active_generation = *prefetch_seek_generation.borrow();
 
             let mut cached_project = prefetch_project.borrow().clone();
             info!(
                 dynamic_prefetch_ahead,
+<<<<<<< HEAD
                 dynamic_prefetch_behind, dynamic_parallel_tasks, "Prefetch window configuration"
+=======
+                dynamic_prefetch_behind,
+                dynamic_parallel_tasks,
+                prefetch_idle_poll_interval_ms = prefetch_idle_poll_interval.as_secs_f64() * 1000.0,
+                "Prefetch window configuration"
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
             );
 
             loop {
@@ -278,10 +298,18 @@ impl Playback {
                         next_prefetch_frame = *frame_request_rx.borrow();
                         frames_decoded = 0;
                         prefetched_behind.clear();
+<<<<<<< HEAD
+=======
+                        prefetched_behind_order.clear();
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.clear();
                         }
+<<<<<<< HEAD
+=======
+                        scheduled_in_flight_frames.clear();
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
 
                         in_flight = FuturesUnordered::new();
                     }
@@ -301,11 +329,16 @@ impl Playback {
                         next_prefetch_frame = requested;
                         frames_decoded = 0;
                         prefetched_behind.clear();
+                        prefetched_behind_order.clear();
 
                         if is_backward_seek || seek_distance > dynamic_prefetch_ahead / 2 {
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.clear();
                             }
+<<<<<<< HEAD
+=======
+                            scheduled_in_flight_frames.clear();
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
                             in_flight = FuturesUnordered::new();
                         }
                     }
@@ -333,11 +366,15 @@ impl Playback {
                         break;
                     }
 
+<<<<<<< HEAD
                     let already_in_flight = prefetch_in_flight
                         .read()
                         .map(|guard| guard.contains(&(active_generation, frame_num)))
                         .unwrap_or(false);
                     if already_in_flight {
+=======
+                    if scheduled_in_flight_frames.contains(&frame_num) {
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
                         next_prefetch_frame += 1;
                         continue;
                     }
@@ -360,6 +397,7 @@ impl Playback {
                         let is_initial = frames_decoded < 10;
                         let generation = active_generation;
 
+                        scheduled_in_flight_frames.insert(frame_num);
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.insert((generation, frame_num));
                         }
@@ -400,11 +438,15 @@ impl Playback {
                             continue;
                         }
 
+<<<<<<< HEAD
                         let already_in_flight = prefetch_in_flight
                             .read()
                             .map(|guard| guard.contains(&(active_generation, behind_frame)))
                             .unwrap_or(false);
                         if already_in_flight {
+=======
+                        if scheduled_in_flight_frames.contains(&behind_frame) {
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
                             continue;
                         }
 
@@ -425,11 +467,19 @@ impl Playback {
                             let segment_index = segment.recording_clip;
                             let generation = active_generation;
 
+                            scheduled_in_flight_frames.insert(behind_frame);
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.insert((generation, behind_frame));
                             }
 
-                            prefetched_behind.insert(behind_frame);
+                            if prefetched_behind.insert(behind_frame) {
+                                prefetched_behind_order.push_back(behind_frame);
+                                while prefetched_behind_order.len() > prefetched_behind_capacity {
+                                    if let Some(evicted) = prefetched_behind_order.pop_front() {
+                                        prefetched_behind.remove(&evicted);
+                                    }
+                                }
+                            }
                             in_flight.push(Box::pin(async move {
                                 let result = decoders
                                     .get_frames(segment_time as f32, !hide_camera, clip_offsets)
@@ -444,6 +494,10 @@ impl Playback {
                     biased;
 
                     Some((frame_num, segment_index, generation, result)) = in_flight.next() => {
+<<<<<<< HEAD
+=======
+                        scheduled_in_flight_frames.remove(&frame_num);
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.remove(&(generation, frame_num));
                         }
@@ -470,7 +524,7 @@ impl Playback {
                         }
                     }
 
-                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                    _ = tokio::time::sleep(prefetch_idle_poll_interval), if in_flight.is_empty() => {}
                 }
             }
         });
@@ -576,6 +630,7 @@ impl Playback {
 
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
+<<<<<<< HEAD
                         if prefetched.generation == seek_generation {
                             if insert_prefetched_frame(
                                 &mut prefetch_buffer,
@@ -586,7 +641,51 @@ impl Playback {
                             }
                             if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
                                 first_frame_time = Some(Instant::now());
+=======
+                        let mut next_prefetched = Some(prefetched);
+
+                        loop {
+                            let Some(prefetched) = next_prefetched.take() else {
+                                break;
+                            };
+
+                            if prefetched.generation == seek_generation
+                                && insert_prefetched_frame(
+                                    &mut prefetch_buffer,
+                                    prefetched,
+                                    frame_number,
+                                )
+                            {
+                                warmup_buffer_changed = true;
+>>>>>>> c801652efd85d0cf6bde578ebe963bc9d7221587
                             }
+
+                            next_prefetched = prefetch_rx.try_recv().ok();
+                        }
+
+                        if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
+                            first_frame_time = Some(Instant::now());
+                        }
+                    }
+                    _ = seek_rx.changed() => {
+                        let seek_frame = *seek_rx.borrow_and_update();
+                        seek_generation = seek_generation.saturating_add(1);
+                        frame_number = seek_frame;
+                        prefetch_buffer.clear();
+                        frame_cache.cache.clear();
+                        warmup_contiguous_prefetched = 0;
+                        warmup_buffer_changed = false;
+                        first_frame_time = None;
+                        warmup_start = Instant::now();
+                        let _ = seek_generation_tx.send(seek_generation);
+                        let _ = frame_request_tx.send(frame_number);
+                        let _ = playback_position_tx.send(frame_number);
+                        if has_audio
+                            && audio_playhead_tx
+                                .send(frame_number as f64 / fps_f64)
+                                .is_err()
+                        {
+                            break;
                         }
                     }
                     _ = seek_rx.changed() => {
