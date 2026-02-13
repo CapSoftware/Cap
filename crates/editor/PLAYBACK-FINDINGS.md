@@ -387,6 +387,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Warmup loop now uses this direct signal instead of length-only delta checks for contiguous coverage cache invalidation.
    - Improves warmup cache correctness when inserts and trims occur with stable overall buffer length.
 
+48. **Extended finalize summary with comparison file stats (2026-02-13)**
+   - Finalize summary JSON now includes comparison file stats payload when comparison is enabled.
+   - Publish summary now surfaces finalize baseline/candidate parse error counts from finalize summary metadata.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -530,6 +534,7 @@ Decoder Pipeline:
 51. Extended finalize summary and publish output with comparison failure reasons and gate outcome metadata.
 52. Added comparison parse-error gating (`--fail-on-parse-errors`) with parse stats surfaced in comparison JSON, finalize settings, and published summaries.
 53. Updated keyed prefetch insert helper to emit structural-change signals for warmup contiguous coverage cache invalidation.
+54. Extended finalize summary and publish output with comparison file stats (including parse error counts).
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -581,6 +586,8 @@ Decoder Pipeline:
 - `scripts/finalize-playback-matrix.js`: forwards parse-error gating and records parse-error policy in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes parse policy and baseline/candidate parse error counts.
 - `crates/editor/src/playback.rs`: `insert_prefetched_frame` now returns structural-change signals and warmup cache invalidation uses this signal to avoid stale contiguous counts when insert+trim keeps buffer length unchanged.
+- `scripts/finalize-playback-matrix.js`: finalize summary now includes comparison file stats payload when comparison runs are enabled.
+- `scripts/publish-playback-matrix-summary.js`: publish summary now surfaces finalize baseline/candidate parse error counts from finalize summary metadata.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: warmup contiguous coverage counts are now cached and recomputed only on warmup buffer changes.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.

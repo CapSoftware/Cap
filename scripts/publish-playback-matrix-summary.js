@@ -121,6 +121,11 @@ function buildSummarySection(
 		if (finalizeSummary.results?.comparisonPassed !== null) {
 			markdown += `- Finalize comparison passed: ${finalizeSummary.results?.comparisonPassed === true ? "true" : "false"}\n`;
 		}
+		const finalizeFileStats = finalizeSummary.results?.comparisonFileStats;
+		if (finalizeFileStats?.baseline || finalizeFileStats?.candidate) {
+			markdown += `- Finalize baseline parse errors: ${finalizeFileStats?.baseline?.parseErrors?.length ?? "n/a"}\n`;
+			markdown += `- Finalize candidate parse errors: ${finalizeFileStats?.candidate?.parseErrors?.length ?? "n/a"}\n`;
+		}
 		const finalizeFailureReasons = Array.isArray(
 			finalizeSummary.results?.comparisonFailureReasons,
 		)
