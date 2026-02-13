@@ -9,6 +9,7 @@ function parseArgs(argv) {
 		statusMd: null,
 		bottlenecksMd: null,
 		comparisonMd: null,
+		comparisonJson: null,
 		validationJson: null,
 		target: path.resolve("crates/editor/PLAYBACK-BENCHMARKS.md"),
 	};
@@ -36,6 +37,10 @@ function parseArgs(argv) {
 			options.comparisonMd = path.resolve(argv[++i] ?? "");
 			continue;
 		}
+		if (arg === "--comparison-json") {
+			options.comparisonJson = path.resolve(argv[++i] ?? "");
+			continue;
+		}
 		if (arg === "--validation-json") {
 			options.validationJson = path.resolve(argv[++i] ?? "");
 			continue;
@@ -51,7 +56,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--comparison-md <path>] [--target <playback-benchmarks-path>]
+	console.log(`Usage: node scripts/publish-playback-matrix-summary.js --aggregate-md <path> --status-md <path> --validation-json <path> [--bottlenecks-md <path>] [--comparison-md <path>] [--comparison-json <path>] [--target <playback-benchmarks-path>]
 
 Prepends a matrix summary section into PLAYBACK-BENCHMARKS.md benchmark history region.`);
 }
@@ -68,6 +73,7 @@ function buildSummarySection(
 	validationJson,
 	bottlenecksMd,
 	comparisonMd,
+	comparisonJson,
 ) {
 	const now = new Date().toISOString();
 	const validation = JSON.parse(validationJson);
@@ -80,6 +86,13 @@ function buildSummarySection(
 	markdown += `- Observed cells: ${validation.observedCells}\n`;
 	markdown += `- Missing cells: ${validation.missingCells?.length ?? 0}\n`;
 	markdown += `- Format failures: ${validation.formatFailures?.length ?? 0}\n\n`;
+	if (comparisonJson) {
+		const comparison = JSON.parse(comparisonJson);
+		const comparisonPassed = comparison.summary?.passed === true;
+		markdown += `- Comparison gate: ${comparisonPassed ? "✅ PASS" : "❌ FAIL"}\n`;
+		markdown += `- Comparison regressions: ${comparison.summary?.regressions ?? "n/a"}\n`;
+		markdown += `- Missing candidate rows: ${comparison.summary?.missingCandidateRows ?? "n/a"}\n\n`;
+	}
 
 	if ((validation.missingCells?.length ?? 0) > 0) {
 		markdown += "**Missing Cells**\n";
@@ -152,6 +165,9 @@ function main() {
 	if (options.comparisonMd) {
 		ensureFile(options.comparisonMd, "Comparison markdown");
 	}
+	if (options.comparisonJson) {
+		ensureFile(options.comparisonJson, "Comparison JSON");
+	}
 	ensureFile(options.target, "Target");
 
 	const aggregateMd = fs.readFileSync(options.aggregateMd, "utf8");
@@ -163,12 +179,16 @@ function main() {
 	const comparisonMd = options.comparisonMd
 		? fs.readFileSync(options.comparisonMd, "utf8")
 		: null;
+	const comparisonJson = options.comparisonJson
+		? fs.readFileSync(options.comparisonJson, "utf8")
+		: null;
 	const summaryMd = buildSummarySection(
 		aggregateMd,
 		statusMd,
 		validationJson,
 		bottlenecksMd,
 		comparisonMd,
+		comparisonJson,
 	);
 	writeToBenchmarkHistory(options.target, summaryMd);
 	console.log(`Published matrix summary into ${options.target}`);
