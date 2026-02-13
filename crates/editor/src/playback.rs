@@ -101,7 +101,8 @@ impl FrameCache {
     }
 }
 
-fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_frame: u32) {
+fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_frame: u32) -> bool {
+    let mut changed = false;
     while buffer.len() > PREFETCH_BUFFER_SIZE {
         let far_ahead_frame = buffer
             .iter()
@@ -111,6 +112,7 @@ fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_fra
 
         if let Some(frame) = far_ahead_frame {
             buffer.remove(&frame);
+            changed = true;
             continue;
         }
 
@@ -118,20 +120,25 @@ fn trim_prefetch_buffer(buffer: &mut BTreeMap<u32, PrefetchedFrame>, current_fra
             break;
         };
         buffer.remove(&oldest_frame);
+        changed = true;
     }
+    changed
 }
 
 fn insert_prefetched_frame(
     buffer: &mut BTreeMap<u32, PrefetchedFrame>,
     prefetched: PrefetchedFrame,
     current_frame: u32,
-) {
+) -> bool {
     if prefetched.frame_number < current_frame {
-        return;
+        return false;
     }
 
-    buffer.entry(prefetched.frame_number).or_insert(prefetched);
-    trim_prefetch_buffer(buffer, current_frame);
+    let frame_number = prefetched.frame_number;
+    let inserted_new = !buffer.contains_key(&frame_number);
+    buffer.entry(frame_number).or_insert(prefetched);
+    let trimmed = trim_prefetch_buffer(buffer, current_frame);
+    inserted_new || trimmed
 }
 
 fn prune_prefetch_buffer_before_frame(
@@ -566,9 +573,11 @@ impl Playback {
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
                         if prefetched.generation == seek_generation {
-                            let pre_insert_len = prefetch_buffer.len();
-                            insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
-                            if prefetch_buffer.len() != pre_insert_len {
+                            if insert_prefetched_frame(
+                                &mut prefetch_buffer,
+                                prefetched,
+                                frame_number,
+                            ) {
                                 warmup_buffer_changed = true;
                             }
                             if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
@@ -617,7 +626,8 @@ impl Playback {
                 }
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
                     if prefetched.generation == seek_generation {
-                        insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
+                        let _ =
+                            insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
                     }
                 }
                 prune_prefetch_buffer_before_frame(&mut prefetch_buffer, frame_number);
@@ -698,7 +708,11 @@ impl Playback {
                                             found_frame = Some(prefetched);
                                             break;
                                         } else if prefetched.frame_number >= frame_number {
-                                            insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
+                                            let _ = insert_prefetched_frame(
+                                                &mut prefetch_buffer,
+                                                prefetched,
+                                                frame_number,
+                                            );
                                         }
                                     }
                                     _ = tokio::time::sleep(in_flight_poll_interval) => {
@@ -752,7 +766,7 @@ impl Playback {
                                         prefetched.segment_index,
                                     ))
                                 } else {
-                                    insert_prefetched_frame(
+                                    let _ = insert_prefetched_frame(
                                         &mut prefetch_buffer,
                                         prefetched,
                                         frame_number,

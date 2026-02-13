@@ -382,6 +382,11 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Comparison JSON now includes baseline/candidate file parsing stats and parse error entries.
    - `scripts/finalize-playback-matrix.js` now forwards parse-error gating option to compare stage; published summary surfaces parse policy and parse error counts.
 
+47. **Made keyed prefetch insert helper report structural changes (2026-02-13)**
+   - `insert_prefetched_frame` now returns whether keyed prefetch buffer changed (insert and/or trim).
+   - Warmup loop now uses this direct signal instead of length-only delta checks for contiguous coverage cache invalidation.
+   - Improves warmup cache correctness when inserts and trims occur with stable overall buffer length.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -524,6 +529,7 @@ Decoder Pipeline:
 50. Corrected minimum sample gating semantics to only count comparable metrics and added compared-metric/effective-sample columns in comparison output.
 51. Extended finalize summary and publish output with comparison failure reasons and gate outcome metadata.
 52. Added comparison parse-error gating (`--fail-on-parse-errors`) with parse stats surfaced in comparison JSON, finalize settings, and published summaries.
+53. Updated keyed prefetch insert helper to emit structural-change signals for warmup contiguous coverage cache invalidation.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -574,6 +580,7 @@ Decoder Pipeline:
 - `scripts/compare-playback-benchmark-runs.js`: added parse-error gating and baseline/candidate file parse stats/parse error entries in JSON output.
 - `scripts/finalize-playback-matrix.js`: forwards parse-error gating and records parse-error policy in finalize summary settings.
 - `scripts/publish-playback-matrix-summary.js`: published comparison status now includes parse policy and baseline/candidate parse error counts.
+- `crates/editor/src/playback.rs`: `insert_prefetched_frame` now returns structural-change signals and warmup cache invalidation uses this signal to avoid stale contiguous counts when insert+trim keeps buffer length unchanged.
 - `crates/editor/src/playback.rs`: warmup loop now skips contiguous coverage scanning until first warmup frame has been observed.
 - `crates/editor/src/playback.rs`: warmup contiguous coverage counts are now cached and recomputed only on warmup buffer changes.
 - `crates/editor/src/playback.rs`: replaced deque-based prefetch buffering with keyed `BTreeMap` buffering and bounded eviction for faster target frame retrieval.
