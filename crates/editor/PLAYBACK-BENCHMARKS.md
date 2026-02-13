@@ -77,6 +77,22 @@ cargo run -p cap-recording --example real-device-test-runner -- full --keep-outp
 cargo run -p cap-recording --example playback-test-runner -- full
 ```
 
+### Cross-Platform Validation Matrix
+
+Run these scenarios on each required hardware class and append outputs via `--benchmark-output`.
+
+```bash
+cargo run -p cap-recording --example playback-test-runner -- full --fps 60 --benchmark-output --notes "platform=<platform> gpu=<gpu> scenario=full"
+cargo run -p cap-recording --example playback-test-runner -- scrub --fps 60 --benchmark-output --notes "platform=<platform> gpu=<gpu> scenario=scrub"
+```
+
+| Platform | GPU Class | MP4 Full | Fragmented Full | MP4 Scrub | Fragmented Scrub | Notes |
+|----------|-----------|----------|-----------------|-----------|------------------|-------|
+| macOS 13+ | Apple Silicon | ☐ | ☐ | ☐ | ☐ | |
+| Windows 11 | NVIDIA discrete | ☐ | ☐ | ☐ | ☐ | |
+| Windows 11 | AMD discrete | ☐ | ☐ | ☐ | ☐ | |
+| Windows 11 | Integrated baseline | ☐ | ☐ | ☐ | ☐ | |
+
 ---
 
 ## Benchmark History
