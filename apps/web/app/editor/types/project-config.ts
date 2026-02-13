@@ -96,14 +96,10 @@ export const CameraConfiguration = Schema.Struct({
 });
 export type CameraConfiguration = typeof CameraConfiguration.Type;
 
-export const StereoMode = Schema.Literal("stereo", "monoL", "monoR");
-
 export const AudioConfiguration = Schema.Struct({
 	mute: Schema.Boolean,
 	improve: Schema.Boolean,
-	micVolumeDb: Schema.Number,
-	micStereoMode: StereoMode,
-	systemVolumeDb: Schema.Number,
+	volumeDb: Schema.Number,
 });
 export type AudioConfiguration = typeof AudioConfiguration.Type;
 

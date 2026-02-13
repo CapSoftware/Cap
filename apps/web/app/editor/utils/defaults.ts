@@ -29,9 +29,7 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
 	audio: {
 		mute: false,
 		improve: false,
-		micVolumeDb: 0,
-		micStereoMode: "stereo",
-		systemVolumeDb: 0,
+		volumeDb: 0,
 	},
 	cursor: {
 		hide: false,
