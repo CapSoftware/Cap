@@ -64,6 +64,7 @@ Aggregate JSON outputs from multiple machines:
 
 ```bash
 node scripts/aggregate-playback-benchmarks.js --input /path/to/json-results --output /tmp/playback-benchmark-aggregate.md
+node scripts/build-playback-matrix-report.js --input /path/to/json-results --output /tmp/playback-matrix-status.md
 ```
 
 Validate matrix coverage and required formats:
