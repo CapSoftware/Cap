@@ -1921,6 +1921,15 @@ async fn set_playhead_position(
         })
         .await;
 
+    let playback_handle = {
+        let state = editor_instance.state.lock().await;
+        state.playback_task.clone()
+    };
+
+    if let Some(handle) = playback_handle {
+        handle.seek(frame_number);
+    }
+
     Ok(())
 }
 
@@ -2544,6 +2553,15 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
             state.playhead_position = frame_number;
         })
         .await;
+
+    let playback_handle = {
+        let state = editor_instance.state.lock().await;
+        state.playback_task.clone()
+    };
+
+    if let Some(handle) = playback_handle {
+        handle.seek(frame_number);
+    }
 
     Ok(())
 }
