@@ -16,7 +16,7 @@ use cpal::{
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
@@ -243,6 +243,7 @@ impl Playback {
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
+            let mut prefetched_behind_order: VecDeque<u32> = VecDeque::new();
             let mut scheduled_in_flight_frames: HashSet<u32> = HashSet::new();
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
             let dynamic_prefetch_ahead = fps.clamp(30, 90);
@@ -259,6 +260,7 @@ impl Playback {
                 .mul_f64(0.25)
                 .max(Duration::from_millis(2))
                 .min(Duration::from_millis(8));
+            let prefetched_behind_capacity = (dynamic_prefetch_behind as usize).saturating_mul(8);
             let mut active_generation = *prefetch_seek_generation.borrow();
 
             let mut cached_project = prefetch_project.borrow().clone();
@@ -286,6 +288,7 @@ impl Playback {
                         next_prefetch_frame = *frame_request_rx.borrow();
                         frames_decoded = 0;
                         prefetched_behind.clear();
+                        prefetched_behind_order.clear();
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.clear();
@@ -310,6 +313,7 @@ impl Playback {
                         next_prefetch_frame = requested;
                         frames_decoded = 0;
                         prefetched_behind.clear();
+                        prefetched_behind_order.clear();
 
                         if is_backward_seek || seek_distance > dynamic_prefetch_ahead / 2 {
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
@@ -433,7 +437,14 @@ impl Playback {
                                 in_flight_guard.insert((generation, behind_frame));
                             }
 
-                            prefetched_behind.insert(behind_frame);
+                            if prefetched_behind.insert(behind_frame) {
+                                prefetched_behind_order.push_back(behind_frame);
+                                while prefetched_behind_order.len() > prefetched_behind_capacity {
+                                    if let Some(evicted) = prefetched_behind_order.pop_front() {
+                                        prefetched_behind.remove(&evicted);
+                                    }
+                                }
+                            }
                             in_flight.push(Box::pin(async move {
                                 let result = decoders
                                     .get_frames(segment_time as f32, !hide_camera, clip_offsets)
