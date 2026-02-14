@@ -831,6 +831,44 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Supersession span threshold retune to 20)
+
+**Goal**: Re-evaluate supersession span threshold with CSV-backed multi-run sweeps and improve 4k scrub medians
+
+**What was done**:
+1. Ran a 4-way sweep over `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES={15,20,25,30}` with `scrub-benchmark --runs 3`.
+2. Compared median last-request latency and p95 tails from CSV outputs.
+3. Updated FFmpeg supersession default span fallback from `25` to `20`.
+4. Re-ran scrub, playback, and decode regression benchmarks after the default change.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - changed default `min_span_frames` fallback from `25` to `20`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - updated command examples to show span `20`
+  - added benchmark entry for the threshold sweep and post-change regression runs
+
+**Results**:
+- 4k sweep medians (last-request avg / p95):
+  - span 15: **836.94ms / 1740.74ms**
+  - span 20: **814.93ms / 1743.49ms**
+  - span 25: **819.11ms / 1762.74ms**
+  - span 30: **923.18ms / 1947.86ms**
+- Post-change default (span 20) validation:
+  - 4k scrub median last-request avg **836.61ms**, p95 **1732.40ms**
+  - playback throughput remains 60fps-class:
+    - 1080p: **60.24 fps**
+    - 4k: **60.18 fps**
+  - decode metrics remain in expected variance envelope:
+    - 1080p random avg **111.79ms**
+    - 4k random avg **509.26ms**
+
+**Decision**: keep defaults at `min_requests=8`, `min_span_frames=20`.
+
+**Stopping point**: supersession defaults now favor a slightly more aggressive span threshold while preserving 60fps throughput and stable decode behavior.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
