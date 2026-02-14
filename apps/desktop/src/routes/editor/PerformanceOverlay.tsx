@@ -51,6 +51,10 @@ type TransportStats = {
 	queuedOutOfOrderDropsWindow: number;
 	directOutOfOrderDropsTotal: number;
 	directOutOfOrderDropsWindow: number;
+	directIngressOutOfOrderDropsTotal: number;
+	directIngressOutOfOrderDropsWindow: number;
+	directResponseOutOfOrderDropsTotal: number;
+	directResponseOutOfOrderDropsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -106,6 +110,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		queuedOutOfOrderDropsWindow: 0,
 		directOutOfOrderDropsTotal: 0,
 		directOutOfOrderDropsWindow: 0,
+		directIngressOutOfOrderDropsTotal: 0,
+		directIngressOutOfOrderDropsWindow: 0,
+		directResponseOutOfOrderDropsTotal: 0,
+		directResponseOutOfOrderDropsWindow: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -251,6 +259,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			queuedOutOfOrderDropsWindow: 0,
 			directOutOfOrderDropsTotal: 0,
 			directOutOfOrderDropsWindow: 0,
+			directIngressOutOfOrderDropsTotal: 0,
+			directIngressOutOfOrderDropsWindow: 0,
+			directResponseOutOfOrderDropsTotal: 0,
+			directResponseOutOfOrderDropsWindow: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -308,6 +320,14 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				queuedOutOfOrderDropsWindow: socketStats.queuedOutOfOrderDropsWindow,
 				directOutOfOrderDropsTotal: socketStats.directOutOfOrderDropsTotal,
 				directOutOfOrderDropsWindow: socketStats.directOutOfOrderDropsWindow,
+				directIngressOutOfOrderDropsTotal:
+					socketStats.directIngressOutOfOrderDropsTotal,
+				directIngressOutOfOrderDropsWindow:
+					socketStats.directIngressOutOfOrderDropsWindow,
+				directResponseOutOfOrderDropsTotal:
+					socketStats.directResponseOutOfOrderDropsTotal,
+				directResponseOutOfOrderDropsWindow:
+					socketStats.directResponseOutOfOrderDropsWindow,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -396,6 +416,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Queued Out-Of-Order Drops (Window): ${t.queuedOutOfOrderDropsWindow}`,
 			`Direct Out-Of-Order Drops (Total): ${t.directOutOfOrderDropsTotal}`,
 			`Direct Out-Of-Order Drops (Window): ${t.directOutOfOrderDropsWindow}`,
+			`Direct Ingress Out-Of-Order Drops (Total): ${t.directIngressOutOfOrderDropsTotal}`,
+			`Direct Ingress Out-Of-Order Drops (Window): ${t.directIngressOutOfOrderDropsWindow}`,
+			`Direct Response Out-Of-Order Drops (Total): ${t.directResponseOutOfOrderDropsTotal}`,
+			`Direct Response Out-Of-Order Drops (Window): ${t.directResponseOutOfOrderDropsWindow}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -607,6 +631,20 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 									<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
 										{" "}
 										(window {transportStats().directOutOfOrderDropsWindow})
+									</span>
+								</Show>
+								<Show
+									when={
+										transportStats().directIngressOutOfOrderDropsTotal > 0 ||
+										transportStats().directResponseOutOfOrderDropsTotal > 0
+									}
+								>
+									<span style={{ color: "rgba(255, 255, 255, 0.5)" }}>
+										{" "}
+										(ingress{" "}
+										{transportStats().directIngressOutOfOrderDropsTotal} /
+										response{" "}
+										{transportStats().directResponseOutOfOrderDropsTotal})
 									</span>
 								</Show>
 							</div>

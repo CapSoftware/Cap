@@ -3082,6 +3082,49 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (direct stale-drop source split diagnostics)
+
+**Goal**: Separate direct-path stale drops caused at ingress from stale drops caused by asynchronous stride-correction response ordering
+
+**What was done**:
+1. Added split counters for direct stale-drop sources (ingress vs response).
+2. Wired split counters into socket stats payload and periodic frame logs.
+3. Exposed split counters in overlay and clipboard diagnostics.
+4. Re-ran desktop typecheck and utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - `FpsStats` now includes:
+    - `directIngressOutOfOrderDropsTotal`
+    - `directIngressOutOfOrderDropsWindow`
+    - `directResponseOutOfOrderDropsTotal`
+    - `directResponseOutOfOrderDropsWindow`
+  - increments ingress counters on direct metadata-path stale drop
+  - increments response counters on stride-correction response stale drop
+  - periodic `[Frame]` log now includes:
+    - `direct_ingress_ooo_window`
+    - `direct_ingress_ooo_total`
+    - `direct_response_ooo_window`
+    - `direct_response_ooo_total`
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling now includes split direct stale-drop counters
+  - clipboard export includes split direct stale-drop metrics
+  - direct out-of-order overlay row now shows ingress/response totals
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Direct stale-drop telemetry now attributes whether drops happen at direct ingress or stride-response completion.
+- ✅ Overlay, clipboard, and logs provide source-split counters for targeted debugging on real machines.
+- ✅ Desktop typecheck and utility tests pass (30/30).
+
+**Stopping point**: Ready for target-machine traces to correlate ingress-vs-response stale drops with render jitter and fallback pressure.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
