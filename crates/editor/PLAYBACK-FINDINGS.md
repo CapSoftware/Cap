@@ -1882,6 +1882,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (transport split percentage diagnostics)
+
+**Goal**: Make long-session transport attribution easier by surfacing SAB-vs-worker share percentages directly in overlay and clipboard output
+
+**What was done**:
+1. Added derived transport split metrics for SAB and worker frame share.
+2. Added derived superseded-drop percentage relative to total received frames.
+3. Extended clipboard export and overlay rows with these percentages.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - added derived helpers:
+    - total transported frame count
+    - SAB frame share percent
+    - worker frame share percent
+    - superseded-drop percent
+  - clipboard export now includes all three percentages
+  - new overlay row displays transport split percentages during active sessions
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Overlay now provides immediate percentage-level attribution for SAB vs worker transport usage.
+- ✅ Clipboard exports include normalized split metrics for easier cross-machine comparison.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows diagnostics runs where percentage splits can be compared alongside fallback byte totals and startup timing traces.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

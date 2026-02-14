@@ -265,10 +265,46 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 	const formatMs = (ms: number) => ms.toFixed(2);
 	const formatMb = (value: number) => value.toFixed(1);
 	const formatSlotMb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+	const formatPct = (value: number) => value.toFixed(1);
+	const totalTransportedFrames = () =>
+		transportStats().sabTotalFramesWrittenToSharedBuffer +
+		transportStats().sabTotalFramesSentToWorker;
+	const sabFrameSharePct = () => {
+		const total = totalTransportedFrames();
+		return total > 0
+			? (transportStats().sabTotalFramesWrittenToSharedBuffer / total) * 100
+			: 0;
+	};
+	const workerFrameSharePct = () => {
+		const total = totalTransportedFrames();
+		return total > 0
+			? (transportStats().sabTotalFramesSentToWorker / total) * 100
+			: 0;
+	};
+	const supersededDropPct = () =>
+		transportStats().sabTotalFramesReceived > 0
+			? (transportStats().sabTotalSupersededDrops /
+					transportStats().sabTotalFramesReceived) *
+				100
+			: 0;
 
 	const copyStatsToClipboard = async () => {
 		const s = stats();
 		const t = transportStats();
+		const totalTransported =
+			t.sabTotalFramesWrittenToSharedBuffer + t.sabTotalFramesSentToWorker;
+		const sabSharePct =
+			totalTransported > 0
+				? (t.sabTotalFramesWrittenToSharedBuffer / totalTransported) * 100
+				: 0;
+		const workerSharePct =
+			totalTransported > 0
+				? (t.sabTotalFramesSentToWorker / totalTransported) * 100
+				: 0;
+		const supersededPct =
+			t.sabTotalFramesReceived > 0
+				? (t.sabTotalSupersededDrops / t.sabTotalFramesReceived) * 100
+				: 0;
 		const statsText = [
 			`FPS: ${formatFps(s.fps)}`,
 			`Frame: ${formatMs(s.avgFrameMs)}ms avg`,
@@ -285,6 +321,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Frames Sent to Worker: ${t.sabTotalFramesSentToWorker}`,
 			`SAB Fallback Transfer: ${formatSlotMb(t.sabTotalWorkerFallbackBytes)} MB`,
 			`SAB Superseded Drops: ${t.sabTotalSupersededDrops}`,
+			`SAB Frame Share: ${formatPct(sabSharePct)}%`,
+			`Worker Frame Share: ${formatPct(workerSharePct)}%`,
+			`Superseded Drop Share: ${formatPct(supersededPct)}%`,
 			`SAB Resizes: ${t.sabResizes}`,
 			`SAB Fallbacks: ${t.sabFallbacks}`,
 			`SAB Oversize Fallbacks: ${t.sabOversizeFallbacks}`,
@@ -410,6 +449,19 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 									{transportStats().sabTotalRetryAttempts} retries /{" "}
 									{formatSlotMb(transportStats().sabTotalWorkerFallbackBytes)}MB
 									fallback
+								</span>
+							</div>
+						</Show>
+						<Show when={totalTransportedFrames() > 0}>
+							<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+								<span>Transport split: </span>
+								<span style={{ color: "#93c5fd" }}>
+									{formatPct(sabFrameSharePct())}% SAB
+								</span>
+								<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
+									{" "}
+									/ {formatPct(workerFrameSharePct())}% worker /{" "}
+									{formatPct(supersededDropPct())}% superseded
 								</span>
 							</div>
 						</Show>
