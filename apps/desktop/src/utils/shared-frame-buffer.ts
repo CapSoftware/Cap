@@ -112,7 +112,7 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 	const metadataView = new Int32Array(buffer);
 	const metadataOffset = controlView[CONTROL_METADATA_OFFSET];
 	const dataOffset = controlView[CONTROL_DATA_OFFSET];
-	let frameCounter = 0;
+	let frameCounter = 0 >>> 0;
 
 	return {
 		write(frameData: ArrayBuffer): boolean {
@@ -167,7 +167,7 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 					reclaimAttempt < MAX_READY_RECLAIM_RETRIES;
 					reclaimAttempt++
 				) {
-					let oldestFrameNumber = Number.MAX_SAFE_INTEGER;
+					let oldestFrameAge = -1;
 					let oldestIdx = -1;
 					let oldestMetaIdx = -1;
 
@@ -184,12 +184,14 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 							continue;
 						}
 
-						const frameNumber = Atomics.load(
-							metadataView,
-							candidateMetaIdx + META_FRAME_NUMBER,
-						);
-						if (frameNumber < oldestFrameNumber) {
-							oldestFrameNumber = frameNumber;
+						const frameNumber =
+							Atomics.load(
+								metadataView,
+								candidateMetaIdx + META_FRAME_NUMBER,
+							) >>> 0;
+						const frameAge = (frameCounter - frameNumber) >>> 0;
+						if (frameAge > oldestFrameAge) {
+							oldestFrameAge = frameAge;
 							oldestIdx = candidateIdx;
 							oldestMetaIdx = candidateMetaIdx;
 						}
@@ -240,7 +242,7 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 				frameData.byteLength,
 			);
 			const currentFrame = frameCounter;
-			frameCounter = (frameCounter + 1) | 0;
+			frameCounter = (frameCounter + 1) >>> 0;
 			Atomics.store(
 				metadataView,
 				slotMetaIdx + META_FRAME_NUMBER,

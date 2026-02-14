@@ -1329,6 +1329,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 2. Prioritized reclaiming the oldest READY slot under full-buffer pressure.
 3. Kept WRITING/READING slots protected; only READY slots are eligible for replacement.
 4. Added unit coverage for overwrite-on-full behavior.
+5. Made oldest-slot selection wrap-safe by comparing frame age in unsigned 32-bit space.
 
 **Changes Made**:
 - `apps/desktop/src/utils/shared-frame-buffer.ts`
