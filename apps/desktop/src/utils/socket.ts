@@ -83,12 +83,6 @@ interface FrameRenderedMessage {
 	height: number;
 }
 
-interface FrameQueuedMessage {
-	type: "frame-queued";
-	width: number;
-	height: number;
-}
-
 interface DecodedFrame {
 	type: "decoded";
 	bitmap: ImageBitmap;
@@ -108,7 +102,6 @@ interface RequestFrameMessage {
 type WorkerMessage =
 	| ReadyMessage
 	| FrameRenderedMessage
-	| FrameQueuedMessage
 	| DecodedFrame
 	| ErrorMessage
 	| RequestFrameMessage;
@@ -398,12 +391,6 @@ export function createImageDataWS(
 
 		if (e.data.type === "error") {
 			console.error("[FrameWorker]", e.data.message);
-			isProcessing = false;
-			processNextFrame();
-			return;
-		}
-
-		if (e.data.type === "frame-queued") {
 			isProcessing = false;
 			processNextFrame();
 			return;

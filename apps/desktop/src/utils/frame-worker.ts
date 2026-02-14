@@ -46,12 +46,6 @@ interface FrameRenderedMessage {
 	height: number;
 }
 
-interface FrameQueuedMessage {
-	type: "frame-queued";
-	width: number;
-	height: number;
-}
-
 interface RendererModeMessage {
 	type: "renderer-mode";
 	mode: "webgpu" | "canvas2d";
@@ -75,7 +69,6 @@ interface RequestFrameMessage {
 
 export type {
 	FrameRenderedMessage,
-	FrameQueuedMessage,
 	RendererModeMessage,
 	DecodedFrame,
 	ErrorMessage,
@@ -266,10 +259,7 @@ function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
 	return renderBorrowedWebGPU(latest.bytes, latest.release);
 }
 
-function drainAndQueueLatestSharedFrame(
-	maxDrain: number,
-	emitQueuedMessage: boolean,
-): boolean {
+function drainAndQueueLatestSharedFrame(maxDrain: number): boolean {
 	if (!consumer || !useSharedBuffer || consumer.isShutdown()) return false;
 	if (renderMode === "webgpu") return false;
 
@@ -287,7 +277,7 @@ function drainAndQueueLatestSharedFrame(
 
 	if (!latest) return false;
 
-	queueFrameFromBytes(latest.bytes, latest.release, emitQueuedMessage);
+	queueFrameFromBytes(latest.bytes, latest.release);
 	return true;
 }
 
@@ -303,7 +293,6 @@ function clearQueuedFrames() {
 function queueFrameFromBytes(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
-	emitQueuedMessage: boolean = true,
 ): boolean {
 	const meta = parseFrameMetadata(bytes);
 	if (!meta) {
@@ -389,15 +378,6 @@ function queueFrameFromBytes(
 	}
 
 	startRenderLoop();
-
-	if (emitQueuedMessage) {
-		self.postMessage({
-			type: "frame-queued",
-			width,
-			height,
-		} satisfies FrameQueuedMessage);
-	}
-
 	return true;
 }
 
@@ -428,9 +408,9 @@ function renderLoop() {
 		}
 
 		if (renderMode === "canvas2d") {
-			drainAndQueueLatestSharedFrame(4, false);
+			drainAndQueueLatestSharedFrame(4);
 		} else if (renderMode === "pending") {
-			drainAndQueueLatestSharedFrame(4, true);
+			drainAndQueueLatestSharedFrame(4);
 		}
 	}
 
@@ -778,11 +758,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	}
 
 	if (e.data.type === "frame") {
-		const queued = queueFrameFromBytes(
-			new Uint8Array(e.data.buffer),
-			undefined,
-			false,
-		);
+		const queued = queueFrameFromBytes(new Uint8Array(e.data.buffer));
 		if (!queued) {
 			const result: ErrorMessage = {
 				type: "error",

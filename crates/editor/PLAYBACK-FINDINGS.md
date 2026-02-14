@@ -2202,6 +2202,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (frame-queued message removal and queue drain cleanup)
+
+**Goal**: Remove now-redundant `frame-queued` message traffic and simplify shared-buffer drain control flow after socket-side ack bypass changes
+
+**What was done**:
+1. Removed `frame-queued` worker message type and all socket-side handling branches.
+2. Simplified shared-frame drain helper usage in worker by removing queue-message emission toggles.
+3. Updated fallback `frame` message handling to call queue path directly without queue-ack emission.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - removed `FrameQueuedMessage` interface/export
+  - removed `emitQueuedMessage` parameter from queue/drain helpers
+  - shared-buffer canvas/pending drain now uses unified `drainAndQueueLatestSharedFrame(4)`
+  - fallback `frame` onmessage path now calls `queueFrameFromBytes(new Uint8Array(buffer))`
+- `apps/desktop/src/utils/socket.ts`
+  - removed `FrameQueuedMessage` interface from worker message union
+  - removed `worker.onmessage` `frame-queued` branch
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts src/utils/socket.ts`
+
+**Results**:
+- ✅ Worker/main-thread queue-ack message path fully removed.
+- ✅ Shared-buffer drain code simplified with equivalent latest-frame behavior.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback-heavy validation to confirm reduced worker/main-thread message overhead and stable dispatch behavior after queue-ack removal.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
