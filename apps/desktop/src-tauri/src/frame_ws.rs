@@ -114,6 +114,45 @@ fn pack_frame_data(
     data
 }
 
+fn pack_nv12_frame_ref(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    frame_number: u32,
+    target_time_ns: u64,
+) -> Vec<u8> {
+    let y_stride = width;
+    let metadata_size = 28;
+    let mut output = Vec::with_capacity(data.len() + metadata_size);
+    output.extend_from_slice(data);
+    output.extend_from_slice(&y_stride.to_le_bytes());
+    output.extend_from_slice(&height.to_le_bytes());
+    output.extend_from_slice(&width.to_le_bytes());
+    output.extend_from_slice(&frame_number.to_le_bytes());
+    output.extend_from_slice(&target_time_ns.to_le_bytes());
+    output.extend_from_slice(&NV12_FORMAT_MAGIC.to_le_bytes());
+    output
+}
+
+fn pack_frame_data_ref(
+    data: &[u8],
+    stride: u32,
+    height: u32,
+    width: u32,
+    frame_number: u32,
+    target_time_ns: u64,
+) -> Vec<u8> {
+    let metadata_size = 24;
+    let mut output = Vec::with_capacity(data.len() + metadata_size);
+    output.extend_from_slice(data);
+    output.extend_from_slice(&stride.to_le_bytes());
+    output.extend_from_slice(&height.to_le_bytes());
+    output.extend_from_slice(&width.to_le_bytes());
+    output.extend_from_slice(&frame_number.to_le_bytes());
+    output.extend_from_slice(&target_time_ns.to_le_bytes());
+    output
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum WSFrameFormat {
     Rgba,
@@ -176,8 +215,28 @@ fn pack_ws_frame(frame: WSFrame) -> Vec<u8> {
     }
 }
 
+fn pack_ws_frame_ref(frame: &WSFrame) -> Vec<u8> {
+    match frame.format {
+        WSFrameFormat::Nv12 => pack_nv12_frame_ref(
+            &frame.data,
+            frame.width,
+            frame.height,
+            frame.frame_number,
+            frame.target_time_ns,
+        ),
+        WSFrameFormat::Rgba => pack_frame_data_ref(
+            &frame.data,
+            frame.stride,
+            frame.height,
+            frame.width,
+            frame.frame_number,
+            frame.target_time_ns,
+        ),
+    }
+}
+
 pub async fn create_watch_frame_ws(
-    frame_rx: watch::Receiver<Option<WSFrame>>,
+    frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
 ) -> (u16, CancellationToken) {
     use axum::{
         extract::{
@@ -188,7 +247,7 @@ pub async fn create_watch_frame_ws(
         routing::get,
     };
 
-    type RouterState = watch::Receiver<Option<WSFrame>>;
+    type RouterState = watch::Receiver<Option<std::sync::Arc<WSFrame>>>;
 
     #[axum::debug_handler]
     async fn ws_handler(
@@ -198,15 +257,19 @@ pub async fn create_watch_frame_ws(
         ws.on_upgrade(move |socket| handle_socket(socket, state))
     }
 
-    async fn handle_socket(mut socket: WebSocket, mut camera_rx: watch::Receiver<Option<WSFrame>>) {
+    async fn handle_socket(
+        mut socket: WebSocket,
+        mut camera_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+    ) {
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
 
         {
-            let frame_opt = camera_rx.borrow().clone();
-            if let Some(frame) = frame_opt {
-                let packed = pack_ws_frame(frame);
+            let borrowed = camera_rx.borrow();
+            if let Some(frame) = borrowed.as_deref() {
+                let packed = pack_ws_frame_ref(frame);
 
+                drop(borrowed);
                 if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
                     return;
@@ -230,8 +293,8 @@ pub async fn create_watch_frame_ws(
                     }
                 },
                 _ = camera_rx.changed() => {
-                    let frame_opt = camera_rx.borrow_and_update().clone();
-                    if let Some(frame) = frame_opt {
+                    let frame_arc = camera_rx.borrow_and_update().clone();
+                    if let Some(ref frame) = frame_arc {
                         let width = frame.width;
                         let height = frame.height;
                         let format_label = match frame.format {
@@ -239,7 +302,7 @@ pub async fn create_watch_frame_ws(
                             WSFrameFormat::Rgba => "RGBA",
                         };
 
-                        let packed = pack_ws_frame(frame);
+                        let packed = pack_ws_frame_ref(frame);
                         let packed_len = packed.len();
 
                         match socket.send(Message::Binary(packed)).await {
