@@ -428,9 +428,7 @@ pub async fn finish_encoder(
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
 ) -> Result<RenderedFrame, RenderingError> {
-    if let Some(prev) = session.pipelined_readback.take_pending() {
-        let _ = prev.wait(device).await;
-    }
+    let previous_pending = session.pipelined_readback.take_pending();
 
     session.pipelined_readback.perform_resize_if_needed(device);
 
@@ -448,6 +446,10 @@ pub async fn finish_encoder(
         .pipelined_readback
         .take_pending()
         .expect("just submitted a readback");
+
+    if let Some(previous_pending) = previous_pending {
+        let _ = previous_pending.wait(device).await;
+    }
 
     pending.wait(device).await
 }

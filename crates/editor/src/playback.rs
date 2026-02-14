@@ -1,5 +1,4 @@
 use cap_audio::FromSampleBytes;
-#[cfg(not(target_os = "windows"))]
 use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
@@ -8,7 +7,6 @@ use cap_rendering::{
     DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
-#[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
     SampleFormat,
@@ -18,8 +16,13 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
+    fs::OpenOptions,
+    io::Write,
     num::NonZeroUsize,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -28,7 +31,6 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-#[cfg(not(target_os = "windows"))]
 use crate::audio::AudioPlaybackBuffer;
 use crate::{
     audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
@@ -39,6 +41,59 @@ const PARALLEL_DECODE_TASKS: usize = 4;
 const MAX_PREFETCH_AHEAD: u32 = 60;
 const PREFETCH_BEHIND: u32 = 15;
 const FRAME_CACHE_SIZE: usize = 60;
+
+static STARTUP_TRACE_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+static STARTUP_TRACE_RUN_ID: OnceLock<Option<String>> = OnceLock::new();
+
+fn startup_trace_writer() -> Option<&'static Mutex<std::fs::File>> {
+    STARTUP_TRACE_FILE
+        .get_or_init(|| {
+            let path = std::env::var("CAP_PLAYBACK_STARTUP_TRACE_FILE").ok()?;
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()?;
+            Some(Mutex::new(file))
+        })
+        .as_ref()
+}
+
+fn startup_trace_run_id() -> Option<&'static str> {
+    STARTUP_TRACE_RUN_ID
+        .get_or_init(|| std::env::var("CAP_PLAYBACK_STARTUP_TRACE_RUN_ID").ok())
+        .as_deref()
+}
+
+fn record_startup_trace(event: &'static str, startup_ms: f64, frame: Option<u32>) {
+    let Some(writer) = startup_trace_writer() else {
+        return;
+    };
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let frame = frame.map_or_else(String::new, |value| value.to_string());
+    let run_id = startup_trace_run_id().unwrap_or_default();
+    let line = format!("{timestamp_ms},{event},{startup_ms:.3},{frame},{run_id}\n");
+
+    if let Ok(mut writer) = writer.lock() {
+        if writer.write_all(line.as_bytes()).is_err() {
+            return;
+        }
+        let _ = writer.flush();
+    }
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -136,6 +191,7 @@ impl Playback {
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
+        let playback_startup_instant = std::time::Instant::now();
         let (prefetch_duration, has_timeline) =
             if let Some(timeline) = &self.project.borrow().timeline {
                 (timeline.duration(), true)
@@ -144,6 +200,7 @@ impl Playback {
             };
         let segment_media_count = self.segment_medias.len();
 
+        let decode_startup_instant = playback_startup_instant;
         tokio::spawn(async move {
             if !has_timeline {
                 warn!("Prefetch: No timeline configuration found");
@@ -160,6 +217,7 @@ impl Playback {
             let mut next_prefetch_frame = *frame_request_rx.borrow();
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
+            let mut first_decoded_logged = false;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
             const INITIAL_PARALLEL_TASKS: usize = 4;
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
@@ -337,6 +395,22 @@ impl Playback {
                         frames_decoded = frames_decoded.saturating_add(1);
 
                         if let Some(segment_frames) = result {
+                            if !first_decoded_logged {
+                                let startup_ms =
+                                    decode_startup_instant.elapsed().as_secs_f64() * 1000.0;
+                                info!(
+                                    startup_ms,
+                                    frame = frame_num,
+                                    segment = segment_index,
+                                    "Playback first decoded frame ready"
+                                );
+                                record_startup_trace(
+                                    "first_decoded_frame",
+                                    startup_ms,
+                                    Some(frame_num),
+                                );
+                                first_decoded_logged = true;
+                            }
                             let _ = prefetch_tx.send(PrefetchedFrame {
                                 frame_number: frame_num,
                                 segment_frames,
@@ -374,6 +448,7 @@ impl Playback {
                 fps,
                 playhead_rx: audio_playhead_rx,
                 duration_secs: duration,
+                startup_instant: playback_startup_instant,
             }
             .spawn();
 
@@ -684,6 +759,19 @@ impl Playback {
                         )
                         .await;
 
+                    if total_frames_rendered == 0 {
+                        let startup_ms = playback_startup_instant.elapsed().as_secs_f64() * 1000.0;
+                        info!(
+                            startup_ms,
+                            frame = frame_number,
+                            "Playback first frame rendered"
+                        );
+                        record_startup_trace(
+                            "first_rendered_frame",
+                            startup_ms,
+                            Some(frame_number),
+                        );
+                    }
                     total_frames_rendered += 1;
                 }
 
@@ -748,6 +836,7 @@ impl PlaybackHandle {
     }
 }
 
+#[derive(Clone)]
 struct AudioPlayback {
     segments: Vec<AudioSegment>,
     stop_rx: watch::Receiver<bool>,
@@ -756,6 +845,7 @@ struct AudioPlayback {
     fps: u32,
     playhead_rx: watch::Receiver<f64>,
     duration_secs: f64,
+    startup_instant: std::time::Instant,
 }
 
 impl AudioPlayback {
@@ -768,6 +858,7 @@ impl AudioPlayback {
         }
 
         std::thread::spawn(move || {
+            let startup_instant = self.startup_instant;
             let host = cpal::default_host();
             let device = match host.default_output_device() {
                 Some(d) => d,
@@ -788,26 +879,74 @@ impl AudioPlayback {
             };
 
             let duration_secs = self.duration_secs;
+            let force_prerender = env_flag_enabled("CAP_AUDIO_PRERENDER_ONLY");
+            let force_streaming = env_flag_enabled("CAP_AUDIO_STREAMING_ONLY");
+
+            if force_prerender && force_streaming {
+                warn!(
+                    "CAP_AUDIO_PRERENDER_ONLY and CAP_AUDIO_STREAMING_ONLY both set; preferring pre-rendered path"
+                );
+            }
+
+            #[derive(Clone, Copy)]
+            enum AudioStartupMode {
+                Streaming,
+                Prerendered,
+            }
+
+            macro_rules! create_audio_stream {
+                ($sample_ty:ty, $startup:expr) => {{
+                    let fallback = self.clone();
+                    if force_prerender {
+                        fallback.create_stream_prerendered::<$sample_ty>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                            $startup,
+                        )
+                        .map(|(stop_rx, stream)| {
+                            (stop_rx, stream, AudioStartupMode::Prerendered)
+                        })
+                    } else if force_streaming {
+                        self.create_stream::<$sample_ty>(
+                            device,
+                            supported_config,
+                            $startup,
+                        )
+                        .map(|(stop_rx, stream)| (stop_rx, stream, AudioStartupMode::Streaming))
+                    } else {
+                        self.create_stream::<$sample_ty>(
+                            device.clone(),
+                            supported_config.clone(),
+                            $startup,
+                        )
+                        .map(|(stop_rx, stream)| (stop_rx, stream, AudioStartupMode::Streaming))
+                            .or_else(|err| {
+                                warn!(
+                                    error = %err,
+                                    "Streaming audio path failed, falling back to pre-rendered path"
+                                );
+                                fallback.create_stream_prerendered::<$sample_ty>(
+                                    device,
+                                    supported_config,
+                                    duration_secs,
+                                    $startup,
+                                )
+                                .map(|(stop_rx, stream)| {
+                                    (stop_rx, stream, AudioStartupMode::Prerendered)
+                                })
+                            })
+                    }
+                }};
+            }
 
             let result = match supported_config.sample_format() {
-                SampleFormat::I16 => {
-                    self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
-                }
-                SampleFormat::I32 => {
-                    self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
-                }
-                SampleFormat::F32 => {
-                    self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
-                }
-                SampleFormat::I64 => {
-                    self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
-                }
-                SampleFormat::U8 => {
-                    self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
-                }
-                SampleFormat::F64 => {
-                    self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
-                }
+                SampleFormat::I16 => create_audio_stream!(i16, startup_instant),
+                SampleFormat::I32 => create_audio_stream!(i32, startup_instant),
+                SampleFormat::F32 => create_audio_stream!(f32, startup_instant),
+                SampleFormat::I64 => create_audio_stream!(i64, startup_instant),
+                SampleFormat::U8 => create_audio_stream!(u8, startup_instant),
+                SampleFormat::F64 => create_audio_stream!(f64, startup_instant),
                 format => {
                     error!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
@@ -817,7 +956,7 @@ impl AudioPlayback {
                 }
             };
 
-            let (mut stop_rx, stream) = match result {
+            let (mut stop_rx, stream, startup_mode) = match result {
                 Ok(s) => s,
                 Err(e) => {
                     error!(
@@ -827,6 +966,18 @@ impl AudioPlayback {
                     return;
                 }
             };
+
+            let startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0;
+            match startup_mode {
+                AudioStartupMode::Streaming => {
+                    info!(startup_ms, "Audio startup path selected: streaming");
+                    record_startup_trace("audio_startup_path_streaming", startup_ms, None);
+                }
+                AudioStartupMode::Prerendered => {
+                    info!(startup_ms, "Audio startup path selected: prerendered");
+                    record_startup_trace("audio_startup_path_prerendered", startup_ms, None);
+                }
+            }
 
             if let Err(e) = stream.play() {
                 error!(
@@ -843,12 +994,11 @@ impl AudioPlayback {
         true
     }
 
-    #[cfg(not(target_os = "windows"))]
-    #[allow(dead_code)]
     fn create_stream<T>(
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
+        startup_instant: std::time::Instant,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
         T: FromSampleBytes + cpal::Sample,
@@ -1036,6 +1186,7 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
+            let callback_started = Arc::new(AtomicBool::new(false));
 
             #[cfg(target_os = "windows")]
             const FIXED_LATENCY_SECS: f64 = 0.08;
@@ -1055,6 +1206,12 @@ impl AudioPlayback {
             let stream_result = device.build_output_stream(
                 &config,
                 move |buffer: &mut [T], info| {
+                    if !callback_started.swap(true, Ordering::AcqRel) {
+                        let startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0;
+                        info!(startup_ms, "Audio streaming callback started");
+                        record_startup_trace("audio_streaming_callback", startup_ms, None);
+                    }
+
                     #[cfg(not(target_os = "windows"))]
                     let latency_secs = latency_corrector.update_from_callback(info);
                     #[cfg(target_os = "windows")]
@@ -1148,6 +1305,7 @@ impl AudioPlayback {
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
         duration_secs: f64,
+        startup_instant: std::time::Instant,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
         T: FromSampleBytes + cpal::Sample,
@@ -1196,11 +1354,18 @@ impl AudioPlayback {
 
         let mut playhead_rx_for_stream = playhead_rx.clone();
         let mut last_video_playhead = playhead;
+        let callback_started = Arc::new(AtomicBool::new(false));
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |buffer: &mut [T], _info| {
+                    if !callback_started.swap(true, Ordering::AcqRel) {
+                        let startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0;
+                        info!(startup_ms, "Audio pre-rendered callback started");
+                        record_startup_trace("audio_prerender_callback", startup_ms, None);
+                    }
+
                     if playhead_rx_for_stream.has_changed().unwrap_or(false) {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
                         let jump = (video_playhead - last_video_playhead).abs();

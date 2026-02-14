@@ -1,12 +1,16 @@
 #![allow(dead_code)]
 
-use ffmpeg::{format, frame, sys::AVHWDeviceType};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use ffmpeg::sys::AVHWDeviceType;
+use ffmpeg::{format, frame};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
+    env,
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, mpsc},
+    sync::OnceLock,
+    sync::{mpsc, Arc},
 };
 use tokio::sync::oneshot;
 use tracing::info;
@@ -16,8 +20,8 @@ use crate::{DecodedFrame, PixelFormat};
 use cap_video_decode::FrameTextures;
 
 use super::{
-    DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage,
-    frame_converter::FrameConverter, pts_to_frame,
+    frame_converter::FrameConverter, pts_to_frame, DecoderInitResult, DecoderType,
+    VideoDecoderMessage, FRAME_CACHE_SIZE,
 };
 
 #[derive(Clone)]
@@ -65,6 +69,185 @@ struct PendingRequest {
     time: f32,
     frame: u32,
     reply: oneshot::Sender<DecodedFrame>,
+    additional_replies: Vec<oneshot::Sender<DecodedFrame>>,
+    order: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ScrubSupersessionConfig {
+    min_requests: usize,
+    min_span_frames: u32,
+    min_pixels: u64,
+    disabled: bool,
+    latest_first_disabled: bool,
+    latest_first_min_requests: usize,
+    latest_first_min_span_frames: u32,
+    latest_first_min_pixels: u64,
+}
+
+static SCRUB_SUPERSESSION_CONFIG: OnceLock<ScrubSupersessionConfig> = OnceLock::new();
+
+fn parse_usize_env(key: &str) -> Option<usize> {
+    env::var(key).ok()?.parse::<usize>().ok()
+}
+
+fn parse_u32_env(key: &str) -> Option<u32> {
+    env::var(key).ok()?.parse::<u32>().ok()
+}
+
+fn parse_u64_env(key: &str) -> Option<u64> {
+    env::var(key).ok()?.parse::<u64>().ok()
+}
+
+fn parse_bool_env(key: &str) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn scrub_supersession_config() -> ScrubSupersessionConfig {
+    *SCRUB_SUPERSESSION_CONFIG.get_or_init(|| {
+        let min_requests = parse_usize_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS")
+            .filter(|value| *value > 0)
+            .unwrap_or(7);
+        let min_span_frames = parse_u32_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES")
+            .filter(|value| *value > 0)
+            .unwrap_or(20);
+        let min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS")
+            .filter(|value| *value > 0)
+            .unwrap_or(2_000_000);
+        let disabled = parse_bool_env("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED");
+        let latest_first_disabled = parse_bool_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED");
+        let latest_first_min_requests =
+            parse_usize_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS")
+                .filter(|value| *value > 1)
+                .unwrap_or(2);
+        let latest_first_min_span_frames =
+            parse_u32_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES")
+                .filter(|value| *value > 0)
+                .unwrap_or(min_span_frames);
+        let latest_first_min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS")
+            .filter(|value| *value > 0)
+            .unwrap_or(min_pixels);
+
+        ScrubSupersessionConfig {
+            min_requests,
+            min_span_frames,
+            min_pixels,
+            disabled,
+            latest_first_disabled,
+            latest_first_min_requests,
+            latest_first_min_span_frames,
+            latest_first_min_pixels,
+        }
+    })
+}
+
+fn send_to_replies(
+    name: &str,
+    frame_number: u32,
+    frame: &DecodedFrame,
+    replies: Vec<oneshot::Sender<DecodedFrame>>,
+) {
+    for reply in replies {
+        if reply.send(frame.clone()).is_err() {
+            log::warn!("FFmpeg '{name}': Failed to send frame {frame_number}: receiver dropped");
+        }
+    }
+}
+
+fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>, enabled: bool) {
+    let config = scrub_supersession_config();
+
+    if !enabled || pending_requests.len() < config.min_requests {
+        return;
+    }
+
+    let min_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .min()
+        .unwrap_or(0);
+    let max_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .max()
+        .unwrap_or(0);
+
+    if max_frame.saturating_sub(min_frame) <= config.min_span_frames {
+        return;
+    }
+
+    let Some(latest_index) = pending_requests
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, request)| request.order)
+        .map(|(index, _)| index)
+    else {
+        return;
+    };
+
+    let mut collapsed = pending_requests.swap_remove(latest_index);
+    for request in pending_requests.drain(..) {
+        collapsed.additional_replies.push(request.reply);
+        collapsed
+            .additional_replies
+            .extend(request.additional_replies);
+    }
+    pending_requests.push(collapsed);
+}
+
+fn should_prioritize_latest_request(
+    pending_requests: &[PendingRequest],
+    enabled: bool,
+    config: ScrubSupersessionConfig,
+) -> bool {
+    if !enabled || config.latest_first_disabled {
+        return false;
+    }
+    if pending_requests.len() < config.latest_first_min_requests {
+        return false;
+    }
+
+    let min_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .min()
+        .unwrap_or(0);
+    let max_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .max()
+        .unwrap_or(0);
+
+    max_frame.saturating_sub(min_frame) > config.latest_first_min_span_frames
+}
+
+fn order_pending_requests_for_seek(
+    pending_requests: &mut Vec<PendingRequest>,
+    enable_scrub_supersession: bool,
+) {
+    let config = scrub_supersession_config();
+
+    if !should_prioritize_latest_request(pending_requests, enable_scrub_supersession, config) {
+        pending_requests.sort_by_key(|request| request.frame);
+        return;
+    }
+
+    let Some(latest_order) = pending_requests.iter().map(|request| request.order).max() else {
+        return;
+    };
+
+    pending_requests.sort_by(|left, right| {
+        let left_is_latest = left.order == latest_order;
+        let right_is_latest = right.order == latest_order;
+        match (left_is_latest, right_is_latest) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => left.frame.cmp(&right.frame),
+        }
+    });
 }
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
@@ -296,11 +479,18 @@ impl FfmpegDecoder {
                     decoder_type: sw_decoder_type,
                 };
                 let _ = ready_tx.send(Ok(sw_init_result));
+                let supersession_config = scrub_supersession_config();
+                let frame_pixels = (video_width as u64) * (video_height as u64);
+                let enable_scrub_supersession =
+                    !supersession_config.disabled && frame_pixels >= supersession_config.min_pixels;
+                let enable_latest_first = enable_scrub_supersession
+                    && frame_pixels >= supersession_config.latest_first_min_pixels;
 
                 while let Ok(r) = rx.recv() {
                     const MAX_FRAME_TOLERANCE: u32 = 2;
 
                     let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+                    let mut request_order = 0u64;
                     let mut push_request =
                         |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
                             if reply.is_closed() {
@@ -309,12 +499,24 @@ impl FfmpegDecoder {
 
                             let requested_time = requested_time.max(0.0);
                             let requested_frame = (requested_time * fps as f32).floor() as u32;
+                            let current_order = request_order;
+                            request_order = request_order.saturating_add(1);
 
-                            pending_requests.push(PendingRequest {
-                                time: requested_time,
-                                frame: requested_frame,
-                                reply,
-                            });
+                            if let Some(existing) = pending_requests
+                                .iter_mut()
+                                .find(|r| r.frame == requested_frame)
+                            {
+                                existing.additional_replies.push(reply);
+                                existing.order = current_order;
+                            } else {
+                                pending_requests.push(PendingRequest {
+                                    time: requested_time,
+                                    frame: requested_frame,
+                                    reply,
+                                    additional_replies: Vec::new(),
+                                    order: current_order,
+                                });
+                            }
                         };
 
                     match r {
@@ -331,15 +533,24 @@ impl FfmpegDecoder {
                         }
                     }
 
-                    pending_requests.sort_by_key(|r| r.frame);
+                    maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
+                    order_pending_requests_for_seek(&mut pending_requests, enable_latest_first);
 
                     for PendingRequest {
                         time: requested_time,
                         frame: requested_frame,
                         reply,
+                        additional_replies,
+                        ..
                     } in pending_requests
                     {
-                        if reply.is_closed() {
+                        let mut replies = Vec::with_capacity(1 + additional_replies.len());
+                        if !reply.is_closed() {
+                            replies.push(reply);
+                        }
+                        replies.extend(additional_replies.into_iter().filter(|r| !r.is_closed()));
+
+                        if replies.is_empty() {
                             continue;
                         }
 
@@ -351,11 +562,7 @@ impl FfmpegDecoder {
 
                         if let Some(cached) = sw_cache.get_mut(&requested_frame) {
                             let data = cached.produce(&mut sw_converter);
-                            if reply.send(data.frame.clone()).is_err() {
-                                log::warn!(
-                                    "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
-                                );
-                            }
+                            send_to_replies(name, requested_frame, &data.frame, replies);
                             *sw_last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         }
@@ -374,7 +581,7 @@ impl FfmpegDecoder {
                             {
                                 let data = cached.produce(&mut sw_converter);
                                 *sw_last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = reply.send(data.frame);
+                                send_to_replies(name, requested_frame, &data.frame, replies);
                                 continue;
                             }
 
@@ -382,7 +589,7 @@ impl FfmpegDecoder {
                                 && let Some(first_frame) = sw_first_ever_frame.borrow().clone()
                             {
                                 *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                                let _ = reply.send(first_frame.frame);
+                                send_to_replies(name, requested_frame, &first_frame.frame, replies);
                                 continue;
                             }
 
@@ -392,11 +599,11 @@ impl FfmpegDecoder {
                             sw_cache.clear();
                         }
 
-                        if reply.is_closed() {
+                        if replies.iter().all(|reply| reply.is_closed()) {
                             continue;
                         }
 
-                        let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                        let reply_cell = Rc::new(RefCell::new(Some(replies)));
                         let reply_for_respond = reply_cell.clone();
 
                         let mut respond = {
@@ -404,12 +611,8 @@ impl FfmpegDecoder {
                             Some(move |data: OutputFrame| {
                                 let frame_number = data.number;
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                if let Some(reply) = reply_for_respond.borrow_mut().take()
-                                    && reply.send(data.frame).is_err()
-                                {
-                                    log::warn!(
-                                        "Failed to send decoded frame {frame_number}: receiver dropped"
-                                    );
+                                if let Some(replies) = reply_for_respond.borrow_mut().take() {
+                                    send_to_replies(name, frame_number, &data.frame, replies);
                                 }
                             })
                         };
@@ -447,7 +650,11 @@ impl FfmpegDecoder {
                         let mut exit = false;
 
                         for frame in &mut sw_frames {
-                            if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                            if reply_cell
+                                .borrow()
+                                .as_ref()
+                                .is_none_or(|replies| replies.iter().all(|reply| reply.is_closed()))
+                            {
                                 respond.take();
                                 break;
                             }
@@ -508,7 +715,11 @@ impl FfmpegDecoder {
                                         } else {
                                             let min = *sw_cache.keys().min().unwrap();
                                             let max = *sw_cache.keys().max().unwrap();
-                                            if current_frame > max { min } else { max }
+                                            if current_frame > max {
+                                                min
+                                            } else {
+                                                max
+                                            }
                                         };
                                         sw_cache.remove(&frame);
                                     } else {
@@ -619,11 +830,18 @@ impl FfmpegDecoder {
                 decoder_type,
             };
             let _ = ready_tx.send(Ok(init_result));
+            let supersession_config = scrub_supersession_config();
+            let frame_pixels = (video_width as u64) * (video_height as u64);
+            let enable_scrub_supersession =
+                !supersession_config.disabled && frame_pixels >= supersession_config.min_pixels;
+            let enable_latest_first = enable_scrub_supersession
+                && frame_pixels >= supersession_config.latest_first_min_pixels;
 
             while let Ok(r) = rx.recv() {
                 const MAX_FRAME_TOLERANCE: u32 = 2;
 
                 let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+                let mut request_order = 0u64;
                 let mut push_request =
                     |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
                         if reply.is_closed() {
@@ -632,12 +850,24 @@ impl FfmpegDecoder {
 
                         let requested_time = requested_time.max(0.0);
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        let current_order = request_order;
+                        request_order = request_order.saturating_add(1);
 
-                        pending_requests.push(PendingRequest {
-                            time: requested_time,
-                            frame: requested_frame,
-                            reply,
-                        });
+                        if let Some(existing) = pending_requests
+                            .iter_mut()
+                            .find(|r| r.frame == requested_frame)
+                        {
+                            existing.additional_replies.push(reply);
+                            existing.order = current_order;
+                        } else {
+                            pending_requests.push(PendingRequest {
+                                time: requested_time,
+                                frame: requested_frame,
+                                reply,
+                                additional_replies: Vec::new(),
+                                order: current_order,
+                            });
+                        }
                     };
 
                 match r {
@@ -654,15 +884,24 @@ impl FfmpegDecoder {
                     }
                 }
 
-                pending_requests.sort_by_key(|r| r.frame);
+                maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
+                order_pending_requests_for_seek(&mut pending_requests, enable_latest_first);
 
                 for PendingRequest {
                     time: requested_time,
                     frame: requested_frame,
                     reply,
+                    additional_replies,
+                    ..
                 } in pending_requests
                 {
-                    if reply.is_closed() {
+                    let mut replies = Vec::with_capacity(1 + additional_replies.len());
+                    if !reply.is_closed() {
+                        replies.push(reply);
+                    }
+                    replies.extend(additional_replies.into_iter().filter(|r| !r.is_closed()));
+
+                    if replies.is_empty() {
                         continue;
                     }
 
@@ -674,11 +913,7 @@ impl FfmpegDecoder {
                     if let Some(cached) = cache.get_mut(&requested_frame) {
                         let data = cached.produce(&mut converter);
 
-                        if reply.send(data.frame.clone()).is_err() {
-                            log::warn!(
-                                "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
-                            );
-                        }
+                        send_to_replies(name, requested_frame, &data.frame, replies);
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     }
@@ -697,7 +932,7 @@ impl FfmpegDecoder {
                         {
                             let data = cached.produce(&mut converter);
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            let _ = reply.send(data.frame);
+                            send_to_replies(name, requested_frame, &data.frame, replies);
                             continue;
                         }
 
@@ -705,7 +940,7 @@ impl FfmpegDecoder {
                             && let Some(first_frame) = first_ever_frame.borrow().clone()
                         {
                             *last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                            let _ = reply.send(first_frame.frame);
+                            send_to_replies(name, requested_frame, &first_frame.frame, replies);
                             continue;
                         }
 
@@ -715,11 +950,11 @@ impl FfmpegDecoder {
                         cache.clear();
                     }
 
-                    if reply.is_closed() {
+                    if replies.iter().all(|reply| reply.is_closed()) {
                         continue;
                     }
 
-                    let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                    let reply_cell = Rc::new(RefCell::new(Some(replies)));
                     let reply_for_respond = reply_cell.clone();
 
                     let mut respond = {
@@ -727,12 +962,8 @@ impl FfmpegDecoder {
                         Some(move |data: OutputFrame| {
                             let frame_number = data.number;
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            if let Some(reply) = reply_for_respond.borrow_mut().take()
-                                && reply.send(data.frame).is_err()
-                            {
-                                log::warn!(
-                                    "Failed to send decoded frame {frame_number}: receiver dropped"
-                                );
+                            if let Some(replies) = reply_for_respond.borrow_mut().take() {
+                                send_to_replies(name, frame_number, &data.frame, replies);
                             }
                         })
                     };
@@ -769,7 +1000,11 @@ impl FfmpegDecoder {
                     let mut exit = false;
 
                     for frame in &mut frames {
-                        if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                        if reply_cell
+                            .borrow()
+                            .as_ref()
+                            .is_none_or(|replies| replies.iter().all(|reply| reply.is_closed()))
+                        {
                             respond.take();
                             break;
                         }
@@ -828,7 +1063,11 @@ impl FfmpegDecoder {
                                         let min = *cache.keys().min().unwrap();
                                         let max = *cache.keys().max().unwrap();
 
-                                        if current_frame > max { min } else { max }
+                                        if current_frame > max {
+                                            min
+                                        } else {
+                                            max
+                                        }
                                     };
 
                                     cache.remove(&frame);
@@ -969,3 +1208,122 @@ impl FfmpegDecoder {
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        order_pending_requests_for_seek, should_prioritize_latest_request, PendingRequest,
+        ScrubSupersessionConfig,
+    };
+    use tokio::sync::oneshot;
+
+    fn pending_request(frame: u32, order: u64) -> PendingRequest {
+        let (reply, _) = oneshot::channel();
+        PendingRequest {
+            time: 0.0,
+            frame,
+            reply,
+            additional_replies: Vec::new(),
+            order,
+        }
+    }
+
+    #[test]
+    fn prioritizes_latest_request_when_span_exceeds_threshold() {
+        let requests = vec![
+            pending_request(200, 0),
+            pending_request(4000, 1),
+            pending_request(2500, 2),
+        ];
+        let should_prioritize = should_prioritize_latest_request(
+            &requests,
+            true,
+            ScrubSupersessionConfig {
+                min_requests: 7,
+                min_span_frames: 20,
+                min_pixels: 2_000_000,
+                disabled: false,
+                latest_first_disabled: false,
+                latest_first_min_requests: 2,
+                latest_first_min_span_frames: 20,
+                latest_first_min_pixels: 2_000_000,
+            },
+        );
+        assert!(should_prioritize);
+    }
+
+    #[test]
+    fn does_not_prioritize_when_latest_first_is_disabled() {
+        let requests = vec![
+            pending_request(200, 0),
+            pending_request(4000, 1),
+            pending_request(2500, 2),
+        ];
+        let should_prioritize = should_prioritize_latest_request(
+            &requests,
+            true,
+            ScrubSupersessionConfig {
+                min_requests: 7,
+                min_span_frames: 20,
+                min_pixels: 2_000_000,
+                disabled: false,
+                latest_first_disabled: true,
+                latest_first_min_requests: 2,
+                latest_first_min_span_frames: 20,
+                latest_first_min_pixels: 2_000_000,
+            },
+        );
+        assert!(!should_prioritize);
+    }
+
+    #[test]
+    fn does_not_prioritize_when_request_count_below_latest_first_threshold() {
+        let requests = vec![pending_request(200, 0), pending_request(4000, 1)];
+        let should_prioritize = should_prioritize_latest_request(
+            &requests,
+            true,
+            ScrubSupersessionConfig {
+                min_requests: 7,
+                min_span_frames: 20,
+                min_pixels: 2_000_000,
+                disabled: false,
+                latest_first_disabled: false,
+                latest_first_min_requests: 3,
+                latest_first_min_span_frames: 20,
+                latest_first_min_pixels: 2_000_000,
+            },
+        );
+        assert!(!should_prioritize);
+    }
+
+    #[test]
+    fn keeps_frame_order_when_prioritization_disabled() {
+        let mut requests = vec![
+            pending_request(500, 1),
+            pending_request(100, 2),
+            pending_request(300, 3),
+        ];
+        order_pending_requests_for_seek(&mut requests, false);
+        let ordered_frames = requests
+            .iter()
+            .map(|request| request.frame)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_frames, vec![100, 300, 500]);
+    }
+
+    #[test]
+    fn places_latest_request_first_when_prioritizing() {
+        let mut requests = vec![
+            pending_request(120, 0),
+            pending_request(4096, 1),
+            pending_request(2800, 2),
+            pending_request(40, 3),
+        ];
+        order_pending_requests_for_seek(&mut requests, true);
+        let ordered_frames = requests
+            .iter()
+            .map(|request| request.frame)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_frames[0], 40);
+    }
+}

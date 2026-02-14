@@ -1,4 +1,7 @@
 use cap_rendering::decoder::{AsyncVideoDecoderHandle, spawn_decoder};
+use futures::future::join_all;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -38,6 +41,16 @@ struct BenchmarkConfig {
     video_path: PathBuf,
     fps: u32,
     iterations: usize,
+    seek_iterations: usize,
+    output_csv: Option<PathBuf>,
+    run_label: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct SeekDistanceStats {
+    distance_secs: f32,
+    samples_ms: Vec<f64>,
+    failures: usize,
 }
 
 #[derive(Debug, Default)]
@@ -46,11 +59,13 @@ struct BenchmarkResults {
     sequential_decode_times_ms: Vec<f64>,
     sequential_fps: f64,
     sequential_failures: usize,
-    seek_times_by_distance: Vec<(f32, f64)>,
-    seek_failures: usize,
+    seek_stats: Vec<SeekDistanceStats>,
     random_access_times_ms: Vec<f64>,
     random_access_avg_ms: f64,
     random_access_failures: usize,
+    duplicate_burst_batch_ms: Vec<(usize, Vec<f64>)>,
+    duplicate_burst_request_ms: Vec<(usize, Vec<f64>)>,
+    duplicate_burst_failures: Vec<(usize, usize)>,
     cache_hits: usize,
     cache_misses: usize,
 }
@@ -101,14 +116,41 @@ impl BenchmarkResults {
         println!();
 
         println!("SEEK PERFORMANCE (by distance)");
-        if !self.seek_times_by_distance.is_empty() || self.seek_failures > 0 {
-            println!("  {:>10} | {:>12}", "Distance(s)", "Time(ms)");
-            println!("  {}-+-{}", "-".repeat(10), "-".repeat(12));
-            for (distance, time) in &self.seek_times_by_distance {
-                println!("  {distance:>10.1} | {time:>12.2}");
-            }
-            if self.seek_failures > 0 {
-                println!("  Seek failures: {}", self.seek_failures);
+        if !self.seek_stats.is_empty() {
+            println!(
+                "  {:>10} | {:>12} | {:>12} | {:>12} | {:>7} | {:>8}",
+                "Distance(s)", "Avg(ms)", "P95(ms)", "Max(ms)", "Samples", "Failures"
+            );
+            println!(
+                "  {}-+-{}-+-{}-+-{}-+-{}-+-{}",
+                "-".repeat(10),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(7),
+                "-".repeat(8)
+            );
+            for stats in &self.seek_stats {
+                let avg = if stats.samples_ms.is_empty() {
+                    0.0
+                } else {
+                    stats.samples_ms.iter().sum::<f64>() / stats.samples_ms.len() as f64
+                };
+                let max = stats
+                    .samples_ms
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let p95 = percentile(&stats.samples_ms, 95.0);
+                println!(
+                    "  {:>10.1} | {:>12.2} | {:>12.2} | {:>12.2} | {:>7} | {:>8}",
+                    stats.distance_secs,
+                    avg,
+                    p95,
+                    if max.is_finite() { max } else { 0.0 },
+                    stats.samples_ms.len(),
+                    stats.failures
+                );
             }
         }
         println!();
@@ -153,6 +195,65 @@ impl BenchmarkResults {
         }
         println!();
 
+        println!("DUPLICATE REQUEST BURST");
+        if !self.duplicate_burst_batch_ms.is_empty() {
+            println!(
+                "  {:>10} | {:>12} | {:>12} | {:>12} | {:>12} | {:>8}",
+                "Burst Size",
+                "BatchAvg(ms)",
+                "BatchP95(ms)",
+                "ReqAvg(ms)",
+                "ReqP95(ms)",
+                "Failures"
+            );
+            println!(
+                "  {}-+-{}-+-{}-+-{}-+-{}-+-{}",
+                "-".repeat(10),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(8)
+            );
+
+            for (burst_size, batch_samples) in &self.duplicate_burst_batch_ms {
+                let request_samples = self
+                    .duplicate_burst_request_ms
+                    .iter()
+                    .find(|(size, _)| size == burst_size)
+                    .map(|(_, samples)| samples.as_slice())
+                    .unwrap_or(&[]);
+                let failures = self
+                    .duplicate_burst_failures
+                    .iter()
+                    .find(|(size, _)| size == burst_size)
+                    .map(|(_, failures)| *failures)
+                    .unwrap_or(0);
+
+                let batch_avg = if batch_samples.is_empty() {
+                    0.0
+                } else {
+                    batch_samples.iter().sum::<f64>() / batch_samples.len() as f64
+                };
+                let req_avg = if request_samples.is_empty() {
+                    0.0
+                } else {
+                    request_samples.iter().sum::<f64>() / request_samples.len() as f64
+                };
+
+                println!(
+                    "  {:>10} | {:>12.2} | {:>12.2} | {:>12.2} | {:>12.2} | {:>8}",
+                    burst_size,
+                    batch_avg,
+                    percentile(batch_samples, 95.0),
+                    req_avg,
+                    percentile(request_samples, 95.0),
+                    failures
+                );
+            }
+        }
+        println!();
+
         let total = self.cache_hits + self.cache_misses;
         if total > 0 {
             println!("CACHE STATISTICS");
@@ -184,6 +285,239 @@ fn percentile(data: &[f64], p: f64) -> f64 {
     });
     let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SampleSummary {
+    avg: f64,
+    p95: f64,
+    p99: f64,
+    max: f64,
+}
+
+fn summarize_samples(samples: &[f64]) -> SampleSummary {
+    if samples.is_empty() {
+        return SampleSummary {
+            avg: 0.0,
+            p95: 0.0,
+            p99: 0.0,
+            max: 0.0,
+        };
+    }
+
+    let avg = samples.iter().sum::<f64>() / samples.len() as f64;
+    let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    SampleSummary {
+        avg,
+        p95: percentile(samples, 95.0),
+        p99: percentile(samples, 99.0),
+        max: if max.is_finite() { max } else { 0.0 },
+    }
+}
+
+fn decode_run_label(config: &BenchmarkConfig) -> String {
+    config
+        .run_label
+        .as_ref()
+        .cloned()
+        .or_else(|| std::env::var("CAP_DECODE_BENCHMARK_RUN_LABEL").ok())
+        .unwrap_or_default()
+}
+
+fn write_csv(
+    path: &PathBuf,
+    config: &BenchmarkConfig,
+    results: &BenchmarkResults,
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+
+    if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
+        let header = [
+            "timestamp_ms",
+            "mode",
+            "run_label",
+            "video",
+            "fps",
+            "iterations",
+            "seek_iterations",
+            "distance_secs",
+            "burst_size",
+            "samples",
+            "failures",
+            "avg_ms",
+            "p95_ms",
+            "p99_ms",
+            "max_ms",
+            "sequential_fps",
+            "decoder_creation_ms",
+            "cache_hits",
+            "cache_misses",
+        ]
+        .join(",");
+        writeln!(file, "{header}")
+            .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let run_label = decode_run_label(config);
+    let video = config.video_path.display();
+
+    writeln!(
+        file,
+        "{timestamp_ms},decoder_creation,\"{}\",\"{}\",{},{},{},\"\",\"\",1,0,{:.3},{:.3},{:.3},{:.3},\"\",{:.3},{},{}",
+        run_label,
+        video,
+        config.fps,
+        config.iterations,
+        config.seek_iterations,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.cache_hits,
+        results.cache_misses
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    let sequential = summarize_samples(&results.sequential_decode_times_ms);
+    writeln!(
+        file,
+        "{timestamp_ms},sequential,\"{}\",\"{}\",{},{},{},\"\",\"\",{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+        run_label,
+        video,
+        config.fps,
+        config.iterations,
+        config.seek_iterations,
+        results.sequential_decode_times_ms.len(),
+        results.sequential_failures,
+        sequential.avg,
+        sequential.p95,
+        sequential.p99,
+        sequential.max,
+        results.sequential_fps,
+        results.decoder_creation_ms,
+        results.cache_hits,
+        results.cache_misses
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    for seek in &results.seek_stats {
+        let summary = summarize_samples(&seek.samples_ms);
+        writeln!(
+            file,
+            "{timestamp_ms},seek,\"{}\",\"{}\",{},{},{},{:.3},\"\",{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            video,
+            config.fps,
+            config.iterations,
+            config.seek_iterations,
+            seek.distance_secs,
+            seek.samples_ms.len(),
+            seek.failures,
+            summary.avg,
+            summary.p95,
+            summary.p99,
+            summary.max,
+            results.sequential_fps,
+            results.decoder_creation_ms,
+            results.cache_hits,
+            results.cache_misses
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    let random_summary = summarize_samples(&results.random_access_times_ms);
+    writeln!(
+        file,
+        "{timestamp_ms},random_access,\"{}\",\"{}\",{},{},{},\"\",\"\",{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+        run_label,
+        video,
+        config.fps,
+        config.iterations,
+        config.seek_iterations,
+        results.random_access_times_ms.len(),
+        results.random_access_failures,
+        random_summary.avg,
+        random_summary.p95,
+        random_summary.p99,
+        random_summary.max,
+        results.sequential_fps,
+        results.decoder_creation_ms,
+        results.cache_hits,
+        results.cache_misses
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    for (burst_size, batch_samples) in &results.duplicate_burst_batch_ms {
+        let request_samples = results
+            .duplicate_burst_request_ms
+            .iter()
+            .find(|(size, _)| size == burst_size)
+            .map(|(_, samples)| samples.as_slice())
+            .unwrap_or(&[]);
+        let failures = results
+            .duplicate_burst_failures
+            .iter()
+            .find(|(size, _)| size == burst_size)
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+        let batch_summary = summarize_samples(batch_samples);
+        let request_summary = summarize_samples(request_samples);
+
+        writeln!(
+            file,
+            "{timestamp_ms},duplicate_batch,\"{}\",\"{}\",{},{},{},\"\",{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            video,
+            config.fps,
+            config.iterations,
+            config.seek_iterations,
+            burst_size,
+            batch_samples.len(),
+            failures,
+            batch_summary.avg,
+            batch_summary.p95,
+            batch_summary.p99,
+            batch_summary.max,
+            results.sequential_fps,
+            results.decoder_creation_ms,
+            results.cache_hits,
+            results.cache_misses
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+        writeln!(
+            file,
+            "{timestamp_ms},duplicate_request,\"{}\",\"{}\",{},{},{},\"\",{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            video,
+            config.fps,
+            config.iterations,
+            config.seek_iterations,
+            burst_size,
+            request_samples.len(),
+            failures,
+            request_summary.avg,
+            request_summary.p95,
+            request_summary.p99,
+            request_summary.max,
+            results.sequential_fps,
+            results.decoder_creation_ms,
+            results.cache_hits,
+            results.cache_misses
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    Ok(())
 }
 
 async fn benchmark_decoder_creation(path: &Path, fps: u32, iterations: usize) -> f64 {
@@ -300,6 +634,41 @@ async fn benchmark_random_access(
     (times, failures)
 }
 
+async fn benchmark_duplicate_burst(
+    decoder: &AsyncVideoDecoderHandle,
+    burst_size: usize,
+    iterations: usize,
+    target_time: f32,
+) -> (Vec<f64>, Vec<f64>, usize) {
+    let mut batch_samples_ms = Vec::with_capacity(iterations);
+    let mut request_samples_ms = Vec::with_capacity(iterations.saturating_mul(burst_size));
+    let mut failures = 0usize;
+
+    let _ = decoder.get_frame(target_time).await;
+
+    for _ in 0..iterations {
+        let batch_start = Instant::now();
+        let requests = (0..burst_size).map(|_| async {
+            let request_start = Instant::now();
+            let decoded = decoder.get_frame(target_time).await.is_some();
+            let request_ms = request_start.elapsed().as_secs_f64() * 1000.0;
+            (decoded, request_ms)
+        });
+
+        let results = join_all(requests).await;
+        batch_samples_ms.push(batch_start.elapsed().as_secs_f64() * 1000.0);
+
+        for (decoded, request_ms) in results {
+            request_samples_ms.push(request_ms);
+            if !decoded {
+                failures = failures.saturating_add(1);
+            }
+        }
+    }
+
+    (batch_samples_ms, request_samples_ms, failures)
+}
+
 async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     let mut results = BenchmarkResults::default();
 
@@ -307,7 +676,10 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         "Starting benchmark with video: {}",
         config.video_path.display()
     );
-    println!("FPS: {}, Iterations: {}", config.fps, config.iterations);
+    println!(
+        "FPS: {}, Iterations: {}, Seek Iterations: {}",
+        config.fps, config.iterations, config.seek_iterations
+    );
     println!();
 
     println!("[1/5] Benchmarking decoder creation...");
@@ -358,16 +730,37 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         .filter(|&d| d <= video_duration)
         .collect();
     for distance in seek_distances {
-        match benchmark_seek(&decoder, config.fps, 0.0, distance).await {
-            Some(seek_time) => {
-                results.seek_times_by_distance.push((distance, seek_time));
-                println!("      {distance:.1}s seek: {seek_time:.2}ms");
-            }
-            None => {
-                results.seek_failures += 1;
-                println!("      {distance:.1}s seek: FAILED");
+        let mut stats = SeekDistanceStats {
+            distance_secs: distance,
+            ..Default::default()
+        };
+        let seek_target_ceiling = (video_duration - 0.01).max(0.0);
+        let start_ceiling = (video_duration - distance - 0.01).max(0.0);
+        for _ in 0..config.seek_iterations {
+            let iteration = (stats.samples_ms.len() + stats.failures) as f32;
+            let from_time = if start_ceiling > 0.0 {
+                (iteration * 0.618_034 * start_ceiling) % start_ceiling
+            } else {
+                0.0
+            };
+            let to_time = (from_time + distance).min(seek_target_ceiling);
+            match benchmark_seek(&decoder, config.fps, from_time, to_time).await {
+                Some(seek_time) => stats.samples_ms.push(seek_time),
+                None => stats.failures += 1,
             }
         }
+        let avg = if stats.samples_ms.is_empty() {
+            0.0
+        } else {
+            stats.samples_ms.iter().sum::<f64>() / stats.samples_ms.len() as f64
+        };
+        let p95 = percentile(&stats.samples_ms, 95.0);
+        println!(
+            "      {distance:.1}s seek: avg {avg:.2}ms, p95 {p95:.2}ms ({} samples, {} failures)",
+            stats.samples_ms.len(),
+            stats.failures
+        );
+        results.seek_stats.push(stats);
     }
 
     println!("[5/5] Benchmarking random access (50 samples)...");
@@ -386,6 +779,36 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         println!("      Warning: {random_failures} random accesses failed");
     }
 
+    println!("[Extra] Benchmarking duplicate request burst handling...");
+    let burst_target = (video_duration * 0.75).min(video_duration - 0.01).max(0.0);
+    for burst_size in [4usize, 8usize, 16usize] {
+        let (batch_samples, request_samples, failures) =
+            benchmark_duplicate_burst(&decoder, burst_size, 10, burst_target).await;
+        let batch_avg = if batch_samples.is_empty() {
+            0.0
+        } else {
+            batch_samples.iter().sum::<f64>() / batch_samples.len() as f64
+        };
+        let request_avg = if request_samples.is_empty() {
+            0.0
+        } else {
+            request_samples.iter().sum::<f64>() / request_samples.len() as f64
+        };
+        println!(
+            "      burst={burst_size}: batch avg {batch_avg:.2}ms, req avg {request_avg:.2}ms, failures {failures}"
+        );
+
+        results
+            .duplicate_burst_batch_ms
+            .push((burst_size, batch_samples));
+        results
+            .duplicate_burst_request_ms
+            .push((burst_size, request_samples));
+        results
+            .duplicate_burst_failures
+            .push((burst_size, failures));
+    }
+
     results
 }
 
@@ -397,7 +820,7 @@ fn main() {
         .position(|a| a == "--video")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>]");
+        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>] [--seek-iterations <n>] [--output-csv <path>] [--run-label <label>]");
 
     let fps = args
         .iter()
@@ -413,14 +836,44 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
 
+    let seek_iterations = args
+        .iter()
+        .position(|a| a == "--seek-iterations")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
+    let output_csv = args
+        .iter()
+        .position(|a| a == "--output-csv")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+
+    let run_label = args
+        .iter()
+        .position(|a| a == "--run-label")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
     let config = BenchmarkConfig {
         video_path,
         fps,
         iterations,
+        seek_iterations,
+        output_csv,
+        run_label,
     };
 
     let rt = Runtime::new().expect("Failed to create Tokio runtime");
-    let results = rt.block_on(run_full_benchmark(config));
+    let results = rt.block_on(run_full_benchmark(config.clone()));
 
     results.print_report();
+
+    if let Some(path) = &config.output_csv {
+        if let Err(error) = write_csv(path, &config, &results) {
+            eprintln!("Failed to write CSV report: {error}");
+        } else {
+            println!("CSV appended to {}", path.display());
+        }
+    }
 }

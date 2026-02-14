@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import toast from "solid-toast";
 import { useEditorContext } from "./context";
+import { getFpsStats } from "~/utils/socket";
 
 type PerformanceOverlayProps = {
 	size: { width: number; height: number };
@@ -22,6 +23,52 @@ type FrameStats = {
 	jitter: number;
 	droppedFrames: number;
 	totalFrames: number;
+};
+
+type TransportStats = {
+	renderFps: number;
+	mbPerSec: number;
+	sabResizes: number;
+	sabFallbacks: number;
+	sabOversizeFallbacks: number;
+	sabRetryLimitFallbacks: number;
+	sabRetriesInFlight: number;
+	sabSlotSizeBytes: number;
+	sabSlotCount: number;
+	sabTotalBytes: number;
+	workerFramesInFlight: number;
+	workerInFlightBackpressureHits: number;
+	workerInFlightBackpressureWindowHits: number;
+	workerFramesInFlightPeakWindow: number;
+	workerFramesInFlightPeakTotal: number;
+	workerInFlightSupersededDrops: number;
+	workerInFlightSupersededDropsWindow: number;
+	renderedFromSharedTotal: number;
+	renderedFromSharedWindow: number;
+	renderedFromWorkerTotal: number;
+	renderedFromWorkerWindow: number;
+	queuedOutOfOrderDropsTotal: number;
+	queuedOutOfOrderDropsWindow: number;
+	directOutOfOrderDropsTotal: number;
+	directOutOfOrderDropsWindow: number;
+	directIngressOutOfOrderDropsTotal: number;
+	directIngressOutOfOrderDropsWindow: number;
+	directResponseOutOfOrderDropsTotal: number;
+	directResponseOutOfOrderDropsWindow: number;
+	strideCorrectionInFlight: number;
+	strideCorrectionPending: number;
+	strideCorrectionDispatchesTotal: number;
+	strideCorrectionDispatchesWindow: number;
+	strideCorrectionSupersededDropsTotal: number;
+	strideCorrectionSupersededDropsWindow: number;
+	strideCorrectionErrorsTotal: number;
+	strideCorrectionErrorsWindow: number;
+	sabTotalRetryAttempts: number;
+	sabTotalFramesReceived: number;
+	sabTotalFramesWrittenToSharedBuffer: number;
+	sabTotalFramesSentToWorker: number;
+	sabTotalWorkerFallbackBytes: number;
+	sabTotalSupersededDrops: number;
 };
 
 const STATS_WINDOW_MS = 1000;
@@ -44,6 +91,51 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		jitter: 0,
 		droppedFrames: 0,
 		totalFrames: 0,
+	});
+	const [transportStats, setTransportStats] = createSignal<TransportStats>({
+		renderFps: 0,
+		mbPerSec: 0,
+		sabResizes: 0,
+		sabFallbacks: 0,
+		sabOversizeFallbacks: 0,
+		sabRetryLimitFallbacks: 0,
+		sabRetriesInFlight: 0,
+		sabSlotSizeBytes: 0,
+		sabSlotCount: 0,
+		sabTotalBytes: 0,
+		workerFramesInFlight: 0,
+		workerInFlightBackpressureHits: 0,
+		workerInFlightBackpressureWindowHits: 0,
+		workerFramesInFlightPeakWindow: 0,
+		workerFramesInFlightPeakTotal: 0,
+		workerInFlightSupersededDrops: 0,
+		workerInFlightSupersededDropsWindow: 0,
+		renderedFromSharedTotal: 0,
+		renderedFromSharedWindow: 0,
+		renderedFromWorkerTotal: 0,
+		renderedFromWorkerWindow: 0,
+		queuedOutOfOrderDropsTotal: 0,
+		queuedOutOfOrderDropsWindow: 0,
+		directOutOfOrderDropsTotal: 0,
+		directOutOfOrderDropsWindow: 0,
+		directIngressOutOfOrderDropsTotal: 0,
+		directIngressOutOfOrderDropsWindow: 0,
+		directResponseOutOfOrderDropsTotal: 0,
+		directResponseOutOfOrderDropsWindow: 0,
+		strideCorrectionInFlight: 0,
+		strideCorrectionPending: 0,
+		strideCorrectionDispatchesTotal: 0,
+		strideCorrectionDispatchesWindow: 0,
+		strideCorrectionSupersededDropsTotal: 0,
+		strideCorrectionSupersededDropsWindow: 0,
+		strideCorrectionErrorsTotal: 0,
+		strideCorrectionErrorsWindow: 0,
+		sabTotalRetryAttempts: 0,
+		sabTotalFramesReceived: 0,
+		sabTotalFramesWrittenToSharedBuffer: 0,
+		sabTotalFramesSentToWorker: 0,
+		sabTotalWorkerFallbackBytes: 0,
+		sabTotalSupersededDrops: 0,
 	});
 
 	const calculateStats = (): FrameStats => {
@@ -156,26 +248,236 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		});
 	};
 
+	const resetTransportStats = () => {
+		setTransportStats({
+			renderFps: 0,
+			mbPerSec: 0,
+			sabResizes: 0,
+			sabFallbacks: 0,
+			sabOversizeFallbacks: 0,
+			sabRetryLimitFallbacks: 0,
+			sabRetriesInFlight: 0,
+			sabSlotSizeBytes: 0,
+			sabSlotCount: 0,
+			sabTotalBytes: 0,
+			workerFramesInFlight: 0,
+			workerInFlightBackpressureHits: 0,
+			workerInFlightBackpressureWindowHits: 0,
+			workerFramesInFlightPeakWindow: 0,
+			workerFramesInFlightPeakTotal: 0,
+			workerInFlightSupersededDrops: 0,
+			workerInFlightSupersededDropsWindow: 0,
+			renderedFromSharedTotal: 0,
+			renderedFromSharedWindow: 0,
+			renderedFromWorkerTotal: 0,
+			renderedFromWorkerWindow: 0,
+			queuedOutOfOrderDropsTotal: 0,
+			queuedOutOfOrderDropsWindow: 0,
+			directOutOfOrderDropsTotal: 0,
+			directOutOfOrderDropsWindow: 0,
+			directIngressOutOfOrderDropsTotal: 0,
+			directIngressOutOfOrderDropsWindow: 0,
+			directResponseOutOfOrderDropsTotal: 0,
+			directResponseOutOfOrderDropsWindow: 0,
+			strideCorrectionInFlight: 0,
+			strideCorrectionPending: 0,
+			strideCorrectionDispatchesTotal: 0,
+			strideCorrectionDispatchesWindow: 0,
+			strideCorrectionSupersededDropsTotal: 0,
+			strideCorrectionSupersededDropsWindow: 0,
+			strideCorrectionErrorsTotal: 0,
+			strideCorrectionErrorsWindow: 0,
+			sabTotalRetryAttempts: 0,
+			sabTotalFramesReceived: 0,
+			sabTotalFramesWrittenToSharedBuffer: 0,
+			sabTotalFramesSentToWorker: 0,
+			sabTotalWorkerFallbackBytes: 0,
+			sabTotalSupersededDrops: 0,
+		});
+	};
+
 	createEffect(() => {
 		if (!performanceMode()) {
 			resetStats();
+			resetTransportStats();
 		}
+	});
+
+	createEffect(() => {
+		if (!performanceMode()) {
+			return;
+		}
+		const updateTransportStats = () => {
+			const socketStats = getFpsStats();
+			if (!socketStats) {
+				return;
+			}
+			setTransportStats({
+				renderFps: socketStats.renderFps,
+				mbPerSec: socketStats.mbPerSec,
+				sabResizes: socketStats.sabResizes,
+				sabFallbacks: socketStats.sabFallbacks,
+				sabOversizeFallbacks: socketStats.sabOversizeFallbacks,
+				sabRetryLimitFallbacks: socketStats.sabRetryLimitFallbacks,
+				sabRetriesInFlight: socketStats.sabRetriesInFlight,
+				sabSlotSizeBytes: socketStats.sabSlotSizeBytes,
+				sabSlotCount: socketStats.sabSlotCount,
+				sabTotalBytes: socketStats.sabTotalBytes,
+				workerFramesInFlight: socketStats.workerFramesInFlight,
+				workerInFlightBackpressureHits:
+					socketStats.workerInFlightBackpressureHits,
+				workerInFlightBackpressureWindowHits:
+					socketStats.workerInFlightBackpressureWindowHits,
+				workerFramesInFlightPeakWindow:
+					socketStats.workerFramesInFlightPeakWindow,
+				workerFramesInFlightPeakTotal:
+					socketStats.workerFramesInFlightPeakTotal,
+				workerInFlightSupersededDrops:
+					socketStats.workerInFlightSupersededDrops,
+				workerInFlightSupersededDropsWindow:
+					socketStats.workerInFlightSupersededDropsWindow,
+				renderedFromSharedTotal: socketStats.renderedFromSharedTotal,
+				renderedFromSharedWindow: socketStats.renderedFromSharedWindow,
+				renderedFromWorkerTotal: socketStats.renderedFromWorkerTotal,
+				renderedFromWorkerWindow: socketStats.renderedFromWorkerWindow,
+				queuedOutOfOrderDropsTotal: socketStats.queuedOutOfOrderDropsTotal,
+				queuedOutOfOrderDropsWindow: socketStats.queuedOutOfOrderDropsWindow,
+				directOutOfOrderDropsTotal: socketStats.directOutOfOrderDropsTotal,
+				directOutOfOrderDropsWindow: socketStats.directOutOfOrderDropsWindow,
+				directIngressOutOfOrderDropsTotal:
+					socketStats.directIngressOutOfOrderDropsTotal,
+				directIngressOutOfOrderDropsWindow:
+					socketStats.directIngressOutOfOrderDropsWindow,
+				directResponseOutOfOrderDropsTotal:
+					socketStats.directResponseOutOfOrderDropsTotal,
+				directResponseOutOfOrderDropsWindow:
+					socketStats.directResponseOutOfOrderDropsWindow,
+				strideCorrectionInFlight: socketStats.strideCorrectionInFlight,
+				strideCorrectionPending: socketStats.strideCorrectionPending,
+				strideCorrectionDispatchesTotal:
+					socketStats.strideCorrectionDispatchesTotal,
+				strideCorrectionDispatchesWindow:
+					socketStats.strideCorrectionDispatchesWindow,
+				strideCorrectionSupersededDropsTotal:
+					socketStats.strideCorrectionSupersededDropsTotal,
+				strideCorrectionSupersededDropsWindow:
+					socketStats.strideCorrectionSupersededDropsWindow,
+				strideCorrectionErrorsTotal: socketStats.strideCorrectionErrorsTotal,
+				strideCorrectionErrorsWindow: socketStats.strideCorrectionErrorsWindow,
+				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
+				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
+				sabTotalFramesWrittenToSharedBuffer:
+					socketStats.sabTotalFramesWrittenToSharedBuffer,
+				sabTotalFramesSentToWorker: socketStats.sabTotalFramesSentToWorker,
+				sabTotalWorkerFallbackBytes: socketStats.sabTotalWorkerFallbackBytes,
+				sabTotalSupersededDrops: socketStats.sabTotalSupersededDrops,
+			});
+		};
+		updateTransportStats();
+		const interval = setInterval(updateTransportStats, 250);
+		onCleanup(() => clearInterval(interval));
 	});
 
 	onCleanup(() => {
 		resetStats();
+		resetTransportStats();
 	});
 
 	const formatFps = (fps: number) => fps.toFixed(1);
 	const formatMs = (ms: number) => ms.toFixed(2);
+	const formatMb = (value: number) => value.toFixed(1);
+	const formatSlotMb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+	const formatPct = (value: number) => value.toFixed(1);
+	const totalTransportedFrames = () =>
+		transportStats().sabTotalFramesWrittenToSharedBuffer +
+		transportStats().sabTotalFramesSentToWorker;
+	const sabFrameSharePct = () => {
+		const total = totalTransportedFrames();
+		return total > 0
+			? (transportStats().sabTotalFramesWrittenToSharedBuffer / total) * 100
+			: 0;
+	};
+	const workerFrameSharePct = () => {
+		const total = totalTransportedFrames();
+		return total > 0
+			? (transportStats().sabTotalFramesSentToWorker / total) * 100
+			: 0;
+	};
+	const supersededDropPct = () =>
+		transportStats().sabTotalFramesReceived > 0
+			? (transportStats().sabTotalSupersededDrops /
+					transportStats().sabTotalFramesReceived) *
+				100
+			: 0;
 
 	const copyStatsToClipboard = async () => {
 		const s = stats();
+		const t = transportStats();
+		const totalTransported =
+			t.sabTotalFramesWrittenToSharedBuffer + t.sabTotalFramesSentToWorker;
+		const sabSharePct =
+			totalTransported > 0
+				? (t.sabTotalFramesWrittenToSharedBuffer / totalTransported) * 100
+				: 0;
+		const workerSharePct =
+			totalTransported > 0
+				? (t.sabTotalFramesSentToWorker / totalTransported) * 100
+				: 0;
+		const supersededPct =
+			t.sabTotalFramesReceived > 0
+				? (t.sabTotalSupersededDrops / t.sabTotalFramesReceived) * 100
+				: 0;
 		const statsText = [
 			`FPS: ${formatFps(s.fps)}`,
 			`Frame: ${formatMs(s.avgFrameMs)}ms avg`,
 			`Range: ${formatMs(s.minFrameMs)} - ${formatMs(s.maxFrameMs)}ms`,
 			`Jitter: ±${formatMs(s.jitter)}ms`,
+			`Render FPS: ${formatFps(t.renderFps)}`,
+			`Transport: ${formatMb(t.mbPerSec)} MB/s`,
+			`SAB Slot: ${formatSlotMb(t.sabSlotSizeBytes)} MB`,
+			`SAB Slot Count: ${t.sabSlotCount}`,
+			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
+			`Worker Frames In Flight: ${t.workerFramesInFlight}`,
+			`Worker In-Flight Cap Hits: ${t.workerInFlightBackpressureHits}`,
+			`Worker In-Flight Cap Hits (Window): ${t.workerInFlightBackpressureWindowHits}`,
+			`Worker In-Flight Peak (Window): ${t.workerFramesInFlightPeakWindow}`,
+			`Worker In-Flight Peak (Total): ${t.workerFramesInFlightPeakTotal}`,
+			`Worker In-Flight Superseded Drops: ${t.workerInFlightSupersededDrops}`,
+			`Worker In-Flight Superseded Drops (Window): ${t.workerInFlightSupersededDropsWindow}`,
+			`Rendered From Shared (Total): ${t.renderedFromSharedTotal}`,
+			`Rendered From Shared (Window): ${t.renderedFromSharedWindow}`,
+			`Rendered From Worker (Total): ${t.renderedFromWorkerTotal}`,
+			`Rendered From Worker (Window): ${t.renderedFromWorkerWindow}`,
+			`Queued Out-Of-Order Drops (Total): ${t.queuedOutOfOrderDropsTotal}`,
+			`Queued Out-Of-Order Drops (Window): ${t.queuedOutOfOrderDropsWindow}`,
+			`Direct Out-Of-Order Drops (Total): ${t.directOutOfOrderDropsTotal}`,
+			`Direct Out-Of-Order Drops (Window): ${t.directOutOfOrderDropsWindow}`,
+			`Direct Ingress Out-Of-Order Drops (Total): ${t.directIngressOutOfOrderDropsTotal}`,
+			`Direct Ingress Out-Of-Order Drops (Window): ${t.directIngressOutOfOrderDropsWindow}`,
+			`Direct Response Out-Of-Order Drops (Total): ${t.directResponseOutOfOrderDropsTotal}`,
+			`Direct Response Out-Of-Order Drops (Window): ${t.directResponseOutOfOrderDropsWindow}`,
+			`Stride Correction In Flight: ${t.strideCorrectionInFlight}`,
+			`Stride Correction Pending: ${t.strideCorrectionPending}`,
+			`Stride Correction Dispatches (Total): ${t.strideCorrectionDispatchesTotal}`,
+			`Stride Correction Dispatches (Window): ${t.strideCorrectionDispatchesWindow}`,
+			`Stride Correction Superseded Drops (Total): ${t.strideCorrectionSupersededDropsTotal}`,
+			`Stride Correction Superseded Drops (Window): ${t.strideCorrectionSupersededDropsWindow}`,
+			`Stride Correction Errors (Total): ${t.strideCorrectionErrorsTotal}`,
+			`Stride Correction Errors (Window): ${t.strideCorrectionErrorsWindow}`,
+			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
+			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
+			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
+			`SAB Frames Sent to Worker: ${t.sabTotalFramesSentToWorker}`,
+			`SAB Fallback Transfer: ${formatSlotMb(t.sabTotalWorkerFallbackBytes)} MB`,
+			`SAB Superseded Drops: ${t.sabTotalSupersededDrops}`,
+			`SAB Frame Share: ${formatPct(sabSharePct)}%`,
+			`Worker Frame Share: ${formatPct(workerSharePct)}%`,
+			`Superseded Drop Share: ${formatPct(supersededPct)}%`,
+			`SAB Resizes: ${t.sabResizes}`,
+			`SAB Fallbacks: ${t.sabFallbacks}`,
+			`SAB Oversize Fallbacks: ${t.sabOversizeFallbacks}`,
+			`SAB Retry Limit Fallbacks: ${t.sabRetryLimitFallbacks}`,
+			`SAB Retries In Flight: ${t.sabRetriesInFlight}`,
 			s.droppedFrames > 0
 				? `Dropped: ${s.droppedFrames}/${s.totalFrames}`
 				: null,
@@ -258,6 +560,196 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 								±{formatMs(stats().jitter)}ms
 							</span>
 						</div>
+						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+							<span>Render: </span>
+							<span style={{ color: "#93c5fd" }}>
+								{formatFps(transportStats().renderFps)} fps
+							</span>
+						</div>
+						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+							<span>Transport: </span>
+							<span style={{ color: "#86efac" }}>
+								{formatMb(transportStats().mbPerSec)} MB/s
+							</span>
+						</div>
+						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+							<span>SAB: </span>
+							<span style={{ color: "#c4b5fd" }}>
+								{formatSlotMb(transportStats().sabSlotSizeBytes)}MB slot
+							</span>
+							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
+								{" "}
+								/ {transportStats().sabSlotCount} slots /{" "}
+								{formatSlotMb(transportStats().sabTotalBytes)}MB total /{" "}
+								{transportStats().sabResizes} resizes
+							</span>
+						</div>
+						<Show when={transportStats().sabTotalFramesReceived > 0}>
+							<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+								<span>SAB totals: </span>
+								<span style={{ color: "#93c5fd" }}>
+									{transportStats().sabTotalFramesReceived} recv
+								</span>
+								<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
+									{" "}
+									/ {transportStats().sabTotalFramesWrittenToSharedBuffer} sab /{" "}
+									{transportStats().sabTotalFramesSentToWorker} worker /{" "}
+									{transportStats().sabTotalSupersededDrops} superseded /{" "}
+									{transportStats().sabTotalRetryAttempts} retries /{" "}
+									{formatSlotMb(transportStats().sabTotalWorkerFallbackBytes)}MB
+									fallback
+								</span>
+							</div>
+						</Show>
+						<Show when={totalTransportedFrames() > 0}>
+							<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+								<span>Transport split: </span>
+								<span style={{ color: "#93c5fd" }}>
+									{formatPct(sabFrameSharePct())}% SAB
+								</span>
+								<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
+									{" "}
+									/ {formatPct(workerFrameSharePct())}% worker /{" "}
+									{formatPct(supersededDropPct())}% superseded
+								</span>
+							</div>
+						</Show>
+						<Show when={transportStats().sabFallbacks > 0}>
+							<div style={{ color: "#fbbf24" }}>
+								SAB fallback {transportStats().sabFallbacks} (oversize{" "}
+								{transportStats().sabOversizeFallbacks}, retry-limit{" "}
+								{transportStats().sabRetryLimitFallbacks})
+							</div>
+						</Show>
+						<Show when={transportStats().sabRetriesInFlight > 0}>
+							<div style={{ color: "#f59e0b" }}>
+								SAB retries in flight: {transportStats().sabRetriesInFlight}
+							</div>
+						</Show>
+						<Show when={transportStats().workerFramesInFlight > 0}>
+							<div style={{ color: "#fbbf24" }}>
+								Worker frames in flight: {transportStats().workerFramesInFlight}
+							</div>
+						</Show>
+						<Show when={transportStats().workerFramesInFlightPeakTotal > 0}>
+							<div style={{ color: "#f59e0b" }}>
+								Worker in-flight peak:{" "}
+								{transportStats().workerFramesInFlightPeakWindow} window /{" "}
+								{transportStats().workerFramesInFlightPeakTotal} total
+							</div>
+						</Show>
+						<Show
+							when={
+								transportStats().renderedFromSharedTotal > 0 ||
+								transportStats().renderedFromWorkerTotal > 0
+							}
+						>
+							<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+								Render source: {transportStats().renderedFromSharedWindow}{" "}
+								shared / {transportStats().renderedFromWorkerWindow} worker
+								window
+								<span style={{ color: "rgba(255, 255, 255, 0.5)" }}>
+									{" "}
+									({transportStats().renderedFromSharedTotal} shared /{" "}
+									{transportStats().renderedFromWorkerTotal} worker total)
+								</span>
+							</div>
+						</Show>
+						<Show when={transportStats().queuedOutOfOrderDropsTotal > 0}>
+							<div style={{ color: "#fb923c" }}>
+								Queued out-of-order drops:{" "}
+								{transportStats().queuedOutOfOrderDropsTotal}
+								<Show when={transportStats().queuedOutOfOrderDropsWindow > 0}>
+									<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+										{" "}
+										(window {transportStats().queuedOutOfOrderDropsWindow})
+									</span>
+								</Show>
+							</div>
+						</Show>
+						<Show when={transportStats().directOutOfOrderDropsTotal > 0}>
+							<div style={{ color: "#f97316" }}>
+								Direct out-of-order drops:{" "}
+								{transportStats().directOutOfOrderDropsTotal}
+								<Show when={transportStats().directOutOfOrderDropsWindow > 0}>
+									<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+										{" "}
+										(window {transportStats().directOutOfOrderDropsWindow})
+									</span>
+								</Show>
+								<Show
+									when={
+										transportStats().directIngressOutOfOrderDropsTotal > 0 ||
+										transportStats().directResponseOutOfOrderDropsTotal > 0
+									}
+								>
+									<span style={{ color: "rgba(255, 255, 255, 0.5)" }}>
+										{" "}
+										(ingress{" "}
+										{transportStats().directIngressOutOfOrderDropsTotal} /
+										response{" "}
+										{transportStats().directResponseOutOfOrderDropsTotal})
+									</span>
+								</Show>
+							</div>
+						</Show>
+						<Show
+							when={
+								transportStats().strideCorrectionInFlight > 0 ||
+								transportStats().strideCorrectionPending > 0 ||
+								transportStats().strideCorrectionDispatchesTotal > 0 ||
+								transportStats().strideCorrectionErrorsTotal > 0
+							}
+						>
+							<div style={{ color: "#f59e0b" }}>
+								Stride correction: in-flight{" "}
+								{transportStats().strideCorrectionInFlight} / pending{" "}
+								{transportStats().strideCorrectionPending}
+								<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+									{" "}
+									(dispatches{" "}
+									{transportStats().strideCorrectionDispatchesWindow} window /{" "}
+									{transportStats().strideCorrectionDispatchesTotal} total,
+									superseded{" "}
+									{transportStats().strideCorrectionSupersededDropsWindow}{" "}
+									window /{" "}
+									{transportStats().strideCorrectionSupersededDropsTotal} total,
+									errors {transportStats().strideCorrectionErrorsWindow} window
+									/ {transportStats().strideCorrectionErrorsTotal} total)
+								</span>
+							</div>
+						</Show>
+						<Show when={transportStats().workerInFlightBackpressureHits > 0}>
+							<div style={{ color: "#f59e0b" }}>
+								Worker in-flight cap hits:{" "}
+								{transportStats().workerInFlightBackpressureHits}
+							</div>
+						</Show>
+						<Show
+							when={transportStats().workerInFlightBackpressureWindowHits > 0}
+						>
+							<div style={{ color: "#fbbf24" }}>
+								Worker cap hits (window):{" "}
+								{transportStats().workerInFlightBackpressureWindowHits}
+							</div>
+						</Show>
+						<Show when={transportStats().workerInFlightSupersededDrops > 0}>
+							<div style={{ color: "#f97316" }}>
+								Worker in-flight superseded drops:{" "}
+								{transportStats().workerInFlightSupersededDrops}
+								<Show
+									when={
+										transportStats().workerInFlightSupersededDropsWindow > 0
+									}
+								>
+									<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+										{" "}
+										(window{" "}
+										{transportStats().workerInFlightSupersededDropsWindow})
+									</span>
+								</Show>
+							</div>
+						</Show>
 						<Show when={stats().droppedFrames > 0}>
 							<div style={{ color: "#f87171" }}>
 								Dropped: {stats().droppedFrames}/{stats().totalFrames}

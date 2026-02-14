@@ -8,25 +8,34 @@ import {
 	type Producer,
 	type SharedFrameBufferConfig,
 } from "./shared-frame-buffer";
-import type { StrideCorrectionResponse } from "./stride-correction-worker";
+import {
+	DEFAULT_FRAME_BUFFER_CONFIG,
+	computeSharedBufferConfig,
+} from "./frame-transport-config";
+import {
+	decideWorkerInflightDispatch,
+	updateWorkerInflightPeaks,
+} from "./frame-transport-inflight";
+import { decideFrameOrder } from "./frame-transport-order";
+import { decideSabWriteFailure } from "./frame-transport-retry";
+import { decideStrideCorrectionDispatch } from "./frame-transport-stride";
+import type {
+	ErrorResponse,
+	StrideCorrectionResponse,
+} from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
 import {
 	disposeWebGPU,
 	initWebGPU,
 	isWebGPUSupported,
 	renderFrameWebGPU,
-	renderNv12FrameWebGPU,
 	type WebGPURenderer,
 } from "./webgpu-renderer";
 
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
-const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
-	slotCount: 6,
-	slotSize: 16 * 1024 * 1024,
-};
-
-let mainThreadNv12Buffer: Uint8ClampedArray | null = null;
-let mainThreadNv12BufferSize = 0;
+const SAB_WRITE_RETRY_LIMIT = 2;
+const WORKER_IN_FLIGHT_LIMIT = 2;
+const FRAME_ORDER_STALE_WINDOW = 30;
 
 export type FpsStats = {
 	fps: number;
@@ -35,6 +44,47 @@ export type FpsStats = {
 	minFrameMs: number;
 	maxFrameMs: number;
 	mbPerSec: number;
+	sabResizes: number;
+	sabFallbacks: number;
+	sabOversizeFallbacks: number;
+	sabRetryLimitFallbacks: number;
+	sabRetriesInFlight: number;
+	sabSlotSizeBytes: number;
+	sabSlotCount: number;
+	sabTotalBytes: number;
+	workerFramesInFlight: number;
+	workerInFlightBackpressureHits: number;
+	workerInFlightBackpressureWindowHits: number;
+	workerFramesInFlightPeakWindow: number;
+	workerFramesInFlightPeakTotal: number;
+	workerInFlightSupersededDrops: number;
+	workerInFlightSupersededDropsWindow: number;
+	renderedFromSharedTotal: number;
+	renderedFromSharedWindow: number;
+	renderedFromWorkerTotal: number;
+	renderedFromWorkerWindow: number;
+	queuedOutOfOrderDropsTotal: number;
+	queuedOutOfOrderDropsWindow: number;
+	directOutOfOrderDropsTotal: number;
+	directOutOfOrderDropsWindow: number;
+	directIngressOutOfOrderDropsTotal: number;
+	directIngressOutOfOrderDropsWindow: number;
+	directResponseOutOfOrderDropsTotal: number;
+	directResponseOutOfOrderDropsWindow: number;
+	strideCorrectionInFlight: number;
+	strideCorrectionPending: number;
+	strideCorrectionDispatchesTotal: number;
+	strideCorrectionDispatchesWindow: number;
+	strideCorrectionSupersededDropsTotal: number;
+	strideCorrectionSupersededDropsWindow: number;
+	strideCorrectionErrorsTotal: number;
+	strideCorrectionErrorsWindow: number;
+	sabTotalRetryAttempts: number;
+	sabTotalFramesReceived: number;
+	sabTotalFramesWrittenToSharedBuffer: number;
+	sabTotalFramesSentToWorker: number;
+	sabTotalWorkerFallbackBytes: number;
+	sabTotalSupersededDrops: number;
 };
 
 let globalFpsStatsGetter: (() => FpsStats) | null = null;
@@ -44,59 +94,6 @@ export function getFpsStats(): FpsStats | null {
 		return globalFpsStatsGetter();
 	}
 	return null;
-}
-
-function convertNv12ToRgbaMainThread(
-	nv12Data: Uint8ClampedArray,
-	width: number,
-	height: number,
-	yStride: number,
-): Uint8ClampedArray {
-	const rgbaSize = width * height * 4;
-	if (!mainThreadNv12Buffer || mainThreadNv12BufferSize < rgbaSize) {
-		mainThreadNv12Buffer = new Uint8ClampedArray(rgbaSize);
-		mainThreadNv12BufferSize = rgbaSize;
-	}
-	const rgba = mainThreadNv12Buffer;
-
-	const ySize = yStride * height;
-	const yPlane = nv12Data;
-	const uvPlane = nv12Data.subarray(ySize);
-	const uvStride = width;
-
-	for (let row = 0; row < height; row++) {
-		const yRowOffset = row * yStride;
-		const uvRowOffset = Math.floor(row / 2) * uvStride;
-		const rgbaRowOffset = row * width * 4;
-
-		for (let col = 0; col < width; col++) {
-			const y = yPlane[yRowOffset + col] - 16;
-
-			const uvCol = Math.floor(col / 2) * 2;
-			const u = uvPlane[uvRowOffset + uvCol] - 128;
-			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
-
-			const c = 298 * y;
-			const d = u;
-			const e = v;
-
-			let r = (c + 409 * e + 128) >> 8;
-			let g = (c - 100 * d - 208 * e + 128) >> 8;
-			let b = (c + 516 * d + 128) >> 8;
-
-			r = r < 0 ? 0 : r > 255 ? 255 : r;
-			g = g < 0 ? 0 : g > 255 ? 255 : g;
-			b = b < 0 ? 0 : b > 255 ? 255 : b;
-
-			const rgbaOffset = rgbaRowOffset + col * 4;
-			rgba[rgbaOffset] = r;
-			rgba[rgbaOffset + 1] = g;
-			rgba[rgbaOffset + 2] = b;
-			rgba[rgbaOffset + 3] = 255;
-		}
-	}
-
-	return rgba.subarray(0, rgbaSize);
 }
 
 export type FrameData = {
@@ -122,19 +119,7 @@ interface FrameRenderedMessage {
 	type: "frame-rendered";
 	width: number;
 	height: number;
-}
-
-interface FrameQueuedMessage {
-	type: "frame-queued";
-	width: number;
-	height: number;
-}
-
-interface DecodedFrame {
-	type: "decoded";
-	bitmap: ImageBitmap;
-	width: number;
-	height: number;
+	source: "shared" | "worker";
 }
 
 interface ErrorMessage {
@@ -149,8 +134,6 @@ interface RequestFrameMessage {
 type WorkerMessage =
 	| ReadyMessage
 	| FrameRenderedMessage
-	| FrameQueuedMessage
-	| DecodedFrame
 	| ErrorMessage
 	| RequestFrameMessage;
 
@@ -172,22 +155,72 @@ export function createImageDataWS(
 	let pendingFrame: ArrayBuffer | null = null;
 	let isProcessing = false;
 	let nextFrame: ArrayBuffer | null = null;
+	let workerFramesInFlight = 0;
 
 	let producer: Producer | null = null;
-	if (SAB_SUPPORTED) {
+	let sharedBufferConfig: SharedFrameBufferConfig | null = null;
+	let sharedBufferResizeFailed = false;
+	let sharedBufferResizeCount = 0;
+	let sabFallbackCount = 0;
+	let sabOversizeFallbackCount = 0;
+	let sabRetryLimitFallbackCount = 0;
+	let sabFallbackWindowCount = 0;
+	let sabOversizeFallbackWindowCount = 0;
+	let sabRetryLimitFallbackWindowCount = 0;
+	let sabWriteRetryCount = 0;
+	let sabRetryScheduled = false;
+	let processNextScheduled = false;
+
+	function initializeSharedBuffer(config: SharedFrameBufferConfig): boolean {
 		try {
-			const init = createSharedFrameBuffer(FRAME_BUFFER_CONFIG);
-			producer = createProducer(init);
+			const init = createSharedFrameBuffer(config);
+			const nextProducer = createProducer(init);
+			producer?.signalShutdown();
+			producer = nextProducer;
+			sharedBufferConfig = config;
+			sharedBufferResizeCount += 1;
 			worker.postMessage({
 				type: "init-shared-buffer",
 				buffer: init.buffer,
 			});
+			return true;
 		} catch (e) {
 			console.error(
 				"[socket] SharedArrayBuffer allocation failed, falling back to non-SAB mode:",
 				e instanceof Error ? e.message : e,
 			);
+			return false;
+		}
+	}
+
+	function ensureSharedBufferCapacity(requiredBytes: number) {
+		if (
+			!producer ||
+			!sharedBufferConfig ||
+			sharedBufferResizeFailed ||
+			requiredBytes <= sharedBufferConfig.slotSize
+		) {
+			return;
+		}
+
+		const config = computeSharedBufferConfig(
+			requiredBytes,
+			DEFAULT_FRAME_BUFFER_CONFIG,
+		);
+		if (config.slotSize <= sharedBufferConfig.slotSize) {
+			return;
+		}
+
+		const initialized = initializeSharedBuffer(config);
+		if (!initialized) {
+			sharedBufferResizeFailed = true;
+		}
+	}
+
+	if (SAB_SUPPORTED) {
+		if (!initializeSharedBuffer(DEFAULT_FRAME_BUFFER_CONFIG)) {
 			producer = null;
+			sharedBufferConfig = null;
 		}
 	}
 
@@ -197,6 +230,14 @@ export function createImageDataWS(
 	let directCanvas: HTMLCanvasElement | null = null;
 	let directCtx: CanvasRenderingContext2D | null = null;
 	let strideWorker: Worker | null = null;
+	let strideWorkerInFlight = false;
+	let pendingStrideCorrection: {
+		buffer: ArrayBuffer;
+		strideBytes: number;
+		width: number;
+		height: number;
+		frameNumber: number;
+	} | null = null;
 
 	let cachedDirectImageData: ImageData | null = null;
 	let cachedDirectWidth = 0;
@@ -208,41 +249,29 @@ export function createImageDataWS(
 
 	let mainThreadWebGPU: WebGPURenderer | null = null;
 	let mainThreadWebGPUInitializing = false;
-	let pendingNv12Frame: ArrayBuffer | null = null;
+	let latestQueuedFrameNumber: number | null = null;
+	let latestDirectAcceptedFrameNumber: number | null = null;
+	let lastDirectRenderedFrameNumber: number | null = null;
 
 	let lastRenderedFrameData: {
 		data: Uint8ClampedArray;
 		width: number;
 		height: number;
-		yStride: number;
-		isNv12: boolean;
+		strideBytes: number;
 	} | null = null;
 
 	function storeRenderedFrame(
 		frameData: Uint8ClampedArray,
 		width: number,
 		height: number,
-		yStride: number,
-		isNv12: boolean,
+		strideBytes: number,
 	) {
-		if (
-			lastRenderedFrameData &&
-			lastRenderedFrameData.data.length === frameData.length
-		) {
-			lastRenderedFrameData.data.set(frameData);
-			lastRenderedFrameData.width = width;
-			lastRenderedFrameData.height = height;
-			lastRenderedFrameData.yStride = yStride;
-			lastRenderedFrameData.isNv12 = isNv12;
-		} else {
-			lastRenderedFrameData = {
-				data: new Uint8ClampedArray(frameData),
-				width,
-				height,
-				yStride,
-				isNv12,
-			};
-		}
+		lastRenderedFrameData = {
+			data: frameData,
+			width,
+			height,
+			strideBytes,
+		};
 		if (!hasRenderedFrame()) {
 			setHasRenderedFrame(true);
 		}
@@ -260,22 +289,38 @@ export function createImageDataWS(
 		worker.onmessage = null;
 		worker.terminate();
 
-		if (strideWorker) {
-			strideWorker.onmessage = null;
-			strideWorker.terminate();
-			strideWorker = null;
-		}
+		teardownStrideWorker();
 
 		pendingFrame = null;
 		nextFrame = null;
 		isProcessing = false;
+		workerFramesInFlight = 0;
+		sabRetryScheduled = false;
+		processNextScheduled = false;
+		sabFallbackWindowCount = 0;
+		sabOversizeFallbackWindowCount = 0;
+		sabRetryLimitFallbackWindowCount = 0;
+		workerInFlightBackpressureWindowHits = 0;
+		workerFramesInFlightPeakWindow = 0;
+		workerInFlightSupersededDropsWindow = 0;
+		renderedFromSharedWindow = 0;
+		renderedFromWorkerWindow = 0;
+		queuedOutOfOrderDropsWindow = 0;
+		directOutOfOrderDropsWindow = 0;
+		directIngressOutOfOrderDropsWindow = 0;
+		directResponseOutOfOrderDropsWindow = 0;
+		strideCorrectionDispatchesWindow = 0;
+		strideCorrectionSupersededDropsWindow = 0;
+		strideCorrectionErrorsWindow = 0;
+		latestQueuedFrameNumber = null;
+		latestDirectAcceptedFrameNumber = null;
+		lastDirectRenderedFrameNumber = null;
 
 		if (mainThreadWebGPU) {
 			disposeWebGPU(mainThreadWebGPU);
 			mainThreadWebGPU = null;
 		}
 
-		pendingNv12Frame = null;
 		cachedDirectImageData = null;
 		cachedDirectWidth = 0;
 		cachedDirectHeight = 0;
@@ -288,95 +333,138 @@ export function createImageDataWS(
 		setIsConnected(false);
 	}
 
-	function renderPendingNv12Frame() {
-		if (!pendingNv12Frame || !mainThreadWebGPU || !directCanvas) return;
-
-		const buffer = pendingNv12Frame;
-		pendingNv12Frame = null;
-
-		const NV12_MAGIC = 0x4e563132;
-		if (buffer.byteLength < 28) return;
-
-		const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
-		if (formatCheck.getUint32(0, true) !== NV12_MAGIC) return;
-
-		const metadataOffset = buffer.byteLength - 28;
-		const meta = new DataView(buffer, metadataOffset, 28);
-		const yStride = meta.getUint32(0, true);
-		const height = meta.getUint32(4, true);
-		const width = meta.getUint32(8, true);
-
-		if (width > 0 && height > 0) {
-			const ySize = yStride * height;
-			const uvSize = width * (height / 2);
-			const totalSize = ySize + uvSize;
-
-			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
-
-			if (directCanvas.width !== width || directCanvas.height !== height) {
-				directCanvas.width = width;
-				directCanvas.height = height;
-			}
-
-			renderNv12FrameWebGPU(
-				mainThreadWebGPU,
-				frameData,
-				width,
-				height,
-				yStride,
-			);
-
-			storeRenderedFrame(frameData, width, height, yStride, true);
-			onmessage({ width, height });
-		}
+	function teardownStrideWorker() {
+		if (!strideWorker) return;
+		strideWorker.onmessage = null;
+		strideWorker.terminate();
+		strideWorker = null;
+		strideWorkerInFlight = false;
+		pendingStrideCorrection = null;
 	}
 
-	function renderPendingFrameCanvas2D() {
-		if (!pendingNv12Frame || !directCanvas || !directCtx) return;
+	function dispatchStrideCorrection(request: {
+		buffer: ArrayBuffer;
+		strideBytes: number;
+		width: number;
+		height: number;
+		frameNumber: number;
+	}) {
+		if (!strideWorker) return;
+		strideWorkerInFlight = true;
+		strideCorrectionDispatchesTotal++;
+		strideCorrectionDispatchesWindow++;
+		strideWorker.postMessage(
+			{
+				type: "correct-stride",
+				buffer: request.buffer,
+				strideBytes: request.strideBytes,
+				width: request.width,
+				height: request.height,
+				frameNumber: request.frameNumber,
+			},
+			[request.buffer],
+		);
+	}
 
-		const buffer = pendingNv12Frame;
-		pendingNv12Frame = null;
+	function queueStrideCorrection(request: {
+		buffer: ArrayBuffer;
+		strideBytes: number;
+		width: number;
+		height: number;
+		frameNumber: number;
+	}) {
+		if (!strideWorker) return;
+		const decision = decideStrideCorrectionDispatch(
+			strideWorkerInFlight,
+			pendingStrideCorrection !== null,
+		);
+		if (decision.action === "dispatch") {
+			dispatchStrideCorrection(request);
+			strideWorkerInFlight = decision.nextInFlight;
+			return;
+		}
+		strideWorkerInFlight = decision.nextInFlight;
+		if (decision.supersededDropsIncrement > 0) {
+			framesDropped += decision.supersededDropsIncrement;
+			strideCorrectionSupersededDropsTotal += decision.supersededDropsIncrement;
+			strideCorrectionSupersededDropsWindow +=
+				decision.supersededDropsIncrement;
+		}
+		pendingStrideCorrection = request;
+	}
 
-		const NV12_MAGIC = 0x4e563132;
-		if (buffer.byteLength < 28) return;
+	function setupStrideWorker() {
+		if (strideWorker) return;
+		const createdWorker = new StrideCorrectionWorker();
+		createdWorker.onmessage = (
+			e: MessageEvent<StrideCorrectionResponse | ErrorResponse>,
+		) => {
+			const flushPending = () => {
+				if (pendingStrideCorrection && strideWorker) {
+					const nextRequest = pendingStrideCorrection;
+					pendingStrideCorrection = null;
+					dispatchStrideCorrection(nextRequest);
+				}
+			};
 
-		const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
-		if (formatCheck.getUint32(0, true) !== NV12_MAGIC) return;
+			if (e.data.type === "error") {
+				strideCorrectionErrorsTotal++;
+				strideCorrectionErrorsWindow++;
+				strideWorkerInFlight = false;
+				flushPending();
+				return;
+			}
 
-		const metadataOffset = buffer.byteLength - 28;
-		const meta = new DataView(buffer, metadataOffset, 28);
-		const yStride = meta.getUint32(0, true);
-		const height = meta.getUint32(4, true);
-		const width = meta.getUint32(8, true);
+			if (e.data.type !== "corrected" || !directCanvas || !directCtx) {
+				strideWorkerInFlight = false;
+				flushPending();
+				return;
+			}
+			strideWorkerInFlight = false;
 
-		if (width > 0 && height > 0) {
-			const ySize = yStride * height;
-			const uvSize = width * (height / 2);
-			const totalSize = ySize + uvSize;
-
-			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
+			const { buffer, width, height, frameNumber } = e.data;
+			const responseOrderDecision = decideFrameOrder(
+				frameNumber,
+				lastDirectRenderedFrameNumber,
+				FRAME_ORDER_STALE_WINDOW,
+			);
+			if (responseOrderDecision.action === "drop") {
+				framesDropped += responseOrderDecision.dropsIncrement;
+				directOutOfOrderDropsTotal += responseOrderDecision.dropsIncrement;
+				directOutOfOrderDropsWindow += responseOrderDecision.dropsIncrement;
+				directResponseOutOfOrderDropsTotal +=
+					responseOrderDecision.dropsIncrement;
+				directResponseOutOfOrderDropsWindow +=
+					responseOrderDecision.dropsIncrement;
+				return;
+			}
+			lastDirectRenderedFrameNumber =
+				responseOrderDecision.nextLatestFrameNumber;
 
 			if (directCanvas.width !== width || directCanvas.height !== height) {
 				directCanvas.width = width;
 				directCanvas.height = height;
 			}
 
-			const rgba = convertNv12ToRgbaMainThread(
-				frameData,
-				width,
-				height,
-				yStride,
-			);
-			const imageData = new ImageData(
-				new Uint8ClampedArray(rgba),
-				width,
-				height,
-			);
-			directCtx.putImageData(imageData, 0, 0);
+			const frameData = new Uint8ClampedArray(buffer);
+			if (
+				!cachedStrideImageData ||
+				cachedStrideWidth !== width ||
+				cachedStrideHeight !== height
+			) {
+				cachedStrideImageData = new ImageData(width, height);
+				cachedStrideWidth = width;
+				cachedStrideHeight = height;
+			}
+			cachedStrideImageData.data.set(frameData);
+			directCtx.putImageData(cachedStrideImageData, 0, 0);
 
-			storeRenderedFrame(frameData, width, height, yStride, true);
+			actualRendersCount++;
+			storeRenderedFrame(cachedStrideImageData.data, width, height, width * 4);
+			flushPending();
 			onmessage({ width, height });
-		}
+		};
+		strideWorker = createdWorker;
 	}
 
 	const canvasControls: CanvasControls = {
@@ -395,8 +483,12 @@ export function createImageDataWS(
 					disposeWebGPU(mainThreadWebGPU);
 					mainThreadWebGPU = null;
 				}
+				teardownStrideWorker();
 				directCtx = null;
 				mainThreadWebGPUInitializing = false;
+				latestQueuedFrameNumber = null;
+				latestDirectAcceptedFrameNumber = null;
+				lastDirectRenderedFrameNumber = null;
 			}
 
 			directCanvas = canvas;
@@ -409,9 +501,7 @@ export function createImageDataWS(
 							.then((renderer) => {
 								mainThreadWebGPU = renderer;
 								mainThreadWebGPUInitializing = false;
-								if (pendingNv12Frame && directCanvas) {
-									renderPendingNv12Frame();
-								}
+								teardownStrideWorker();
 								onRequestFrame?.();
 							})
 							.catch((e) => {
@@ -419,8 +509,8 @@ export function createImageDataWS(
 								console.error("[Socket] Main thread WebGPU init failed:", e);
 								directCtx =
 									directCanvas?.getContext("2d", { alpha: false }) ?? null;
-								if (pendingNv12Frame && directCanvas && directCtx) {
-									renderPendingFrameCanvas2D();
+								if (directCtx) {
+									setupStrideWorker();
 								}
 								onRequestFrame?.();
 							});
@@ -428,62 +518,30 @@ export function createImageDataWS(
 						mainThreadWebGPUInitializing = false;
 						directCtx =
 							directCanvas?.getContext("2d", { alpha: false }) ?? null;
-						if (pendingNv12Frame && directCanvas && directCtx) {
-							renderPendingFrameCanvas2D();
+						if (directCtx) {
+							setupStrideWorker();
 						}
 						onRequestFrame?.();
 					}
 				});
 			}
-
-			strideWorker = new StrideCorrectionWorker();
-			strideWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
-				if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
-
-				const { buffer, width, height } = e.data;
-				if (directCanvas.width !== width || directCanvas.height !== height) {
-					directCanvas.width = width;
-					directCanvas.height = height;
-				}
-
-				const frameData = new Uint8ClampedArray(buffer);
-				if (
-					!cachedStrideImageData ||
-					cachedStrideWidth !== width ||
-					cachedStrideHeight !== height
-				) {
-					cachedStrideImageData = new ImageData(width, height);
-					cachedStrideWidth = width;
-					cachedStrideHeight = height;
-				}
-				cachedStrideImageData.data.set(frameData);
-				directCtx.putImageData(cachedStrideImageData, 0, 0);
-
-				storeRenderedFrame(
-					cachedStrideImageData.data,
-					width,
-					height,
-					width * 4,
-					false,
-				);
-				onmessage({ width, height });
-			};
 		},
 		resetFrameState: () => {
+			latestQueuedFrameNumber = null;
+			latestDirectAcceptedFrameNumber = null;
+			lastDirectRenderedFrameNumber = null;
 			worker.postMessage({ type: "reset-frame-state" });
 		},
 		captureFrame: async () => {
 			if (!lastRenderedFrameData) {
 				return null;
 			}
-			const { data, width, height, yStride, isNv12 } = lastRenderedFrameData;
-			let imageData: ImageData;
-			if (isNv12) {
-				const rgba = convertNv12ToRgbaMainThread(data, width, height, yStride);
-				imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
-			} else {
-				imageData = new ImageData(new Uint8ClampedArray(data), width, height);
-			}
+			const { data, width, height } = lastRenderedFrameData;
+			const imageData = new ImageData(
+				new Uint8ClampedArray(data),
+				width,
+				height,
+			);
 			const canvas = document.createElement("canvas");
 			canvas.width = width;
 			canvas.height = height;
@@ -506,25 +564,33 @@ export function createImageDataWS(
 
 		if (e.data.type === "error") {
 			console.error("[FrameWorker]", e.data.message);
+			if (workerFramesInFlight > 0) {
+				workerFramesInFlight--;
+			}
 			isProcessing = false;
-			processNextFrame();
-			return;
-		}
-
-		if (e.data.type === "frame-queued") {
-			const { width, height } = e.data;
-			onmessage({ width, height });
-			isProcessing = false;
-			processNextFrame();
+			scheduleProcessNextFrame();
 			return;
 		}
 
 		if (e.data.type === "frame-rendered") {
-			const { width, height } = e.data;
+			const { width, height, source } = e.data;
 			onmessage({ width, height });
+			if (source === "worker" && workerFramesInFlight > 0) {
+				workerFramesInFlight--;
+			}
+			if (source === "worker") {
+				renderedFromWorkerTotal++;
+				renderedFromWorkerWindow++;
+			} else {
+				renderedFromSharedTotal++;
+				renderedFromSharedWindow++;
+			}
 			actualRendersCount++;
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
+			}
+			if (nextFrame || pendingFrame) {
+				scheduleProcessNextFrame();
 			}
 			return;
 		}
@@ -533,14 +599,90 @@ export function createImageDataWS(
 			onRequestFrame?.();
 			return;
 		}
-
-		if (e.data.type === "decoded") {
-			const { bitmap, width, height } = e.data;
-			onmessage({ width, height, bitmap });
-			isProcessing = false;
-			processNextFrame();
-		}
 	};
+
+	function readFrameNumber(buffer: ArrayBuffer): number | null {
+		if (buffer.byteLength < 24) return null;
+		const metadataOffset = buffer.byteLength - 24;
+		const meta = new DataView(buffer, metadataOffset, 24);
+		return meta.getUint32(12, true);
+	}
+
+	function scheduleProcessNextFrame() {
+		if (processNextScheduled) return;
+		processNextScheduled = true;
+		queueMicrotask(() => {
+			processNextScheduled = false;
+			processNextFrame();
+		});
+	}
+
+	function enqueueFrameBuffer(buffer: ArrayBuffer) {
+		const frameNumber = readFrameNumber(buffer);
+		const orderDecision = decideFrameOrder(
+			frameNumber,
+			latestQueuedFrameNumber,
+			FRAME_ORDER_STALE_WINDOW,
+		);
+		latestQueuedFrameNumber = orderDecision.nextLatestFrameNumber;
+		if (orderDecision.action === "drop") {
+			framesDropped += orderDecision.dropsIncrement;
+			totalSupersededDrops += orderDecision.dropsIncrement;
+			queuedOutOfOrderDropsTotal += orderDecision.dropsIncrement;
+			queuedOutOfOrderDropsWindow += orderDecision.dropsIncrement;
+			return;
+		}
+
+		if (isProcessing) {
+			if (nextFrame) {
+				framesDropped++;
+				totalSupersededDrops++;
+			}
+			nextFrame = buffer;
+		} else {
+			pendingFrame = buffer;
+			scheduleProcessNextFrame();
+		}
+	}
+
+	function dispatchToWorker(buffer: ArrayBuffer): boolean {
+		const decision = decideWorkerInflightDispatch(
+			workerFramesInFlight,
+			WORKER_IN_FLIGHT_LIMIT,
+			nextFrame !== null,
+		);
+
+		totalWorkerInFlightBackpressureHits += decision.backpressureHitsIncrement;
+		workerInFlightBackpressureWindowHits += decision.backpressureHitsIncrement;
+
+		if (decision.supersededDropsIncrement > 0) {
+			framesDropped += decision.supersededDropsIncrement;
+			totalSupersededDrops += decision.supersededDropsIncrement;
+			totalWorkerInFlightSupersededDrops += decision.supersededDropsIncrement;
+			workerInFlightSupersededDropsWindow += decision.supersededDropsIncrement;
+		}
+
+		if (decision.action === "backpressure") {
+			nextFrame = buffer;
+			return false;
+		}
+
+		framesSentToWorker++;
+		totalFramesSentToWorker++;
+		totalWorkerFallbackBytes += buffer.byteLength;
+		workerFramesInFlight = decision.nextWorkerFramesInFlight;
+
+		const peaks = updateWorkerInflightPeaks(
+			workerFramesInFlight,
+			workerFramesInFlightPeakWindow,
+			workerFramesInFlightPeakTotal,
+		);
+		workerFramesInFlightPeakWindow = peaks.peakWindow;
+		workerFramesInFlightPeakTotal = peaks.peakTotal;
+
+		worker.postMessage({ type: "frame", buffer }, [buffer]);
+		return true;
+	}
 
 	function processNextFrame() {
 		if (isProcessing) return;
@@ -557,12 +699,67 @@ export function createImageDataWS(
 		isProcessing = true;
 
 		if (producer) {
+			ensureSharedBufferCapacity(buffer.byteLength);
+			const slotSize = sharedBufferConfig?.slotSize ?? 0;
+			const isOversized = slotSize > 0 && buffer.byteLength > slotSize;
 			const written = producer.write(buffer);
 			if (!written) {
-				worker.postMessage({ type: "frame", buffer }, [buffer]);
+				sabFallbackCount += 1;
+				sabFallbackWindowCount += 1;
+				const decision = decideSabWriteFailure(
+					isOversized,
+					sabWriteRetryCount,
+					SAB_WRITE_RETRY_LIMIT,
+				);
+				sabWriteRetryCount = decision.nextRetryCount;
+
+				if (decision.action === "retry") {
+					isProcessing = false;
+					totalSabRetryAttempts++;
+					if (nextFrame) {
+						framesDropped++;
+						totalSupersededDrops++;
+					}
+					nextFrame = buffer;
+					if (!sabRetryScheduled) {
+						sabRetryScheduled = true;
+						requestAnimationFrame(() => {
+							sabRetryScheduled = false;
+							processNextFrame();
+						});
+					}
+					return;
+				}
+				if (decision.action === "fallback_oversize") {
+					sabOversizeFallbackCount += 1;
+					sabOversizeFallbackWindowCount += 1;
+				} else {
+					sabRetryLimitFallbackCount += 1;
+					sabRetryLimitFallbackWindowCount += 1;
+				}
+				const dispatched = dispatchToWorker(buffer);
+				isProcessing = false;
+				if (dispatched && (nextFrame || pendingFrame)) {
+					scheduleProcessNextFrame();
+				}
+				return;
+			} else {
+				sabWriteRetryCount = 0;
+				totalFramesWrittenToSharedBuffer++;
+				isProcessing = false;
+				if (nextFrame || pendingFrame) {
+					scheduleProcessNextFrame();
+				}
+				return;
 			}
 		} else {
-			worker.postMessage({ type: "frame", buffer }, [buffer]);
+			sabWriteRetryCount = 0;
+			const dispatched = dispatchToWorker(buffer);
+			isProcessing = false;
+			if (dispatched && (nextFrame || pendingFrame)) {
+				scheduleProcessNextFrame();
+			}
+			return;
 		}
 	}
 
@@ -582,12 +779,41 @@ export function createImageDataWS(
 	let frameCount = 0;
 	let frameTimeSum = 0;
 	let totalBytesReceived = 0;
+	let totalSabRetryAttempts = 0;
+	let totalFramesReceived = 0;
+	let totalFramesWrittenToSharedBuffer = 0;
+	let totalFramesSentToWorker = 0;
+	let totalWorkerFallbackBytes = 0;
+	let totalWorkerInFlightBackpressureHits = 0;
+	let workerInFlightBackpressureWindowHits = 0;
+	let workerFramesInFlightPeakWindow = 0;
+	let workerFramesInFlightPeakTotal = 0;
+	let totalWorkerInFlightSupersededDrops = 0;
+	let workerInFlightSupersededDropsWindow = 0;
+	let renderedFromSharedTotal = 0;
+	let renderedFromSharedWindow = 0;
+	let renderedFromWorkerTotal = 0;
+	let renderedFromWorkerWindow = 0;
+	let queuedOutOfOrderDropsTotal = 0;
+	let queuedOutOfOrderDropsWindow = 0;
+	let directOutOfOrderDropsTotal = 0;
+	let directOutOfOrderDropsWindow = 0;
+	let directIngressOutOfOrderDropsTotal = 0;
+	let directIngressOutOfOrderDropsWindow = 0;
+	let directResponseOutOfOrderDropsTotal = 0;
+	let directResponseOutOfOrderDropsWindow = 0;
+	let strideCorrectionDispatchesTotal = 0;
+	let strideCorrectionDispatchesWindow = 0;
+	let strideCorrectionSupersededDropsTotal = 0;
+	let strideCorrectionSupersededDropsWindow = 0;
+	let strideCorrectionErrorsTotal = 0;
+	let strideCorrectionErrorsWindow = 0;
+	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
 	let framesReceived = 0;
 	let framesDropped = 0;
 	let framesSentToWorker = 0;
 	let actualRendersCount = 0;
-	let renderFrameCount = 0;
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
 
@@ -601,12 +827,53 @@ export function createImageDataWS(
 		minFrameMs: minFrameTime === Number.MAX_VALUE ? 0 : minFrameTime,
 		maxFrameMs: maxFrameTime,
 		mbPerSec: totalBytesReceived / 1_000_000,
+		sabResizes: sharedBufferResizeCount,
+		sabFallbacks: sabFallbackCount,
+		sabOversizeFallbacks: sabOversizeFallbackCount,
+		sabRetryLimitFallbacks: sabRetryLimitFallbackCount,
+		sabRetriesInFlight: sabWriteRetryCount,
+		sabSlotSizeBytes: sharedBufferConfig?.slotSize ?? 0,
+		sabSlotCount: sharedBufferConfig?.slotCount ?? 0,
+		sabTotalBytes:
+			(sharedBufferConfig?.slotSize ?? 0) *
+			(sharedBufferConfig?.slotCount ?? 0),
+		workerFramesInFlight,
+		workerInFlightBackpressureHits: totalWorkerInFlightBackpressureHits,
+		workerInFlightBackpressureWindowHits,
+		workerFramesInFlightPeakWindow,
+		workerFramesInFlightPeakTotal,
+		workerInFlightSupersededDrops: totalWorkerInFlightSupersededDrops,
+		workerInFlightSupersededDropsWindow: workerInFlightSupersededDropsWindow,
+		renderedFromSharedTotal,
+		renderedFromSharedWindow,
+		renderedFromWorkerTotal,
+		renderedFromWorkerWindow,
+		queuedOutOfOrderDropsTotal,
+		queuedOutOfOrderDropsWindow,
+		directOutOfOrderDropsTotal,
+		directOutOfOrderDropsWindow,
+		directIngressOutOfOrderDropsTotal,
+		directIngressOutOfOrderDropsWindow,
+		directResponseOutOfOrderDropsTotal,
+		directResponseOutOfOrderDropsWindow,
+		strideCorrectionInFlight: strideWorkerInFlight ? 1 : 0,
+		strideCorrectionPending: pendingStrideCorrection ? 1 : 0,
+		strideCorrectionDispatchesTotal,
+		strideCorrectionDispatchesWindow,
+		strideCorrectionSupersededDropsTotal,
+		strideCorrectionSupersededDropsWindow,
+		strideCorrectionErrorsTotal,
+		strideCorrectionErrorsWindow,
+		sabTotalRetryAttempts: totalSabRetryAttempts,
+		sabTotalFramesReceived: totalFramesReceived,
+		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
+		sabTotalFramesSentToWorker: totalFramesSentToWorker,
+		sabTotalWorkerFallbackBytes: totalWorkerFallbackBytes,
+		sabTotalSupersededDrops: totalSupersededDrops,
 	});
 
 	globalFpsStatsGetter = getLocalFpsStats;
 	(globalThis as Record<string, unknown>).__capFpsStats = getLocalFpsStats;
-
-	const NV12_MAGIC = 0x4e563132;
 
 	ws.binaryType = "arraybuffer";
 	ws.onmessage = (event) => {
@@ -614,12 +881,7 @@ export function createImageDataWS(
 		const now = performance.now();
 		totalBytesReceived += buffer.byteLength;
 		framesReceived++;
-
-		let isNv12Format = false;
-		if (buffer.byteLength >= 28) {
-			const formatCheck = new DataView(buffer, buffer.byteLength - 4, 4);
-			isNv12Format = formatCheck.getUint32(0, true) === NV12_MAGIC;
-		}
+		totalFramesReceived++;
 
 		if (lastFrameTime > 0) {
 			const delta = now - lastFrameTime;
@@ -639,7 +901,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, ${isNv12Format ? "NV12" : "RGBA"}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}, worker_superseded_window: ${workerInFlightSupersededDropsWindow}, worker_superseded_total: ${totalWorkerInFlightSupersededDrops}, rendered_shared_window: ${renderedFromSharedWindow}, rendered_shared_total: ${renderedFromSharedTotal}, rendered_worker_window: ${renderedFromWorkerWindow}, rendered_worker_total: ${renderedFromWorkerTotal}, queued_ooo_window: ${queuedOutOfOrderDropsWindow}, queued_ooo_total: ${queuedOutOfOrderDropsTotal}, direct_ooo_window: ${directOutOfOrderDropsWindow}, direct_ooo_total: ${directOutOfOrderDropsTotal}, direct_ingress_ooo_window: ${directIngressOutOfOrderDropsWindow}, direct_ingress_ooo_total: ${directIngressOutOfOrderDropsTotal}, direct_response_ooo_window: ${directResponseOutOfOrderDropsWindow}, direct_response_ooo_total: ${directResponseOutOfOrderDropsTotal}, stride_corr_inflight: ${strideWorkerInFlight ? 1 : 0}, stride_corr_pending: ${pendingStrideCorrection ? 1 : 0}, stride_corr_dispatches_window: ${strideCorrectionDispatchesWindow}, stride_corr_dispatches_total: ${strideCorrectionDispatchesTotal}, stride_corr_superseded_window: ${strideCorrectionSupersededDropsWindow}, stride_corr_superseded_total: ${strideCorrectionSupersededDropsTotal}, stride_corr_errors_window: ${strideCorrectionErrorsWindow}, stride_corr_errors_total: ${strideCorrectionErrorsTotal}`,
 				);
 
 				frameCount = 0;
@@ -650,6 +912,22 @@ export function createImageDataWS(
 				framesDropped = 0;
 				framesSentToWorker = 0;
 				actualRendersCount = 0;
+				sabFallbackWindowCount = 0;
+				sabOversizeFallbackWindowCount = 0;
+				sabRetryLimitFallbackWindowCount = 0;
+				workerInFlightBackpressureWindowHits = 0;
+				workerFramesInFlightPeakWindow = workerFramesInFlight;
+				workerInFlightSupersededDropsWindow = 0;
+				renderedFromSharedWindow = 0;
+				renderedFromWorkerWindow = 0;
+				queuedOutOfOrderDropsWindow = 0;
+				directOutOfOrderDropsWindow = 0;
+				directIngressOutOfOrderDropsWindow = 0;
+				directResponseOutOfOrderDropsWindow = 0;
+				strideCorrectionDispatchesWindow = 0;
+				strideCorrectionSupersededDropsWindow = 0;
+				strideCorrectionErrorsWindow = 0;
+				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;
 			}
@@ -658,261 +936,126 @@ export function createImageDataWS(
 		}
 		lastFrameTime = now;
 
-		if (isNv12Format) {
-			if (mainThreadWebGPU && directCanvas) {
-				const metadataOffset = buffer.byteLength - 28;
-				const meta = new DataView(buffer, metadataOffset, 28);
-				const yStride = meta.getUint32(0, true);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
-				const frameNumber = meta.getUint32(12, true);
+		const shouldRenderDirect = Boolean(
+			directCanvas && (mainThreadWebGPU || (directCtx && strideWorker)),
+		);
+		if (!shouldRenderDirect) {
+			latestDirectAcceptedFrameNumber = null;
+			lastDirectRenderedFrameNumber = null;
+			enqueueFrameBuffer(buffer);
+			return;
+		}
+		latestQueuedFrameNumber = null;
 
-				if (width > 0 && height > 0) {
-					const ySize = yStride * height;
-					const uvSize = width * (height / 2);
-					const totalSize = ySize + uvSize;
-
-					const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
-
-					if (directCanvas.width !== width || directCanvas.height !== height) {
-						directCanvas.width = width;
-						directCanvas.height = height;
-					}
-
-					renderNv12FrameWebGPU(
-						mainThreadWebGPU,
-						frameData,
-						width,
-						height,
-						yStride,
-					);
-					actualRendersCount++;
-					renderFrameCount++;
-
-					storeRenderedFrame(frameData, width, height, yStride, true);
-					onmessage({ width, height });
-				}
-				return;
-			}
-
-			if (mainThreadWebGPUInitializing || !directCanvas) {
-				pendingNv12Frame = buffer;
-				const metadataOffset = buffer.byteLength - 28;
-				const meta = new DataView(buffer, metadataOffset, 28);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
-				if (width > 0 && height > 0) {
-					onmessage({ width, height });
-				}
-				return;
-			}
-
-			if (directCanvas && directCtx) {
-				if (!directCanvas.isConnected) {
-					const domCanvas = document.getElementById(
-						"canvas",
-					) as HTMLCanvasElement | null;
-					if (domCanvas && domCanvas !== directCanvas) {
-						directCanvas = domCanvas;
-						directCtx = domCanvas.getContext("2d", { alpha: false });
-						if (!directCtx) {
-							console.error(
-								"[Socket] Failed to get 2D context from DOM canvas",
-							);
-							return;
-						}
-					} else {
-						return;
-					}
-				}
-
-				const metadataOffset = buffer.byteLength - 28;
-				const meta = new DataView(buffer, metadataOffset, 28);
-				const yStride = meta.getUint32(0, true);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
-				const frameNumber = meta.getUint32(12, true);
-
-				if (width > 0 && height > 0) {
-					const ySize = yStride * height;
-					const uvSize = width * (height / 2);
-					const totalSize = ySize + uvSize;
-
-					const nv12Data = new Uint8ClampedArray(buffer, 0, totalSize);
-					const rgbaData = convertNv12ToRgbaMainThread(
-						nv12Data,
-						width,
-						height,
-						yStride,
-					);
-
-					if (directCanvas.width !== width || directCanvas.height !== height) {
-						directCanvas.width = width;
-						directCanvas.height = height;
-					}
-
-					if (
-						!cachedDirectImageData ||
-						cachedDirectWidth !== width ||
-						cachedDirectHeight !== height
-					) {
-						cachedDirectImageData = new ImageData(width, height);
-						cachedDirectWidth = width;
-						cachedDirectHeight = height;
-					}
-					cachedDirectImageData.data.set(rgbaData);
-					directCtx.putImageData(cachedDirectImageData, 0, 0);
-
-					storeRenderedFrame(nv12Data, width, height, yStride, true);
-					actualRendersCount++;
-					renderFrameCount++;
-
-					onmessage({ width, height });
-				}
-				return;
-			}
-
-			if (isProcessing) {
-				framesDropped++;
-				nextFrame = buffer;
-			} else {
-				framesSentToWorker++;
-				pendingFrame = buffer;
-				processNextFrame();
-			}
+		if (buffer.byteLength < 24) {
 			return;
 		}
 
-		if (mainThreadWebGPU && directCanvas && buffer.byteLength >= 24) {
-			const metadataOffset = buffer.byteLength - 24;
-			const meta = new DataView(buffer, metadataOffset, 24);
-			const strideBytes = meta.getUint32(0, true);
-			const height = meta.getUint32(4, true);
-			const width = meta.getUint32(8, true);
+		const metadataOffset = buffer.byteLength - 24;
+		const meta = new DataView(buffer, metadataOffset, 24);
+		const strideBytes = meta.getUint32(0, true);
+		const height = meta.getUint32(4, true);
+		const width = meta.getUint32(8, true);
+		const frameNumber = meta.getUint32(12, true);
+		const expectedRowBytes = width * 4;
+		const frameDataSize = strideBytes * height;
 
-			if (width > 0 && height > 0) {
-				const frameDataSize = strideBytes * height;
-				const frameData = new Uint8ClampedArray(buffer, 0, frameDataSize);
+		if (
+			width === 0 ||
+			height === 0 ||
+			strideBytes === 0 ||
+			strideBytes < expectedRowBytes ||
+			buffer.byteLength - 24 < frameDataSize
+		) {
+			return;
+		}
+
+		const directOrderDecision = decideFrameOrder(
+			frameNumber,
+			latestDirectAcceptedFrameNumber,
+			FRAME_ORDER_STALE_WINDOW,
+		);
+		if (directOrderDecision.action === "drop") {
+			framesDropped += directOrderDecision.dropsIncrement;
+			directOutOfOrderDropsTotal += directOrderDecision.dropsIncrement;
+			directOutOfOrderDropsWindow += directOrderDecision.dropsIncrement;
+			directIngressOutOfOrderDropsTotal += directOrderDecision.dropsIncrement;
+			directIngressOutOfOrderDropsWindow += directOrderDecision.dropsIncrement;
+			return;
+		}
+		latestDirectAcceptedFrameNumber = directOrderDecision.nextLatestFrameNumber;
+
+		if (mainThreadWebGPU && directCanvas) {
+			const frameData = new Uint8ClampedArray(buffer, 0, frameDataSize);
+
+			if (directCanvas.width !== width || directCanvas.height !== height) {
+				directCanvas.width = width;
+				directCanvas.height = height;
+			}
+
+			renderFrameWebGPU(
+				mainThreadWebGPU,
+				frameData,
+				width,
+				height,
+				strideBytes,
+			);
+			actualRendersCount++;
+			storeRenderedFrame(frameData, width, height, strideBytes);
+			lastDirectRenderedFrameNumber = frameNumber;
+			onmessage({ width, height });
+			return;
+		}
+
+		if (directCanvas && directCtx && strideWorker) {
+			const needsStrideCorrection = strideBytes !== expectedRowBytes;
+
+			if (!needsStrideCorrection) {
+				const frameData = new Uint8ClampedArray(
+					buffer,
+					0,
+					expectedRowBytes * height,
+				);
 
 				if (directCanvas.width !== width || directCanvas.height !== height) {
 					directCanvas.width = width;
 					directCanvas.height = height;
 				}
 
-				renderFrameWebGPU(
-					mainThreadWebGPU,
-					frameData,
+				if (
+					!cachedDirectImageData ||
+					cachedDirectWidth !== width ||
+					cachedDirectHeight !== height
+				) {
+					cachedDirectImageData = new ImageData(width, height);
+					cachedDirectWidth = width;
+					cachedDirectHeight = height;
+				}
+				cachedDirectImageData.data.set(frameData);
+				directCtx.putImageData(cachedDirectImageData, 0, 0);
+
+				storeRenderedFrame(
+					cachedDirectImageData.data,
 					width,
 					height,
-					strideBytes,
+					width * 4,
 				);
 				actualRendersCount++;
-				renderFrameCount++;
-
-				storeRenderedFrame(frameData, width, height, strideBytes, false);
+				lastDirectRenderedFrameNumber = frameNumber;
 				onmessage({ width, height });
+			} else {
+				queueStrideCorrection({
+					buffer,
+					strideBytes,
+					width,
+					height,
+					frameNumber,
+				});
 			}
 			return;
 		}
 
-		if (directCanvas && directCtx && strideWorker) {
-			if (buffer.byteLength >= 24) {
-				const metadataOffset = buffer.byteLength - 24;
-				const meta = new DataView(buffer, metadataOffset, 24);
-				const strideBytes = meta.getUint32(0, true);
-				const height = meta.getUint32(4, true);
-				const width = meta.getUint32(8, true);
-
-				if (width > 0 && height > 0) {
-					const expectedRowBytes = width * 4;
-					const needsStrideCorrection = strideBytes !== expectedRowBytes;
-
-					if (lastFrameTime > 0) {
-						const delta = now - lastFrameTime;
-						frameCount++;
-						frameTimeSum += delta;
-						minFrameTime = Math.min(minFrameTime, delta);
-						maxFrameTime = Math.max(maxFrameTime, delta);
-						if (frameCount % 60 === 0) {
-							const avgDelta = frameTimeSum / 60;
-							const elapsedSec = (now - lastLogTime) / 1000;
-							const mbPerSec = totalBytesReceived / 1_000_000 / elapsedSec;
-							const actualRenderFps = renderFrameCount / elapsedSec;
-							console.log(
-								`[Frame] recv_fps: ${(1000 / avgDelta).toFixed(1)}, render_fps: ${actualRenderFps.toFixed(1)}, mb/s: ${mbPerSec.toFixed(1)}, frame_ms: ${avgDelta.toFixed(1)} (min: ${minFrameTime.toFixed(1)}, max: ${maxFrameTime.toFixed(1)}), size: ${(buffer.byteLength / 1024).toFixed(0)}KB, format: ${isNv12Format ? "NV12" : "RGBA"}`,
-							);
-							frameTimeSum = 0;
-							totalBytesReceived = 0;
-							lastLogTime = now;
-							renderFrameCount = 0;
-							minFrameTime = Number.MAX_VALUE;
-							maxFrameTime = 0;
-						}
-					} else {
-						lastLogTime = now;
-					}
-					lastFrameTime = now;
-
-					if (!needsStrideCorrection) {
-						const frameData = new Uint8ClampedArray(
-							buffer,
-							0,
-							expectedRowBytes * height,
-						);
-
-						if (
-							directCanvas.width !== width ||
-							directCanvas.height !== height
-						) {
-							directCanvas.width = width;
-							directCanvas.height = height;
-						}
-
-						if (
-							!cachedDirectImageData ||
-							cachedDirectWidth !== width ||
-							cachedDirectHeight !== height
-						) {
-							cachedDirectImageData = new ImageData(width, height);
-							cachedDirectWidth = width;
-							cachedDirectHeight = height;
-						}
-						cachedDirectImageData.data.set(frameData);
-						directCtx.putImageData(cachedDirectImageData, 0, 0);
-
-						storeRenderedFrame(
-							cachedDirectImageData.data,
-							width,
-							height,
-							width * 4,
-							false,
-						);
-						renderFrameCount++;
-
-						onmessage({ width, height });
-					} else {
-						strideWorker.postMessage(
-							{
-								type: "correct-stride",
-								buffer,
-								strideBytes,
-								width,
-								height,
-							},
-							[buffer],
-						);
-					}
-				}
-			}
-			return;
-		}
-
-		if (isProcessing) {
-			nextFrame = buffer;
-		} else {
-			pendingFrame = buffer;
-			processNextFrame();
-		}
+		enqueueFrameBuffer(buffer);
 	};
 
 	return [ws, isConnected, isWorkerReady, canvasControls];
