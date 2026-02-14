@@ -3602,6 +3602,47 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (stride worker error handling + telemetry)
+
+**Goal**: Improve robustness and observability for stride-correction failures and worker error scenarios
+
+**What was done**:
+1. Added explicit validation/error responses in stride-correction worker.
+2. Added stride worker error counters (window + total) in socket stats.
+3. Extended frame logs/overlay/clipboard with stride error counters.
+4. Updated stride row visibility to include error-driven display condition.
+5. Re-ran desktop typecheck and utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/stride-correction-worker.ts`
+  - validates dimensions/stride and source buffer length
+  - emits typed `error` responses for invalid input or exceptions
+- `apps/desktop/src/utils/socket.ts`
+  - handles stride worker `error` responses and increments:
+    - `strideCorrectionErrorsTotal`
+    - `strideCorrectionErrorsWindow`
+  - `FpsStats` extended with stride error counters
+  - periodic frame log now includes stride error counters
+  - window error counter resets each frame-log window
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling includes stride error counters
+  - clipboard export includes stride error counters
+  - stride overlay row now shows errors (window/total)
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx src/utils/stride-correction-worker.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-stride.test.ts src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Stride correction path now surfaces invalid-input/exception failures explicitly.
+- ✅ Transport diagnostics now include stride error counters for field debugging.
+- ✅ Desktop typecheck and utility suite pass (33/33).
+
+**Stopping point**: Ready for direct-path stress runs where stride error counters can confirm transport stability under malformed or extreme stride inputs.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

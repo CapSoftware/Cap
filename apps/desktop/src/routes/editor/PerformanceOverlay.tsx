@@ -61,6 +61,8 @@ type TransportStats = {
 	strideCorrectionDispatchesWindow: number;
 	strideCorrectionSupersededDropsTotal: number;
 	strideCorrectionSupersededDropsWindow: number;
+	strideCorrectionErrorsTotal: number;
+	strideCorrectionErrorsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -126,6 +128,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		strideCorrectionDispatchesWindow: 0,
 		strideCorrectionSupersededDropsTotal: 0,
 		strideCorrectionSupersededDropsWindow: 0,
+		strideCorrectionErrorsTotal: 0,
+		strideCorrectionErrorsWindow: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -281,6 +285,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			strideCorrectionDispatchesWindow: 0,
 			strideCorrectionSupersededDropsTotal: 0,
 			strideCorrectionSupersededDropsWindow: 0,
+			strideCorrectionErrorsTotal: 0,
+			strideCorrectionErrorsWindow: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -356,6 +362,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 					socketStats.strideCorrectionSupersededDropsTotal,
 				strideCorrectionSupersededDropsWindow:
 					socketStats.strideCorrectionSupersededDropsWindow,
+				strideCorrectionErrorsTotal: socketStats.strideCorrectionErrorsTotal,
+				strideCorrectionErrorsWindow: socketStats.strideCorrectionErrorsWindow,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -454,6 +462,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Stride Correction Dispatches (Window): ${t.strideCorrectionDispatchesWindow}`,
 			`Stride Correction Superseded Drops (Total): ${t.strideCorrectionSupersededDropsTotal}`,
 			`Stride Correction Superseded Drops (Window): ${t.strideCorrectionSupersededDropsWindow}`,
+			`Stride Correction Errors (Total): ${t.strideCorrectionErrorsTotal}`,
+			`Stride Correction Errors (Window): ${t.strideCorrectionErrorsWindow}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -687,7 +697,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							when={
 								transportStats().strideCorrectionInFlight > 0 ||
 								transportStats().strideCorrectionPending > 0 ||
-								transportStats().strideCorrectionDispatchesTotal > 0
+								transportStats().strideCorrectionDispatchesTotal > 0 ||
+								transportStats().strideCorrectionErrorsTotal > 0
 							}
 						>
 							<div style={{ color: "#f59e0b" }}>
@@ -702,7 +713,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 									superseded{" "}
 									{transportStats().strideCorrectionSupersededDropsWindow}{" "}
 									window /{" "}
-									{transportStats().strideCorrectionSupersededDropsTotal} total)
+									{transportStats().strideCorrectionSupersededDropsTotal} total,
+									errors {transportStats().strideCorrectionErrorsWindow} window
+									/ {transportStats().strideCorrectionErrorsTotal} total)
 								</span>
 							</div>
 						</Show>
