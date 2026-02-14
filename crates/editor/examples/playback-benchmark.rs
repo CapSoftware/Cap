@@ -11,6 +11,14 @@ struct Config {
     audio_path: Option<PathBuf>,
     fps: u32,
     max_frames: usize,
+    seek_iterations: usize,
+}
+
+#[derive(Debug, Default)]
+struct SeekDistanceStats {
+    distance_secs: f32,
+    samples_ms: Vec<f64>,
+    failures: usize,
 }
 
 #[derive(Debug, Default)]
@@ -21,7 +29,7 @@ struct PlaybackStats {
     decode_times_ms: Vec<f64>,
     sequential_elapsed_secs: f64,
     effective_fps: f64,
-    seek_samples_ms: Vec<(f32, f64)>,
+    seek_stats: Vec<SeekDistanceStats>,
 }
 
 fn get_video_duration(path: &Path) -> f32 {
@@ -109,10 +117,33 @@ async fn run_playback_benchmark(config: &Config) -> Result<PlaybackStats, String
         if point >= duration_secs {
             continue;
         }
-        let seek_start = Instant::now();
-        let _ = decoder.get_frame(point).await;
-        let seek_ms = seek_start.elapsed().as_secs_f64() * 1000.0;
-        stats.seek_samples_ms.push((point, seek_ms));
+        let mut seek_stats = SeekDistanceStats {
+            distance_secs: point,
+            ..Default::default()
+        };
+        let seek_target_ceiling = (duration_secs - 0.01).max(0.0);
+        let start_ceiling = (duration_secs - point - 0.01).max(0.0);
+        for _ in 0..config.seek_iterations {
+            let iteration = (seek_stats.samples_ms.len() + seek_stats.failures) as f32;
+            let from_time = if start_ceiling > 0.0 {
+                (iteration * 0.618_034 * start_ceiling) % start_ceiling
+            } else {
+                0.0
+            };
+            let to_time = (from_time + point).min(seek_target_ceiling);
+            if decoder.get_frame(from_time).await.is_none() {
+                seek_stats.failures += 1;
+                continue;
+            }
+            let seek_start = Instant::now();
+            if decoder.get_frame(to_time).await.is_some() {
+                let seek_ms = seek_start.elapsed().as_secs_f64() * 1000.0;
+                seek_stats.samples_ms.push(seek_ms);
+            } else {
+                seek_stats.failures += 1;
+            }
+        }
+        stats.seek_stats.push(seek_stats);
     }
 
     Ok(stats)
@@ -125,6 +156,7 @@ fn print_report(config: &Config, stats: &PlaybackStats) {
     println!("Video: {}", config.video_path.display());
     println!("Target FPS: {}", config.fps);
     println!("Frame Budget: {:.2}ms", 1000.0 / config.fps as f64);
+    println!("Seek Iterations: {}", config.seek_iterations);
 
     println!("\nSequential Playback Simulation");
     println!("Decoded Frames: {}", stats.decoded_frames);
@@ -158,10 +190,43 @@ fn print_report(config: &Config, stats: &PlaybackStats) {
         println!("Decode max: {:.2}ms", max);
     }
 
-    if !stats.seek_samples_ms.is_empty() {
+    if !stats.seek_stats.is_empty() {
         println!("\nSeek Samples");
-        for (secs, ms) in &stats.seek_samples_ms {
-            println!("{:>5.1}s -> {:>8.2}ms", secs, ms);
+        println!(
+            "{:>5} | {:>8} | {:>8} | {:>8} | {:>7} | {:>8}",
+            "Secs", "Avg(ms)", "P95(ms)", "Max(ms)", "Samples", "Failures"
+        );
+        println!(
+            "{}-+-{}-+-{}-+-{}-+-{}-+-{}",
+            "-".repeat(5),
+            "-".repeat(8),
+            "-".repeat(8),
+            "-".repeat(8),
+            "-".repeat(7),
+            "-".repeat(8)
+        );
+        for stats_for_distance in &stats.seek_stats {
+            let avg = if stats_for_distance.samples_ms.is_empty() {
+                0.0
+            } else {
+                stats_for_distance.samples_ms.iter().sum::<f64>()
+                    / stats_for_distance.samples_ms.len() as f64
+            };
+            let max = stats_for_distance
+                .samples_ms
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            let p95 = percentile(&stats_for_distance.samples_ms, 95.0);
+            println!(
+                "{:>5.1} | {:>8.2} | {:>8.2} | {:>8.2} | {:>7} | {:>8}",
+                stats_for_distance.distance_secs,
+                avg,
+                p95,
+                if max.is_finite() { max } else { 0.0 },
+                stats_for_distance.samples_ms.len(),
+                stats_for_distance.failures
+            );
         }
     }
 
@@ -192,6 +257,7 @@ fn parse_args() -> Result<Config, String> {
     let mut audio_path: Option<PathBuf> = None;
     let mut fps = 60_u32;
     let mut max_frames = 600_usize;
+    let mut seek_iterations = 10_usize;
 
     let mut i = 1;
     while i < args.len() {
@@ -228,9 +294,18 @@ fn parse_args() -> Result<Config, String> {
                     .parse::<usize>()
                     .map_err(|_| "Invalid --max-frames value".to_string())?;
             }
+            "--seek-iterations" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Missing value for --seek-iterations".to_string());
+                }
+                seek_iterations = args[i]
+                    .parse::<usize>()
+                    .map_err(|_| "Invalid --seek-iterations value".to_string())?;
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: playback-benchmark --video <path> [--audio <path>] [--fps <n>] [--max-frames <n>]"
+                    "Usage: playback-benchmark --video <path> [--audio <path>] [--fps <n>] [--max-frames <n>] [--seek-iterations <n>]"
                 );
                 std::process::exit(0);
             }
@@ -254,6 +329,7 @@ fn parse_args() -> Result<Config, String> {
         audio_path,
         fps,
         max_frames,
+        seek_iterations,
     })
 }
 

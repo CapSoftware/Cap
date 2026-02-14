@@ -62,6 +62,9 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 
 # With custom FPS and iterations
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --iterations 50
+
+# Increase seek sampling per distance for more stable tails
+cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --seek-iterations 20
 ```
 
 #### Playback Throughput Benchmark (Linux-compatible)
@@ -72,6 +75,9 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 
 # Optional audio duration comparison
 cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --audio /path/to/audio.ogg --fps 60
+
+# Increase seek sample count for stable p95/max seek stats
+cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600 --seek-iterations 20
 ```
 
 #### Playback Startup Latency Report (log analysis)
@@ -259,6 +265,56 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Effective FPS: **60.11**
 - Decode: avg **5.54ms**, p95 **8.09ms**, p99 **11.25ms**, max **15.17ms**
 - Seek samples: 0.5s **41.73ms**, 1.0s **9.75ms**, 2.0s **8.98ms**, 5.0s **451.74ms**
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Seek benchmark methodology hardening)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `decode-benchmark` and `playback-benchmark` with `--seek-iterations 10`  
+**Change under test:** benchmark seek sampling now uses varied start positions per iteration and reports avg/p95/max tails
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **6.93ms**
+- Sequential decode: **393.9 fps**, avg **2.54ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **47.25 / 92.23 / 92.23ms**
+  - 1.0s: **69.24 / 144.81 / 144.81ms**
+  - 2.0s: **151.47 / 375.69 / 375.69ms**
+  - 5.0s: **237.30 / 379.66 / 379.66ms**
+- Random access: avg **115.46ms**, p95 **351.75ms**, p99 **386.64ms**
+
+#### Decode Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Decoder init: **30.88ms**
+- Sequential decode: **100.4 fps**, avg **9.96ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **195.41 / 369.35 / 369.35ms**
+  - 1.0s: **333.83 / 671.86 / 671.86ms**
+  - 2.0s: **584.19 / 1421.40 / 1421.40ms**
+  - 5.0s: **925.07 / 1474.59 / 1474.59ms**
+- Random access: avg **539.69ms**, p95 **1467.07ms**, p99 **1667.76ms**
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.24**
+- Decode: avg **1.17ms**, p95 **2.22ms**, p99 **2.61ms**, max **3.71ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **47.74 / 104.77 / 104.77ms**
+  - 1.0s: **68.99 / 142.64 / 142.64ms**
+  - 2.0s: **155.51 / 367.99 / 367.99ms**
+  - 5.0s: **231.63 / 372.21 / 372.21ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.13**
+- Decode: avg **5.13ms**, p95 **7.60ms**, p99 **11.15ms**, max **12.78ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **202.75 / 361.23 / 361.23ms**
+  - 1.0s: **320.26 / 617.03 / 617.03ms**
+  - 2.0s: **589.11 / 1424.54 / 1424.54ms**
+  - 5.0s: **926.16 / 1460.47 / 1460.47ms**
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

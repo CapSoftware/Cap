@@ -81,6 +81,7 @@
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
 - [x] **Add Linux-compatible benchmark fallback path** - Added `cap-editor` playback benchmark example and supporting linux compile fallbacks (2026-02-14)
+- [x] **Harden seek benchmark methodology** - Added repeated seek sampling with avg/p95/max and de-cached iteration strategy (2026-02-14)
 
 ---
 
@@ -528,6 +529,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md`
 
 **Stopping point**: next actionable step is running desktop playback sessions on macOS and Windows with `CAP_PLAYBACK_STARTUP_TRACE_FILE` enabled and feeding the resulting logs into `playback-startup-report`.
+
+---
+
+### Session 2026-02-14 (Seek benchmark methodology hardening)
+
+**Goal**: Improve benchmark evidence quality for seek optimizations by reducing cache-driven false positives
+
+**What was done**:
+1. Updated `decode-benchmark` to support `--seek-iterations` and report per-distance avg/p95/max.
+2. Updated seek sampling logic to vary the start position per iteration, keeping constant seek distance while avoiding repeated cache hits.
+3. Updated `playback-benchmark` with the same `--seek-iterations` support, distance-tail reporting, and varied start-point strategy.
+4. Re-ran 1080p and 4k decode/playback benchmarks with repeated seek sampling.
+
+**Changes Made**:
+- `crates/editor/examples/decode-benchmark.rs`
+  - added `--seek-iterations`
+  - added repeated seek stats tables (avg/p95/max/samples/failures)
+  - varied per-iteration seek start times to avoid de-cached artifacts
+- `crates/editor/examples/playback-benchmark.rs`
+  - added `--seek-iterations`
+  - added repeated seek stats table output
+  - varied per-iteration seek start times with from->to measurement
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - updated benchmark command docs and added methodology-hardening benchmark run data
+
+**Results**:
+- ✅ Throughput remains at ~60fps in playback benchmark:
+  - 1080p: **60.24 fps**, missed deadlines **0**
+  - 4k: **60.13 fps**, missed deadlines **0**
+- ✅ Repeated seek sampling now reveals tail behavior directly:
+  - 4k decode seeks show high p95 tails up to ~1.47s at 5s distance
+  - 1080p seeks are substantially lower but still non-trivial at medium/long jumps
+- ✅ Benchmark tooling now better discriminates real improvements vs cache effects.
+
+**Stopping point**: next optimization passes should be evaluated with `--seek-iterations` to prevent regression masking and to target 4k long-seek tail reduction.
 
 ---
 

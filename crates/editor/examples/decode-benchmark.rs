@@ -38,6 +38,14 @@ struct BenchmarkConfig {
     video_path: PathBuf,
     fps: u32,
     iterations: usize,
+    seek_iterations: usize,
+}
+
+#[derive(Debug, Default)]
+struct SeekDistanceStats {
+    distance_secs: f32,
+    samples_ms: Vec<f64>,
+    failures: usize,
 }
 
 #[derive(Debug, Default)]
@@ -46,8 +54,7 @@ struct BenchmarkResults {
     sequential_decode_times_ms: Vec<f64>,
     sequential_fps: f64,
     sequential_failures: usize,
-    seek_times_by_distance: Vec<(f32, f64)>,
-    seek_failures: usize,
+    seek_stats: Vec<SeekDistanceStats>,
     random_access_times_ms: Vec<f64>,
     random_access_avg_ms: f64,
     random_access_failures: usize,
@@ -101,14 +108,41 @@ impl BenchmarkResults {
         println!();
 
         println!("SEEK PERFORMANCE (by distance)");
-        if !self.seek_times_by_distance.is_empty() || self.seek_failures > 0 {
-            println!("  {:>10} | {:>12}", "Distance(s)", "Time(ms)");
-            println!("  {}-+-{}", "-".repeat(10), "-".repeat(12));
-            for (distance, time) in &self.seek_times_by_distance {
-                println!("  {distance:>10.1} | {time:>12.2}");
-            }
-            if self.seek_failures > 0 {
-                println!("  Seek failures: {}", self.seek_failures);
+        if !self.seek_stats.is_empty() {
+            println!(
+                "  {:>10} | {:>12} | {:>12} | {:>12} | {:>7} | {:>8}",
+                "Distance(s)", "Avg(ms)", "P95(ms)", "Max(ms)", "Samples", "Failures"
+            );
+            println!(
+                "  {}-+-{}-+-{}-+-{}-+-{}-+-{}",
+                "-".repeat(10),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(7),
+                "-".repeat(8)
+            );
+            for stats in &self.seek_stats {
+                let avg = if stats.samples_ms.is_empty() {
+                    0.0
+                } else {
+                    stats.samples_ms.iter().sum::<f64>() / stats.samples_ms.len() as f64
+                };
+                let max = stats
+                    .samples_ms
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let p95 = percentile(&stats.samples_ms, 95.0);
+                println!(
+                    "  {:>10.1} | {:>12.2} | {:>12.2} | {:>12.2} | {:>7} | {:>8}",
+                    stats.distance_secs,
+                    avg,
+                    p95,
+                    if max.is_finite() { max } else { 0.0 },
+                    stats.samples_ms.len(),
+                    stats.failures
+                );
             }
         }
         println!();
@@ -307,7 +341,10 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         "Starting benchmark with video: {}",
         config.video_path.display()
     );
-    println!("FPS: {}, Iterations: {}", config.fps, config.iterations);
+    println!(
+        "FPS: {}, Iterations: {}, Seek Iterations: {}",
+        config.fps, config.iterations, config.seek_iterations
+    );
     println!();
 
     println!("[1/5] Benchmarking decoder creation...");
@@ -358,16 +395,37 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
         .filter(|&d| d <= video_duration)
         .collect();
     for distance in seek_distances {
-        match benchmark_seek(&decoder, config.fps, 0.0, distance).await {
-            Some(seek_time) => {
-                results.seek_times_by_distance.push((distance, seek_time));
-                println!("      {distance:.1}s seek: {seek_time:.2}ms");
-            }
-            None => {
-                results.seek_failures += 1;
-                println!("      {distance:.1}s seek: FAILED");
+        let mut stats = SeekDistanceStats {
+            distance_secs: distance,
+            ..Default::default()
+        };
+        let seek_target_ceiling = (video_duration - 0.01).max(0.0);
+        let start_ceiling = (video_duration - distance - 0.01).max(0.0);
+        for _ in 0..config.seek_iterations {
+            let iteration = (stats.samples_ms.len() + stats.failures) as f32;
+            let from_time = if start_ceiling > 0.0 {
+                (iteration * 0.618_034 * start_ceiling) % start_ceiling
+            } else {
+                0.0
+            };
+            let to_time = (from_time + distance).min(seek_target_ceiling);
+            match benchmark_seek(&decoder, config.fps, from_time, to_time).await {
+                Some(seek_time) => stats.samples_ms.push(seek_time),
+                None => stats.failures += 1,
             }
         }
+        let avg = if stats.samples_ms.is_empty() {
+            0.0
+        } else {
+            stats.samples_ms.iter().sum::<f64>() / stats.samples_ms.len() as f64
+        };
+        let p95 = percentile(&stats.samples_ms, 95.0);
+        println!(
+            "      {distance:.1}s seek: avg {avg:.2}ms, p95 {p95:.2}ms ({} samples, {} failures)",
+            stats.samples_ms.len(),
+            stats.failures
+        );
+        results.seek_stats.push(stats);
     }
 
     println!("[5/5] Benchmarking random access (50 samples)...");
@@ -397,7 +455,7 @@ fn main() {
         .position(|a| a == "--video")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>]");
+        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>] [--seek-iterations <n>]");
 
     let fps = args
         .iter()
@@ -413,10 +471,18 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
 
+    let seek_iterations = args
+        .iter()
+        .position(|a| a == "--seek-iterations")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
     let config = BenchmarkConfig {
         video_path,
         fps,
         iterations,
+        seek_iterations,
     };
 
     let rt = Runtime::new().expect("Failed to create Tokio runtime");
