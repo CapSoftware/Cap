@@ -83,13 +83,6 @@ interface FrameRenderedMessage {
 	height: number;
 }
 
-interface DecodedFrame {
-	type: "decoded";
-	bitmap: ImageBitmap;
-	width: number;
-	height: number;
-}
-
 interface ErrorMessage {
 	type: "error";
 	message: string;
@@ -102,7 +95,6 @@ interface RequestFrameMessage {
 type WorkerMessage =
 	| ReadyMessage
 	| FrameRenderedMessage
-	| DecodedFrame
 	| ErrorMessage
 	| RequestFrameMessage;
 
@@ -409,13 +401,6 @@ export function createImageDataWS(
 		if (e.data.type === "request-frame") {
 			onRequestFrame?.();
 			return;
-		}
-
-		if (e.data.type === "decoded") {
-			const { bitmap, width, height } = e.data;
-			onmessage({ width, height, bitmap });
-			isProcessing = false;
-			processNextFrame();
 		}
 	};
 

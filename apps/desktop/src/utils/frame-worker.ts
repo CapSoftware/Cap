@@ -51,13 +51,6 @@ interface RendererModeMessage {
 	mode: "webgpu" | "canvas2d";
 }
 
-interface DecodedFrame {
-	type: "decoded";
-	bitmap: ImageBitmap;
-	width: number;
-	height: number;
-}
-
 interface ErrorMessage {
 	type: "error";
 	message: string;
@@ -70,7 +63,6 @@ interface RequestFrameMessage {
 export type {
 	FrameRenderedMessage,
 	RendererModeMessage,
-	DecodedFrame,
 	ErrorMessage,
 	ReadyMessage,
 	RequestFrameMessage,

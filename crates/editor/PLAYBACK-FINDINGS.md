@@ -2308,6 +2308,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (decoded transport branch cleanup)
+
+**Goal**: Remove stale worker/socket transport branch handling that was no longer emitted after queue-ack path removal
+
+**What was done**:
+1. Removed unused `DecodedFrame` message type from worker utilities.
+2. Removed `decoded` branch handling from socket worker message dispatcher.
+3. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - removed `DecodedFrame` interface/export
+- `apps/desktop/src/utils/socket.ts`
+  - removed `DecodedFrame` interface and worker message union entry
+  - removed dead `if (e.data.type === "decoded")` handling block
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts src/utils/socket.ts`
+
+**Results**:
+- ✅ Worker/socket message surface now matches currently emitted runtime events.
+- ✅ Removed dead branch logic from socket worker dispatcher.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for continued transport tuning with reduced message-schema complexity.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
