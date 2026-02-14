@@ -116,7 +116,7 @@ impl RgbaToNv12Converter {
         }
 
         let nv12_size = Self::nv12_size(width, height);
-        let aligned_size = ((nv12_size + 3) / 4) * 4;
+        let aligned_size = nv12_size.div_ceil(4) * 4;
 
         self.nv12_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("NV12 Storage Buffer"),
@@ -136,6 +136,7 @@ impl RgbaToNv12Converter {
         self.cached_height = height;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn convert_and_readback(
         &mut self,
         device: &wgpu::Device,
@@ -147,7 +148,7 @@ impl RgbaToNv12Converter {
         frame_number: u32,
         frame_rate: u32,
     ) -> Option<PendingNv12Readback> {
-        if width == 0 || height == 0 || width % 4 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(4) || !height.is_multiple_of(2) {
             return None;
         }
 
