@@ -19,7 +19,10 @@ use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
     num::NonZeroUsize,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -769,6 +772,7 @@ impl AudioPlayback {
         }
 
         std::thread::spawn(move || {
+            let startup_instant = std::time::Instant::now();
             let host = cpal::default_host();
             let device = match host.default_output_device() {
                 Some(d) => d,
@@ -792,9 +796,13 @@ impl AudioPlayback {
 
             #[cfg(not(target_os = "windows"))]
             macro_rules! create_audio_stream {
-                ($sample_ty:ty) => {{
+                ($sample_ty:ty, $startup:expr) => {{
                     let fallback = self.clone();
-                    self.create_stream::<$sample_ty>(device.clone(), supported_config.clone())
+                    self.create_stream::<$sample_ty>(
+                        device.clone(),
+                        supported_config.clone(),
+                        $startup,
+                    )
                         .or_else(|err| {
                             warn!(
                                 error = %err,
@@ -804,6 +812,7 @@ impl AudioPlayback {
                                 device,
                                 supported_config,
                                 duration_secs,
+                                $startup,
                             )
                         })
                 }};
@@ -811,22 +820,23 @@ impl AudioPlayback {
 
             #[cfg(target_os = "windows")]
             macro_rules! create_audio_stream {
-                ($sample_ty:ty) => {{
+                ($sample_ty:ty, $startup:expr) => {{
                     self.create_stream_prerendered::<$sample_ty>(
                         device,
                         supported_config,
                         duration_secs,
+                        $startup,
                     )
                 }};
             }
 
             let result = match supported_config.sample_format() {
-                SampleFormat::I16 => create_audio_stream!(i16),
-                SampleFormat::I32 => create_audio_stream!(i32),
-                SampleFormat::F32 => create_audio_stream!(f32),
-                SampleFormat::I64 => create_audio_stream!(i64),
-                SampleFormat::U8 => create_audio_stream!(u8),
-                SampleFormat::F64 => create_audio_stream!(f64),
+                SampleFormat::I16 => create_audio_stream!(i16, startup_instant),
+                SampleFormat::I32 => create_audio_stream!(i32, startup_instant),
+                SampleFormat::F32 => create_audio_stream!(f32, startup_instant),
+                SampleFormat::I64 => create_audio_stream!(i64, startup_instant),
+                SampleFormat::U8 => create_audio_stream!(u8, startup_instant),
+                SampleFormat::F64 => create_audio_stream!(f64, startup_instant),
                 format => {
                     error!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
@@ -868,6 +878,7 @@ impl AudioPlayback {
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
+        startup_instant: std::time::Instant,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
         T: FromSampleBytes + cpal::Sample,
@@ -1055,6 +1066,7 @@ impl AudioPlayback {
             let headroom_for_stream = headroom_samples;
             let mut playhead_rx_for_stream = playhead_rx.clone();
             let mut last_video_playhead = playhead;
+            let callback_started = Arc::new(AtomicBool::new(false));
 
             #[cfg(target_os = "windows")]
             const FIXED_LATENCY_SECS: f64 = 0.08;
@@ -1074,6 +1086,13 @@ impl AudioPlayback {
             let stream_result = device.build_output_stream(
                 &config,
                 move |buffer: &mut [T], info| {
+                    if !callback_started.swap(true, Ordering::AcqRel) {
+                        info!(
+                            startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0,
+                            "Audio streaming callback started"
+                        );
+                    }
+
                     #[cfg(not(target_os = "windows"))]
                     let latency_secs = latency_corrector.update_from_callback(info);
                     #[cfg(target_os = "windows")]
@@ -1167,6 +1186,7 @@ impl AudioPlayback {
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
         duration_secs: f64,
+        startup_instant: std::time::Instant,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
         T: FromSampleBytes + cpal::Sample,
@@ -1215,11 +1235,19 @@ impl AudioPlayback {
 
         let mut playhead_rx_for_stream = playhead_rx.clone();
         let mut last_video_playhead = playhead;
+        let callback_started = Arc::new(AtomicBool::new(false));
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |buffer: &mut [T], _info| {
+                    if !callback_started.swap(true, Ordering::AcqRel) {
+                        info!(
+                            startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0,
+                            "Audio pre-rendered callback started"
+                        );
+                    }
+
                     if playhead_rx_for_stream.has_changed().unwrap_or(false) {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
                         let jump = (video_playhead - last_video_playhead).abs();
