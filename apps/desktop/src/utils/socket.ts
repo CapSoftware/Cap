@@ -42,6 +42,7 @@ export type FpsStats = {
 	sabSlotCount: number;
 	sabTotalBytes: number;
 	sabTotalFramesReceived: number;
+	sabTotalFramesWrittenToSharedBuffer: number;
 	sabTotalFramesSentToWorker: number;
 	sabTotalSupersededDrops: number;
 };
@@ -487,6 +488,12 @@ export function createImageDataWS(
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
 			} else {
 				sabWriteRetryCount = 0;
+				totalFramesWrittenToSharedBuffer++;
+				isProcessing = false;
+				if (nextFrame || pendingFrame) {
+					processNextFrame();
+				}
+				return;
 			}
 		} else {
 			sabWriteRetryCount = 0;
@@ -513,6 +520,7 @@ export function createImageDataWS(
 	let frameTimeSum = 0;
 	let totalBytesReceived = 0;
 	let totalFramesReceived = 0;
+	let totalFramesWrittenToSharedBuffer = 0;
 	let totalFramesSentToWorker = 0;
 	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
@@ -545,6 +553,7 @@ export function createImageDataWS(
 			(sharedBufferConfig?.slotSize ?? 0) *
 			(sharedBufferConfig?.slotCount ?? 0),
 		sabTotalFramesReceived: totalFramesReceived,
+		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
 		sabTotalFramesSentToWorker: totalFramesSentToWorker,
 		sabTotalSupersededDrops: totalSupersededDrops,
 	});

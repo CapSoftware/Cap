@@ -37,6 +37,7 @@ type TransportStats = {
 	sabSlotCount: number;
 	sabTotalBytes: number;
 	sabTotalFramesReceived: number;
+	sabTotalFramesWrittenToSharedBuffer: number;
 	sabTotalFramesSentToWorker: number;
 	sabTotalSupersededDrops: number;
 };
@@ -74,6 +75,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabSlotCount: 0,
 		sabTotalBytes: 0,
 		sabTotalFramesReceived: 0,
+		sabTotalFramesWrittenToSharedBuffer: 0,
 		sabTotalFramesSentToWorker: 0,
 		sabTotalSupersededDrops: 0,
 	});
@@ -201,6 +203,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabSlotCount: 0,
 			sabTotalBytes: 0,
 			sabTotalFramesReceived: 0,
+			sabTotalFramesWrittenToSharedBuffer: 0,
 			sabTotalFramesSentToWorker: 0,
 			sabTotalSupersededDrops: 0,
 		});
@@ -234,6 +237,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				sabSlotCount: socketStats.sabSlotCount,
 				sabTotalBytes: socketStats.sabTotalBytes,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
+				sabTotalFramesWrittenToSharedBuffer:
+					socketStats.sabTotalFramesWrittenToSharedBuffer,
 				sabTotalFramesSentToWorker: socketStats.sabTotalFramesSentToWorker,
 				sabTotalSupersededDrops: socketStats.sabTotalSupersededDrops,
 			});
@@ -267,6 +272,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Slot Count: ${t.sabSlotCount}`,
 			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
+			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
 			`SAB Frames Sent to Worker: ${t.sabTotalFramesSentToWorker}`,
 			`SAB Superseded Drops: ${t.sabTotalSupersededDrops}`,
 			`SAB Resizes: ${t.sabResizes}`,
@@ -388,7 +394,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 								</span>
 								<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
 									{" "}
-									/ {transportStats().sabTotalFramesSentToWorker} worker /{" "}
+									/ {transportStats().sabTotalFramesWrittenToSharedBuffer} sab /{" "}
+									{transportStats().sabTotalFramesSentToWorker} worker /{" "}
 									{transportStats().sabTotalSupersededDrops} superseded
 								</span>
 							</div>

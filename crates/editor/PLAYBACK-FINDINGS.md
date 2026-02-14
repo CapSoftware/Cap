@@ -1747,6 +1747,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (SAB write fast-path dispatch and totals)
+
+**Goal**: Reduce frame handoff stalls when SharedArrayBuffer writes succeed and improve transport-path attribution in overlay telemetry
+
+**What was done**:
+1. Updated socket frame dispatch so successful SAB writes no longer wait for worker queue callbacks before accepting the next frame.
+2. Added cumulative SAB write-success counter to transport stats.
+3. Extended overlay diagnostics and clipboard export with explicit recv/sab/worker/superseded totals.
+4. Re-ran desktop typecheck and transport utility test suite.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `sabTotalFramesWrittenToSharedBuffer` to `FpsStats`
+  - added cumulative counter tracking for successful SAB writes
+  - changed successful SAB write path in `processNextFrame` to clear `isProcessing` immediately and continue dispatching pending frames without waiting for worker ack events
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - extended transport state/reset/polling with `sabTotalFramesWrittenToSharedBuffer`
+  - added clipboard export line for SAB-written totals
+  - updated `SAB totals` row to show `recv / sab / worker / superseded`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ SAB success path no longer serializes on worker `frame-queued` acknowledgements, reducing dispatch-side stalls.
+- ✅ Overlay and clipboard output now expose explicit SAB-written totals alongside worker fallback totals for easier cross-machine diagnosis.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for next macOS/Windows validation pass to compare worker fallback share against total SAB write share during long playback sessions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
