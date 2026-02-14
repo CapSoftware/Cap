@@ -297,6 +297,31 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 	const dataOffset = controlView[CONTROL_DATA_OFFSET];
 	const metadataView = new Int32Array(buffer);
 
+	function claimReadySlot(
+		baseReadIdx: number,
+	): { readIdx: number; slotMetaIdx: number } | null {
+		for (let probe = 0; probe < slotCount; probe++) {
+			const readIdx = (baseReadIdx + probe) % slotCount;
+			const slotMetaIdx = (metadataOffset + readIdx * METADATA_ENTRY_SIZE) / 4;
+			const state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
+			if (state !== SLOT_STATE.READY) {
+				continue;
+			}
+
+			const exchangedState = Atomics.compareExchange(
+				metadataView,
+				slotMetaIdx + META_SLOT_STATE,
+				SLOT_STATE.READY,
+				SLOT_STATE.READING,
+			);
+			if (exchangedState === SLOT_STATE.READY) {
+				return { readIdx, slotMetaIdx };
+			}
+		}
+
+		return null;
+	}
+
 	return {
 		read(timeoutMs: number = 100): ArrayBuffer | null {
 			const MAX_CAS_RETRIES = 3;
@@ -307,17 +332,19 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 					return null;
 				}
 
-				const readIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
-				const slotMetaIdx =
-					(metadataOffset + readIdx * METADATA_ENTRY_SIZE) / 4;
-
-				let state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
-
-				if (state !== SLOT_STATE.READY) {
+				const baseReadIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
+				const claimed = claimReadySlot(baseReadIdx);
+				if (!claimed) {
+					const waitSlotMetaIdx =
+						(metadataOffset + baseReadIdx * METADATA_ENTRY_SIZE) / 4;
+					const waitState = Atomics.load(
+						metadataView,
+						waitSlotMetaIdx + META_SLOT_STATE,
+					);
 					const waitResult = Atomics.wait(
 						metadataView,
-						slotMetaIdx + META_SLOT_STATE,
-						state,
+						waitSlotMetaIdx + META_SLOT_STATE,
+						waitState,
 						timeoutMs,
 					);
 					if (waitResult === "timed-out") {
@@ -328,22 +355,9 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 					if (shutdownCheck) {
 						return null;
 					}
-
-					state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
-					if (state !== SLOT_STATE.READY) {
-						continue;
-					}
-				}
-
-				const exchangedState = Atomics.compareExchange(
-					metadataView,
-					slotMetaIdx + META_SLOT_STATE,
-					SLOT_STATE.READY,
-					SLOT_STATE.READING,
-				);
-				if (exchangedState !== SLOT_STATE.READY) {
 					continue;
 				}
+				const { readIdx, slotMetaIdx } = claimed;
 
 				const frameSize = Atomics.load(
 					metadataView,
@@ -397,17 +411,19 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 					return null;
 				}
 
-				const readIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
-				const slotMetaIdx =
-					(metadataOffset + readIdx * METADATA_ENTRY_SIZE) / 4;
-
-				let state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
-
-				if (state !== SLOT_STATE.READY) {
+				const baseReadIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
+				const claimed = claimReadySlot(baseReadIdx);
+				if (!claimed) {
+					const waitSlotMetaIdx =
+						(metadataOffset + baseReadIdx * METADATA_ENTRY_SIZE) / 4;
+					const waitState = Atomics.load(
+						metadataView,
+						waitSlotMetaIdx + META_SLOT_STATE,
+					);
 					const waitResult = Atomics.wait(
 						metadataView,
-						slotMetaIdx + META_SLOT_STATE,
-						state,
+						waitSlotMetaIdx + META_SLOT_STATE,
+						waitState,
 						timeoutMs,
 					);
 					if (waitResult === "timed-out") {
@@ -418,22 +434,9 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 					if (shutdownCheck) {
 						return null;
 					}
-
-					state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
-					if (state !== SLOT_STATE.READY) {
-						continue;
-					}
-				}
-
-				const exchangedState = Atomics.compareExchange(
-					metadataView,
-					slotMetaIdx + META_SLOT_STATE,
-					SLOT_STATE.READY,
-					SLOT_STATE.READING,
-				);
-				if (exchangedState !== SLOT_STATE.READY) {
 					continue;
 				}
+				const { readIdx, slotMetaIdx } = claimed;
 
 				const frameSize = Atomics.load(
 					metadataView,
@@ -485,17 +488,19 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 					return null;
 				}
 
-				const readIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
-				const slotMetaIdx =
-					(metadataOffset + readIdx * METADATA_ENTRY_SIZE) / 4;
-
-				let state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
-
-				if (state !== SLOT_STATE.READY) {
+				const baseReadIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
+				const claimed = claimReadySlot(baseReadIdx);
+				if (!claimed) {
+					const waitSlotMetaIdx =
+						(metadataOffset + baseReadIdx * METADATA_ENTRY_SIZE) / 4;
+					const waitState = Atomics.load(
+						metadataView,
+						waitSlotMetaIdx + META_SLOT_STATE,
+					);
 					const waitResult = Atomics.wait(
 						metadataView,
-						slotMetaIdx + META_SLOT_STATE,
-						state,
+						waitSlotMetaIdx + META_SLOT_STATE,
+						waitState,
 						timeoutMs,
 					);
 					if (waitResult === "timed-out") {
@@ -506,22 +511,9 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 					if (shutdownCheck) {
 						return null;
 					}
-
-					state = Atomics.load(metadataView, slotMetaIdx + META_SLOT_STATE);
-					if (state !== SLOT_STATE.READY) {
-						continue;
-					}
-				}
-
-				const exchangedState = Atomics.compareExchange(
-					metadataView,
-					slotMetaIdx + META_SLOT_STATE,
-					SLOT_STATE.READY,
-					SLOT_STATE.READING,
-				);
-				if (exchangedState !== SLOT_STATE.READY) {
 					continue;
 				}
+				const { readIdx, slotMetaIdx } = claimed;
 
 				const frameSize = Atomics.load(
 					metadataView,

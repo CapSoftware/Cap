@@ -1280,6 +1280,32 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Shared frame buffer consumer probing for sparse-ready slots)
+
+**Goal**: Keep consumer latency low when producer writes into non-sequential available slots under contention
+
+**What was done**:
+1. Added consumer-side ready-slot probing across the ring buffer starting from the current read index.
+2. Updated `read`, `readInto`, and `borrow` to claim the first READY slot found via CAS.
+3. Preserved existing timeout behavior when no READY slot is currently available.
+
+**Changes Made**:
+- `apps/desktop/src/utils/shared-frame-buffer.ts`
+  - added `claimReadySlot` helper
+  - consumer read APIs now probe all slots for READY state before waiting on the current read slot
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/shared-frame-buffer.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Desktop TypeScript checks pass.
+- ✅ Consumer path now remains compatible with producer-side sparse slot selection and avoids avoidable waits on empty read-index slots.
+
+**Stopping point**: pair this with existing SAB transport telemetry in target-machine runs to validate reduced fallback and lower queueing jitter.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
