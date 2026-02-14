@@ -40,6 +40,7 @@ type TransportStats = {
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
 	sabTotalFramesSentToWorker: number;
+	sabTotalWorkerFallbackBytes: number;
 	sabTotalSupersededDrops: number;
 };
 
@@ -79,6 +80,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
 		sabTotalFramesSentToWorker: 0,
+		sabTotalWorkerFallbackBytes: 0,
 		sabTotalSupersededDrops: 0,
 	});
 
@@ -208,6 +210,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
 			sabTotalFramesSentToWorker: 0,
+			sabTotalWorkerFallbackBytes: 0,
 			sabTotalSupersededDrops: 0,
 		});
 	};
@@ -244,6 +247,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				sabTotalFramesWrittenToSharedBuffer:
 					socketStats.sabTotalFramesWrittenToSharedBuffer,
 				sabTotalFramesSentToWorker: socketStats.sabTotalFramesSentToWorker,
+				sabTotalWorkerFallbackBytes: socketStats.sabTotalWorkerFallbackBytes,
 				sabTotalSupersededDrops: socketStats.sabTotalSupersededDrops,
 			});
 		};
@@ -279,6 +283,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
 			`SAB Frames Sent to Worker: ${t.sabTotalFramesSentToWorker}`,
+			`SAB Fallback Transfer: ${formatSlotMb(t.sabTotalWorkerFallbackBytes)} MB`,
 			`SAB Superseded Drops: ${t.sabTotalSupersededDrops}`,
 			`SAB Resizes: ${t.sabResizes}`,
 			`SAB Fallbacks: ${t.sabFallbacks}`,
@@ -402,7 +407,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 									/ {transportStats().sabTotalFramesWrittenToSharedBuffer} sab /{" "}
 									{transportStats().sabTotalFramesSentToWorker} worker /{" "}
 									{transportStats().sabTotalSupersededDrops} superseded /{" "}
-									{transportStats().sabTotalRetryAttempts} retries
+									{transportStats().sabTotalRetryAttempts} retries /{" "}
+									{formatSlotMb(transportStats().sabTotalWorkerFallbackBytes)}MB
+									fallback
 								</span>
 							</div>
 						</Show>

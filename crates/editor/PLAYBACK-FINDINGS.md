@@ -1848,6 +1848,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker fallback transfer volume telemetry)
+
+**Goal**: Quantify cumulative worker fallback transfer cost during long playback sessions for cross-machine transport analysis
+
+**What was done**:
+1. Added cumulative fallback transfer bytes counter in socket transport stats.
+2. Wired byte accumulation on all worker-posted frame paths (SAB fallback and no-SAB mode).
+3. Extended performance overlay diagnostics and clipboard export with fallback transfer megabytes.
+4. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `sabTotalWorkerFallbackBytes` to `FpsStats`
+  - accumulates `buffer.byteLength` whenever frame payload is sent through worker `postMessage`
+  - emits cumulative fallback bytes through `getLocalFpsStats`
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - extended transport state/reset/polling with `sabTotalWorkerFallbackBytes`
+  - clipboard export now includes cumulative fallback transfer MB
+  - `SAB totals` row now appends fallback transfer megabytes
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Overlay now shows cumulative fallback transfer volume in MB for sustained sessions.
+- ✅ Clipboard exports now include worker fallback byte totals for external comparison.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows captures to correlate fallback transfer volume with observed frame pacing and SAB contention counters.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
