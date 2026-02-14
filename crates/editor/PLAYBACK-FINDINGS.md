@@ -2270,6 +2270,44 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (readback overlap in frame pipeline)
+
+**Goal**: Increase render/readback overlap by submitting current-frame readback before waiting on prior pending map completion
+
+**What was done**:
+1. Updated frame pipeline finalization order to capture previous pending readback handle first.
+2. Submitted current frame readback immediately.
+3. Deferred waiting on previous pending readback until after current submission.
+4. Retained current-frame return semantics by still awaiting current pending readback before returning.
+5. Re-ran rendering crate check and playback benchmark passes for 1080p and 4k.
+
+**Changes Made**:
+- `crates/rendering/src/frame_pipeline.rs`
+  - `finish_encoder` now:
+    - stores previous pending readback with `take_pending()`
+    - submits current frame readback
+    - waits previous pending (if any)
+    - waits and returns current pending frame
+
+**Verification**:
+- `cargo +1.88.0 check -p cap-rendering`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --max-frames 240 --seek-iterations 8`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-4k60.mp4 --fps 60 --max-frames 240 --seek-iterations 8`
+- `cargo +1.88.0 fmt --all`
+
+**Results**:
+- ✅ 1080p playback benchmark remained stable:
+  - effective FPS 60.24, missed deadlines 0
+  - decode p95 2.14ms
+- ✅ 4k playback benchmark remained stable:
+  - effective FPS 60.18, missed deadlines 0
+  - decode p95 7.13ms
+- ✅ No regressions detected in sequential throughput; seek profile remained within expected variance envelope.
+
+**Stopping point**: Ready for target-machine desktop validation to confirm overlap change improves real preview frame pacing under sustained render load.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
