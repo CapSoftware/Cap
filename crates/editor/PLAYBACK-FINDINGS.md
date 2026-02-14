@@ -1121,6 +1121,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Desktop socket RGBA-only transport path simplification)
+
+**Goal**: Reduce preview-frame hot-path overhead by removing legacy NV12 handling from desktop websocket frame consumption
+
+**What was done**:
+1. Simplified desktop websocket frame handling in `socket.ts` to operate on RGBA payloads only.
+2. Removed NV12 detection, conversion, deferred NV12 frame buffering, and NV12 capture conversion branches from the main message loop and capture path.
+3. Kept stride-correction and worker fallback paths for RGBA frames intact.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - removed NV12 conversion helpers and associated state
+  - removed NV12 render paths for main-thread WebGPU and 2D fallback
+  - simplified frame metadata parsing to RGBA 24-byte trailer handling
+  - simplified stored-frame capture path to direct RGBA image data
+
+**Verification**:
+- `pnpm install --filter @cap/desktop...`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm exec biome format --write apps/desktop/src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Desktop TypeScript build checks pass with the simplified RGBA-only transport handling.
+- ✅ Legacy NV12-only branches no longer execute on websocket frame hot path.
+
+**Stopping point**: next validation step for this change is in-app desktop playback profiling (macOS/Windows) using existing overlay stats and startup/scrub capture workflow.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
