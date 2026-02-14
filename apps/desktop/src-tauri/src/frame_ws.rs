@@ -10,72 +10,65 @@ static LAST_LOG_TIME: AtomicU64 = AtomicU64::new(0);
 const NV12_FORMAT_MAGIC: u32 = 0x4e563132;
 
 fn convert_to_nv12(data: &[u8], width: u32, height: u32, stride: u32) -> Vec<u8> {
-    let width = width & !1;
-    let height = height & !1;
+    let width = (width & !1) as usize;
+    let height = (height & !1) as usize;
 
     if width == 0 || height == 0 {
         return Vec::new();
     }
 
-    let y_stride = width;
-    let uv_stride = width;
-    let y_size = (y_stride * height) as usize;
-    let uv_size = (uv_stride * (height / 2)) as usize;
-    let total_size = y_size + uv_size;
+    let y_size = width * height;
+    let uv_size = width * (height / 2);
+    let stride = stride as usize;
 
-    let stride_bytes = stride as usize;
-
-    let mut output = vec![0u8; total_size];
+    let mut output = vec![0u8; y_size + uv_size];
     let (y_plane, uv_plane) = output.split_at_mut(y_size);
 
-    for y in 0..height as usize {
-        let src_row = y * stride_bytes;
+    for row in 0..height {
+        let src_offset = row * stride;
+        let y_offset = row * width;
 
-        if src_row >= data.len() {
+        if src_offset + width * 4 > data.len() {
             continue;
         }
 
-        let y_row_start = y * y_stride as usize;
-        let is_uv_row = y % 2 == 0;
-        let uv_row_start = if is_uv_row {
-            (y / 2) * uv_stride as usize
-        } else {
-            0
-        };
+        let src_row = &data[src_offset..];
+        let y_row = &mut y_plane[y_offset..y_offset + width];
 
-        for x in 0..width as usize {
-            let px = src_row + x * 4;
+        for x in 0..width {
+            let px = x * 4;
+            let r = src_row[px] as i32;
+            let g = src_row[px + 1] as i32;
+            let b = src_row[px + 2] as i32;
+            y_row[x] = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16).min(255) as u8;
+        }
 
-            if px + 2 < data.len() {
-                let r = data[px] as i32;
-                let g = data[px + 1] as i32;
-                let b = data[px + 2] as i32;
+        if row % 2 == 0 {
+            let uv_offset = (row / 2) * width;
+            let uv_row = &mut uv_plane[uv_offset..uv_offset + width];
 
-                let y_val = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-                y_plane[y_row_start + x] = y_val.clamp(0, 255) as u8;
+            let mut x = 0;
+            while x < width {
+                let px0 = x * 4;
+                let px1 = (x + 1) * 4;
 
-                if is_uv_row && x % 2 == 0 && x + 1 < width as usize {
-                    let px1 = src_row + (x + 1) * 4;
+                let r0 = src_row[px0] as i32;
+                let g0 = src_row[px0 + 1] as i32;
+                let b0 = src_row[px0 + 2] as i32;
+                let r1 = src_row[px1] as i32;
+                let g1 = src_row[px1 + 1] as i32;
+                let b1 = src_row[px1 + 2] as i32;
 
-                    let (r1, g1, b1) = if px1 + 2 < data.len() {
-                        (data[px1] as i32, data[px1 + 1] as i32, data[px1 + 2] as i32)
-                    } else {
-                        (r, g, b)
-                    };
+                let avg_r = (r0 + r1) >> 1;
+                let avg_g = (g0 + g1) >> 1;
+                let avg_b = (b0 + b1) >> 1;
 
-                    let avg_r = (r + r1) / 2;
-                    let avg_g = (g + g1) / 2;
-                    let avg_b = (b + b1) / 2;
+                uv_row[x] = (((-38 * avg_r - 74 * avg_g + 112 * avg_b + 128) >> 8) + 128)
+                    .clamp(0, 255) as u8;
+                uv_row[x + 1] = (((112 * avg_r - 94 * avg_g - 18 * avg_b + 128) >> 8) + 128)
+                    .clamp(0, 255) as u8;
 
-                    let u = ((-38 * avg_r - 74 * avg_g + 112 * avg_b + 128) >> 8) + 128;
-                    let v = ((112 * avg_r - 94 * avg_g - 18 * avg_b + 128) >> 8) + 128;
-
-                    let uv_idx = uv_row_start + x;
-                    if uv_idx + 1 < uv_plane.len() {
-                        uv_plane[uv_idx] = u.clamp(0, 255) as u8;
-                        uv_plane[uv_idx + 1] = v.clamp(0, 255) as u8;
-                    }
-                }
+                x += 2;
             }
         }
     }
