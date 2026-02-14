@@ -1140,6 +1140,36 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - `delta_seek`
   - `delta_duplicate`
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Audio streaming-first windows path prep)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Command:** `playback-benchmark --fps 60 --max-frames 240 --seek-iterations 8`  
+**Change under test:** audio playback startup path now attempts streaming on all platforms with pre-rendered fallback (`CAP_AUDIO_PRERENDER_ONLY` override)
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.23**
+- Decode: avg **1.37ms**, p95 **2.52ms**, p99 **2.61ms**, max **4.34ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **42.38 / 94.80 / 94.80ms**
+  - 1.0s: **64.87 / 147.85 / 147.85ms**
+  - 2.0s: **124.91 / 308.52 / 308.52ms**
+  - 5.0s: **223.96 / 354.15 / 354.15ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **11**
+- Effective FPS: **60.17**
+- Decode: avg **6.95ms**, p95 **12.62ms**, p99 **23.18ms**, max **31.66ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **177.49 / 356.81 / 356.81ms**
+  - 1.0s: **303.60 / 632.02 / 632.02ms**
+  - 2.0s: **557.40 / 1412.22 / 1412.22ms**
+  - 5.0s: **1070.92 / 1530.27 / 1530.27ms**
+
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
 ---

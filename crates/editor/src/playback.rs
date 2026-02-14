@@ -1,5 +1,4 @@
 use cap_audio::FromSampleBytes;
-#[cfg(not(target_os = "windows"))]
 use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
@@ -8,7 +7,6 @@ use cap_rendering::{
     DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
-#[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
     SampleFormat,
@@ -33,7 +31,6 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-#[cfg(not(target_os = "windows"))]
 use crate::audio::AudioPlaybackBuffer;
 use crate::{
     audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
@@ -87,6 +84,15 @@ fn record_startup_trace(event: &'static str, startup_ms: f64, frame: Option<u32>
         }
         let _ = writer.flush();
     }
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Debug)]
@@ -873,40 +879,37 @@ impl AudioPlayback {
             };
 
             let duration_secs = self.duration_secs;
+            let force_prerender = env_flag_enabled("CAP_AUDIO_PRERENDER_ONLY");
 
-            #[cfg(not(target_os = "windows"))]
             macro_rules! create_audio_stream {
                 ($sample_ty:ty, $startup:expr) => {{
                     let fallback = self.clone();
-                    self.create_stream::<$sample_ty>(
-                        device.clone(),
-                        supported_config.clone(),
-                        $startup,
-                    )
-                        .or_else(|err| {
-                            warn!(
-                                error = %err,
-                                "Streaming audio path failed, falling back to pre-rendered path"
-                            );
-                            fallback.create_stream_prerendered::<$sample_ty>(
-                                device,
-                                supported_config,
-                                duration_secs,
-                                $startup,
-                            )
-                        })
-                }};
-            }
-
-            #[cfg(target_os = "windows")]
-            macro_rules! create_audio_stream {
-                ($sample_ty:ty, $startup:expr) => {{
-                    self.create_stream_prerendered::<$sample_ty>(
-                        device,
-                        supported_config,
-                        duration_secs,
-                        $startup,
-                    )
+                    if force_prerender {
+                        fallback.create_stream_prerendered::<$sample_ty>(
+                            device,
+                            supported_config,
+                            duration_secs,
+                            $startup,
+                        )
+                    } else {
+                        self.create_stream::<$sample_ty>(
+                            device.clone(),
+                            supported_config.clone(),
+                            $startup,
+                        )
+                            .or_else(|err| {
+                                warn!(
+                                    error = %err,
+                                    "Streaming audio path failed, falling back to pre-rendered path"
+                                );
+                                fallback.create_stream_prerendered::<$sample_ty>(
+                                    device,
+                                    supported_config,
+                                    duration_secs,
+                                    $startup,
+                                )
+                            })
+                    }
                 }};
             }
 
@@ -952,8 +955,6 @@ impl AudioPlayback {
         true
     }
 
-    #[cfg(not(target_os = "windows"))]
-    #[allow(dead_code)]
     fn create_stream<T>(
         self,
         device: cpal::Device,

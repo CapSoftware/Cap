@@ -3125,6 +3125,43 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (audio streaming-first startup path across platforms)
+
+**Goal**: Reduce startup audio delay by trying streaming playback path on all platforms before falling back to pre-rendered audio
+
+**What was done**:
+1. Removed platform gating that prevented streaming audio path from compiling on Windows.
+2. Unified spawn-time stream selection to attempt streaming first, then fallback to pre-rendered on failure.
+3. Added runtime override `CAP_AUDIO_PRERENDER_ONLY` for forced fallback behavior when needed.
+4. Ran playback throughput benchmark smoke passes on 1080p60 and 4k60.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - `create_stream` is now available cross-platform
+  - audio thread startup now uses one stream-selection flow for all platforms:
+    - try `create_stream`
+    - on error fallback to `create_stream_prerendered`
+  - added `env_flag_enabled` utility and runtime override:
+    - `CAP_AUDIO_PRERENDER_ONLY`
+  - removed platform-conditional imports now required by shared stream path
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added benchmark entry for post-change playback throughput smoke validation
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 check -p cap-editor`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --max-frames 240 --seek-iterations 8`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-4k60.mp4 --fps 60 --max-frames 240 --seek-iterations 8`
+
+**Results**:
+- ✅ Playback benchmark smoke run remains stable at ~60fps on both clips after startup-path change.
+- ✅ Audio pipeline now has a single streaming-first path with fallback and runtime override.
+- ✅ Editor crate compiles cleanly after cross-platform stream-path unification.
+
+**Stopping point**: Ready for macOS + Windows editor startup trace captures to quantify callback-start deltas from streaming-first startup path.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
