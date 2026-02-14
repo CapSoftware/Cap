@@ -80,6 +80,8 @@ struct ScrubSupersessionConfig {
     min_pixels: u64,
     disabled: bool,
     latest_first_disabled: bool,
+    latest_first_min_requests: usize,
+    latest_first_min_span_frames: u32,
 }
 
 static SCRUB_SUPERSESSION_CONFIG: OnceLock<ScrubSupersessionConfig> = OnceLock::new();
@@ -116,6 +118,14 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
             .unwrap_or(2_000_000);
         let disabled = parse_bool_env("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED");
         let latest_first_disabled = parse_bool_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED");
+        let latest_first_min_requests =
+            parse_usize_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS")
+                .filter(|value| *value > 1)
+                .unwrap_or(2);
+        let latest_first_min_span_frames =
+            parse_u32_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES")
+                .filter(|value| *value > 0)
+                .unwrap_or(min_span_frames);
 
         ScrubSupersessionConfig {
             min_requests,
@@ -123,6 +133,8 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
             min_pixels,
             disabled,
             latest_first_disabled,
+            latest_first_min_requests,
+            latest_first_min_span_frames,
         }
     })
 }
@@ -186,7 +198,10 @@ fn should_prioritize_latest_request(
     enabled: bool,
     config: ScrubSupersessionConfig,
 ) -> bool {
-    if !enabled || config.latest_first_disabled || pending_requests.len() <= 1 {
+    if !enabled || config.latest_first_disabled {
+        return false;
+    }
+    if pending_requests.len() < config.latest_first_min_requests {
         return false;
     }
 
@@ -201,7 +216,7 @@ fn should_prioritize_latest_request(
         .max()
         .unwrap_or(0);
 
-    max_frame.saturating_sub(min_frame) > config.min_span_frames
+    max_frame.saturating_sub(min_frame) > config.latest_first_min_span_frames
 }
 
 fn order_pending_requests_for_seek(
@@ -1222,6 +1237,8 @@ mod tests {
                 min_pixels: 2_000_000,
                 disabled: false,
                 latest_first_disabled: false,
+                latest_first_min_requests: 2,
+                latest_first_min_span_frames: 20,
             },
         );
         assert!(should_prioritize);
@@ -1243,6 +1260,27 @@ mod tests {
                 min_pixels: 2_000_000,
                 disabled: false,
                 latest_first_disabled: true,
+                latest_first_min_requests: 2,
+                latest_first_min_span_frames: 20,
+            },
+        );
+        assert!(!should_prioritize);
+    }
+
+    #[test]
+    fn does_not_prioritize_when_request_count_below_latest_first_threshold() {
+        let requests = vec![pending_request(200, 0), pending_request(4000, 1)];
+        let should_prioritize = should_prioritize_latest_request(
+            &requests,
+            true,
+            ScrubSupersessionConfig {
+                min_requests: 7,
+                min_span_frames: 20,
+                min_pixels: 2_000_000,
+                disabled: false,
+                latest_first_disabled: false,
+                latest_first_min_requests: 3,
+                latest_first_min_span_frames: 20,
             },
         );
         assert!(!should_prioritize);
