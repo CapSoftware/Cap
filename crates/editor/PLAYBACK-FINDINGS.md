@@ -3275,6 +3275,29 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (startup capture docs for pre-render override)
+
+**Goal**: Make A/B startup capture workflow explicit for streaming-first vs forced pre-render audio startup comparisons
+
+**What was done**:
+1. Added startup capture command showing `CAP_AUDIO_PRERENDER_ONLY=1` usage.
+2. Included run-id labeling in the same command for direct baseline/candidate grouping.
+
+**Changes Made**:
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - startup latency section now includes:
+    - `CAP_AUDIO_PRERENDER_ONLY=1`
+    - `CAP_PLAYBACK_STARTUP_TRACE_FILE`
+    - `CAP_PLAYBACK_STARTUP_TRACE_RUN_ID`
+  - command demonstrates forced pre-render run labeling for startup deltas
+
+**Results**:
+- ✅ Startup trace capture docs now include explicit forced pre-render comparison path for audio startup A/B runs.
+
+**Stopping point**: Ready for macOS/Windows startup capture passes with matched streaming/pre-render run labels.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
