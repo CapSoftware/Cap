@@ -218,7 +218,10 @@ function main() {
 	};
 
 	if (options.outputJson) {
-		fs.writeFileSync(options.outputJson, JSON.stringify(validationResult, null, 2));
+		fs.writeFileSync(
+			options.outputJson,
+			JSON.stringify(validationResult, null, 2),
+		);
 		console.log(`Validation JSON: ${options.outputJson}`);
 	}
 
