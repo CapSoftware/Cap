@@ -2408,6 +2408,48 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker in-flight gating for fallback dispatch)
+
+**Goal**: Prevent unbounded fallback postMessage backlog after queue-ack removal by adding explicit worker in-flight frame cap in socket dispatch
+
+**What was done**:
+1. Added worker in-flight frame tracking in socket transport.
+2. Enforced in-flight limit before posting fallback frames to worker.
+3. Updated worker message handlers to decrement in-flight count on render/error completion.
+4. Added in-flight diagnostics to transport stats and overlay display.
+5. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added:
+    - `WORKER_IN_FLIGHT_LIMIT = 2`
+    - `workerFramesInFlight` runtime counter
+  - fallback postMessage paths now:
+    - gate on `workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT`
+    - requeue latest frame instead of pushing unbounded worker backlog
+  - increments in-flight counter on fallback postMessage dispatch
+  - decrements in-flight counter on worker `frame-rendered` and `error`
+  - exports `workerFramesInFlight` via `FpsStats`
+  - cleanup now resets in-flight counter
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/polling now includes `workerFramesInFlight`
+  - clipboard export includes worker in-flight count
+  - overlay now shows `Worker frames in flight` when non-zero
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Fallback dispatch now has explicit bounded in-flight pressure control.
+- ✅ Main-thread retains latest-frame supersession behavior instead of feeding unbounded worker queue.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback-heavy target-machine runs to evaluate whether capped in-flight fallback improves pacing and drop behavior under sustained contention.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

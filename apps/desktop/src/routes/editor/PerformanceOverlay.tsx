@@ -36,6 +36,7 @@ type TransportStats = {
 	sabSlotSizeBytes: number;
 	sabSlotCount: number;
 	sabTotalBytes: number;
+	workerFramesInFlight: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -76,6 +77,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabSlotSizeBytes: 0,
 		sabSlotCount: 0,
 		sabTotalBytes: 0,
+		workerFramesInFlight: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -206,6 +208,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabSlotSizeBytes: 0,
 			sabSlotCount: 0,
 			sabTotalBytes: 0,
+			workerFramesInFlight: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -242,6 +245,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				sabSlotSizeBytes: socketStats.sabSlotSizeBytes,
 				sabSlotCount: socketStats.sabSlotCount,
 				sabTotalBytes: socketStats.sabTotalBytes,
+				workerFramesInFlight: socketStats.workerFramesInFlight,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -315,6 +319,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Slot: ${formatSlotMb(t.sabSlotSizeBytes)} MB`,
 			`SAB Slot Count: ${t.sabSlotCount}`,
 			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
+			`Worker Frames In Flight: ${t.workerFramesInFlight}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -475,6 +480,11 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 						<Show when={transportStats().sabRetriesInFlight > 0}>
 							<div style={{ color: "#f59e0b" }}>
 								SAB retries in flight: {transportStats().sabRetriesInFlight}
+							</div>
+						</Show>
+						<Show when={transportStats().workerFramesInFlight > 0}>
+							<div style={{ color: "#fbbf24" }}>
+								Worker frames in flight: {transportStats().workerFramesInFlight}
 							</div>
 						</Show>
 						<Show when={stats().droppedFrames > 0}>

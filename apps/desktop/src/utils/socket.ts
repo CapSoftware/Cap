@@ -25,6 +25,7 @@ import {
 
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
 const SAB_WRITE_RETRY_LIMIT = 2;
+const WORKER_IN_FLIGHT_LIMIT = 2;
 
 export type FpsStats = {
 	fps: number;
@@ -41,6 +42,7 @@ export type FpsStats = {
 	sabSlotSizeBytes: number;
 	sabSlotCount: number;
 	sabTotalBytes: number;
+	workerFramesInFlight: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -116,6 +118,7 @@ export function createImageDataWS(
 	let pendingFrame: ArrayBuffer | null = null;
 	let isProcessing = false;
 	let nextFrame: ArrayBuffer | null = null;
+	let workerFramesInFlight = 0;
 
 	let producer: Producer | null = null;
 	let sharedBufferConfig: SharedFrameBufferConfig | null = null;
@@ -247,6 +250,7 @@ export function createImageDataWS(
 		pendingFrame = null;
 		nextFrame = null;
 		isProcessing = false;
+		workerFramesInFlight = 0;
 		sabRetryScheduled = false;
 		processNextScheduled = false;
 		sabFallbackWindowCount = 0;
@@ -385,6 +389,9 @@ export function createImageDataWS(
 
 		if (e.data.type === "error") {
 			console.error("[FrameWorker]", e.data.message);
+			if (workerFramesInFlight > 0) {
+				workerFramesInFlight--;
+			}
 			isProcessing = false;
 			scheduleProcessNextFrame();
 			return;
@@ -393,9 +400,15 @@ export function createImageDataWS(
 		if (e.data.type === "frame-rendered") {
 			const { width, height } = e.data;
 			onmessage({ width, height });
+			if (workerFramesInFlight > 0) {
+				workerFramesInFlight--;
+			}
 			actualRendersCount++;
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
+			}
+			if (nextFrame || pendingFrame) {
+				scheduleProcessNextFrame();
 			}
 			return;
 		}
@@ -481,9 +494,20 @@ export function createImageDataWS(
 					sabRetryLimitFallbackCount += 1;
 					sabRetryLimitFallbackWindowCount += 1;
 				}
+				if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
+					isProcessing = false;
+					if (nextFrame) {
+						framesDropped++;
+						totalSupersededDrops++;
+					}
+					nextFrame = buffer;
+					scheduleProcessNextFrame();
+					return;
+				}
 				framesSentToWorker++;
 				totalFramesSentToWorker++;
 				totalWorkerFallbackBytes += buffer.byteLength;
+				workerFramesInFlight++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
 				isProcessing = false;
 				if (nextFrame || pendingFrame) {
@@ -501,9 +525,20 @@ export function createImageDataWS(
 			}
 		} else {
 			sabWriteRetryCount = 0;
+			if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
+				isProcessing = false;
+				if (nextFrame) {
+					framesDropped++;
+					totalSupersededDrops++;
+				}
+				nextFrame = buffer;
+				scheduleProcessNextFrame();
+				return;
+			}
 			framesSentToWorker++;
 			totalFramesSentToWorker++;
 			totalWorkerFallbackBytes += buffer.byteLength;
+			workerFramesInFlight++;
 			worker.postMessage({ type: "frame", buffer }, [buffer]);
 			isProcessing = false;
 			if (nextFrame || pendingFrame) {
@@ -564,6 +599,7 @@ export function createImageDataWS(
 		sabTotalBytes:
 			(sharedBufferConfig?.slotSize ?? 0) *
 			(sharedBufferConfig?.slotCount ?? 0),
+		workerFramesInFlight,
 		sabTotalRetryAttempts: totalSabRetryAttempts,
 		sabTotalFramesReceived: totalFramesReceived,
 		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
