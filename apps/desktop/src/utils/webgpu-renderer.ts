@@ -34,45 +34,16 @@ fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 }
 `;
 
-const NV12_FRAGMENT_SHADER = `
-@group(0) @binding(0) var frameSampler: sampler;
-@group(0) @binding(1) var yTexture: texture_2d<f32>;
-@group(0) @binding(2) var uvTexture: texture_2d<f32>;
-
-@fragment
-fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
-	let y = textureSample(yTexture, frameSampler, texCoord).r;
-	let uv = textureSample(uvTexture, frameSampler, texCoord).rg;
-	
-	let yScaled = y - 0.0625;
-	let u = uv.r - 0.5;
-	let v = uv.g - 0.5;
-	
-	let r = clamp(1.164 * yScaled + 1.596 * v, 0.0, 1.0);
-	let g = clamp(1.164 * yScaled - 0.391 * u - 0.813 * v, 0.0, 1.0);
-	let b = clamp(1.164 * yScaled + 2.018 * u, 0.0, 1.0);
-	
-	return vec4f(r, g, b, 1.0);
-}
-`;
-
 export interface WebGPURenderer {
 	device: GPUDevice;
 	context: GPUCanvasContext;
 	pipeline: GPURenderPipeline;
-	nv12Pipeline: GPURenderPipeline;
 	sampler: GPUSampler;
 	frameTexture: GPUTexture | null;
 	bindGroup: GPUBindGroup | null;
 	bindGroupLayout: GPUBindGroupLayout;
-	nv12BindGroupLayout: GPUBindGroupLayout;
-	yTexture: GPUTexture | null;
-	uvTexture: GPUTexture | null;
-	nv12BindGroup: GPUBindGroup | null;
 	cachedWidth: number;
 	cachedHeight: number;
-	cachedNv12Width: number;
-	cachedNv12Height: number;
 	canvas: OffscreenCanvas;
 }
 
@@ -134,39 +105,12 @@ export async function initWebGPU(
 		],
 	});
 
-	const nv12BindGroupLayout = device.createBindGroupLayout({
-		entries: [
-			{
-				binding: 0,
-				visibility: GPUShaderStage.FRAGMENT,
-				sampler: { type: "filtering" },
-			},
-			{
-				binding: 1,
-				visibility: GPUShaderStage.FRAGMENT,
-				texture: { sampleType: "float" },
-			},
-			{
-				binding: 2,
-				visibility: GPUShaderStage.FRAGMENT,
-				texture: { sampleType: "float" },
-			},
-		],
-	});
-
 	const pipelineLayout = device.createPipelineLayout({
 		bindGroupLayouts: [bindGroupLayout],
 	});
 
-	const nv12PipelineLayout = device.createPipelineLayout({
-		bindGroupLayouts: [nv12BindGroupLayout],
-	});
-
 	const vertexModule = device.createShaderModule({ code: VERTEX_SHADER });
 	const fragmentModule = device.createShaderModule({ code: FRAGMENT_SHADER });
-	const nv12FragmentModule = device.createShaderModule({
-		code: NV12_FRAGMENT_SHADER,
-	});
 
 	const pipeline = device.createRenderPipeline({
 		layout: pipelineLayout,
@@ -176,22 +120,6 @@ export async function initWebGPU(
 		},
 		fragment: {
 			module: fragmentModule,
-			entryPoint: "fs",
-			targets: [{ format }],
-		},
-		primitive: {
-			topology: "triangle-list",
-		},
-	});
-
-	const nv12Pipeline = device.createRenderPipeline({
-		layout: nv12PipelineLayout,
-		vertex: {
-			module: vertexModule,
-			entryPoint: "vs",
-		},
-		fragment: {
-			module: nv12FragmentModule,
 			entryPoint: "fs",
 			targets: [{ format }],
 		},
@@ -211,19 +139,12 @@ export async function initWebGPU(
 		device,
 		context,
 		pipeline,
-		nv12Pipeline,
 		sampler,
 		frameTexture: null,
 		bindGroup: null,
 		bindGroupLayout,
-		nv12BindGroupLayout,
-		yTexture: null,
-		uvTexture: null,
-		nv12BindGroup: null,
 		cachedWidth: 0,
 		cachedHeight: 0,
-		cachedNv12Width: 0,
-		cachedNv12Height: 0,
 		canvas,
 	};
 }
@@ -310,128 +231,9 @@ export function renderFrameWebGPU(
 	device.queue.submit([encoder.finish()]);
 }
 
-export function renderNv12FrameWebGPU(
-	renderer: WebGPURenderer,
-	data: Uint8ClampedArray,
-	width: number,
-	height: number,
-	yStride: number,
-): void {
-	const {
-		device,
-		context,
-		nv12Pipeline,
-		sampler,
-		nv12BindGroupLayout,
-		canvas,
-	} = renderer;
-
-	if (canvas.width !== width || canvas.height !== height) {
-		canvas.width = width;
-		canvas.height = height;
-		const format = navigator.gpu.getPreferredCanvasFormat();
-		context.configure({
-			device,
-			format,
-			alphaMode: "opaque",
-		});
-	}
-
-	if (
-		renderer.cachedNv12Width !== width ||
-		renderer.cachedNv12Height !== height
-	) {
-		renderer.yTexture?.destroy();
-		renderer.uvTexture?.destroy();
-
-		renderer.yTexture = device.createTexture({
-			size: { width, height },
-			format: "r8unorm",
-			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-		});
-
-		renderer.uvTexture = device.createTexture({
-			size: { width: width / 2, height: height / 2 },
-			format: "rg8unorm",
-			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-		});
-
-		renderer.nv12BindGroup = device.createBindGroup({
-			layout: nv12BindGroupLayout,
-			entries: [
-				{ binding: 0, resource: sampler },
-				{ binding: 1, resource: renderer.yTexture.createView() },
-				{ binding: 2, resource: renderer.uvTexture.createView() },
-			],
-		});
-
-		renderer.cachedNv12Width = width;
-		renderer.cachedNv12Height = height;
-	}
-
-	if (!renderer.yTexture || !renderer.uvTexture || !renderer.nv12BindGroup) {
-		return;
-	}
-
-	const ySize = yStride * height;
-	const uvWidth = width / 2;
-	const uvHeight = height / 2;
-	const uvStride = width;
-	const uvSize = uvStride * uvHeight;
-
-	if (data.byteLength < ySize + uvSize) {
-		return;
-	}
-
-	const yData = data.subarray(0, ySize);
-	const uvData = data.subarray(ySize, ySize + uvSize);
-
-	device.queue.writeTexture(
-		{ texture: renderer.yTexture },
-		yData.buffer as unknown as GPUAllowSharedBufferSource,
-		{ bytesPerRow: yStride, rowsPerImage: height, offset: yData.byteOffset },
-		{ width, height },
-	);
-
-	device.queue.writeTexture(
-		{ texture: renderer.uvTexture },
-		uvData.buffer as unknown as GPUAllowSharedBufferSource,
-		{
-			bytesPerRow: uvStride,
-			rowsPerImage: uvHeight,
-			offset: uvData.byteOffset,
-		},
-		{ width: uvWidth, height: uvHeight },
-	);
-
-	const encoder = device.createCommandEncoder();
-	const pass = encoder.beginRenderPass({
-		colorAttachments: [
-			{
-				view: context.getCurrentTexture().createView(),
-				clearValue: { r: 0, g: 0, b: 0, a: 1 },
-				loadOp: "clear",
-				storeOp: "store",
-			},
-		],
-	});
-
-	pass.setPipeline(nv12Pipeline);
-	pass.setBindGroup(0, renderer.nv12BindGroup);
-	pass.draw(3);
-	pass.end();
-
-	device.queue.submit([encoder.finish()]);
-}
-
 export function disposeWebGPU(renderer: WebGPURenderer): void {
 	renderer.frameTexture?.destroy();
 	renderer.frameTexture = null;
 	renderer.bindGroup = null;
-	renderer.yTexture?.destroy();
-	renderer.yTexture = null;
-	renderer.uvTexture?.destroy();
-	renderer.uvTexture = null;
-	renderer.nv12BindGroup = null;
 	renderer.device.destroy();
 }
