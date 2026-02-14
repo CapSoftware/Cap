@@ -316,16 +316,24 @@ impl FFmpegDecoder {
         use ffmpeg::rescale;
         let timestamp_us = (requested_time * 1_000_000.0) as i64;
         let position = rescale::Rescale::rescale(&timestamp_us, (1, 1_000_000), rescale::TIME_BASE);
-        let seek_window =
+        let preferred_backtrack =
+            rescale::Rescale::rescale(&(500_000_i64), (1, 1_000_000), rescale::TIME_BASE);
+        let preferred_forward =
+            rescale::Rescale::rescale(&(2_000_000_i64), (1, 1_000_000), rescale::TIME_BASE);
+        let wide_seek_window =
             rescale::Rescale::rescale(&(2_000_000_i64), (1, 1_000_000), rescale::TIME_BASE);
 
         self.decoder.flush();
 
         let seek_result = if position >= self.last_seek_position {
-            let min = position.saturating_sub(seek_window);
-            let max = position.saturating_add(seek_window);
+            let preferred_min = position.saturating_sub(preferred_backtrack);
+            let preferred_max = position.saturating_add(preferred_forward);
+            let wide_min = position.saturating_sub(wide_seek_window);
+            let wide_max = position.saturating_add(wide_seek_window);
+
             self.input
-                .seek(position, min..max)
+                .seek(position, preferred_min..preferred_max)
+                .or_else(|_| self.input.seek(position, wide_min..wide_max))
                 .or_else(|_| self.input.seek(position, ..position))
         } else {
             self.input.seek(position, ..position)
