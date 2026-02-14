@@ -2480,6 +2480,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker in-flight cap hit telemetry)
+
+**Goal**: Improve fallback-pressure diagnostics by exposing how often worker in-flight capping blocks immediate postMessage dispatch
+
+**What was done**:
+1. Added cumulative counter for worker in-flight cap hits in socket transport.
+2. Incremented counter in both fallback branches when dispatch is blocked by in-flight cap.
+3. Exposed new metric through `FpsStats`.
+4. Added overlay and clipboard output for cap-hit totals.
+5. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `workerInFlightBackpressureHits` to `FpsStats`
+  - added `totalWorkerInFlightBackpressureHits` runtime counter
+  - increments counter when `workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT`
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - extended transport stats state/reset/polling with `workerInFlightBackpressureHits`
+  - clipboard export includes `Worker In-Flight Cap Hits`
+  - overlay now shows `Worker in-flight cap hits` row when non-zero
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Diagnostics now surface how frequently fallback dispatch is blocked by in-flight limits.
+- ✅ Overlay and clipboard provide direct visibility into cap-pressure behavior during long sessions.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback contention runs to correlate cap-hit frequency with superseded drops, retry counts, and FPS stability.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

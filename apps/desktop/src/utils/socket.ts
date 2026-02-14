@@ -43,6 +43,7 @@ export type FpsStats = {
 	sabSlotCount: number;
 	sabTotalBytes: number;
 	workerFramesInFlight: number;
+	workerInFlightBackpressureHits: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -496,6 +497,7 @@ export function createImageDataWS(
 				}
 				if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
 					isProcessing = false;
+					totalWorkerInFlightBackpressureHits++;
 					if (nextFrame) {
 						framesDropped++;
 						totalSupersededDrops++;
@@ -526,6 +528,7 @@ export function createImageDataWS(
 			sabWriteRetryCount = 0;
 			if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
 				isProcessing = false;
+				totalWorkerInFlightBackpressureHits++;
 				if (nextFrame) {
 					framesDropped++;
 					totalSupersededDrops++;
@@ -567,6 +570,7 @@ export function createImageDataWS(
 	let totalFramesWrittenToSharedBuffer = 0;
 	let totalFramesSentToWorker = 0;
 	let totalWorkerFallbackBytes = 0;
+	let totalWorkerInFlightBackpressureHits = 0;
 	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
 	let framesReceived = 0;
@@ -598,6 +602,7 @@ export function createImageDataWS(
 			(sharedBufferConfig?.slotSize ?? 0) *
 			(sharedBufferConfig?.slotCount ?? 0),
 		workerFramesInFlight,
+		workerInFlightBackpressureHits: totalWorkerInFlightBackpressureHits,
 		sabTotalRetryAttempts: totalSabRetryAttempts,
 		sabTotalFramesReceived: totalFramesReceived,
 		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
