@@ -487,6 +487,9 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
     - `Playback first decoded frame ready`
     - `Playback first frame rendered`
   - added `startup_instant` to `AudioPlayback` and wired callback logs to playback start origin
+- `crates/editor/examples/playback-startup-report.rs`
+  - added log analysis utility for startup timing markers
+  - reports avg/p50/p95/min/max for decoded, rendered, and audio callback startup milestones
 
 **Results**:
 - Playback throughput remains at ~60fps in synthetic benchmark after instrumentation:

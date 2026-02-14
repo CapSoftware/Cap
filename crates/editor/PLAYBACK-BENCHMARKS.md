@@ -74,6 +74,16 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --audio /path/to/audio.ogg --fps 60
 ```
 
+#### Playback Startup Latency Report (log analysis)
+
+```bash
+# Parse startup timing logs captured from desktop editor sessions
+cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log
+
+# Aggregate multiple session logs
+cargo run -p cap-editor --example playback-startup-report -- --log /path/to/macos.log --log /path/to/windows.log
+```
+
 #### Combined Workflow (Recording → Playback)
 
 ```bash
