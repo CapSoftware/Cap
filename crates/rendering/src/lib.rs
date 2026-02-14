@@ -2067,7 +2067,7 @@ impl RendererLayers {
             constants,
         );
 
-        self.camera.prepare(
+        self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
             uniforms.camera,
@@ -2077,9 +2077,10 @@ impl RendererLayers {
                     .as_ref()
                     .map(|frame| (size, frame, segment_frames.recording_time))
             }),
+            encoder,
         );
 
-        self.camera_only.prepare(
+        self.camera_only.prepare_with_encoder(
             &constants.device,
             &constants.queue,
             uniforms.camera_only,
@@ -2089,6 +2090,7 @@ impl RendererLayers {
                     .as_ref()
                     .map(|frame| (size, frame, segment_frames.recording_time))
             }),
+            encoder,
         );
 
         self.text.prepare(
