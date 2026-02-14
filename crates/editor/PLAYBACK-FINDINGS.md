@@ -869,6 +869,45 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Supersession min-pixels threshold retune to 2,000,000)
+
+**Goal**: Validate whether enabling supersession for 1080p-class streams improves scrub latency without harming 4k behavior
+
+**What was done**:
+1. Ran baseline scrub benchmarks with current defaults (`min_pixels=3_686_400`, `min_span_frames=20`).
+2. Ran candidate scrub benchmarks with `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS=2_000_000`.
+3. Compared 1080p and 4k median run aggregates from `--runs 3`.
+4. Updated FFmpeg supersession default min-pixels fallback to `2_000_000`.
+5. Re-ran scrub + playback + decode regression benchmarks after default promotion.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - changed default supersession `min_pixels` fallback from `3_686_400` to `2_000_000`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - updated runtime tuning command examples
+  - added benchmark history section for min-pixels sweep and post-retune regression checks
+
+**Results**:
+- Sweep medians (last-request avg / p95):
+  - baseline min_pixels=3_686_400:
+    - 1080p: **332.72ms / 480.45ms**
+    - 4k: **855.08ms / 1769.64ms**
+  - candidate min_pixels=2_000_000:
+    - 1080p: **213.36ms / 449.62ms**
+    - 4k: **814.28ms / 1716.14ms**
+- Post-change default validation:
+  - 1080p scrub median last-request avg **200.14ms**, p95 **429.83ms**
+  - 4k scrub median last-request avg **834.23ms**, p95 **1718.54ms**
+  - playback remains 60fps-class:
+    - 1080p: **60.23 fps**
+    - 4k: **60.19 fps**
+
+**Decision**: keep defaults at `min_requests=8`, `min_span_frames=20`, `min_pixels=2_000_000`.
+
+**Stopping point**: supersession now benefits both 1080p and 4k scrub paths under the same default policy while preserving playback throughput targets.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

@@ -105,7 +105,7 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
             .unwrap_or(20);
         let min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS")
             .filter(|value| *value > 0)
-            .unwrap_or(3_686_400);
+            .unwrap_or(2_000_000);
         let disabled = env::var("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED")
             .ok()
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
