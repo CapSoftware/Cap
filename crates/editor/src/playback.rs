@@ -106,12 +106,7 @@ impl FrameCache {
             .cache
             .iter()
             .filter_map(|(k, _)| {
-                let distance = if *k > current_frame {
-                    *k - current_frame
-                } else {
-                    current_frame - *k
-                };
-                if distance > max_distance {
+                if (*k).abs_diff(current_frame) > max_distance {
                     Some(*k)
                 } else {
                     None
