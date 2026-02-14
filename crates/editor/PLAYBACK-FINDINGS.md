@@ -2997,6 +2997,49 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (frame-order decision helper extraction for socket transport)
+
+**Goal**: Consolidate queued/direct stale-frame ordering decisions into a shared helper and add targeted unit coverage
+
+**What was done**:
+1. Added shared transport frame-order decision helper.
+2. Added focused unit tests for missing/latest/forward/backward/seek decision cases.
+3. Refactored socket queued ingress and direct-render gating to use shared helper.
+4. Re-ran desktop typecheck and expanded transport utility test suite.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-transport-order.ts` (new)
+  - added `decideFrameOrder(candidateFrameNumber, latestFrameNumber, staleWindow)`
+  - returns:
+    - `action` (`accept` / `drop`)
+    - `nextLatestFrameNumber`
+    - `dropsIncrement`
+- `apps/desktop/src/utils/frame-transport-order.test.ts` (new)
+  - covers:
+    - missing candidate acceptance
+    - first-frame seeding
+    - short backward stale drop
+    - large backward seek acceptance
+    - forward progression acceptance
+- `apps/desktop/src/utils/socket.ts`
+  - replaced direct calls to `shouldDropOutOfOrderFrame` with `decideFrameOrder`
+  - queued and direct transport stale-drop counters now update from helper decisions
+  - latest frame-number state updates now flow through helper return values
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/utils/frame-transport-order.ts src/utils/frame-transport-order.test.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Socket transport ordering behavior now uses a single tested decision primitive.
+- ✅ Queued and direct stale-drop logic remains consistent and easier to evolve.
+- ✅ Desktop typecheck and utility suite pass (28/28).
+
+**Stopping point**: Ready for target-machine playback sessions with unified stale-ordering decision behavior in both queued and direct transport paths.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

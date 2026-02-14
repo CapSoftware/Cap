@@ -16,7 +16,7 @@ import {
 	decideWorkerInflightDispatch,
 	updateWorkerInflightPeaks,
 } from "./frame-transport-inflight";
-import { shouldDropOutOfOrderFrame } from "./frame-order";
+import { decideFrameOrder } from "./frame-transport-order";
 import { decideSabWriteFailure } from "./frame-transport-retry";
 import type { StrideCorrectionResponse } from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
@@ -480,23 +480,18 @@ export function createImageDataWS(
 
 	function enqueueFrameBuffer(buffer: ArrayBuffer) {
 		const frameNumber = readFrameNumber(buffer);
-		if (
-			frameNumber !== null &&
-			latestQueuedFrameNumber !== null &&
-			shouldDropOutOfOrderFrame(
-				frameNumber,
-				latestQueuedFrameNumber,
-				FRAME_ORDER_STALE_WINDOW,
-			)
-		) {
-			framesDropped++;
-			totalSupersededDrops++;
-			queuedOutOfOrderDropsTotal++;
-			queuedOutOfOrderDropsWindow++;
+		const orderDecision = decideFrameOrder(
+			frameNumber,
+			latestQueuedFrameNumber,
+			FRAME_ORDER_STALE_WINDOW,
+		);
+		latestQueuedFrameNumber = orderDecision.nextLatestFrameNumber;
+		if (orderDecision.action === "drop") {
+			framesDropped += orderDecision.dropsIncrement;
+			totalSupersededDrops += orderDecision.dropsIncrement;
+			queuedOutOfOrderDropsTotal += orderDecision.dropsIncrement;
+			queuedOutOfOrderDropsWindow += orderDecision.dropsIncrement;
 			return;
-		}
-		if (frameNumber !== null) {
-			latestQueuedFrameNumber = frameNumber;
 		}
 
 		if (isProcessing) {
@@ -808,18 +803,17 @@ export function createImageDataWS(
 			return;
 		}
 
-		if (
-			lastDirectRenderedFrameNumber !== null &&
-			shouldDropOutOfOrderFrame(
-				frameNumber,
-				lastDirectRenderedFrameNumber,
-				FRAME_ORDER_STALE_WINDOW,
-			)
-		) {
-			directOutOfOrderDropsTotal++;
-			directOutOfOrderDropsWindow++;
+		const directOrderDecision = decideFrameOrder(
+			frameNumber,
+			lastDirectRenderedFrameNumber,
+			FRAME_ORDER_STALE_WINDOW,
+		);
+		if (directOrderDecision.action === "drop") {
+			directOutOfOrderDropsTotal += directOrderDecision.dropsIncrement;
+			directOutOfOrderDropsWindow += directOrderDecision.dropsIncrement;
 			return;
 		}
+		lastDirectRenderedFrameNumber = directOrderDecision.nextLatestFrameNumber;
 
 		if (mainThreadWebGPU && directCanvas) {
 			const frameData = new Uint8ClampedArray(buffer, 0, frameDataSize);
@@ -839,7 +833,6 @@ export function createImageDataWS(
 			actualRendersCount++;
 			renderFrameCount++;
 			storeRenderedFrame(frameData, width, height, strideBytes);
-			lastDirectRenderedFrameNumber = frameNumber;
 			onmessage({ width, height });
 			return;
 		}
@@ -879,10 +872,8 @@ export function createImageDataWS(
 				);
 				actualRendersCount++;
 				renderFrameCount++;
-				lastDirectRenderedFrameNumber = frameNumber;
 				onmessage({ width, height });
 			} else {
-				lastDirectRenderedFrameNumber = frameNumber;
 				strideWorker.postMessage(
 					{
 						type: "correct-stride",
