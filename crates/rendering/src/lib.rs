@@ -7,7 +7,7 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::{RenderSession, finish_encoder};
+use frame_pipeline::{RenderSession, finish_encoder, flush_pending_readback};
 use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
@@ -530,6 +530,14 @@ pub async fn render_video_to_channel(
         };
 
         sender.send((frame, current_frame_number)).await?;
+    }
+
+    if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline().await {
+        if final_frame.width > 0 && final_frame.height > 0 {
+            sender
+                .send((final_frame, frame_number.saturating_sub(1)))
+                .await?;
+        }
     }
 
     let total_time = start_time.elapsed();
@@ -1874,6 +1882,14 @@ impl<'a> FrameRenderer<'a> {
         }
 
         Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
+    pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
+        if let Some(session) = &mut self.session {
+            flush_pending_readback(session, &self.constants.device).await
+        } else {
+            None
+        }
     }
 }
 

@@ -461,3 +461,14 @@ pub async fn finish_encoder(
 
     pending.wait(device).await
 }
+
+pub async fn flush_pending_readback(
+    session: &mut RenderSession,
+    device: &wgpu::Device,
+) -> Option<Result<RenderedFrame, RenderingError>> {
+    if let Some(pending) = session.pipelined_readback.take_pending() {
+        Some(pending.wait(device).await)
+    } else {
+        None
+    }
+}
