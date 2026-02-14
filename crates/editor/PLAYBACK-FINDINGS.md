@@ -3238,6 +3238,43 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (startup report CSV audio-path rows)
+
+**Goal**: Persist audio startup mode classification into startup report CSV outputs for downstream baseline/candidate analysis
+
+**What was done**:
+1. Extended aggregate CSV export with `aggregate_audio_path` rows.
+2. Extended delta CSV export with `delta_audio_path` rows.
+3. Extended run-metrics CSV export with `run_metric_audio_path` rows.
+4. Added tests validating new audio-path CSV rows.
+5. Updated benchmark docs to note audio-path run-metric CSV mode.
+
+**Changes Made**:
+- `crates/editor/examples/playback-startup-report.rs`
+  - `append_aggregate_csv` now appends `aggregate_audio_path` row with:
+    - audio path label
+    - stream callback sample count
+    - prerender callback sample count
+  - `append_delta_csv` now appends `delta_audio_path` row with baseline/candidate audio path summary
+  - `append_run_metrics_csv` now appends `run_metric_audio_path` row per run id
+  - aggregate/delta call sites now pass audio-path summaries
+  - tests updated to assert new row modes
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - startup report CSV command note updated to mention `run_metric_audio_path` row mode
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics --output-csv /tmp/playback-startup-run-export.csv`
+
+**Results**:
+- ✅ Startup report CSV outputs now carry explicit audio startup mode rows for aggregate, delta, and run-metrics exports.
+- ✅ Updated startup report tests pass with new row modes (11/11).
+
+**Stopping point**: Ready to ingest macOS/Windows startup trace CSVs and query audio startup mode directly from exported rows.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

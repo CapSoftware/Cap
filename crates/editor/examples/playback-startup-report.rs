@@ -341,6 +341,7 @@ fn append_aggregate_csv(
     path: &PathBuf,
     run_id: Option<&str>,
     metrics: &[(&str, &[f64])],
+    audio_summary: Option<(AudioStartupPath, usize, usize)>,
 ) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create(true)
@@ -368,6 +369,23 @@ fn append_aggregate_csv(
         }
     }
 
+    if let Some((audio_path, stream_samples, prerender_samples)) = audio_summary {
+        let metric = format!(
+            "audio_path={} stream_samples={} prerender_samples={}",
+            audio_startup_path_label(audio_path),
+            stream_samples,
+            prerender_samples
+        );
+        writeln!(
+            file,
+            "{timestamp_ms},aggregate_audio_path,\"{}\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+            metric,
+            run_id.unwrap_or(""),
+            stream_samples + prerender_samples
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
     Ok(())
 }
 
@@ -376,6 +394,10 @@ fn append_delta_csv(
     baseline_run_id: Option<&str>,
     candidate_run_id: Option<&str>,
     metrics: &[(&str, &[f64], &[f64])],
+    audio_summary: Option<(
+        (AudioStartupPath, usize, usize),
+        (AudioStartupPath, usize, usize),
+    )>,
 ) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create(true)
@@ -407,6 +429,30 @@ fn append_delta_csv(
             )
             .map_err(|error| format!("write {} / {error}", path.display()))?;
         }
+    }
+
+    if let Some((baseline_audio, candidate_audio)) = audio_summary {
+        let baseline_metric = format!(
+            "baseline_audio_path={} stream_samples={} prerender_samples={}",
+            audio_startup_path_label(baseline_audio.0),
+            baseline_audio.1,
+            baseline_audio.2
+        );
+        let candidate_metric = format!(
+            "candidate_audio_path={} stream_samples={} prerender_samples={}",
+            audio_startup_path_label(candidate_audio.0),
+            candidate_audio.1,
+            candidate_audio.2
+        );
+        let metric = format!("{baseline_metric} {candidate_metric}");
+        writeln!(
+            file,
+            "{timestamp_ms},delta_audio_path,\"{}\",\"\",\"{}\",\"{}\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+            metric,
+            baseline_run_id.unwrap_or(""),
+            candidate_run_id.unwrap_or(""),
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
 
     Ok(())
@@ -480,6 +526,22 @@ fn append_run_metrics_csv(
                 .map_err(|error| format!("write {} / {error}", path.display()))?;
             }
         }
+
+        let (audio_path, stream_samples, prerender_samples) = detect_audio_startup_path(stats);
+        let metric = format!(
+            "audio_path={} stream_samples={} prerender_samples={}",
+            audio_startup_path_label(audio_path),
+            stream_samples,
+            prerender_samples
+        );
+        writeln!(
+            file,
+            "{timestamp_ms},run_metric_audio_path,\"{}\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+            metric,
+            run_id,
+            stream_samples + prerender_samples
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
 
     Ok(())
@@ -752,7 +814,10 @@ fn main() {
                     stats.audio_prerender_startup_ms.as_slice(),
                 ),
             ];
-            if let Err(error) = append_aggregate_csv(path, run_id.as_deref(), &metrics) {
+            let audio_summary = detect_audio_startup_path(&stats);
+            if let Err(error) =
+                append_aggregate_csv(path, run_id.as_deref(), &metrics, Some(audio_summary))
+            {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
@@ -859,8 +924,15 @@ fn main() {
                     candidate_stats.audio_prerender_startup_ms.as_slice(),
                 ),
             ];
-            if let Err(error) = append_delta_csv(path, baseline_filter, candidate_filter, &metrics)
-            {
+            let baseline_audio_summary = detect_audio_startup_path(&baseline_stats);
+            let candidate_audio_summary = detect_audio_startup_path(&candidate_stats);
+            if let Err(error) = append_delta_csv(
+                path,
+                baseline_filter,
+                candidate_filter,
+                &metrics,
+                Some((baseline_audio_summary, candidate_audio_summary)),
+            ) {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
@@ -1008,6 +1080,7 @@ mod tests {
             &path,
             Some("macos-pass-1"),
             &[("first decoded frame", &[100.0, 120.0])],
+            Some((AudioStartupPath::Streaming, 2, 0)),
         )
         .expect("write aggregate rows");
 
@@ -1016,15 +1089,21 @@ mod tests {
             Some("baseline"),
             Some("candidate"),
             &[("first decoded frame", &[100.0, 120.0], &[80.0, 90.0])],
+            Some((
+                (AudioStartupPath::Streaming, 2, 0),
+                (AudioStartupPath::Prerendered, 0, 1),
+            )),
         )
         .expect("write delta rows");
 
         let contents = fs::read_to_string(&path).expect("read csv contents");
         let rows = contents.lines().collect::<Vec<_>>();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 5);
         assert!(rows[0].contains("timestamp_ms,mode,metric"));
         assert!(rows[1].contains("aggregate"));
-        assert!(rows[2].contains("delta"));
+        assert!(rows[2].contains("aggregate_audio_path"));
+        assert!(rows[3].contains("delta"));
+        assert!(rows[4].contains("delta_audio_path"));
 
         let _ = fs::remove_file(path);
     }
@@ -1083,6 +1162,7 @@ mod tests {
         let contents = fs::read_to_string(&path).expect("read csv");
         assert!(contents.contains(",run_count,"));
         assert!(contents.contains(",run_metric,"));
+        assert!(contents.contains(",run_metric_audio_path,"));
 
         let _ = fs::remove_file(path);
     }

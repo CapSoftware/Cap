@@ -168,7 +168,7 @@ cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback
 # List per-run startup metric summaries (avg/p95 by event + audio startup mode classification)
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-run-metrics
 
-# Export run counts or run metrics to CSV
+# Export run counts or run metrics to CSV (`run_metric_audio_path` rows include audio startup mode classification)
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-runs --output-csv /tmp/playback-startup-run-summary.csv
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-run-metrics --output-csv /tmp/playback-startup-run-summary.csv
 
