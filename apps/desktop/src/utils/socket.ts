@@ -59,6 +59,8 @@ export type FpsStats = {
 	renderedFromSharedWindow: number;
 	renderedFromWorkerTotal: number;
 	renderedFromWorkerWindow: number;
+	queuedOutOfOrderDropsTotal: number;
+	queuedOutOfOrderDropsWindow: number;
 	directOutOfOrderDropsTotal: number;
 	directOutOfOrderDropsWindow: number;
 	sabTotalRetryAttempts: number;
@@ -223,6 +225,7 @@ export function createImageDataWS(
 
 	let mainThreadWebGPU: WebGPURenderer | null = null;
 	let mainThreadWebGPUInitializing = false;
+	let latestQueuedFrameNumber: number | null = null;
 	let lastDirectRenderedFrameNumber: number | null = null;
 
 	let lastRenderedFrameData: {
@@ -281,7 +284,9 @@ export function createImageDataWS(
 		workerInFlightSupersededDropsWindow = 0;
 		renderedFromSharedWindow = 0;
 		renderedFromWorkerWindow = 0;
+		queuedOutOfOrderDropsWindow = 0;
 		directOutOfOrderDropsWindow = 0;
+		latestQueuedFrameNumber = null;
 		lastDirectRenderedFrameNumber = null;
 
 		if (mainThreadWebGPU) {
@@ -319,6 +324,7 @@ export function createImageDataWS(
 				}
 				directCtx = null;
 				mainThreadWebGPUInitializing = false;
+				latestQueuedFrameNumber = null;
 				lastDirectRenderedFrameNumber = null;
 			}
 
@@ -383,6 +389,7 @@ export function createImageDataWS(
 			};
 		},
 		resetFrameState: () => {
+			latestQueuedFrameNumber = null;
 			lastDirectRenderedFrameNumber = null;
 			worker.postMessage({ type: "reset-frame-state" });
 		},
@@ -455,6 +462,13 @@ export function createImageDataWS(
 		}
 	};
 
+	function readFrameNumber(buffer: ArrayBuffer): number | null {
+		if (buffer.byteLength < 24) return null;
+		const metadataOffset = buffer.byteLength - 24;
+		const meta = new DataView(buffer, metadataOffset, 24);
+		return meta.getUint32(12, true);
+	}
+
 	function scheduleProcessNextFrame() {
 		if (processNextScheduled) return;
 		processNextScheduled = true;
@@ -465,6 +479,26 @@ export function createImageDataWS(
 	}
 
 	function enqueueFrameBuffer(buffer: ArrayBuffer) {
+		const frameNumber = readFrameNumber(buffer);
+		if (
+			frameNumber !== null &&
+			latestQueuedFrameNumber !== null &&
+			shouldDropOutOfOrderFrame(
+				frameNumber,
+				latestQueuedFrameNumber,
+				FRAME_ORDER_STALE_WINDOW,
+			)
+		) {
+			framesDropped++;
+			totalSupersededDrops++;
+			queuedOutOfOrderDropsTotal++;
+			queuedOutOfOrderDropsWindow++;
+			return;
+		}
+		if (frameNumber !== null) {
+			latestQueuedFrameNumber = frameNumber;
+		}
+
 		if (isProcessing) {
 			if (nextFrame) {
 				framesDropped++;
@@ -626,6 +660,8 @@ export function createImageDataWS(
 	let renderedFromSharedWindow = 0;
 	let renderedFromWorkerTotal = 0;
 	let renderedFromWorkerWindow = 0;
+	let queuedOutOfOrderDropsTotal = 0;
+	let queuedOutOfOrderDropsWindow = 0;
 	let directOutOfOrderDropsTotal = 0;
 	let directOutOfOrderDropsWindow = 0;
 	let totalSupersededDrops = 0;
@@ -669,6 +705,8 @@ export function createImageDataWS(
 		renderedFromSharedWindow,
 		renderedFromWorkerTotal,
 		renderedFromWorkerWindow,
+		queuedOutOfOrderDropsTotal,
+		queuedOutOfOrderDropsWindow,
 		directOutOfOrderDropsTotal,
 		directOutOfOrderDropsWindow,
 		sabTotalRetryAttempts: totalSabRetryAttempts,
@@ -708,7 +746,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}, worker_superseded_window: ${workerInFlightSupersededDropsWindow}, worker_superseded_total: ${totalWorkerInFlightSupersededDrops}, rendered_shared_window: ${renderedFromSharedWindow}, rendered_shared_total: ${renderedFromSharedTotal}, rendered_worker_window: ${renderedFromWorkerWindow}, rendered_worker_total: ${renderedFromWorkerTotal}, direct_ooo_window: ${directOutOfOrderDropsWindow}, direct_ooo_total: ${directOutOfOrderDropsTotal}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}, worker_superseded_window: ${workerInFlightSupersededDropsWindow}, worker_superseded_total: ${totalWorkerInFlightSupersededDrops}, rendered_shared_window: ${renderedFromSharedWindow}, rendered_shared_total: ${renderedFromSharedTotal}, rendered_worker_window: ${renderedFromWorkerWindow}, rendered_worker_total: ${renderedFromWorkerTotal}, queued_ooo_window: ${queuedOutOfOrderDropsWindow}, queued_ooo_total: ${queuedOutOfOrderDropsTotal}, direct_ooo_window: ${directOutOfOrderDropsWindow}, direct_ooo_total: ${directOutOfOrderDropsTotal}`,
 				);
 
 				frameCount = 0;
@@ -727,6 +765,7 @@ export function createImageDataWS(
 				workerInFlightSupersededDropsWindow = 0;
 				renderedFromSharedWindow = 0;
 				renderedFromWorkerWindow = 0;
+				queuedOutOfOrderDropsWindow = 0;
 				directOutOfOrderDropsWindow = 0;
 				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
@@ -744,6 +783,7 @@ export function createImageDataWS(
 			enqueueFrameBuffer(buffer);
 			return;
 		}
+		latestQueuedFrameNumber = null;
 
 		if (buffer.byteLength < 24) {
 			return;

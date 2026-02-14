@@ -2956,6 +2956,47 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (queued transport out-of-order stale gating)
+
+**Goal**: Reduce worker-path churn by dropping stale out-of-order frames before queueing when transport is not in direct-render mode
+
+**What was done**:
+1. Added frame-number extraction for incoming websocket frame buffers.
+2. Added queued-path stale gating against latest accepted queued frame number.
+3. Added queued out-of-order drop counters (window + cumulative).
+4. Extended frame logs, overlay, and clipboard diagnostics with queued drop counters.
+5. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - queue ingress now reads frame number from frame metadata trailer
+  - drops stale out-of-order queued frames via `shouldDropOutOfOrderFrame`
+  - adds `FpsStats` fields:
+    - `queuedOutOfOrderDropsTotal`
+    - `queuedOutOfOrderDropsWindow`
+  - periodic `[Frame]` log now includes:
+    - `queued_ooo_window`
+    - `queued_ooo_total`
+  - resets queued out-of-order window counter on each log flush
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling now includes queued out-of-order counters
+  - clipboard export includes queued out-of-order metrics
+  - overlay row shows queued out-of-order drops with window suffix
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Non-direct transport path now suppresses stale out-of-order queued frames before worker dispatch.
+- ✅ Diagnostics now separate queued-path stale drops from direct-path stale drops.
+- ✅ Desktop typecheck and transport utility tests pass (23/23).
+
+**Stopping point**: Ready for target-machine runs to attribute stale-drop behavior between queued and direct render paths.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
