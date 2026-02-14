@@ -12,6 +12,7 @@ import {
 	DEFAULT_FRAME_BUFFER_CONFIG,
 	computeSharedBufferConfig,
 } from "./frame-transport-config";
+import { decideSabWriteFailure } from "./frame-transport-retry";
 import type { StrideCorrectionResponse } from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
 import {
@@ -440,15 +441,14 @@ export function createImageDataWS(
 			const written = producer.write(buffer);
 			if (!written) {
 				sabFallbackCount += 1;
-				if (isOversized || sabWriteRetryCount >= SAB_WRITE_RETRY_LIMIT) {
-					if (isOversized) {
-						sabOversizeFallbackCount += 1;
-					} else {
-						sabRetryLimitFallbackCount += 1;
-					}
-					sabWriteRetryCount = 0;
-				} else {
-					sabWriteRetryCount += 1;
+				const decision = decideSabWriteFailure(
+					isOversized,
+					sabWriteRetryCount,
+					SAB_WRITE_RETRY_LIMIT,
+				);
+				sabWriteRetryCount = decision.nextRetryCount;
+
+				if (decision.action === "retry") {
 					isProcessing = false;
 					if (nextFrame) {
 						framesDropped++;
@@ -462,6 +462,11 @@ export function createImageDataWS(
 						});
 					}
 					return;
+				}
+				if (decision.action === "fallback_oversize") {
+					sabOversizeFallbackCount += 1;
+				} else {
+					sabRetryLimitFallbackCount += 1;
 				}
 				framesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);

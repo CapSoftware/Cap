@@ -1389,6 +1389,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (SAB retry decision extraction + test coverage)
+
+**Goal**: Make SAB retry/fallback policy deterministic and test-covered
+
+**What was done**:
+1. Extracted SAB write-failure decision logic into a dedicated helper.
+2. Replaced inline socket retry branch logic with helper-driven decisions.
+3. Added targeted unit tests for oversize fallback, retry progression, and retry-limit fallback.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-transport-retry.ts`
+  - added `decideSabWriteFailure`
+  - explicit decision outcomes:
+    - `retry`
+    - `fallback_oversize`
+    - `fallback_retry_limit`
+- `apps/desktop/src/utils/socket.ts`
+  - now consumes `decideSabWriteFailure` for SAB write-failure handling
+- `apps/desktop/src/utils/frame-transport-retry.test.ts`
+  - added 3 tests covering all decision outcomes
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/socket.ts apps/desktop/src/utils/frame-transport-retry.ts apps/desktop/src/utils/frame-transport-retry.test.ts`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-retry.test.ts src/utils/frame-transport-config.test.ts src/utils/shared-frame-buffer.test.ts` (11 passed)
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ SAB retry policy behavior is now isolated, testable, and easier to tune.
+- ✅ Desktop tests and TypeScript checks pass.
+
+**Stopping point**: keep using SAB telemetry counters on target machines to tune retry limit and slot sizing defaults from real playback traces.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
