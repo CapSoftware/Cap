@@ -880,6 +880,13 @@ impl AudioPlayback {
 
             let duration_secs = self.duration_secs;
             let force_prerender = env_flag_enabled("CAP_AUDIO_PRERENDER_ONLY");
+            let force_streaming = env_flag_enabled("CAP_AUDIO_STREAMING_ONLY");
+
+            if force_prerender && force_streaming {
+                warn!(
+                    "CAP_AUDIO_PRERENDER_ONLY and CAP_AUDIO_STREAMING_ONLY both set; preferring pre-rendered path"
+                );
+            }
 
             #[derive(Clone, Copy)]
             enum AudioStartupMode {
@@ -900,6 +907,13 @@ impl AudioPlayback {
                         .map(|(stop_rx, stream)| {
                             (stop_rx, stream, AudioStartupMode::Prerendered)
                         })
+                    } else if force_streaming {
+                        self.create_stream::<$sample_ty>(
+                            device,
+                            supported_config,
+                            $startup,
+                        )
+                        .map(|(stop_rx, stream)| (stop_rx, stream, AudioStartupMode::Streaming))
                     } else {
                         self.create_stream::<$sample_ty>(
                             device.clone(),

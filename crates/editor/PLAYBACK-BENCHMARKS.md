@@ -156,6 +156,9 @@ CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv CAP_PLAYBACK_STARTUP_T
 # Force legacy pre-rendered startup path for A/B startup comparisons
 CAP_AUDIO_PRERENDER_ONLY=1 CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv CAP_PLAYBACK_STARTUP_TRACE_RUN_ID=macos-prerender pnpm dev:desktop
 
+# Force streaming-only startup path (disables pre-render fallback) for startup comparisons
+CAP_AUDIO_STREAMING_ONLY=1 CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv CAP_PLAYBACK_STARTUP_TRACE_RUN_ID=macos-streaming-only pnpm dev:desktop
+
 # Parse startup timing logs captured from desktop editor sessions
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log
 

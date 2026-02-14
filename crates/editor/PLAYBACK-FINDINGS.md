@@ -3367,6 +3367,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (audio startup mode env override expansion)
+
+**Goal**: Improve startup A/B experimentation by adding an explicit streaming-only override in addition to the existing pre-render-only override
+
+**What was done**:
+1. Added `CAP_AUDIO_STREAMING_ONLY` override handling in playback audio startup selection.
+2. Preserved `CAP_AUDIO_PRERENDER_ONLY` precedence when both overrides are set.
+3. Updated startup capture docs with streaming-only command variant.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - reads `CAP_AUDIO_STREAMING_ONLY` via `env_flag_enabled`
+  - stream selection logic now supports:
+    - pre-render-only override
+    - streaming-only override
+    - default streaming with pre-render fallback
+  - logs warning when both pre-render-only and streaming-only flags are set
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - startup trace capture commands now include `CAP_AUDIO_STREAMING_ONLY=1` variant
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 check -p cap-editor`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --max-frames 120 --seek-iterations 4`
+
+**Results**:
+- ✅ Startup mode overrides now support explicit streaming-only and pre-render-only A/B captures.
+- ✅ Override conflict behavior is deterministic (`CAP_AUDIO_PRERENDER_ONLY` wins).
+- ✅ Editor crate compiles and playback benchmark smoke run remains healthy.
+
+**Stopping point**: Ready for macOS/Windows startup trace capture sweeps using labeled streaming-only vs pre-render-only runs.
+
+---
+
 ### Session 2026-02-14 (startup capture docs for pre-render override)
 
 **Goal**: Make A/B startup capture workflow explicit for streaming-first vs forced pre-render audio startup comparisons
