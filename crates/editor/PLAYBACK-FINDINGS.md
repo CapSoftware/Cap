@@ -708,7 +708,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
   - 1080p: **60.23 fps**
   - 4k: **60.16 fps**
 
-**Stopping point**: heuristic improves 4k scrub responsiveness but has mixed 1080p tail behavior; next iteration should preserve 4k gains while tightening 1080p scrub p95/p99.
+**Stopping point**: first pass improved 4k scrub responsiveness but had mixed 1080p tail behavior; moved to resolution-gated supersession in follow-up pass.
+
+---
+
+### Session 2026-02-14 (Decoder scrub supersession heuristic pass 2)
+
+**Goal**: Retain 4k scrub gains while reducing 1080p side effects
+
+**What was done**:
+1. Gated supersession heuristic to high-resolution streams only (`>= 2560x1440`).
+2. Re-ran scrub burst benchmarks for 1080p and 4k.
+3. Re-ran decode and playback regression benchmarks for both clips.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - `maybe_supersede_scrub_burst` now accepts an enable flag
+  - supersession enablement computed from stream resolution in both FFmpeg loops
+
+**Results**:
+- ✅ 4k scrub responsiveness remained improved vs baseline:
+  - last-request avg: **1524ms -> 864ms**
+  - last-request p95: **2116ms -> 1689ms**
+  - all-request avg: **1072ms -> 820ms**
+- ✅ 1080p tails improved vs pass 1 while keeping better average:
+  - last-request avg: **313ms -> 298ms**
+  - last-request p95: **456ms -> 427ms**
+- ✅ Playback throughput remained stable:
+  - 1080p: **60.23 fps**
+  - 4k: **60.19 fps**
+- ✅ Decode seek/random-access metrics stayed within expected variance envelope.
+
+**Stopping point**: resolution-gated supersession is currently the best scrub-latency configuration; next work should focus on reducing 4k long-seek tails further without regressing these burst-latency gains.
 
 ---
 

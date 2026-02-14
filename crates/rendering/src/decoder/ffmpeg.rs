@@ -84,10 +84,10 @@ fn send_to_replies(
     }
 }
 
-fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>) {
+fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>, enabled: bool) {
     const SCRUB_SUPERSEDE_MIN_REQUESTS: usize = 8;
 
-    if pending_requests.len() < SCRUB_SUPERSEDE_MIN_REQUESTS {
+    if !enabled || pending_requests.len() < SCRUB_SUPERSEDE_MIN_REQUESTS {
         return;
     }
 
@@ -354,6 +354,8 @@ impl FfmpegDecoder {
                     decoder_type: sw_decoder_type,
                 };
                 let _ = ready_tx.send(Ok(sw_init_result));
+                let enable_scrub_supersession =
+                    (video_width as u64) * (video_height as u64) >= 3_686_400;
 
                 while let Ok(r) = rx.recv() {
                     const MAX_FRAME_TOLERANCE: u32 = 2;
@@ -402,7 +404,7 @@ impl FfmpegDecoder {
                         }
                     }
 
-                    maybe_supersede_scrub_burst(&mut pending_requests);
+                    maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
                     pending_requests.sort_by_key(|r| r.frame);
 
                     for PendingRequest {
@@ -695,6 +697,8 @@ impl FfmpegDecoder {
                 decoder_type,
             };
             let _ = ready_tx.send(Ok(init_result));
+            let enable_scrub_supersession =
+                (video_width as u64) * (video_height as u64) >= 3_686_400;
 
             while let Ok(r) = rx.recv() {
                 const MAX_FRAME_TOLERANCE: u32 = 2;
@@ -743,7 +747,7 @@ impl FfmpegDecoder {
                     }
                 }
 
-                maybe_supersede_scrub_burst(&mut pending_requests);
+                maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
                 pending_requests.sort_by_key(|r| r.frame);
 
                 for PendingRequest {
