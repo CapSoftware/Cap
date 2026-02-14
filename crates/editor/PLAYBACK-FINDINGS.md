@@ -1466,7 +1466,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 2. Added transport diagnostics to overlay panel:
    - render FPS
    - transport MB/s
-   - SAB slot size and resize count
+   - SAB slot size, slot count, total SAB memory, and resize count
    - SAB fallback counters (oversize vs retry-limit)
    - in-flight SAB retry count
 3. Extended clipboard export payload with the same transport diagnostics.

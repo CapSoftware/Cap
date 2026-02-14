@@ -34,6 +34,8 @@ type TransportStats = {
 	sabRetryLimitFallbacks: number;
 	sabRetriesInFlight: number;
 	sabSlotSizeBytes: number;
+	sabSlotCount: number;
+	sabTotalBytes: number;
 };
 
 const STATS_WINDOW_MS = 1000;
@@ -66,6 +68,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabRetryLimitFallbacks: 0,
 		sabRetriesInFlight: 0,
 		sabSlotSizeBytes: 0,
+		sabSlotCount: 0,
+		sabTotalBytes: 0,
 	});
 
 	const calculateStats = (): FrameStats => {
@@ -188,6 +192,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabRetryLimitFallbacks: 0,
 			sabRetriesInFlight: 0,
 			sabSlotSizeBytes: 0,
+			sabSlotCount: 0,
+			sabTotalBytes: 0,
 		});
 	};
 
@@ -216,6 +222,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				sabRetryLimitFallbacks: socketStats.sabRetryLimitFallbacks,
 				sabRetriesInFlight: socketStats.sabRetriesInFlight,
 				sabSlotSizeBytes: socketStats.sabSlotSizeBytes,
+				sabSlotCount: socketStats.sabSlotCount,
+				sabTotalBytes: socketStats.sabTotalBytes,
 			});
 		};
 		updateTransportStats();
@@ -244,6 +252,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Render FPS: ${formatFps(t.renderFps)}`,
 			`Transport: ${formatMb(t.mbPerSec)} MB/s`,
 			`SAB Slot: ${formatSlotMb(t.sabSlotSizeBytes)} MB`,
+			`SAB Slot Count: ${t.sabSlotCount}`,
+			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
 			`SAB Resizes: ${t.sabResizes}`,
 			`SAB Fallbacks: ${t.sabFallbacks}`,
 			`SAB Oversize Fallbacks: ${t.sabOversizeFallbacks}`,
@@ -350,7 +360,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							</span>
 							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
 								{" "}
-								/ {transportStats().sabResizes} resizes
+								/ {transportStats().sabSlotCount} slots /{" "}
+								{formatSlotMb(transportStats().sabTotalBytes)}MB total /{" "}
+								{transportStats().sabResizes} resizes
 							</span>
 						</div>
 						<Show when={transportStats().sabFallbacks > 0}>

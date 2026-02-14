@@ -39,6 +39,8 @@ export type FpsStats = {
 	sabRetryLimitFallbacks: number;
 	sabRetriesInFlight: number;
 	sabSlotSizeBytes: number;
+	sabSlotCount: number;
+	sabTotalBytes: number;
 };
 
 let globalFpsStatsGetter: (() => FpsStats) | null = null;
@@ -530,6 +532,10 @@ export function createImageDataWS(
 		sabRetryLimitFallbacks: sabRetryLimitFallbackCount,
 		sabRetriesInFlight: sabWriteRetryCount,
 		sabSlotSizeBytes: sharedBufferConfig?.slotSize ?? 0,
+		sabSlotCount: sharedBufferConfig?.slotCount ?? 0,
+		sabTotalBytes:
+			(sharedBufferConfig?.slotSize ?? 0) *
+			(sharedBufferConfig?.slotCount ?? 0),
 	});
 
 	globalFpsStatsGetter = getLocalFpsStats;
