@@ -2593,6 +2593,46 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker in-flight superseded-drop diagnostics)
+
+**Goal**: Distinguish drops caused specifically by worker in-flight cap pressure from other superseded-frame drop causes
+
+**What was done**:
+1. Added cumulative and window counters for superseded drops that occur while worker in-flight cap is active.
+2. Incremented these counters only when cap-hit branches overwrite an existing `nextFrame`.
+3. Added counters to socket frame logs and transport stats payload.
+4. Exposed the metrics in overlay and clipboard diagnostics.
+5. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added to `FpsStats`:
+    - `workerInFlightSupersededDrops`
+    - `workerInFlightSupersededDropsWindow`
+  - tracks both counters in fallback cap-hit overwrite branches
+  - periodic `[Frame]` log now includes:
+    - `worker_superseded_window`
+    - `worker_superseded_total`
+  - resets window counter on log-window flush
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling now includes in-flight superseded-drop metrics
+  - clipboard export includes both total and window values
+  - overlay row shows `Worker in-flight superseded drops` with window suffix when present
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Diagnostics now isolate cap-pressure-induced superseded drops from broader drop totals.
+- ✅ Frame logs and overlay provide both burst-window and cumulative visibility for this drop mode.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback-pressure validation to quantify how much dropping is attributable specifically to worker in-flight capping.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

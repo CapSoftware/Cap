@@ -47,6 +47,8 @@ export type FpsStats = {
 	workerInFlightBackpressureWindowHits: number;
 	workerFramesInFlightPeakWindow: number;
 	workerFramesInFlightPeakTotal: number;
+	workerInFlightSupersededDrops: number;
+	workerInFlightSupersededDropsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -262,6 +264,7 @@ export function createImageDataWS(
 		sabRetryLimitFallbackWindowCount = 0;
 		workerInFlightBackpressureWindowHits = 0;
 		workerFramesInFlightPeakWindow = 0;
+		workerInFlightSupersededDropsWindow = 0;
 
 		if (mainThreadWebGPU) {
 			disposeWebGPU(mainThreadWebGPU);
@@ -507,6 +510,8 @@ export function createImageDataWS(
 					if (nextFrame) {
 						framesDropped++;
 						totalSupersededDrops++;
+						totalWorkerInFlightSupersededDrops++;
+						workerInFlightSupersededDropsWindow++;
 					}
 					nextFrame = buffer;
 					return;
@@ -547,6 +552,8 @@ export function createImageDataWS(
 				if (nextFrame) {
 					framesDropped++;
 					totalSupersededDrops++;
+					totalWorkerInFlightSupersededDrops++;
+					workerInFlightSupersededDropsWindow++;
 				}
 				nextFrame = buffer;
 				return;
@@ -597,6 +604,8 @@ export function createImageDataWS(
 	let workerInFlightBackpressureWindowHits = 0;
 	let workerFramesInFlightPeakWindow = 0;
 	let workerFramesInFlightPeakTotal = 0;
+	let totalWorkerInFlightSupersededDrops = 0;
+	let workerInFlightSupersededDropsWindow = 0;
 	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
 	let framesReceived = 0;
@@ -632,6 +641,8 @@ export function createImageDataWS(
 		workerInFlightBackpressureWindowHits,
 		workerFramesInFlightPeakWindow,
 		workerFramesInFlightPeakTotal,
+		workerInFlightSupersededDrops: totalWorkerInFlightSupersededDrops,
+		workerInFlightSupersededDropsWindow: workerInFlightSupersededDropsWindow,
 		sabTotalRetryAttempts: totalSabRetryAttempts,
 		sabTotalFramesReceived: totalFramesReceived,
 		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
@@ -669,7 +680,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}, worker_superseded_window: ${workerInFlightSupersededDropsWindow}, worker_superseded_total: ${totalWorkerInFlightSupersededDrops}`,
 				);
 
 				frameCount = 0;
@@ -685,6 +696,7 @@ export function createImageDataWS(
 				sabRetryLimitFallbackWindowCount = 0;
 				workerInFlightBackpressureWindowHits = 0;
 				workerFramesInFlightPeakWindow = workerFramesInFlight;
+				workerInFlightSupersededDropsWindow = 0;
 				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;

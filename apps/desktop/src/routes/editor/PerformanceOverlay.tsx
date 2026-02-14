@@ -41,6 +41,8 @@ type TransportStats = {
 	workerInFlightBackpressureWindowHits: number;
 	workerFramesInFlightPeakWindow: number;
 	workerFramesInFlightPeakTotal: number;
+	workerInFlightSupersededDrops: number;
+	workerInFlightSupersededDropsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -86,6 +88,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		workerInFlightBackpressureWindowHits: 0,
 		workerFramesInFlightPeakWindow: 0,
 		workerFramesInFlightPeakTotal: 0,
+		workerInFlightSupersededDrops: 0,
+		workerInFlightSupersededDropsWindow: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -221,6 +225,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			workerInFlightBackpressureWindowHits: 0,
 			workerFramesInFlightPeakWindow: 0,
 			workerFramesInFlightPeakTotal: 0,
+			workerInFlightSupersededDrops: 0,
+			workerInFlightSupersededDropsWindow: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -266,6 +272,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 					socketStats.workerFramesInFlightPeakWindow,
 				workerFramesInFlightPeakTotal:
 					socketStats.workerFramesInFlightPeakTotal,
+				workerInFlightSupersededDrops:
+					socketStats.workerInFlightSupersededDrops,
+				workerInFlightSupersededDropsWindow:
+					socketStats.workerInFlightSupersededDropsWindow,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -344,6 +354,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Worker In-Flight Cap Hits (Window): ${t.workerInFlightBackpressureWindowHits}`,
 			`Worker In-Flight Peak (Window): ${t.workerFramesInFlightPeakWindow}`,
 			`Worker In-Flight Peak (Total): ${t.workerFramesInFlightPeakTotal}`,
+			`Worker In-Flight Superseded Drops: ${t.workerInFlightSupersededDrops}`,
+			`Worker In-Flight Superseded Drops (Window): ${t.workerInFlightSupersededDropsWindow}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -530,6 +542,23 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							<div style={{ color: "#fbbf24" }}>
 								Worker cap hits (window):{" "}
 								{transportStats().workerInFlightBackpressureWindowHits}
+							</div>
+						</Show>
+						<Show when={transportStats().workerInFlightSupersededDrops > 0}>
+							<div style={{ color: "#f97316" }}>
+								Worker in-flight superseded drops:{" "}
+								{transportStats().workerInFlightSupersededDrops}
+								<Show
+									when={
+										transportStats().workerInFlightSupersededDropsWindow > 0
+									}
+								>
+									<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+										{" "}
+										(window{" "}
+										{transportStats().workerInFlightSupersededDropsWindow})
+									</span>
+								</Show>
 							</div>
 						</Show>
 						<Show when={stats().droppedFrames > 0}>
