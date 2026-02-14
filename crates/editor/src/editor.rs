@@ -60,7 +60,7 @@ impl Renderer {
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
 
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, rx) = mpsc::channel(8);
 
         let this = Self {
             rx,
@@ -148,7 +148,7 @@ impl Renderer {
                 }
             }
             match frame_renderer
-                .render_nv12(
+                .render(
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,
@@ -157,7 +157,7 @@ impl Renderer {
                 .await
             {
                 Ok(frame) => {
-                    (self.frame_cb)(EditorFrameOutput::Nv12(frame));
+                    (self.frame_cb)(EditorFrameOutput::Rgba(frame));
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to render frame in editor");
