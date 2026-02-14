@@ -68,6 +68,12 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 
 # Includes duplicate-request burst stats (burst sizes 4/8/16) by default
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60
+
+# Export decode benchmark rows to CSV for cross-machine analysis
+cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --seek-iterations 20 --output-csv /tmp/cap-decode-benchmark.csv
+
+# Add run labels for baseline/candidate grouping
+cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --output-csv /tmp/cap-decode-benchmark.csv --run-label windows-pass-1
 ```
 
 #### Playback Throughput Benchmark (Linux-compatible)
@@ -1055,6 +1061,33 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Decoded: **240/240**, failures **0**
 - Effective FPS: **60.18**
 - Decode: avg **5.02ms**, p95 **7.18ms**, p99 **11.55ms**, max **15.85ms**
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Decode benchmark CSV export validation)
+
+**Environment:** Linux runner with synthetic 1080p60 MP4 asset  
+**Command:** `decode-benchmark --fps 60 --iterations 3 --seek-iterations 2 --output-csv /tmp/cap-decode-benchmark-v2.csv --run-label linux-frame-order-pass-v2`  
+**Change under test:** decode benchmark CSV export + run-label plumbing
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **10.28ms**
+- Sequential decode: **377.11 fps**, avg **2.65ms**, p95 **3.53ms**, p99 **4.85ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **41.52 / 81.16 / 81.16ms**
+  - 1.0s: **16.61 / 29.90 / 29.90ms**
+  - 2.0s: **191.45 / 213.25 / 213.25ms**
+  - 5.0s: **147.94 / 295.55 / 295.55ms**
+- Random access: avg **118.94ms**, p95 **355.69ms**, p99 **376.19ms**
+- Duplicate burst (batch avg / request avg):
+  - 4: **3.68 / 3.66ms**
+  - 8: **4.99 / 4.97ms**
+  - 16: **4.12 / 4.09ms**
+- CSV rows written for modes:
+  - `decoder_creation`
+  - `sequential`
+  - `seek`
+  - `random_access`
+  - `duplicate_batch`
+  - `duplicate_request`
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

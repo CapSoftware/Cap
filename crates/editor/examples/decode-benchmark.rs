@@ -1,5 +1,7 @@
 use cap_rendering::decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use futures::future::join_all;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -40,6 +42,8 @@ struct BenchmarkConfig {
     fps: u32,
     iterations: usize,
     seek_iterations: usize,
+    output_csv: Option<PathBuf>,
+    run_label: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -281,6 +285,239 @@ fn percentile(data: &[f64], p: f64) -> f64 {
     });
     let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SampleSummary {
+    avg: f64,
+    p95: f64,
+    p99: f64,
+    max: f64,
+}
+
+fn summarize_samples(samples: &[f64]) -> SampleSummary {
+    if samples.is_empty() {
+        return SampleSummary {
+            avg: 0.0,
+            p95: 0.0,
+            p99: 0.0,
+            max: 0.0,
+        };
+    }
+
+    let avg = samples.iter().sum::<f64>() / samples.len() as f64;
+    let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    SampleSummary {
+        avg,
+        p95: percentile(samples, 95.0),
+        p99: percentile(samples, 99.0),
+        max: if max.is_finite() { max } else { 0.0 },
+    }
+}
+
+fn decode_run_label(config: &BenchmarkConfig) -> String {
+    config
+        .run_label
+        .as_ref()
+        .cloned()
+        .or_else(|| std::env::var("CAP_DECODE_BENCHMARK_RUN_LABEL").ok())
+        .unwrap_or_default()
+}
+
+fn write_csv(
+    path: &PathBuf,
+    config: &BenchmarkConfig,
+    results: &BenchmarkResults,
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+
+    if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
+        let header = [
+            "timestamp_ms",
+            "mode",
+            "run_label",
+            "video",
+            "fps",
+            "iterations",
+            "seek_iterations",
+            "distance_secs",
+            "burst_size",
+            "samples",
+            "failures",
+            "avg_ms",
+            "p95_ms",
+            "p99_ms",
+            "max_ms",
+            "sequential_fps",
+            "decoder_creation_ms",
+            "cache_hits",
+            "cache_misses",
+        ]
+        .join(",");
+        writeln!(file, "{header}")
+            .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let run_label = decode_run_label(config);
+    let video = config.video_path.display();
+
+    writeln!(
+        file,
+        "{timestamp_ms},decoder_creation,\"{}\",\"{}\",{},{},{},\"\",\"\",1,0,{:.3},{:.3},{:.3},{:.3},\"\",{:.3},{},{}",
+        run_label,
+        video,
+        config.fps,
+        config.iterations,
+        config.seek_iterations,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.decoder_creation_ms,
+        results.cache_hits,
+        results.cache_misses
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    let sequential = summarize_samples(&results.sequential_decode_times_ms);
+    writeln!(
+        file,
+        "{timestamp_ms},sequential,\"{}\",\"{}\",{},{},{},\"\",\"\",{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+        run_label,
+        video,
+        config.fps,
+        config.iterations,
+        config.seek_iterations,
+        results.sequential_decode_times_ms.len(),
+        results.sequential_failures,
+        sequential.avg,
+        sequential.p95,
+        sequential.p99,
+        sequential.max,
+        results.sequential_fps,
+        results.decoder_creation_ms,
+        results.cache_hits,
+        results.cache_misses
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    for seek in &results.seek_stats {
+        let summary = summarize_samples(&seek.samples_ms);
+        writeln!(
+            file,
+            "{timestamp_ms},seek,\"{}\",\"{}\",{},{},{},{:.3},\"\",{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            video,
+            config.fps,
+            config.iterations,
+            config.seek_iterations,
+            seek.distance_secs,
+            seek.samples_ms.len(),
+            seek.failures,
+            summary.avg,
+            summary.p95,
+            summary.p99,
+            summary.max,
+            results.sequential_fps,
+            results.decoder_creation_ms,
+            results.cache_hits,
+            results.cache_misses
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    let random_summary = summarize_samples(&results.random_access_times_ms);
+    writeln!(
+        file,
+        "{timestamp_ms},random_access,\"{}\",\"{}\",{},{},{},\"\",\"\",{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+        run_label,
+        video,
+        config.fps,
+        config.iterations,
+        config.seek_iterations,
+        results.random_access_times_ms.len(),
+        results.random_access_failures,
+        random_summary.avg,
+        random_summary.p95,
+        random_summary.p99,
+        random_summary.max,
+        results.sequential_fps,
+        results.decoder_creation_ms,
+        results.cache_hits,
+        results.cache_misses
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    for (burst_size, batch_samples) in &results.duplicate_burst_batch_ms {
+        let request_samples = results
+            .duplicate_burst_request_ms
+            .iter()
+            .find(|(size, _)| size == burst_size)
+            .map(|(_, samples)| samples.as_slice())
+            .unwrap_or(&[]);
+        let failures = results
+            .duplicate_burst_failures
+            .iter()
+            .find(|(size, _)| size == burst_size)
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+        let batch_summary = summarize_samples(batch_samples);
+        let request_summary = summarize_samples(request_samples);
+
+        writeln!(
+            file,
+            "{timestamp_ms},duplicate_batch,\"{}\",\"{}\",{},{},{},\"\",{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            video,
+            config.fps,
+            config.iterations,
+            config.seek_iterations,
+            burst_size,
+            batch_samples.len(),
+            failures,
+            batch_summary.avg,
+            batch_summary.p95,
+            batch_summary.p99,
+            batch_summary.max,
+            results.sequential_fps,
+            results.decoder_creation_ms,
+            results.cache_hits,
+            results.cache_misses
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+        writeln!(
+            file,
+            "{timestamp_ms},duplicate_request,\"{}\",\"{}\",{},{},{},\"\",{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            video,
+            config.fps,
+            config.iterations,
+            config.seek_iterations,
+            burst_size,
+            request_samples.len(),
+            failures,
+            request_summary.avg,
+            request_summary.p95,
+            request_summary.p99,
+            request_summary.max,
+            results.sequential_fps,
+            results.decoder_creation_ms,
+            results.cache_hits,
+            results.cache_misses
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    Ok(())
 }
 
 async fn benchmark_decoder_creation(path: &Path, fps: u32, iterations: usize) -> f64 {
@@ -583,7 +820,7 @@ fn main() {
         .position(|a| a == "--video")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>] [--seek-iterations <n>]");
+        .expect("Usage: decode-benchmark --video <path> [--fps <fps>] [--iterations <n>] [--seek-iterations <n>] [--output-csv <path>] [--run-label <label>]");
 
     let fps = args
         .iter()
@@ -606,15 +843,37 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
 
+    let output_csv = args
+        .iter()
+        .position(|a| a == "--output-csv")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+
+    let run_label = args
+        .iter()
+        .position(|a| a == "--run-label")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
     let config = BenchmarkConfig {
         video_path,
         fps,
         iterations,
         seek_iterations,
+        output_csv,
+        run_label,
     };
 
     let rt = Runtime::new().expect("Failed to create Tokio runtime");
-    let results = rt.block_on(run_full_benchmark(config));
+    let results = rt.block_on(run_full_benchmark(config.clone()));
 
     results.print_report();
+
+    if let Some(path) = &config.output_csv {
+        if let Err(error) = write_csv(path, &config, &results) {
+            eprintln!("Failed to write CSV report: {error}");
+        } else {
+            println!("CSV appended to {}", path.display());
+        }
+    }
 }

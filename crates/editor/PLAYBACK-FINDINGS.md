@@ -2810,6 +2810,53 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (decode benchmark CSV export + run labels)
+
+**Goal**: Improve decode benchmark evidence portability for cross-machine baseline/candidate comparisons
+
+**What was done**:
+1. Extended decode benchmark CLI with CSV output path support.
+2. Added optional run-label support via CLI/env for grouped analysis.
+3. Added structured CSV rows for decoder creation, sequential decode, seek distances, random access, and duplicate burst metrics.
+4. Validated CSV generation with a full benchmark run on 1080p60.
+
+**Changes Made**:
+- `crates/editor/examples/decode-benchmark.rs`
+  - added config fields:
+    - `output_csv: Option<PathBuf>`
+    - `run_label: Option<String>`
+  - added CSV writer with append-header behavior
+  - added run-label resolver from:
+    - `--run-label`
+    - `CAP_DECODE_BENCHMARK_RUN_LABEL`
+  - exports row modes:
+    - `decoder_creation`
+    - `sequential`
+    - `seek`
+    - `random_access`
+    - `duplicate_batch`
+    - `duplicate_request`
+  - wired CLI args:
+    - `--output-csv <path>`
+    - `--run-label <label>`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added decode CSV export command examples
+  - added validation benchmark run summary for CSV mode
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 check -p cap-editor --example decode-benchmark`
+- `cargo +1.88.0 run -p cap-editor --example decode-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --iterations 3 --seek-iterations 2 --output-csv /tmp/cap-decode-benchmark-v2.csv --run-label linux-frame-order-pass-v2`
+
+**Results**:
+- ✅ Decode benchmark now emits structured CSV suitable for aggregated multi-machine analysis.
+- ✅ Run labels allow baseline/candidate grouping in a shared CSV artifact.
+- ✅ Validation run completed and appended expected row modes to `/tmp/cap-decode-benchmark-v2.csv`.
+
+**Stopping point**: Ready to collect decode CSV artifacts from macOS and Windows with consistent labels alongside existing scrub/playback CSV workflows.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
