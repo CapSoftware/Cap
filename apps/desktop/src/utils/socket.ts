@@ -25,6 +25,7 @@ const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 };
 const FRAME_BUFFER_RESIZE_ALIGNMENT = 2 * 1024 * 1024;
 const FRAME_BUFFER_MAX_SLOT_SIZE = 64 * 1024 * 1024;
+const SAB_WRITE_RETRY_LIMIT = 2;
 
 export type FpsStats = {
 	fps: number;
@@ -124,6 +125,8 @@ export function createImageDataWS(
 	let sharedBufferResizeCount = 0;
 	let sabFallbackCount = 0;
 	let sabOversizeFallbackCount = 0;
+	let sabRetryLimitFallbackCount = 0;
+	let sabWriteRetryCount = 0;
 
 	function initializeSharedBuffer(config: SharedFrameBufferConfig): boolean {
 		try {
@@ -448,9 +451,15 @@ export function createImageDataWS(
 			const written = producer.write(buffer);
 			if (!written) {
 				sabFallbackCount += 1;
-				if (isOversized) {
-					sabOversizeFallbackCount += 1;
+				if (isOversized || sabWriteRetryCount >= SAB_WRITE_RETRY_LIMIT) {
+					if (isOversized) {
+						sabOversizeFallbackCount += 1;
+					} else {
+						sabRetryLimitFallbackCount += 1;
+					}
+					sabWriteRetryCount = 0;
 				} else {
+					sabWriteRetryCount += 1;
 					isProcessing = false;
 					if (nextFrame) {
 						framesDropped++;
@@ -461,8 +470,11 @@ export function createImageDataWS(
 				}
 				framesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
+			} else {
+				sabWriteRetryCount = 0;
 			}
 		} else {
+			sabWriteRetryCount = 0;
 			framesSentToWorker++;
 			worker.postMessage({ type: "frame", buffer }, [buffer]);
 		}
@@ -533,7 +545,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks: ${sabFallbackCount}, sab_oversize_fallbacks: ${sabOversizeFallbackCount}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks: ${sabFallbackCount}, sab_oversize_fallbacks: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}`,
 				);
 
 				frameCount = 0;
@@ -546,6 +558,8 @@ export function createImageDataWS(
 				actualRendersCount = 0;
 				sabFallbackCount = 0;
 				sabOversizeFallbackCount = 0;
+				sabRetryLimitFallbackCount = 0;
+				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;
 			}

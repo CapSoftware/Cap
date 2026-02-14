@@ -1204,6 +1204,11 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
    - oversize-triggered SAB fallback count
 6. Added SAB backpressure retry path:
    - when SAB write fails due slot contention (non-oversize), frame is re-queued for next animation frame instead of immediately transferring via worker message copy
+7. Added retry-limit fallback guard:
+   - after bounded SAB retry attempts, transport falls back to worker transfer to avoid indefinite retry loops
+8. Expanded SAB telemetry to separate:
+   - oversize-triggered fallbacks
+   - retry-limit-triggered fallbacks
 
 **Changes Made**:
 - `apps/desktop/src/utils/socket.ts`
