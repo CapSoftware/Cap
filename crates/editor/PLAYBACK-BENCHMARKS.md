@@ -10,7 +10,7 @@ This document tracks performance benchmarks for Cap's playback and decoding syst
 |--------|--------|-----------|
 | Decoder Init | <200ms | - |
 | Decode Latency (p95) | <50ms | - |
-| Effective FPS | ≥30 fps | ±2 fps |
+| Effective FPS | ≥60 fps | ±2 fps |
 | Decode Jitter | <10ms | - |
 | A/V Sync (mic↔video) | <100ms | - |
 | A/V Sync (system↔video) | <100ms | - |
@@ -64,6 +64,16 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --iterations 50
 ```
 
+#### Playback Throughput Benchmark (Linux-compatible)
+
+```bash
+# Simulate real-time playback deadlines from a single video
+cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600
+
+# Optional audio duration comparison
+cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --audio /path/to/audio.ogg --fps 60
+```
+
 #### Combined Workflow (Recording → Playback)
 
 ```bash
@@ -79,6 +89,39 @@ cargo run -p cap-recording --example playback-test-runner -- full
 ## Benchmark History
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `decode-benchmark` and `playback-benchmark`
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **6.09ms**
+- Sequential decode: **401.9 fps**, avg **2.49ms**, p95 **~2.34ms**
+- Seek latency: 0.5s **1.88ms**, 1.0s **1.83ms**, 2.0s **260.87ms**, 5.0s **102.36ms**
+- Random access: avg **223.27ms**, p95 **398.42ms**, p99 **443.68ms**
+
+#### Decode Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Decoder init: **28.65ms**
+- Sequential decode: **99.4 fps**, avg **10.06ms**, p95 **~8.35ms**
+- Seek latency: 0.5s **6.61ms**, 1.0s **6.73ms**, 2.0s **905.03ms**, 5.0s **442.71ms**
+- Random access: avg **918.05ms**, p95 **1620.94ms**, p99 **2084.36ms**
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **480/480**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.11**
+- Decode: avg **1.23ms**, p95 **2.34ms**, p99 **2.44ms**, max **4.76ms**
+- Seek samples: 0.5s **104.51ms**, 1.0s **90.83ms**, 2.0s **144.89ms**, 5.0s **98.70ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **480/480**, failures **0**
+- Missed deadlines: **2**
+- Effective FPS: **60.11**
+- Decode: avg **5.54ms**, p95 **8.35ms**, p99 **12.69ms**, max **17.10ms**
+- Seek samples: 0.5s **266.92ms**, 1.0s **306.19ms**, 2.0s **570.41ms**, 5.0s **442.48ms**
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

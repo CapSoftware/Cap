@@ -72,13 +72,15 @@
 ### Active Work Items
 *(Update this section as you work)*
 
-- [ ] **Test fragmented mode** - Run playback tests on fragmented recordings
-- [ ] **Investigate display decoder init time** - 337ms may be optimizable
+- [ ] **Capture audio startup latency before/after** - Validate streaming audio path startup behavior against prior path
+- [ ] **Tune medium/long seek latency** - Reduce 2s+ seek spikes visible in decode and playback benchmarks
+- [ ] **Run full desktop editor validation on macOS + Windows** - Confirm in-app FPS and A/V behavior on target platforms
 
 ### Completed
 - [x] **Run initial baseline** - Established current playback performance metrics (2026-01-28)
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
+- [x] **Add Linux-compatible benchmark fallback path** - Added `cap-editor` playback benchmark example and supporting linux compile fallbacks (2026-02-14)
 
 ---
 
@@ -106,6 +108,9 @@ cargo run -p cap-recording --example playback-test-runner -- full --benchmark-ou
 # Combined workflow: record then playback
 cargo run -p cap-recording --example real-device-test-runner -- baseline --keep-outputs && \
 cargo run -p cap-recording --example playback-test-runner -- full
+
+# Linux-compatible playback throughput benchmark
+cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600
 ```
 
 **Note**: Playback tests require recordings to exist. Run the recording test runner with `--keep-outputs` first.
@@ -122,6 +127,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 | `crates/video-decode/src/ffmpeg.rs` | FFmpeg software fallback |
 | `crates/audio/src/lib.rs` | AudioData loading and sync analysis |
 | `crates/recording/examples/playback-test-runner.rs` | Playback benchmark runner |
+| `crates/editor/examples/playback-benchmark.rs` | Linux-compatible playback throughput benchmark |
 
 ---
 
@@ -321,6 +327,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - Bandwidth increase: ~9MB → ~23MB per frame (acceptable for local WebSocket)
 
 **Stopping point**: Fix implemented and compiles. Needs testing with actual editor to verify 60fps achievement.
+
+---
+
+### Session 2026-02-14 (Linux benchmark fallback + audio startup path)
+
+**Goal**: Continue playback optimization with measurable benchmarks in Linux environment and reduce audio startup delay risk
+
+**What was done**:
+1. Unblocked several Linux compile blockers in platform-dependent crates (`scap-targets`, `cap-cursor-capture`, `cap-camera-ffmpeg`, `cap-timestamp`, `scap-ffmpeg`)
+2. Verified `cap-recording` benchmark path remains heavily platform-specific on Linux and cannot be fully used without broad recording-stack Linux enablement
+3. Added new Linux-compatible benchmark example `crates/editor/examples/playback-benchmark.rs`
+4. Ran playback throughput benchmarks on synthetic 1080p60 and 4k60 files
+5. Switched editor audio playback startup logic to prefer streaming audio path with fallback to pre-rendered path
+
+**Changes Made**:
+- `crates/scap-targets/src/platform/linux.rs` and related platform exports
+- `crates/scap-targets/src/lib.rs`
+- `crates/cursor-capture/src/position.rs`
+- `crates/camera-ffmpeg/src/lib.rs`
+- `crates/timestamp/src/lib.rs`
+- `crates/scap-ffmpeg/src/lib.rs`
+- `crates/editor/examples/playback-benchmark.rs`
+- `crates/editor/src/playback.rs`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+
+**Results**:
+- Playback benchmark (1080p60 synthetic): 480 decoded / 480, effective 60.11 fps, 0 missed deadlines, decode p95 2.34ms
+- Playback benchmark (4k60 synthetic): 480 decoded / 480, effective 60.11 fps, 2 missed deadlines, decode p95 8.35ms
+- Decode benchmark confirms persistent seek/random-access hotspots, especially 4k medium/long seeks
+- Audio startup path now prefers streaming playback on non-Windows, with automatic fallback to pre-rendered path on stream creation failure
+
+**Stopping point**: Need targeted measurement of audio startup latency deltas in real editor playback, then continue seek-latency tuning.
 
 ---
 

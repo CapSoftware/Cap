@@ -748,6 +748,7 @@ impl PlaybackHandle {
     }
 }
 
+#[derive(Clone)]
 struct AudioPlayback {
     segments: Vec<AudioSegment>,
     stop_rx: watch::Receiver<bool>,
@@ -789,25 +790,43 @@ impl AudioPlayback {
 
             let duration_secs = self.duration_secs;
 
+            #[cfg(not(target_os = "windows"))]
+            macro_rules! create_audio_stream {
+                ($sample_ty:ty) => {{
+                    let fallback = self.clone();
+                    self.create_stream::<$sample_ty>(device.clone(), supported_config.clone())
+                        .or_else(|err| {
+                            warn!(
+                                error = %err,
+                                "Streaming audio path failed, falling back to pre-rendered path"
+                            );
+                            fallback.create_stream_prerendered::<$sample_ty>(
+                                device,
+                                supported_config,
+                                duration_secs,
+                            )
+                        })
+                }};
+            }
+
+            #[cfg(target_os = "windows")]
+            macro_rules! create_audio_stream {
+                ($sample_ty:ty) => {{
+                    self.create_stream_prerendered::<$sample_ty>(
+                        device,
+                        supported_config,
+                        duration_secs,
+                    )
+                }};
+            }
+
             let result = match supported_config.sample_format() {
-                SampleFormat::I16 => {
-                    self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
-                }
-                SampleFormat::I32 => {
-                    self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
-                }
-                SampleFormat::F32 => {
-                    self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
-                }
-                SampleFormat::I64 => {
-                    self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
-                }
-                SampleFormat::U8 => {
-                    self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
-                }
-                SampleFormat::F64 => {
-                    self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
-                }
+                SampleFormat::I16 => create_audio_stream!(i16),
+                SampleFormat::I32 => create_audio_stream!(i32),
+                SampleFormat::F32 => create_audio_stream!(f32),
+                SampleFormat::I64 => create_audio_stream!(i64),
+                SampleFormat::U8 => create_audio_stream!(u8),
+                SampleFormat::F64 => create_audio_stream!(f64),
                 format => {
                     error!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",

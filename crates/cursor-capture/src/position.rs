@@ -1,7 +1,7 @@
 use device_query::{DeviceQuery, DeviceState};
+use scap_targets::Display;
 #[cfg(any(windows, target_os = "macos"))]
 use scap_targets::bounds::*;
-use scap_targets::Display;
 
 // Physical on Windows, Logical on macOS
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
