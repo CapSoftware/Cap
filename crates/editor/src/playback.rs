@@ -385,7 +385,12 @@ impl Playback {
             let aggressive_skip_threshold = 6u32;
 
             let mut total_frames_rendered = 0u64;
-            let mut _total_frames_skipped = 0u64;
+            let mut total_frames_skipped = 0u64;
+            let mut cache_hits = 0u64;
+            let mut prefetch_hits = 0u64;
+            let mut sync_decodes = 0u64;
+            let mut last_stats_time = Instant::now();
+            let stats_interval = Duration::from_secs(2);
 
             let warmup_target_frames = 10usize;
             let warmup_after_first_timeout = Duration::from_millis(500);
@@ -486,6 +491,7 @@ impl Playback {
 
                 let segment_frames_opt = if let Some(cached) = frame_cache.get(frame_number) {
                     was_cached = true;
+                    cache_hits += 1;
                     Some(cached)
                 } else {
                     let prefetched_idx = prefetch_buffer
@@ -494,6 +500,7 @@ impl Playback {
 
                     if let Some(idx) = prefetched_idx {
                         let prefetched = prefetch_buffer.remove(idx).unwrap();
+                        prefetch_hits += 1;
                         Some((
                             Arc::new(prefetched.segment_frames),
                             prefetched.segment_index,
@@ -549,7 +556,7 @@ impl Playback {
                                     ))
                                 } else {
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 }
                             }
@@ -571,12 +578,12 @@ impl Playback {
                                 } else {
                                     prefetch_buffer.push_back(prefetched);
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 }
                             } else {
                                 frame_number = frame_number.saturating_add(1);
-                                _total_frames_skipped += 1;
+                                total_frames_skipped += 1;
                                 continue;
                             }
                         } else {
@@ -617,7 +624,7 @@ impl Playback {
                                         guard.remove(&frame_number);
                                     }
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 },
                                 data = segment_media
@@ -630,6 +637,7 @@ impl Playback {
                                 },
                             };
 
+                            sync_decodes += 1;
                             data.map(|frames| (Arc::new(frames), segment.recording_clip))
                         }
                     }
@@ -687,6 +695,24 @@ impl Playback {
                     total_frames_rendered += 1;
                 }
 
+                if last_stats_time.elapsed() >= stats_interval {
+                    let effective_fps = total_frames_rendered as f64
+                        / start.elapsed().as_secs_f64().max(0.001);
+                    let recent_rendered = total_frames_rendered;
+                    let buffer_len = prefetch_buffer.len();
+                    info!(
+                        effective_fps = format!("{:.1}", effective_fps),
+                        rendered = recent_rendered,
+                        skipped = total_frames_skipped,
+                        cache_hits = cache_hits,
+                        prefetch_hits = prefetch_hits,
+                        sync_decodes = sync_decodes,
+                        prefetch_buffer = buffer_len,
+                        "Playback stats"
+                    );
+                    last_stats_time = Instant::now();
+                }
+
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
                 frame_number = frame_number.saturating_add(1);
@@ -712,7 +738,7 @@ impl Playback {
                     let skipped = frames_behind.saturating_sub(1);
                     if skipped > 0 {
                         frame_number += skipped;
-                        _total_frames_skipped += skipped as u64;
+                        total_frames_skipped += skipped as u64;
 
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
