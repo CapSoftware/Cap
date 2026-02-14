@@ -596,6 +596,32 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (FFmpeg duplicate-request coalescing)
+
+**Goal**: Reduce wasted decode work during scrub/request bursts that target the same frame
+
+**What was done**:
+1. Added same-frame coalescing in FFmpeg decoder request batches (software + hardware paths).
+2. When multiple pending requests resolve to one frame index, decoder now executes one response production and fans the frame out to all waiting reply channels.
+3. Re-ran hardened decode/playback benchmarks (`--seek-iterations 10`) to verify throughput and tail stability.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - pending request now stores additional replies for same-frame coalescing
+  - request intake merges duplicate frame requests in-batch
+  - frame send path fans out decoded/cached frame to all coalesced replies
+
+**Results**:
+- ✅ Playback throughput remains stable at 60fps-class:
+  - 1080p playback benchmark: **60.24 fps**, missed deadlines **0**
+  - 4k playback benchmark: **60.20 fps**, missed deadlines **0**
+- ✅ Decode benchmarks stayed within expected variance envelope for current seek-tail profile.
+- ✅ No regressions observed in compile/test benchmark runs after coalescing change.
+
+**Stopping point**: same-frame coalescing landed as a low-risk scrub efficiency improvement; next major improvement still requires reducing long-distance 4k seek tails via deeper decoder strategy.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

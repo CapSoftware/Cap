@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
-use ffmpeg::{format, frame};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use ffmpeg::sys::AVHWDeviceType;
+use ffmpeg::{format, frame};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -67,6 +67,20 @@ struct PendingRequest {
     time: f32,
     frame: u32,
     reply: oneshot::Sender<DecodedFrame>,
+    additional_replies: Vec<oneshot::Sender<DecodedFrame>>,
+}
+
+fn send_to_replies(
+    name: &str,
+    frame_number: u32,
+    frame: &DecodedFrame,
+    replies: Vec<oneshot::Sender<DecodedFrame>>,
+) {
+    for reply in replies {
+        if reply.send(frame.clone()).is_err() {
+            log::warn!("FFmpeg '{name}': Failed to send frame {frame_number}: receiver dropped");
+        }
+    }
 }
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
@@ -312,11 +326,19 @@ impl FfmpegDecoder {
                             let requested_time = requested_time.max(0.0);
                             let requested_frame = (requested_time * fps as f32).floor() as u32;
 
-                            pending_requests.push(PendingRequest {
-                                time: requested_time,
-                                frame: requested_frame,
-                                reply,
-                            });
+                            if let Some(existing) = pending_requests
+                                .iter_mut()
+                                .find(|r| r.frame == requested_frame)
+                            {
+                                existing.additional_replies.push(reply);
+                            } else {
+                                pending_requests.push(PendingRequest {
+                                    time: requested_time,
+                                    frame: requested_frame,
+                                    reply,
+                                    additional_replies: Vec::new(),
+                                });
+                            }
                         };
 
                     match r {
@@ -339,9 +361,16 @@ impl FfmpegDecoder {
                         time: requested_time,
                         frame: requested_frame,
                         reply,
+                        additional_replies,
                     } in pending_requests
                     {
-                        if reply.is_closed() {
+                        let mut replies = Vec::with_capacity(1 + additional_replies.len());
+                        if !reply.is_closed() {
+                            replies.push(reply);
+                        }
+                        replies.extend(additional_replies.into_iter().filter(|r| !r.is_closed()));
+
+                        if replies.is_empty() {
                             continue;
                         }
 
@@ -353,11 +382,7 @@ impl FfmpegDecoder {
 
                         if let Some(cached) = sw_cache.get_mut(&requested_frame) {
                             let data = cached.produce(&mut sw_converter);
-                            if reply.send(data.frame.clone()).is_err() {
-                                log::warn!(
-                                    "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
-                                );
-                            }
+                            send_to_replies(name, requested_frame, &data.frame, replies);
                             *sw_last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         }
@@ -376,7 +401,7 @@ impl FfmpegDecoder {
                             {
                                 let data = cached.produce(&mut sw_converter);
                                 *sw_last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = reply.send(data.frame);
+                                send_to_replies(name, requested_frame, &data.frame, replies);
                                 continue;
                             }
 
@@ -384,7 +409,7 @@ impl FfmpegDecoder {
                                 && let Some(first_frame) = sw_first_ever_frame.borrow().clone()
                             {
                                 *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                                let _ = reply.send(first_frame.frame);
+                                send_to_replies(name, requested_frame, &first_frame.frame, replies);
                                 continue;
                             }
 
@@ -394,11 +419,11 @@ impl FfmpegDecoder {
                             sw_cache.clear();
                         }
 
-                        if reply.is_closed() {
+                        if replies.iter().all(|reply| reply.is_closed()) {
                             continue;
                         }
 
-                        let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                        let reply_cell = Rc::new(RefCell::new(Some(replies)));
                         let reply_for_respond = reply_cell.clone();
 
                         let mut respond = {
@@ -406,12 +431,8 @@ impl FfmpegDecoder {
                             Some(move |data: OutputFrame| {
                                 let frame_number = data.number;
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                if let Some(reply) = reply_for_respond.borrow_mut().take()
-                                    && reply.send(data.frame).is_err()
-                                {
-                                    log::warn!(
-                                        "Failed to send decoded frame {frame_number}: receiver dropped"
-                                    );
+                                if let Some(replies) = reply_for_respond.borrow_mut().take() {
+                                    send_to_replies(name, frame_number, &data.frame, replies);
                                 }
                             })
                         };
@@ -449,7 +470,11 @@ impl FfmpegDecoder {
                         let mut exit = false;
 
                         for frame in &mut sw_frames {
-                            if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                            if reply_cell
+                                .borrow()
+                                .as_ref()
+                                .is_none_or(|replies| replies.iter().all(|reply| reply.is_closed()))
+                            {
                                 respond.take();
                                 break;
                             }
@@ -635,11 +660,19 @@ impl FfmpegDecoder {
                         let requested_time = requested_time.max(0.0);
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
 
-                        pending_requests.push(PendingRequest {
-                            time: requested_time,
-                            frame: requested_frame,
-                            reply,
-                        });
+                        if let Some(existing) = pending_requests
+                            .iter_mut()
+                            .find(|r| r.frame == requested_frame)
+                        {
+                            existing.additional_replies.push(reply);
+                        } else {
+                            pending_requests.push(PendingRequest {
+                                time: requested_time,
+                                frame: requested_frame,
+                                reply,
+                                additional_replies: Vec::new(),
+                            });
+                        }
                     };
 
                 match r {
@@ -662,9 +695,16 @@ impl FfmpegDecoder {
                     time: requested_time,
                     frame: requested_frame,
                     reply,
+                    additional_replies,
                 } in pending_requests
                 {
-                    if reply.is_closed() {
+                    let mut replies = Vec::with_capacity(1 + additional_replies.len());
+                    if !reply.is_closed() {
+                        replies.push(reply);
+                    }
+                    replies.extend(additional_replies.into_iter().filter(|r| !r.is_closed()));
+
+                    if replies.is_empty() {
                         continue;
                     }
 
@@ -676,11 +716,7 @@ impl FfmpegDecoder {
                     if let Some(cached) = cache.get_mut(&requested_frame) {
                         let data = cached.produce(&mut converter);
 
-                        if reply.send(data.frame.clone()).is_err() {
-                            log::warn!(
-                                "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
-                            );
-                        }
+                        send_to_replies(name, requested_frame, &data.frame, replies);
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     }
@@ -699,7 +735,7 @@ impl FfmpegDecoder {
                         {
                             let data = cached.produce(&mut converter);
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            let _ = reply.send(data.frame);
+                            send_to_replies(name, requested_frame, &data.frame, replies);
                             continue;
                         }
 
@@ -707,7 +743,7 @@ impl FfmpegDecoder {
                             && let Some(first_frame) = first_ever_frame.borrow().clone()
                         {
                             *last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                            let _ = reply.send(first_frame.frame);
+                            send_to_replies(name, requested_frame, &first_frame.frame, replies);
                             continue;
                         }
 
@@ -717,11 +753,11 @@ impl FfmpegDecoder {
                         cache.clear();
                     }
 
-                    if reply.is_closed() {
+                    if replies.iter().all(|reply| reply.is_closed()) {
                         continue;
                     }
 
-                    let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                    let reply_cell = Rc::new(RefCell::new(Some(replies)));
                     let reply_for_respond = reply_cell.clone();
 
                     let mut respond = {
@@ -729,12 +765,8 @@ impl FfmpegDecoder {
                         Some(move |data: OutputFrame| {
                             let frame_number = data.number;
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            if let Some(reply) = reply_for_respond.borrow_mut().take()
-                                && reply.send(data.frame).is_err()
-                            {
-                                log::warn!(
-                                    "Failed to send decoded frame {frame_number}: receiver dropped"
-                                );
+                            if let Some(replies) = reply_for_respond.borrow_mut().take() {
+                                send_to_replies(name, frame_number, &data.frame, replies);
                             }
                         })
                     };
@@ -771,7 +803,11 @@ impl FfmpegDecoder {
                     let mut exit = false;
 
                     for frame in &mut frames {
-                        if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                        if reply_cell
+                            .borrow()
+                            .as_ref()
+                            .is_none_or(|replies| replies.iter().all(|reply| reply.is_closed()))
+                        {
                             respond.take();
                             break;
                         }

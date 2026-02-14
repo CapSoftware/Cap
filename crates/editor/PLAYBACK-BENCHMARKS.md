@@ -316,6 +316,56 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - 2.0s: **589.11 / 1424.54 / 1424.54ms**
   - 5.0s: **926.16 / 1460.47 / 1460.47ms**
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Decoder duplicate-request coalescing)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `decode-benchmark` and `playback-benchmark` with `--seek-iterations 10`  
+**Change under test:** FFmpeg decoder request batches now coalesce same-frame requests into a single decode result fan-out
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **6.80ms**
+- Sequential decode: **385.6 fps**, avg **2.59ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **46.92 / 89.95 / 89.95ms**
+  - 1.0s: **70.08 / 147.40 / 147.40ms**
+  - 2.0s: **153.93 / 373.48 / 373.48ms**
+  - 5.0s: **251.75 / 419.44 / 419.44ms**
+- Random access: avg **125.70ms**, p95 **376.36ms**, p99 **426.63ms**
+
+#### Decode Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Decoder init: **30.79ms**
+- Sequential decode: **103.4 fps**, avg **9.67ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **197.39 / 395.30 / 395.30ms**
+  - 1.0s: **351.40 / 730.65 / 730.65ms**
+  - 2.0s: **613.21 / 1398.75 / 1398.75ms**
+  - 5.0s: **900.60 / 1467.33 / 1467.33ms**
+- Random access: avg **517.34ms**, p95 **1493.69ms**, p99 **1622.08ms**
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.24**
+- Decode: avg **1.21ms**, p95 **2.14ms**, p99 **2.23ms**, max **3.63ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **46.02 / 92.97 / 92.97ms**
+  - 1.0s: **68.15 / 142.22 / 142.22ms**
+  - 2.0s: **146.18 / 356.46 / 356.46ms**
+  - 5.0s: **232.73 / 379.79 / 379.79ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.20**
+- Decode: avg **4.81ms**, p95 **7.59ms**, p99 **12.31ms**, max **13.54ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **201.18 / 362.15 / 362.15ms**
+  - 1.0s: **332.09 / 662.63 / 662.63ms**
+  - 2.0s: **584.79 / 1411.56 / 1411.56ms**
+  - 5.0s: **1012.17 / 1722.61 / 1722.61ms**
+
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
 ---
