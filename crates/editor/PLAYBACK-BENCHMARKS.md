@@ -114,11 +114,17 @@ CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv CAP_PLAYBACK_STARTUP_T
 # Parse startup timing logs captured from desktop editor sessions
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log
 
+# Filter startup CSV events to a specific labeled run id
+cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --run-id macos-pass-1
+
 # Aggregate multiple session logs
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/macos.log --log /path/to/windows.log
 
 # Compare candidate logs against baseline logs
 cargo run -p cap-editor --example playback-startup-report -- --baseline-log /path/to/baseline.log --candidate-log /path/to/candidate.log
+
+# Compare specific labeled runs inside shared startup CSV traces
+cargo run -p cap-editor --example playback-startup-report -- --baseline-log /tmp/playback-startup.csv --candidate-log /tmp/playback-startup.csv --baseline-run-id macos-pass-1 --candidate-run-id macos-pass-2
 ```
 
 #### Combined Workflow (Recording → Playback)
@@ -158,6 +164,19 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - one row per run (`scope=run`)
   - one aggregate row (`scope=aggregate`)
 - Captures runtime supersession env values alongside scrub latency metrics for easier cross-machine sweeps.
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (startup report run-id filters)
+
+**Environment:** Linux runner, startup report parser validation  
+**Commands:** `playback-startup-report --run-id`, `cargo test -p cap-editor --example playback-startup-report`
+
+#### Startup Report Parser Validation
+- Unit tests: **6 passed**, including:
+  - CSV parse with and without run-id column
+  - run-id filtering of startup metrics from mixed-run CSV lines
+- CLI smoke run:
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --run-id sample-run`
+  - Completed successfully with filtered metric output path active.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 

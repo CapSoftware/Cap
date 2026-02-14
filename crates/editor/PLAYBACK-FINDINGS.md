@@ -964,6 +964,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Startup report run-id filtering)
+
+**Goal**: Allow startup latency comparisons from shared CSV logs without manual file splitting
+
+**What was done**:
+1. Extended startup report parser to read optional CSV run-id column.
+2. Added run-id filters for aggregate mode and baseline/candidate comparison mode.
+3. Added parser tests that validate run-id filtering behavior on mixed-run CSV traces.
+
+**Changes Made**:
+- `crates/editor/examples/playback-startup-report.rs`
+  - CSV parser now returns optional run-id field
+  - new CLI args:
+    - `--run-id`
+    - `--baseline-run-id`
+    - `--candidate-run-id`
+  - run-id filter now excludes non-matching CSV rows before metric aggregation
+  - added unit test coverage for run-id-filtered parsing
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added command examples for run-id filtering and same-file baseline/candidate comparisons
+
+**Verification**:
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --run-id sample-run`
+
+**Results**:
+- ✅ Startup parser supports grouped analysis across repeated sessions in one CSV file.
+- ✅ Baseline/candidate deltas can now target specific labeled runs in shared trace files.
+- ✅ All startup report example tests passing (6/6).
+
+**Stopping point**: macOS/Windows startup captures can remain in a single trace file while still enabling precise per-run before/after reporting.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
