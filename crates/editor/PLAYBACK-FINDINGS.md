@@ -3522,6 +3522,49 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (stride correction backlog telemetry)
+
+**Goal**: Expose stride-correction backlog behavior in transport diagnostics for direct-path burst tuning
+
+**What was done**:
+1. Added stride-correction queue state metrics (in-flight/pending).
+2. Added stride-correction dispatch counters (window/total).
+3. Added stride-correction superseded pending-drop counters (window/total).
+4. Wired metrics into socket frame logs, stats payload, overlay, and clipboard export.
+5. Re-ran desktop typecheck and utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - `FpsStats` now includes:
+    - `strideCorrectionInFlight`
+    - `strideCorrectionPending`
+    - `strideCorrectionDispatchesTotal`
+    - `strideCorrectionDispatchesWindow`
+    - `strideCorrectionSupersededDropsTotal`
+    - `strideCorrectionSupersededDropsWindow`
+  - `dispatchStrideCorrection` now increments dispatch counters
+  - pending replacement in `queueStrideCorrection` now increments superseded counters
+  - periodic frame log includes stride correction counters
+  - stride window counters reset per frame-log window
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling includes new stride counters
+  - clipboard export includes stride correction counters
+  - overlay row now shows stride in-flight/pending + dispatch/superseded totals
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Transport diagnostics now expose stride-correction backlog pressure and superseded pending work.
+- ✅ Overlay/log/clipboard flows provide consistent stride backlog metrics.
+- ✅ Desktop typecheck and utility tests pass (30/30).
+
+**Stopping point**: Ready for stride-heavy direct-path sessions to correlate backlog telemetry with direct stale-drop counters and FPS stability.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

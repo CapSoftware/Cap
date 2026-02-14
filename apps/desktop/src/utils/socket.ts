@@ -70,6 +70,12 @@ export type FpsStats = {
 	directIngressOutOfOrderDropsWindow: number;
 	directResponseOutOfOrderDropsTotal: number;
 	directResponseOutOfOrderDropsWindow: number;
+	strideCorrectionInFlight: number;
+	strideCorrectionPending: number;
+	strideCorrectionDispatchesTotal: number;
+	strideCorrectionDispatchesWindow: number;
+	strideCorrectionSupersededDropsTotal: number;
+	strideCorrectionSupersededDropsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -300,6 +306,8 @@ export function createImageDataWS(
 		directOutOfOrderDropsWindow = 0;
 		directIngressOutOfOrderDropsWindow = 0;
 		directResponseOutOfOrderDropsWindow = 0;
+		strideCorrectionDispatchesWindow = 0;
+		strideCorrectionSupersededDropsWindow = 0;
 		latestQueuedFrameNumber = null;
 		latestDirectAcceptedFrameNumber = null;
 		lastDirectRenderedFrameNumber = null;
@@ -339,6 +347,8 @@ export function createImageDataWS(
 	}) {
 		if (!strideWorker) return;
 		strideWorkerInFlight = true;
+		strideCorrectionDispatchesTotal++;
+		strideCorrectionDispatchesWindow++;
 		strideWorker.postMessage(
 			{
 				type: "correct-stride",
@@ -366,6 +376,8 @@ export function createImageDataWS(
 		}
 		if (pendingStrideCorrection) {
 			framesDropped++;
+			strideCorrectionSupersededDropsTotal++;
+			strideCorrectionSupersededDropsWindow++;
 		}
 		pendingStrideCorrection = request;
 	}
@@ -777,6 +789,10 @@ export function createImageDataWS(
 	let directIngressOutOfOrderDropsWindow = 0;
 	let directResponseOutOfOrderDropsTotal = 0;
 	let directResponseOutOfOrderDropsWindow = 0;
+	let strideCorrectionDispatchesTotal = 0;
+	let strideCorrectionDispatchesWindow = 0;
+	let strideCorrectionSupersededDropsTotal = 0;
+	let strideCorrectionSupersededDropsWindow = 0;
 	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
 	let framesReceived = 0;
@@ -825,6 +841,12 @@ export function createImageDataWS(
 		directIngressOutOfOrderDropsWindow,
 		directResponseOutOfOrderDropsTotal,
 		directResponseOutOfOrderDropsWindow,
+		strideCorrectionInFlight: strideWorkerInFlight ? 1 : 0,
+		strideCorrectionPending: pendingStrideCorrection ? 1 : 0,
+		strideCorrectionDispatchesTotal,
+		strideCorrectionDispatchesWindow,
+		strideCorrectionSupersededDropsTotal,
+		strideCorrectionSupersededDropsWindow,
 		sabTotalRetryAttempts: totalSabRetryAttempts,
 		sabTotalFramesReceived: totalFramesReceived,
 		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
@@ -862,7 +884,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}, worker_superseded_window: ${workerInFlightSupersededDropsWindow}, worker_superseded_total: ${totalWorkerInFlightSupersededDrops}, rendered_shared_window: ${renderedFromSharedWindow}, rendered_shared_total: ${renderedFromSharedTotal}, rendered_worker_window: ${renderedFromWorkerWindow}, rendered_worker_total: ${renderedFromWorkerTotal}, queued_ooo_window: ${queuedOutOfOrderDropsWindow}, queued_ooo_total: ${queuedOutOfOrderDropsTotal}, direct_ooo_window: ${directOutOfOrderDropsWindow}, direct_ooo_total: ${directOutOfOrderDropsTotal}, direct_ingress_ooo_window: ${directIngressOutOfOrderDropsWindow}, direct_ingress_ooo_total: ${directIngressOutOfOrderDropsTotal}, direct_response_ooo_window: ${directResponseOutOfOrderDropsWindow}, direct_response_ooo_total: ${directResponseOutOfOrderDropsTotal}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_inflight_peak_window: ${workerFramesInFlightPeakWindow}, worker_inflight_peak_total: ${workerFramesInFlightPeakTotal}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}, worker_superseded_window: ${workerInFlightSupersededDropsWindow}, worker_superseded_total: ${totalWorkerInFlightSupersededDrops}, rendered_shared_window: ${renderedFromSharedWindow}, rendered_shared_total: ${renderedFromSharedTotal}, rendered_worker_window: ${renderedFromWorkerWindow}, rendered_worker_total: ${renderedFromWorkerTotal}, queued_ooo_window: ${queuedOutOfOrderDropsWindow}, queued_ooo_total: ${queuedOutOfOrderDropsTotal}, direct_ooo_window: ${directOutOfOrderDropsWindow}, direct_ooo_total: ${directOutOfOrderDropsTotal}, direct_ingress_ooo_window: ${directIngressOutOfOrderDropsWindow}, direct_ingress_ooo_total: ${directIngressOutOfOrderDropsTotal}, direct_response_ooo_window: ${directResponseOutOfOrderDropsWindow}, direct_response_ooo_total: ${directResponseOutOfOrderDropsTotal}, stride_corr_inflight: ${strideWorkerInFlight ? 1 : 0}, stride_corr_pending: ${pendingStrideCorrection ? 1 : 0}, stride_corr_dispatches_window: ${strideCorrectionDispatchesWindow}, stride_corr_dispatches_total: ${strideCorrectionDispatchesTotal}, stride_corr_superseded_window: ${strideCorrectionSupersededDropsWindow}, stride_corr_superseded_total: ${strideCorrectionSupersededDropsTotal}`,
 				);
 
 				frameCount = 0;
@@ -885,6 +907,8 @@ export function createImageDataWS(
 				directOutOfOrderDropsWindow = 0;
 				directIngressOutOfOrderDropsWindow = 0;
 				directResponseOutOfOrderDropsWindow = 0;
+				strideCorrectionDispatchesWindow = 0;
+				strideCorrectionSupersededDropsWindow = 0;
 				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;

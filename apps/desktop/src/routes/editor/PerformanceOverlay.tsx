@@ -55,6 +55,12 @@ type TransportStats = {
 	directIngressOutOfOrderDropsWindow: number;
 	directResponseOutOfOrderDropsTotal: number;
 	directResponseOutOfOrderDropsWindow: number;
+	strideCorrectionInFlight: number;
+	strideCorrectionPending: number;
+	strideCorrectionDispatchesTotal: number;
+	strideCorrectionDispatchesWindow: number;
+	strideCorrectionSupersededDropsTotal: number;
+	strideCorrectionSupersededDropsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -114,6 +120,12 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		directIngressOutOfOrderDropsWindow: 0,
 		directResponseOutOfOrderDropsTotal: 0,
 		directResponseOutOfOrderDropsWindow: 0,
+		strideCorrectionInFlight: 0,
+		strideCorrectionPending: 0,
+		strideCorrectionDispatchesTotal: 0,
+		strideCorrectionDispatchesWindow: 0,
+		strideCorrectionSupersededDropsTotal: 0,
+		strideCorrectionSupersededDropsWindow: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -263,6 +275,12 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			directIngressOutOfOrderDropsWindow: 0,
 			directResponseOutOfOrderDropsTotal: 0,
 			directResponseOutOfOrderDropsWindow: 0,
+			strideCorrectionInFlight: 0,
+			strideCorrectionPending: 0,
+			strideCorrectionDispatchesTotal: 0,
+			strideCorrectionDispatchesWindow: 0,
+			strideCorrectionSupersededDropsTotal: 0,
+			strideCorrectionSupersededDropsWindow: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -328,6 +346,16 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 					socketStats.directResponseOutOfOrderDropsTotal,
 				directResponseOutOfOrderDropsWindow:
 					socketStats.directResponseOutOfOrderDropsWindow,
+				strideCorrectionInFlight: socketStats.strideCorrectionInFlight,
+				strideCorrectionPending: socketStats.strideCorrectionPending,
+				strideCorrectionDispatchesTotal:
+					socketStats.strideCorrectionDispatchesTotal,
+				strideCorrectionDispatchesWindow:
+					socketStats.strideCorrectionDispatchesWindow,
+				strideCorrectionSupersededDropsTotal:
+					socketStats.strideCorrectionSupersededDropsTotal,
+				strideCorrectionSupersededDropsWindow:
+					socketStats.strideCorrectionSupersededDropsWindow,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -420,6 +448,12 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Direct Ingress Out-Of-Order Drops (Window): ${t.directIngressOutOfOrderDropsWindow}`,
 			`Direct Response Out-Of-Order Drops (Total): ${t.directResponseOutOfOrderDropsTotal}`,
 			`Direct Response Out-Of-Order Drops (Window): ${t.directResponseOutOfOrderDropsWindow}`,
+			`Stride Correction In Flight: ${t.strideCorrectionInFlight}`,
+			`Stride Correction Pending: ${t.strideCorrectionPending}`,
+			`Stride Correction Dispatches (Total): ${t.strideCorrectionDispatchesTotal}`,
+			`Stride Correction Dispatches (Window): ${t.strideCorrectionDispatchesWindow}`,
+			`Stride Correction Superseded Drops (Total): ${t.strideCorrectionSupersededDropsTotal}`,
+			`Stride Correction Superseded Drops (Window): ${t.strideCorrectionSupersededDropsWindow}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -647,6 +681,29 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 										{transportStats().directResponseOutOfOrderDropsTotal})
 									</span>
 								</Show>
+							</div>
+						</Show>
+						<Show
+							when={
+								transportStats().strideCorrectionInFlight > 0 ||
+								transportStats().strideCorrectionPending > 0 ||
+								transportStats().strideCorrectionDispatchesTotal > 0
+							}
+						>
+							<div style={{ color: "#f59e0b" }}>
+								Stride correction: in-flight{" "}
+								{transportStats().strideCorrectionInFlight} / pending{" "}
+								{transportStats().strideCorrectionPending}
+								<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+									{" "}
+									(dispatches{" "}
+									{transportStats().strideCorrectionDispatchesWindow} window /{" "}
+									{transportStats().strideCorrectionDispatchesTotal} total,
+									superseded{" "}
+									{transportStats().strideCorrectionSupersededDropsWindow}{" "}
+									window /{" "}
+									{transportStats().strideCorrectionSupersededDropsTotal} total)
+								</span>
 							</div>
 						</Show>
 						<Show when={transportStats().workerInFlightBackpressureHits > 0}>
