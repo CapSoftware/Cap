@@ -12,6 +12,10 @@ import {
 	DEFAULT_FRAME_BUFFER_CONFIG,
 	computeSharedBufferConfig,
 } from "./frame-transport-config";
+import {
+	decideWorkerInflightDispatch,
+	updateWorkerInflightPeaks,
+} from "./frame-transport-inflight";
 import { decideSabWriteFailure } from "./frame-transport-retry";
 import type { StrideCorrectionResponse } from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
@@ -451,6 +455,45 @@ export function createImageDataWS(
 		}
 	}
 
+	function dispatchToWorker(buffer: ArrayBuffer): boolean {
+		const decision = decideWorkerInflightDispatch(
+			workerFramesInFlight,
+			WORKER_IN_FLIGHT_LIMIT,
+			nextFrame !== null,
+		);
+
+		totalWorkerInFlightBackpressureHits += decision.backpressureHitsIncrement;
+		workerInFlightBackpressureWindowHits += decision.backpressureHitsIncrement;
+
+		if (decision.supersededDropsIncrement > 0) {
+			framesDropped += decision.supersededDropsIncrement;
+			totalSupersededDrops += decision.supersededDropsIncrement;
+			totalWorkerInFlightSupersededDrops += decision.supersededDropsIncrement;
+			workerInFlightSupersededDropsWindow += decision.supersededDropsIncrement;
+		}
+
+		if (decision.action === "backpressure") {
+			nextFrame = buffer;
+			return false;
+		}
+
+		framesSentToWorker++;
+		totalFramesSentToWorker++;
+		totalWorkerFallbackBytes += buffer.byteLength;
+		workerFramesInFlight = decision.nextWorkerFramesInFlight;
+
+		const peaks = updateWorkerInflightPeaks(
+			workerFramesInFlight,
+			workerFramesInFlightPeakWindow,
+			workerFramesInFlightPeakTotal,
+		);
+		workerFramesInFlightPeakWindow = peaks.peakWindow;
+		workerFramesInFlightPeakTotal = peaks.peakTotal;
+
+		worker.postMessage({ type: "frame", buffer }, [buffer]);
+		return true;
+	}
+
 	function processNextFrame() {
 		if (isProcessing) return;
 
@@ -504,34 +547,9 @@ export function createImageDataWS(
 					sabRetryLimitFallbackCount += 1;
 					sabRetryLimitFallbackWindowCount += 1;
 				}
-				if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
-					isProcessing = false;
-					totalWorkerInFlightBackpressureHits++;
-					workerInFlightBackpressureWindowHits++;
-					if (nextFrame) {
-						framesDropped++;
-						totalSupersededDrops++;
-						totalWorkerInFlightSupersededDrops++;
-						workerInFlightSupersededDropsWindow++;
-					}
-					nextFrame = buffer;
-					return;
-				}
-				framesSentToWorker++;
-				totalFramesSentToWorker++;
-				totalWorkerFallbackBytes += buffer.byteLength;
-				workerFramesInFlight++;
-				workerFramesInFlightPeakWindow = Math.max(
-					workerFramesInFlightPeakWindow,
-					workerFramesInFlight,
-				);
-				workerFramesInFlightPeakTotal = Math.max(
-					workerFramesInFlightPeakTotal,
-					workerFramesInFlight,
-				);
-				worker.postMessage({ type: "frame", buffer }, [buffer]);
+				const dispatched = dispatchToWorker(buffer);
 				isProcessing = false;
-				if (nextFrame || pendingFrame) {
+				if (dispatched && (nextFrame || pendingFrame)) {
 					scheduleProcessNextFrame();
 				}
 				return;
@@ -546,34 +564,9 @@ export function createImageDataWS(
 			}
 		} else {
 			sabWriteRetryCount = 0;
-			if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
-				isProcessing = false;
-				totalWorkerInFlightBackpressureHits++;
-				workerInFlightBackpressureWindowHits++;
-				if (nextFrame) {
-					framesDropped++;
-					totalSupersededDrops++;
-					totalWorkerInFlightSupersededDrops++;
-					workerInFlightSupersededDropsWindow++;
-				}
-				nextFrame = buffer;
-				return;
-			}
-			framesSentToWorker++;
-			totalFramesSentToWorker++;
-			totalWorkerFallbackBytes += buffer.byteLength;
-			workerFramesInFlight++;
-			workerFramesInFlightPeakWindow = Math.max(
-				workerFramesInFlightPeakWindow,
-				workerFramesInFlight,
-			);
-			workerFramesInFlightPeakTotal = Math.max(
-				workerFramesInFlightPeakTotal,
-				workerFramesInFlight,
-			);
-			worker.postMessage({ type: "frame", buffer }, [buffer]);
+			const dispatched = dispatchToWorker(buffer);
 			isProcessing = false;
-			if (nextFrame || pendingFrame) {
+			if (dispatched && (nextFrame || pendingFrame)) {
 				scheduleProcessNextFrame();
 			}
 			return;

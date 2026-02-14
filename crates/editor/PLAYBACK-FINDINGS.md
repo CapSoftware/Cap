@@ -2675,6 +2675,53 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (in-flight helper consolidation and source-aware dispatch counters)
+
+**Goal**: Consolidate fallback in-flight dispatch branching into shared helper logic and ensure in-flight completion counts only worker-sourced renders
+
+**What was done**:
+1. Integrated `frame-transport-inflight` helper into socket fallback dispatch.
+2. Added `dispatchToWorker` wrapper to centralize decision handling, peak tracking, and counters.
+3. Tagged worker `frame-rendered` messages with `source: "shared" | "worker"`.
+4. Updated socket to decrement `workerFramesInFlight` only for `source === "worker"`.
+5. Added/expanded worker pressure diagnostics:
+   - in-flight peaks (window/total)
+   - cap-hit counters (window/total)
+   - cap-induced superseded drops (window/total)
+6. Added unit tests for in-flight decision/peak helpers and re-ran desktop checks/tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-transport-inflight.ts`
+  - added:
+    - `decideWorkerInflightDispatch`
+    - `updateWorkerInflightPeaks`
+- `apps/desktop/src/utils/frame-transport-inflight.test.ts`
+  - added 4 tests for dispatch/backpressure decisions and peak updates
+- `apps/desktop/src/utils/socket.ts`
+  - uses helper-driven `dispatchToWorker(buffer)`
+  - source-aware in-flight decrement on worker messages
+  - expanded worker pressure counters and frame-log diagnostics
+- `apps/desktop/src/utils/frame-worker.ts`
+  - `FrameRenderedMessage` now includes `source`
+  - queued frames retain source for rendered-event emission
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - includes all new worker pressure counters in state, overlay, and clipboard export
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-transport-inflight.ts src/utils/frame-transport-inflight.test.ts src/utils/socket.ts src/utils/frame-worker.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Fallback in-flight gating logic is centralized and unit-tested.
+- ✅ In-flight completion no longer decrements on shared-buffer render events.
+- ✅ Overlay/log diagnostics now expose richer fallback backlog pressure behavior.
+- ✅ Desktop typecheck and expanded transport suite pass (17/17).
+
+**Stopping point**: Ready for fallback-heavy validation runs to compare source-aware in-flight pressure signatures across target machines.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
