@@ -362,6 +362,34 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (FFmpeg seek reset tuning)
+
+**Goal**: Reduce medium-distance seek latency spikes in FFmpeg decode path
+
+**What was done**:
+1. Updated `cap-video-decode` FFmpeg reset logic to use a forward bounded seek window before fallback
+2. Re-ran decode and playback throughput benchmarks on synthetic 1080p60 and 4k60 videos
+
+**Changes Made**:
+- `crates/video-decode/src/ffmpeg.rs`
+  - Added `last_seek_position` tracking
+  - For forward seeks, attempts `seek(position, min..max)` using a 2-second window
+  - Falls back to previous `..position` strategy if bounded seek fails
+
+**Results**:
+- 1080p60 decode benchmark:
+  - 2.0s seek improved from ~260ms to **5.26ms**
+  - random access avg improved from ~223ms to **120.87ms**
+- 4k60 decode benchmark:
+  - 2.0s seek improved from ~905ms to **12.65ms**
+  - random access avg improved from ~918ms to **533.65ms**
+- Playback throughput remains at ~60fps for both 1080p60 and 4k60 synthetic runs
+- Long 5.0s seek latency is still elevated on 4k and remains an active tuning target
+
+**Stopping point**: Keep current seek tuning; next focus is long-seek (5s+) latency and real desktop A/V startup measurements.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
