@@ -149,3 +149,36 @@ fn main() {
         &stats.audio_prerender_startup_ms,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_csv_startup_event, parse_startup_ms};
+
+    #[test]
+    fn parses_csv_startup_event() {
+        let parsed = parse_csv_startup_event("1739530000000,first_rendered_frame,123.456,42");
+        assert!(parsed.is_some());
+        let (event, startup_ms) = parsed.expect("expected CSV startup event");
+        assert_eq!(event, "first_rendered_frame");
+        assert!((startup_ms - 123.456).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parses_structured_startup_ms_field() {
+        let parsed =
+            parse_startup_ms("INFO Playback first frame rendered startup_ms=87.25 frame=1");
+        assert!(parsed.is_some());
+        let startup_ms = parsed.expect("expected startup_ms");
+        assert!((startup_ms - 87.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parses_json_startup_ms_field() {
+        let parsed = parse_startup_ms(
+            "{\"level\":\"INFO\",\"fields\":{\"startup_ms\":42.5},\"message\":\"Audio streaming callback started\"}",
+        );
+        assert!(parsed.is_some());
+        let startup_ms = parsed.expect("expected startup_ms");
+        assert!((startup_ms - 42.5).abs() < f64::EPSILON);
+    }
+}

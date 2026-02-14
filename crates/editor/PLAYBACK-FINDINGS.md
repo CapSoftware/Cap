@@ -524,6 +524,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 **Verification**:
 - `cargo +1.88.0 check -p cap-editor`
 - `cargo +1.88.0 check -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md`
 
 **Stopping point**: next actionable step is running desktop playback sessions on macOS and Windows with `CAP_PLAYBACK_STARTUP_TRACE_FILE` enabled and feeding the resulting logs into `playback-startup-report`.
