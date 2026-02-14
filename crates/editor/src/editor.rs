@@ -55,7 +55,7 @@ impl Renderer {
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
 
-        let (tx, rx) = mpsc::channel(8);
+        let (tx, rx) = mpsc::channel(4);
 
         let this = Self {
             rx,
