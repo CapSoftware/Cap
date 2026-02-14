@@ -277,6 +277,7 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 						SLOT_STATE.READY,
 					);
 					Atomics.notify(metadataView, slotMetaIdx + META_SLOT_STATE, 1);
+					Atomics.notify(metadataView, CONTROL_WRITE_INDEX, 1);
 					return true;
 				}
 
@@ -399,16 +400,14 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 				const baseReadIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
 				const claimed = claimReadySlot(baseReadIdx);
 				if (!claimed) {
-					const waitSlotMetaIdx =
-						(metadataOffset + baseReadIdx * METADATA_ENTRY_SIZE) / 4;
-					const waitState = Atomics.load(
-						metadataView,
-						waitSlotMetaIdx + META_SLOT_STATE,
+					const observedWriteIdx = Atomics.load(
+						controlView,
+						CONTROL_WRITE_INDEX,
 					);
 					const waitResult = Atomics.wait(
 						metadataView,
-						waitSlotMetaIdx + META_SLOT_STATE,
-						waitState,
+						CONTROL_WRITE_INDEX,
+						observedWriteIdx,
 						timeoutMs,
 					);
 					if (waitResult === "timed-out") {
@@ -478,16 +477,14 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 				const baseReadIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
 				const claimed = claimReadySlot(baseReadIdx);
 				if (!claimed) {
-					const waitSlotMetaIdx =
-						(metadataOffset + baseReadIdx * METADATA_ENTRY_SIZE) / 4;
-					const waitState = Atomics.load(
-						metadataView,
-						waitSlotMetaIdx + META_SLOT_STATE,
+					const observedWriteIdx = Atomics.load(
+						controlView,
+						CONTROL_WRITE_INDEX,
 					);
 					const waitResult = Atomics.wait(
 						metadataView,
-						waitSlotMetaIdx + META_SLOT_STATE,
-						waitState,
+						CONTROL_WRITE_INDEX,
+						observedWriteIdx,
 						timeoutMs,
 					);
 					if (waitResult === "timed-out") {
@@ -555,16 +552,14 @@ export function createConsumer(buffer: SharedArrayBuffer): Consumer {
 				const baseReadIdx = Atomics.load(controlView, CONTROL_READ_INDEX);
 				const claimed = claimReadySlot(baseReadIdx);
 				if (!claimed) {
-					const waitSlotMetaIdx =
-						(metadataOffset + baseReadIdx * METADATA_ENTRY_SIZE) / 4;
-					const waitState = Atomics.load(
-						metadataView,
-						waitSlotMetaIdx + META_SLOT_STATE,
+					const observedWriteIdx = Atomics.load(
+						controlView,
+						CONTROL_WRITE_INDEX,
 					);
 					const waitResult = Atomics.wait(
 						metadataView,
-						waitSlotMetaIdx + META_SLOT_STATE,
-						waitState,
+						CONTROL_WRITE_INDEX,
+						observedWriteIdx,
 						timeoutMs,
 					);
 					if (waitResult === "timed-out") {

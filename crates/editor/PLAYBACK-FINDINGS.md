@@ -1331,6 +1331,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 4. Added unit coverage for overwrite-on-full behavior.
 5. Made oldest-slot selection wrap-safe by comparing frame age in unsigned 32-bit space.
 6. Added explicit `frameAge` helper and unit coverage for u32 wrap semantics.
+7. Updated consumer wait strategy to wait on write-index updates, preventing missed wakeups when READY frames appear in non-read-index slots.
 
 **Changes Made**:
 - `apps/desktop/src/utils/shared-frame-buffer.ts`
