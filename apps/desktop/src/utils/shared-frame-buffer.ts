@@ -34,6 +34,15 @@ export interface SharedFrameBufferInit {
 	config: SharedFrameBufferConfig;
 }
 
+export function frameAge(
+	currentFrameNumber: number,
+	candidateFrameNumber: number,
+): number {
+	const current = currentFrameNumber >>> 0;
+	const candidate = candidateFrameNumber >>> 0;
+	return (current - candidate) >>> 0;
+}
+
 export function isSharedArrayBufferSupported(): boolean {
 	try {
 		return (
@@ -189,9 +198,9 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 								metadataView,
 								candidateMetaIdx + META_FRAME_NUMBER,
 							) >>> 0;
-						const frameAge = (frameCounter - frameNumber) >>> 0;
-						if (frameAge > oldestFrameAge) {
-							oldestFrameAge = frameAge;
+						const candidateAge = frameAge(frameCounter, frameNumber);
+						if (candidateAge > oldestFrameAge) {
+							oldestFrameAge = candidateAge;
 							oldestIdx = candidateIdx;
 							oldestMetaIdx = candidateMetaIdx;
 						}

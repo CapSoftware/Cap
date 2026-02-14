@@ -3,6 +3,7 @@ import {
 	createConsumer,
 	createProducer,
 	createSharedFrameBuffer,
+	frameAge,
 } from "./shared-frame-buffer";
 
 function makeFrame(...bytes: number[]): ArrayBuffer {
@@ -17,6 +18,12 @@ function readFirstByte(frame: ArrayBuffer | null): number | null {
 }
 
 describe("shared-frame-buffer", () => {
+	it("computes frame age across u32 wrap", () => {
+		expect(frameAge(1, 0xffffffff)).toBe(2);
+		expect(frameAge(0xffffffff, 0xfffffffe)).toBe(1);
+		expect(frameAge(100, 100)).toBe(0);
+	});
+
 	it("claims alternate writable slot when write index slot is busy", () => {
 		const init = createSharedFrameBuffer({ slotCount: 3, slotSize: 64 });
 		const producer = createProducer(init);

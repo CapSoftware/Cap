@@ -1330,6 +1330,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 3. Kept WRITING/READING slots protected; only READY slots are eligible for replacement.
 4. Added unit coverage for overwrite-on-full behavior.
 5. Made oldest-slot selection wrap-safe by comparing frame age in unsigned 32-bit space.
+6. Added explicit `frameAge` helper and unit coverage for u32 wrap semantics.
 
 **Changes Made**:
 - `apps/desktop/src/utils/shared-frame-buffer.ts`
@@ -1423,6 +1424,35 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - ✅ Desktop tests and TypeScript checks pass.
 
 **Stopping point**: keep using SAB telemetry counters on target machines to tune retry limit and slot sizing defaults from real playback traces.
+
+---
+
+### Session 2026-02-14 (Frame-age helper extraction for wrap-safe ordering)
+
+**Goal**: Make wrap-safe frame ordering explicit and testable in shared-buffer reclaim logic
+
+**What was done**:
+1. Extracted unsigned wrap-safe frame-age computation into `frameAge`.
+2. Replaced inline reclaim age arithmetic with helper usage.
+3. Added unit tests for wrap semantics around `0xffffffff -> 0`.
+
+**Changes Made**:
+- `apps/desktop/src/utils/shared-frame-buffer.ts`
+  - added exported `frameAge(current, candidate)`
+  - producer reclaim path now calls `frameAge` when selecting oldest READY frame
+- `apps/desktop/src/utils/shared-frame-buffer.test.ts`
+  - added `computes frame age across u32 wrap`
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/shared-frame-buffer.ts apps/desktop/src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec vitest run src/utils/shared-frame-buffer.test.ts src/utils/frame-transport-retry.test.ts src/utils/frame-transport-config.test.ts` (13 passed)
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Shared-buffer ordering logic now has a dedicated wrap-safe primitive with direct test coverage.
+- ✅ Desktop transport utility tests and typecheck remain green.
+
+**Stopping point**: continue using this helper for any future reclaim policy tuning that depends on frame ordering.
 
 ---
 
