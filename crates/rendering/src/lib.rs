@@ -42,7 +42,7 @@ pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
-pub use frame_pipeline::{Nv12RenderedFrame, RenderedFrame};
+pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
