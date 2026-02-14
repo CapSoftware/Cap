@@ -163,9 +163,18 @@ function scenarioArgs(options, scenario) {
 
 function validateOptions(options) {
 	if (!options.platform || !options.gpu || !options.outputDir) {
-		throw new Error("Missing required options: --platform, --gpu, --output-dir");
+		throw new Error(
+			"Missing required options: --platform, --gpu, --output-dir",
+		);
 	}
-	const validScenarios = new Set(["full", "scrub", "decoder", "playback", "audio-sync", "camera-sync"]);
+	const validScenarios = new Set([
+		"full",
+		"scrub",
+		"decoder",
+		"playback",
+		"audio-sync",
+		"camera-sync",
+	]);
 	for (const scenario of options.scenarios) {
 		if (!validScenarios.has(scenario)) {
 			throw new Error(`Unsupported scenario: ${scenario}`);
@@ -188,7 +197,9 @@ function main() {
 
 	validateOptions(options);
 
-	console.log(`Running matrix for platform=${options.platform} gpu=${options.gpu}`);
+	console.log(
+		`Running matrix for platform=${options.platform} gpu=${options.gpu}`,
+	);
 	for (const scenario of options.scenarios) {
 		run("cargo", scenarioArgs(options, scenario));
 	}
