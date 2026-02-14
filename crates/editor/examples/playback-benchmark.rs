@@ -1,5 +1,7 @@
 use cap_audio::AudioData;
 use cap_rendering::decoder::spawn_decoder;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -12,6 +14,8 @@ struct Config {
     fps: u32,
     max_frames: usize,
     seek_iterations: usize,
+    output_csv: Option<PathBuf>,
+    run_label: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -30,6 +34,14 @@ struct PlaybackStats {
     sequential_elapsed_secs: f64,
     effective_fps: f64,
     seek_stats: Vec<SeekDistanceStats>,
+}
+
+#[derive(Clone, Copy)]
+struct DecodeSummary {
+    avg: f64,
+    p95: f64,
+    p99: f64,
+    max: f64,
 }
 
 fn get_video_duration(path: &Path) -> f32 {
@@ -62,6 +74,141 @@ fn percentile(samples: &[f64], p: f64) -> f64 {
     filtered.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = ((p / 100.0) * (filtered.len() - 1) as f64).round() as usize;
     filtered[idx.min(filtered.len() - 1)]
+}
+
+fn playback_run_label(config: &Config) -> String {
+    config
+        .run_label
+        .as_ref()
+        .cloned()
+        .or_else(|| std::env::var("CAP_PLAYBACK_BENCHMARK_RUN_LABEL").ok())
+        .unwrap_or_default()
+}
+
+fn decode_summary(stats: &PlaybackStats) -> Option<DecodeSummary> {
+    if stats.decode_times_ms.is_empty() {
+        return None;
+    }
+    let avg = stats.decode_times_ms.iter().sum::<f64>() / stats.decode_times_ms.len() as f64;
+    let max = stats
+        .decode_times_ms
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    Some(DecodeSummary {
+        avg,
+        p95: percentile(&stats.decode_times_ms, 95.0),
+        p99: percentile(&stats.decode_times_ms, 99.0),
+        max: if max.is_finite() { max } else { 0.0 },
+    })
+}
+
+fn write_csv(path: &PathBuf, config: &Config, stats: &PlaybackStats) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
+        let header = [
+            "timestamp_ms",
+            "mode",
+            "run_label",
+            "video",
+            "fps",
+            "max_frames",
+            "seek_iterations",
+            "decoded_frames",
+            "failed_frames",
+            "missed_deadlines",
+            "effective_fps",
+            "sequential_elapsed_s",
+            "decode_avg_ms",
+            "decode_p95_ms",
+            "decode_p99_ms",
+            "decode_max_ms",
+            "seek_distance_s",
+            "seek_avg_ms",
+            "seek_p95_ms",
+            "seek_max_ms",
+            "seek_samples",
+            "seek_failures",
+        ]
+        .join(",");
+        writeln!(file, "{header}").map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let run_label = playback_run_label(config);
+    let decode = decode_summary(stats).unwrap_or(DecodeSummary {
+        avg: 0.0,
+        p95: 0.0,
+        p99: 0.0,
+        max: 0.0,
+    });
+
+    writeln!(
+        file,
+        "{timestamp_ms},sequential,\"{}\",\"{}\",{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\"",
+        run_label,
+        config.video_path.display(),
+        config.fps,
+        config.max_frames,
+        config.seek_iterations,
+        stats.decoded_frames,
+        stats.failed_frames,
+        stats.missed_deadlines,
+        stats.effective_fps,
+        stats.sequential_elapsed_secs,
+        decode.avg,
+        decode.p95,
+        decode.p99,
+        decode.max
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    for seek in &stats.seek_stats {
+        let seek_avg = if seek.samples_ms.is_empty() {
+            0.0
+        } else {
+            seek.samples_ms.iter().sum::<f64>() / seek.samples_ms.len() as f64
+        };
+        let seek_max = seek
+            .samples_ms
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        writeln!(
+            file,
+            "{timestamp_ms},seek,\"{}\",\"{}\",{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            run_label,
+            config.video_path.display(),
+            config.fps,
+            config.max_frames,
+            config.seek_iterations,
+            stats.decoded_frames,
+            stats.failed_frames,
+            stats.missed_deadlines,
+            stats.effective_fps,
+            stats.sequential_elapsed_secs,
+            decode.avg,
+            decode.p95,
+            decode.p99,
+            decode.max,
+            seek.distance_secs,
+            seek_avg,
+            percentile(&seek.samples_ms, 95.0),
+            if seek_max.is_finite() { seek_max } else { 0.0 },
+            seek.samples_ms.len(),
+            seek.failures
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    Ok(())
 }
 
 async fn run_playback_benchmark(config: &Config) -> Result<PlaybackStats, String> {
@@ -258,6 +405,8 @@ fn parse_args() -> Result<Config, String> {
     let mut fps = 60_u32;
     let mut max_frames = 600_usize;
     let mut seek_iterations = 10_usize;
+    let mut output_csv: Option<PathBuf> = None;
+    let mut run_label: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -303,9 +452,23 @@ fn parse_args() -> Result<Config, String> {
                     .parse::<usize>()
                     .map_err(|_| "Invalid --seek-iterations value".to_string())?;
             }
+            "--output-csv" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Missing value for --output-csv".to_string());
+                }
+                output_csv = Some(PathBuf::from(&args[i]));
+            }
+            "--run-label" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Missing value for --run-label".to_string());
+                }
+                run_label = Some(args[i].clone());
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: playback-benchmark --video <path> [--audio <path>] [--fps <n>] [--max-frames <n>] [--seek-iterations <n>]"
+                    "Usage: playback-benchmark --video <path> [--audio <path>] [--fps <n>] [--max-frames <n>] [--seek-iterations <n>] [--output-csv <path>] [--run-label <label>]"
                 );
                 std::process::exit(0);
             }
@@ -330,6 +493,8 @@ fn parse_args() -> Result<Config, String> {
         fps,
         max_frames,
         seek_iterations,
+        output_csv,
+        run_label,
     })
 }
 
@@ -346,6 +511,12 @@ fn main() {
     match rt.block_on(run_playback_benchmark(&config)) {
         Ok(stats) => {
             print_report(&config, &stats);
+            if let Some(path) = &config.output_csv
+                && let Err(err) = write_csv(path, &config, &stats)
+            {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
         }
         Err(err) => {
             eprintln!("{err}");

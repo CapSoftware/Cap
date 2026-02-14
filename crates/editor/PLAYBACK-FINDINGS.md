@@ -1044,6 +1044,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Playback benchmark CSV export)
+
+**Goal**: Persist playback throughput benchmark outputs in machine-readable format for cross-platform comparisons
+
+**What was done**:
+1. Added optional CSV export to `playback-benchmark`.
+2. Added optional run labeling for exported playback benchmark rows.
+3. Emitted sequential and per-seek rows in a single CSV schema.
+
+**Changes Made**:
+- `crates/editor/examples/playback-benchmark.rs`
+  - new CLI args:
+    - `--output-csv <path>`
+    - `--run-label <label>`
+  - new env fallback:
+    - `CAP_PLAYBACK_BENCHMARK_RUN_LABEL`
+  - CSV rows:
+    - `mode=sequential` for throughput/decode summary
+    - `mode=seek` for each seek distance sample summary
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added command usage and validation benchmark sample for CSV mode
+
+**Verification**:
+- `cargo +1.88.0 check -p cap-editor --example playback-benchmark`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --max-frames 240 --seek-iterations 10 --output-csv /tmp/cap-playback-benchmark.csv --run-label linux-pass-a`
+- inspected `/tmp/cap-playback-benchmark.csv` and confirmed sequential + seek rows with populated metrics.
+
+**Results**:
+- ✅ Playback benchmark outputs can now be aggregated across machines/runs without manual copy-paste.
+- ✅ CSV schema captures both real-time throughput and seek behavior under one run label.
+
+**Stopping point**: startup + scrub + playback benchmark tooling now all support labeled CSV exports, enabling cleaner macOS/Windows evidence ingestion once traces are collected.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

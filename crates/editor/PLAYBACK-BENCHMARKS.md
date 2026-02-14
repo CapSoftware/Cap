@@ -81,6 +81,12 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 
 # Increase seek sample count for stable p95/max seek stats
 cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600 --seek-iterations 20
+
+# Export playback throughput + seek samples to CSV
+cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600 --seek-iterations 20 --output-csv /tmp/cap-playback-benchmark.csv
+
+# Add run label for cross-machine baseline/candidate grouping
+cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600 --output-csv /tmp/cap-playback-benchmark.csv --run-label windows-pass-1
 ```
 
 #### Scrub Burst Benchmark (queue stress)
@@ -442,6 +448,23 @@ cargo run -p cap-recording --example playback-test-runner -- full
     - summary rows per `(label, video)`
     - delta rows per overlapping video
 - Utility tests remain green (**5 passed**).
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (playback benchmark CSV export)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4  
+**Command:** `playback-benchmark --seek-iterations 10 --output-csv /tmp/cap-playback-benchmark.csv --run-label linux-pass-a`
+
+#### Result
+- Sequential row:
+  - effective fps **60.23**
+  - decoded **240**, failed **0**, missed deadlines **0**
+  - decode avg/p95/p99/max: **1.36 / 2.57 / 4.27 / 5.25ms**
+- Seek rows emitted for sampled distances:
+  - 0.5s avg/p95 **48.31 / 97.18ms**
+  - 1.0s avg/p95 **69.16 / 148.41ms**
+  - 2.0s avg/p95 **149.21 / 364.12ms**
+  - 5.0s avg/p95 **237.82 / 377.19ms**
+- CSV output includes `mode=sequential` and `mode=seek` rows with shared run label for downstream aggregation.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
