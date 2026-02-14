@@ -1,7 +1,8 @@
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::{BufRead, BufReader},
+    fs::OpenOptions,
+    io::{BufRead, BufReader, Write},
     path::PathBuf,
 };
 
@@ -30,6 +31,14 @@ struct MetricSummary {
     p95: f64,
     min: f64,
     max: f64,
+}
+
+#[derive(Clone, Copy)]
+struct DeltaSummary {
+    baseline: MetricSummary,
+    candidate: MetricSummary,
+    avg_delta: f64,
+    p95_delta: f64,
 }
 
 fn percentile(values: &[f64], percentile: f64) -> f64 {
@@ -99,32 +108,44 @@ fn summarize(values: &[f64]) -> Option<MetricSummary> {
 }
 
 fn print_delta(name: &str, baseline: &[f64], candidate: &[f64]) {
-    let Some(base_summary) = summarize(baseline) else {
+    if summarize(baseline).is_none() {
         println!("{name}: no baseline samples");
         return;
-    };
-    let Some(candidate_summary) = summarize(candidate) else {
+    }
+    if summarize(candidate).is_none() {
         println!("{name}: no candidate samples");
         return;
-    };
-
-    let avg_delta = candidate_summary.avg - base_summary.avg;
-    let p95_delta = candidate_summary.p95 - base_summary.p95;
-    let avg_pct = if base_summary.avg.abs() > f64::EPSILON {
-        avg_delta / base_summary.avg * 100.0
+    }
+    let delta = summarize_delta(baseline, candidate).expect("validated summaries");
+    let avg_pct = if delta.baseline.avg.abs() > f64::EPSILON {
+        delta.avg_delta / delta.baseline.avg * 100.0
     } else {
         0.0
     };
-    let p95_pct = if base_summary.p95.abs() > f64::EPSILON {
-        p95_delta / base_summary.p95 * 100.0
+    let p95_pct = if delta.baseline.p95.abs() > f64::EPSILON {
+        delta.p95_delta / delta.baseline.p95 * 100.0
     } else {
         0.0
     };
 
     println!(
         "{name}: avg_delta={avg_delta:.2}ms ({avg_pct:+.1}%) p95_delta={p95_delta:.2}ms ({p95_pct:+.1}%) baseline_samples={} candidate_samples={}",
-        base_summary.samples, candidate_summary.samples
+        delta.baseline.samples,
+        delta.candidate.samples,
+        avg_delta = delta.avg_delta,
+        p95_delta = delta.p95_delta
     );
+}
+
+fn summarize_delta(baseline: &[f64], candidate: &[f64]) -> Option<DeltaSummary> {
+    let baseline_summary = summarize(baseline)?;
+    let candidate_summary = summarize(candidate)?;
+    Some(DeltaSummary {
+        avg_delta: candidate_summary.avg - baseline_summary.avg,
+        p95_delta: candidate_summary.p95 - baseline_summary.p95,
+        baseline: baseline_summary,
+        candidate: candidate_summary,
+    })
 }
 
 fn parse_log(
@@ -223,11 +244,113 @@ fn collect_run_id_counts(path: &PathBuf) -> Result<BTreeMap<String, usize>, Stri
     Ok(counts)
 }
 
+fn write_csv_header(path: &PathBuf, file: &mut File) -> Result<(), String> {
+    if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) > 0 {
+        return Ok(());
+    }
+    let header = [
+        "timestamp_ms",
+        "mode",
+        "metric",
+        "run_id",
+        "baseline_run_id",
+        "candidate_run_id",
+        "samples",
+        "avg_ms",
+        "p95_ms",
+        "baseline_samples",
+        "baseline_avg_ms",
+        "baseline_p95_ms",
+        "candidate_samples",
+        "candidate_avg_ms",
+        "candidate_p95_ms",
+        "avg_delta_ms",
+        "p95_delta_ms",
+    ]
+    .join(",");
+    writeln!(file, "{header}").map_err(|error| format!("write {} / {error}", path.display()))
+}
+
+fn append_aggregate_csv(
+    path: &PathBuf,
+    run_id: Option<&str>,
+    metrics: &[(&str, &[f64])],
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    write_csv_header(path, &mut file)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+
+    for (name, values) in metrics {
+        if let Some(summary) = summarize(values) {
+            writeln!(
+                file,
+                "{timestamp_ms},aggregate,\"{}\",\"{}\",\"\",\"\",{},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+                name,
+                run_id.unwrap_or(""),
+                summary.samples,
+                summary.avg,
+                summary.p95
+            )
+            .map_err(|error| format!("write {} / {error}", path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn append_delta_csv(
+    path: &PathBuf,
+    baseline_run_id: Option<&str>,
+    candidate_run_id: Option<&str>,
+    metrics: &[(&str, &[f64], &[f64])],
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    write_csv_header(path, &mut file)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+
+    for (name, baseline_values, candidate_values) in metrics {
+        if let Some(delta) = summarize_delta(baseline_values, candidate_values) {
+            writeln!(
+                file,
+                "{timestamp_ms},delta,\"{}\",\"\",\"{}\",\"{}\",\"\",\"\",\"\",{},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3}",
+                name,
+                baseline_run_id.unwrap_or(""),
+                candidate_run_id.unwrap_or(""),
+                delta.baseline.samples,
+                delta.baseline.avg,
+                delta.baseline.p95,
+                delta.candidate.samples,
+                delta.candidate.avg,
+                delta.candidate.p95,
+                delta.avg_delta,
+                delta.p95_delta
+            )
+            .map_err(|error| format!("write {} / {error}", path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "Usage: playback-startup-report [--log <path> ...] [--run-id <id>] [--list-runs] [--baseline-log <path> ... --candidate-log <path> ...] [--baseline-run-id <id>] [--candidate-run-id <id>]"
+            "Usage: playback-startup-report [--log <path> ...] [--run-id <id>] [--list-runs] [--output-csv <path>] [--baseline-log <path> ... --candidate-log <path> ...] [--baseline-run-id <id>] [--candidate-run-id <id>]"
         );
         std::process::exit(1);
     }
@@ -239,6 +362,7 @@ fn main() {
     let mut baseline_run_id: Option<String> = None;
     let mut candidate_run_id: Option<String> = None;
     let mut list_runs = false;
+    let mut output_csv: Option<PathBuf> = None;
     let mut index = 0usize;
 
     while index < args.len() {
@@ -301,6 +425,15 @@ fn main() {
                 list_runs = true;
                 index += 1;
                 continue;
+            }
+            "--output-csv" => {
+                if let Some(value) = args.get(index + 1) {
+                    output_csv = Some(PathBuf::from(value));
+                    index += 2;
+                    continue;
+                }
+                eprintln!("Missing value for --output-csv");
+                std::process::exit(1);
             }
             _ => {
                 eprintln!("Unknown argument: {}", args[index]);
@@ -389,6 +522,25 @@ fn main() {
             "audio pre-rendered callback",
             &stats.audio_prerender_startup_ms,
         );
+
+        if let Some(path) = &output_csv {
+            let metrics = [
+                ("first decoded frame", stats.decode_startup_ms.as_slice()),
+                ("first rendered frame", stats.render_startup_ms.as_slice()),
+                (
+                    "audio streaming callback",
+                    stats.audio_stream_startup_ms.as_slice(),
+                ),
+                (
+                    "audio pre-rendered callback",
+                    stats.audio_prerender_startup_ms.as_slice(),
+                ),
+            ];
+            if let Err(error) = append_aggregate_csv(path, run_id.as_deref(), &metrics) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
     }
 
     if !baseline_logs.is_empty() {
@@ -454,12 +606,45 @@ fn main() {
             &baseline_stats.audio_prerender_startup_ms,
             &candidate_stats.audio_prerender_startup_ms,
         );
+
+        if let Some(path) = &output_csv {
+            let metrics = [
+                (
+                    "first decoded frame",
+                    baseline_stats.decode_startup_ms.as_slice(),
+                    candidate_stats.decode_startup_ms.as_slice(),
+                ),
+                (
+                    "first rendered frame",
+                    baseline_stats.render_startup_ms.as_slice(),
+                    candidate_stats.render_startup_ms.as_slice(),
+                ),
+                (
+                    "audio streaming callback",
+                    baseline_stats.audio_stream_startup_ms.as_slice(),
+                    candidate_stats.audio_stream_startup_ms.as_slice(),
+                ),
+                (
+                    "audio pre-rendered callback",
+                    baseline_stats.audio_prerender_startup_ms.as_slice(),
+                    candidate_stats.audio_prerender_startup_ms.as_slice(),
+                ),
+            ];
+            if let Err(error) = append_delta_csv(path, baseline_filter, candidate_filter, &metrics)
+            {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EventStats, parse_csv_startup_event, parse_log, parse_startup_ms, summarize};
+    use super::{
+        EventStats, append_aggregate_csv, append_delta_csv, parse_csv_startup_event, parse_log,
+        parse_startup_ms, summarize, summarize_delta,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -513,6 +698,13 @@ mod tests {
     }
 
     #[test]
+    fn summarizes_deltas() {
+        let delta = summarize_delta(&[100.0, 120.0], &[80.0, 90.0]).expect("expected delta");
+        assert!((delta.avg_delta + 25.0).abs() < f64::EPSILON);
+        assert!((delta.p95_delta + 30.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn filters_csv_by_run_id() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -537,6 +729,39 @@ mod tests {
         parse_log(&path, &mut candidate, Some("candidate")).expect("parse candidate");
         assert_eq!(candidate.decode_startup_ms, vec![60.0]);
         assert_eq!(candidate.audio_stream_startup_ms, vec![80.0]);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn writes_aggregate_and_delta_csv_rows() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("timestamp")
+            .as_nanos();
+        let path = PathBuf::from(format!("/tmp/playback-startup-report-csv-{unique}.csv"));
+
+        append_aggregate_csv(
+            &path,
+            Some("macos-pass-1"),
+            &[("first decoded frame", &[100.0, 120.0])],
+        )
+        .expect("write aggregate rows");
+
+        append_delta_csv(
+            &path,
+            Some("baseline"),
+            Some("candidate"),
+            &[("first decoded frame", &[100.0, 120.0], &[80.0, 90.0])],
+        )
+        .expect("write delta rows");
+
+        let contents = fs::read_to_string(&path).expect("read csv contents");
+        let rows = contents.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].contains("timestamp_ms,mode,metric"));
+        assert!(rows[1].contains("aggregate"));
+        assert!(rows[2].contains("delta"));
 
         let _ = fs::remove_file(path);
     }

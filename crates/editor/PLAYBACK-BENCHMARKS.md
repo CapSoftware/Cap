@@ -117,6 +117,9 @@ CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv CAP_PLAYBACK_STARTUP_T
 # Parse startup timing logs captured from desktop editor sessions
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log
 
+# Export startup metric summaries to CSV
+cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log --output-csv /tmp/playback-startup-summary.csv
+
 # Filter startup CSV events to a specific labeled run id
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --run-id macos-pass-1
 
@@ -131,6 +134,9 @@ cargo run -p cap-editor --example playback-startup-report -- --baseline-log /pat
 
 # Compare specific labeled runs inside shared startup CSV traces
 cargo run -p cap-editor --example playback-startup-report -- --baseline-log /tmp/playback-startup.csv --candidate-log /tmp/playback-startup.csv --baseline-run-id macos-pass-1 --candidate-run-id macos-pass-2
+
+# Export baseline/candidate deltas to CSV
+cargo run -p cap-editor --example playback-startup-report -- --baseline-log /tmp/playback-startup.csv --candidate-log /tmp/playback-startup.csv --baseline-run-id macos-pass-1 --candidate-run-id macos-pass-2 --output-csv /tmp/playback-startup-delta.csv
 ```
 
 #### Combined Workflow (Recording → Playback)
@@ -196,6 +202,20 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --list-runs`
   - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --run-id missing-run` (expected non-zero exit)
 - Unit tests remain green: `cargo test -p cap-editor --example playback-startup-report` (**6 passed**).
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (startup report CSV export)
+
+**Environment:** Linux runner, startup report parser validation  
+**Commands:** `playback-startup-report --output-csv`, `cargo test -p cap-editor --example playback-startup-report`
+
+#### Startup Report CSV Validation
+- Added CSV export for:
+  - aggregate startup metrics (`mode=aggregate`)
+  - baseline/candidate deltas (`mode=delta`)
+- Unit tests now cover CSV row emission and delta summarization (**8 passed**).
+- CLI smoke run:
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --output-csv /tmp/playback-startup-summary.csv`
+  - output CSV schema verified with header row.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (supersession span retune to 20)
 
