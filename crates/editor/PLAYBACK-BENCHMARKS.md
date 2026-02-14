@@ -225,6 +225,28 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Decode: avg **4.95ms**, p95 **7.57ms**, p99 **10.04ms**, max **14.18ms**
 - Seek samples: 0.5s **30.56ms**, 1.0s **9.45ms**, 2.0s **8.94ms**, 5.0s **430.25ms**
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Startup instrumentation pass)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `playback-benchmark`  
+**Change under test:** startup timeline instrumentation for first decoded frame, first rendered frame, and audio callback origin aligned to playback start
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **480/480**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.11**
+- Decode: avg **1.28ms**, p95 **2.51ms**, p99 **2.63ms**, max **4.70ms**
+- Seek samples: 0.5s **14.63ms**, 1.0s **2.68ms**, 2.0s **2.87ms**, 5.0s **145.33ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **480/480**, failures **0**
+- Missed deadlines: **1**
+- Effective FPS: **60.11**
+- Decode: avg **5.54ms**, p95 **8.09ms**, p99 **11.25ms**, max **15.17ms**
+- Seek samples: 0.5s **41.73ms**, 1.0s **9.75ms**, 2.0s **8.98ms**, 5.0s **451.74ms**
+
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
 ---

@@ -471,6 +471,33 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Playback startup instrumentation alignment)
+
+**Goal**: Make startup latency logs directly comparable across decode, render, and audio callback milestones
+
+**What was done**:
+1. Added playback startup origin timestamp at playback start.
+2. Logged first decoded frame availability in prefetch pipeline against that origin.
+3. Logged first rendered frame against the same origin.
+4. Switched audio callback startup logging to use the same playback origin timestamp.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - added startup timeline logs:
+    - `Playback first decoded frame ready`
+    - `Playback first frame rendered`
+  - added `startup_instant` to `AudioPlayback` and wired callback logs to playback start origin
+
+**Results**:
+- Playback throughput remains at ~60fps in synthetic benchmark after instrumentation:
+  - 1080p: **60.11 fps**, missed deadlines **0**
+  - 4k: **60.11 fps**, missed deadlines **1**
+- No functional playback regression observed in benchmark pass.
+
+**Stopping point**: startup timing evidence can now be captured in real editor sessions and compared directly; next required step is collecting macOS and Windows session logs with the new unified timing markers.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

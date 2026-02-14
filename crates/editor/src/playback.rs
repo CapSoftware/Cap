@@ -139,6 +139,7 @@ impl Playback {
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
+        let playback_startup_instant = std::time::Instant::now();
         let (prefetch_duration, has_timeline) =
             if let Some(timeline) = &self.project.borrow().timeline {
                 (timeline.duration(), true)
@@ -147,6 +148,7 @@ impl Playback {
             };
         let segment_media_count = self.segment_medias.len();
 
+        let decode_startup_instant = playback_startup_instant;
         tokio::spawn(async move {
             if !has_timeline {
                 warn!("Prefetch: No timeline configuration found");
@@ -163,6 +165,7 @@ impl Playback {
             let mut next_prefetch_frame = *frame_request_rx.borrow();
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
+            let mut first_decoded_logged = false;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
             const INITIAL_PARALLEL_TASKS: usize = 4;
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
@@ -340,6 +343,15 @@ impl Playback {
                         frames_decoded = frames_decoded.saturating_add(1);
 
                         if let Some(segment_frames) = result {
+                            if !first_decoded_logged {
+                                info!(
+                                    startup_ms = decode_startup_instant.elapsed().as_secs_f64() * 1000.0,
+                                    frame = frame_num,
+                                    segment = segment_index,
+                                    "Playback first decoded frame ready"
+                                );
+                                first_decoded_logged = true;
+                            }
                             let _ = prefetch_tx.send(PrefetchedFrame {
                                 frame_number: frame_num,
                                 segment_frames,
@@ -377,6 +389,7 @@ impl Playback {
                 fps,
                 playhead_rx: audio_playhead_rx,
                 duration_secs: duration,
+                startup_instant: playback_startup_instant,
             }
             .spawn();
 
@@ -687,6 +700,13 @@ impl Playback {
                         )
                         .await;
 
+                    if total_frames_rendered == 0 {
+                        info!(
+                            startup_ms = playback_startup_instant.elapsed().as_secs_f64() * 1000.0,
+                            frame = frame_number,
+                            "Playback first frame rendered"
+                        );
+                    }
                     total_frames_rendered += 1;
                 }
 
@@ -760,6 +780,7 @@ struct AudioPlayback {
     fps: u32,
     playhead_rx: watch::Receiver<f64>,
     duration_secs: f64,
+    startup_instant: std::time::Instant,
 }
 
 impl AudioPlayback {
@@ -772,7 +793,7 @@ impl AudioPlayback {
         }
 
         std::thread::spawn(move || {
-            let startup_instant = std::time::Instant::now();
+            let startup_instant = self.startup_instant;
             let host = cpal::default_host();
             let device = match host.default_output_device() {
                 Some(d) => d,
