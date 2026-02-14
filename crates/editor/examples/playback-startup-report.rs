@@ -69,6 +69,18 @@ fn parse_log(path: &PathBuf, stats: &mut EventStats) -> Result<(), String> {
 
     for line in reader.lines() {
         let line = line.map_err(|error| format!("read {} / {error}", path.display()))?;
+
+        if let Some((event, startup_ms)) = parse_csv_startup_event(&line) {
+            match event {
+                "first_decoded_frame" => stats.decode_startup_ms.push(startup_ms),
+                "first_rendered_frame" => stats.render_startup_ms.push(startup_ms),
+                "audio_streaming_callback" => stats.audio_stream_startup_ms.push(startup_ms),
+                "audio_prerender_callback" => stats.audio_prerender_startup_ms.push(startup_ms),
+                _ => {}
+            }
+            continue;
+        }
+
         let Some(startup_ms) = parse_startup_ms(&line) else {
             continue;
         };
@@ -85,6 +97,14 @@ fn parse_log(path: &PathBuf, stats: &mut EventStats) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn parse_csv_startup_event(line: &str) -> Option<(&str, f64)> {
+    let mut parts = line.splitn(4, ',');
+    let _timestamp = parts.next()?;
+    let event = parts.next()?;
+    let startup_ms = parts.next()?.parse::<f64>().ok()?;
+    Some((event, startup_ms))
 }
 
 fn main() {

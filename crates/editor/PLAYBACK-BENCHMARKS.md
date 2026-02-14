@@ -77,6 +77,9 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 #### Playback Startup Latency Report (log analysis)
 
 ```bash
+# Capture startup traces from desktop editor playback sessions
+CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv pnpm dev:desktop
+
 # Parse startup timing logs captured from desktop editor sessions
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log
 

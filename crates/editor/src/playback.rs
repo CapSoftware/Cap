@@ -18,9 +18,11 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
+    fs::OpenOptions,
+    io::Write,
     num::NonZeroUsize,
     sync::{
-        Arc, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -42,6 +44,42 @@ const PARALLEL_DECODE_TASKS: usize = 4;
 const MAX_PREFETCH_AHEAD: u32 = 60;
 const PREFETCH_BEHIND: u32 = 15;
 const FRAME_CACHE_SIZE: usize = 60;
+
+static STARTUP_TRACE_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+
+fn startup_trace_writer() -> Option<&'static Mutex<std::fs::File>> {
+    STARTUP_TRACE_FILE
+        .get_or_init(|| {
+            let path = std::env::var("CAP_PLAYBACK_STARTUP_TRACE_FILE").ok()?;
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()?;
+            Some(Mutex::new(file))
+        })
+        .as_ref()
+}
+
+fn record_startup_trace(event: &'static str, startup_ms: f64, frame: Option<u32>) {
+    let Some(writer) = startup_trace_writer() else {
+        return;
+    };
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let frame = frame.map_or_else(String::new, |value| value.to_string());
+    let line = format!("{timestamp_ms},{event},{startup_ms:.3},{frame}\n");
+
+    if let Ok(mut writer) = writer.lock() {
+        if writer.write_all(line.as_bytes()).is_err() {
+            return;
+        }
+        let _ = writer.flush();
+    }
+}
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -344,11 +382,18 @@ impl Playback {
 
                         if let Some(segment_frames) = result {
                             if !first_decoded_logged {
+                                let startup_ms =
+                                    decode_startup_instant.elapsed().as_secs_f64() * 1000.0;
                                 info!(
-                                    startup_ms = decode_startup_instant.elapsed().as_secs_f64() * 1000.0,
+                                    startup_ms,
                                     frame = frame_num,
                                     segment = segment_index,
                                     "Playback first decoded frame ready"
+                                );
+                                record_startup_trace(
+                                    "first_decoded_frame",
+                                    startup_ms,
+                                    Some(frame_num),
                                 );
                                 first_decoded_logged = true;
                             }
@@ -701,10 +746,16 @@ impl Playback {
                         .await;
 
                     if total_frames_rendered == 0 {
+                        let startup_ms = playback_startup_instant.elapsed().as_secs_f64() * 1000.0;
                         info!(
-                            startup_ms = playback_startup_instant.elapsed().as_secs_f64() * 1000.0,
+                            startup_ms,
                             frame = frame_number,
                             "Playback first frame rendered"
+                        );
+                        record_startup_trace(
+                            "first_rendered_frame",
+                            startup_ms,
+                            Some(frame_number),
                         );
                     }
                     total_frames_rendered += 1;
@@ -1108,10 +1159,9 @@ impl AudioPlayback {
                 &config,
                 move |buffer: &mut [T], info| {
                     if !callback_started.swap(true, Ordering::AcqRel) {
-                        info!(
-                            startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0,
-                            "Audio streaming callback started"
-                        );
+                        let startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0;
+                        info!(startup_ms, "Audio streaming callback started");
+                        record_startup_trace("audio_streaming_callback", startup_ms, None);
                     }
 
                     #[cfg(not(target_os = "windows"))]
@@ -1263,10 +1313,9 @@ impl AudioPlayback {
                 &config,
                 move |buffer: &mut [T], _info| {
                     if !callback_started.swap(true, Ordering::AcqRel) {
-                        info!(
-                            startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0,
-                            "Audio pre-rendered callback started"
-                        );
+                        let startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0;
+                        info!(startup_ms, "Audio pre-rendered callback started");
+                        record_startup_trace("audio_prerender_callback", startup_ms, None);
                     }
 
                     if playhead_rx_for_stream.has_changed().unwrap_or(false) {

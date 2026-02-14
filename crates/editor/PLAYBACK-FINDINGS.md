@@ -501,6 +501,35 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Startup trace export for cross-platform sessions)
+
+**Goal**: Make macOS/Windows startup latency collection deterministic and parseable
+
+**What was done**:
+1. Added optional startup trace CSV export from desktop playback path via environment variable.
+2. Emitted trace rows for first decoded frame, first rendered frame, and first audio callback milestones.
+3. Updated startup report example to parse both tracing logs and CSV trace lines.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - added `CAP_PLAYBACK_STARTUP_TRACE_FILE` writer
+  - startup milestones now append CSV rows:
+    - `first_decoded_frame`
+    - `first_rendered_frame`
+    - `audio_streaming_callback`
+    - `audio_prerender_callback`
+- `crates/editor/examples/playback-startup-report.rs`
+  - added CSV event parser support
+
+**Verification**:
+- `cargo +1.88.0 check -p cap-editor`
+- `cargo +1.88.0 check -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md`
+
+**Stopping point**: next actionable step is running desktop playback sessions on macOS and Windows with `CAP_PLAYBACK_STARTUP_TRACE_FILE` enabled and feeding the resulting logs into `playback-startup-report`.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
