@@ -1,5 +1,7 @@
 use cap_rendering::decoder::spawn_decoder;
 use futures::future::join_all;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
@@ -13,6 +15,7 @@ struct Config {
     burst_size: usize,
     sweep_seconds: f32,
     runs: usize,
+    output_csv: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -234,7 +237,121 @@ fn aggregate_summaries(summaries: &[ScrubSummary]) -> ScrubSummary {
     }
 }
 
-fn print_report(config: &Config, summaries: &[ScrubSummary]) {
+fn scrub_env_value(key: &str) -> String {
+    std::env::var(key).unwrap_or_default()
+}
+
+fn write_csv(
+    path: &PathBuf,
+    config: &Config,
+    summaries: &[ScrubSummary],
+    aggregate: ScrubSummary,
+) -> Result<(), String> {
+    let file_exists = path.exists();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+
+    if !file_exists {
+        let header = [
+            "timestamp_ms",
+            "scope",
+            "run_index",
+            "video",
+            "fps",
+            "bursts",
+            "burst_size",
+            "sweep_seconds",
+            "runs",
+            "supersede_disabled",
+            "supersede_min_pixels",
+            "supersede_min_requests",
+            "supersede_min_span_frames",
+            "all_avg_ms",
+            "all_p95_ms",
+            "all_p99_ms",
+            "all_max_ms",
+            "last_avg_ms",
+            "last_p95_ms",
+            "last_p99_ms",
+            "last_max_ms",
+            "successful_requests",
+            "failed_requests",
+        ]
+        .join(",");
+        writeln!(file, "{header}")
+            .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+
+    let supersede_disabled = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED");
+    let supersede_min_pixels = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS");
+    let supersede_min_requests = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS");
+    let supersede_min_span_frames = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES");
+    let common_prefix = format!(
+        "{timestamp_ms},{{scope}},{{run_index}},\"{}\",{},{},{},{:.3},{},\"{}\",\"{}\",\"{}\",\"{}\"",
+        config.video_path.display(),
+        config.fps,
+        config.bursts,
+        config.burst_size,
+        config.sweep_seconds,
+        config.runs,
+        supersede_disabled,
+        supersede_min_pixels,
+        supersede_min_requests,
+        supersede_min_span_frames
+    );
+
+    for (index, summary) in summaries.iter().enumerate() {
+        writeln!(
+            file,
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            common_prefix
+                .replace("{scope}", "run")
+                .replace("{run_index}", &(index + 1).to_string()),
+            summary.all_avg_ms,
+            summary.all_p95_ms,
+            summary.all_p99_ms,
+            summary.all_max_ms,
+            summary.last_avg_ms,
+            summary.last_p95_ms,
+            summary.last_p99_ms,
+            summary.last_max_ms,
+            summary.successful_requests,
+            summary.failed_requests
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    writeln!(
+        file,
+        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+        common_prefix
+            .replace("{scope}", "aggregate")
+            .replace("{run_index}", "0"),
+        aggregate.all_avg_ms,
+        aggregate.all_p95_ms,
+        aggregate.all_p99_ms,
+        aggregate.all_max_ms,
+        aggregate.last_avg_ms,
+        aggregate.last_p95_ms,
+        aggregate.last_p99_ms,
+        aggregate.last_max_ms,
+        aggregate.successful_requests,
+        aggregate.failed_requests
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))?;
+
+    Ok(())
+}
+
+fn print_report(config: &Config, summaries: &[ScrubSummary]) -> ScrubSummary {
     let stats = aggregate_summaries(summaries);
     println!("\n{}", "=".repeat(68));
     println!("Scrub Burst Benchmark Report");
@@ -268,6 +385,7 @@ fn print_report(config: &Config, summaries: &[ScrubSummary]) {
     println!("  max: {:.2}ms", stats.last_max_ms);
 
     println!("{}", "=".repeat(68));
+    stats
 }
 
 fn parse_args() -> Result<Config, String> {
@@ -278,6 +396,7 @@ fn parse_args() -> Result<Config, String> {
     let mut burst_size = 12usize;
     let mut sweep_seconds = 2.0f32;
     let mut runs = 1usize;
+    let mut output_csv: Option<PathBuf> = None;
 
     let mut index = 1usize;
     while index < args.len() {
@@ -334,9 +453,16 @@ fn parse_args() -> Result<Config, String> {
                     .parse::<usize>()
                     .map_err(|_| "invalid value for --runs".to_string())?;
             }
+            "--output-csv" => {
+                index += 1;
+                if index >= args.len() {
+                    return Err("missing value for --output-csv".to_string());
+                }
+                output_csv = Some(PathBuf::from(&args[index]));
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: scrub-benchmark --video <path> [--fps <n>] [--bursts <n>] [--burst-size <n>] [--sweep-seconds <n>] [--runs <n>]"
+                    "Usage: scrub-benchmark --video <path> [--fps <n>] [--bursts <n>] [--burst-size <n>] [--sweep-seconds <n>] [--runs <n>] [--output-csv <path>]"
                 );
                 std::process::exit(0);
             }
@@ -374,6 +500,7 @@ fn parse_args() -> Result<Config, String> {
         burst_size,
         sweep_seconds,
         runs,
+        output_csv,
     })
 }
 
@@ -409,5 +536,11 @@ fn main() {
         }
     }
 
-    print_report(&config, &summaries);
+    let aggregate = print_report(&config, &summaries);
+    if let Some(path) = &config.output_csv
+        && let Err(error) = write_csv(path, &config, &summaries, aggregate)
+    {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
 }

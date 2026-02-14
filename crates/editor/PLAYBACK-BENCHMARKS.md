@@ -97,6 +97,9 @@ CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS=3686400 \
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=8 \
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES=25 \
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
+
+# Export per-run and aggregate scrub metrics to CSV
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --runs 3 --output-csv /tmp/cap-scrub-benchmark.csv
 ```
 
 #### Playback Startup Latency Report (log analysis)
@@ -133,6 +136,28 @@ cargo run -p cap-recording --example playback-test-runner -- full
 ## Benchmark History
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub CSV export)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `scrub-benchmark --runs 2 --output-csv /tmp/cap-scrub-benchmark.csv`
+
+#### Scrub Burst Benchmark + CSV — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Successful requests: **192**, failures: **0**
+- Median across 2 runs (all-request): avg **191.35ms**, p95 **430.23ms**, p99 **430.23ms**, max **450.58ms**
+- Median across 2 runs (last-request): avg **290.53ms**, p95 **450.58ms**, p99 **450.58ms**, max **450.58ms**
+
+#### Scrub Burst Benchmark + CSV — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Successful requests: **192**, failures: **0**
+- Median across 2 runs (all-request): avg **740.11ms**, p95 **1712.02ms**, p99 **1712.02ms**, max **1712.03ms**
+- Median across 2 runs (last-request): avg **740.10ms**, p95 **1712.02ms**, p99 **1712.02ms**, max **1712.02ms**
+
+#### CSV Output
+- Output file: `/tmp/cap-scrub-benchmark.csv`
+- Rows emitted per invocation:
+  - one row per run (`scope=run`)
+  - one aggregate row (`scope=aggregate`)
+- Captures runtime supersession env values alongside scrub latency metrics for easier cross-machine sweeps.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 

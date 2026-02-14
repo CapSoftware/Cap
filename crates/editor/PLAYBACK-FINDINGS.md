@@ -74,6 +74,7 @@
 
 - [ ] **Capture audio startup latency before/after** - Use new playback log metrics (`Audio streaming callback started`) to validate startup on macOS/Windows
 - [ ] **Tune medium/long seek latency** - Reduce 2s+ seek spikes visible in decode and playback benchmarks
+- [ ] **Capture scrub benchmark CSV sweeps on macOS/Windows** - Use `--output-csv` plus supersession env values for side-by-side threshold comparisons
 - [ ] **Run full desktop editor validation on macOS + Windows** - Confirm in-app FPS and A/V behavior on target platforms
 
 ### Completed
@@ -924,6 +925,42 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo +1.88.0 check -p cap-editor --example playback-startup-report`
 
 **Stopping point**: startup instrumentation evidence can now be reported as explicit before/after deltas once macOS and Windows traces are collected.
+
+---
+
+### Session 2026-02-14 (Scrub benchmark CSV export)
+
+**Goal**: Make scrub benchmark outputs portable for cross-platform tuning analysis
+
+**What was done**:
+1. Extended `scrub-benchmark` with `--output-csv <path>`.
+2. Added CSV row emission for each run and one aggregate row.
+3. Embedded supersession runtime env values in each CSV row for threshold traceability.
+4. Validated export flow with 2-run 1080p and 4k benchmark passes.
+
+**Changes Made**:
+- `crates/editor/examples/scrub-benchmark.rs`
+  - added `output_csv` config field and CLI parsing
+  - writes append-only CSV rows with run and aggregate metrics
+  - includes current supersession env vars:
+    - `CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED`
+    - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS`
+    - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS`
+    - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - documented CSV export usage and recorded validation benchmark sample
+
+**Verification**:
+- `cargo +1.88.0 check -p cap-editor --example scrub-benchmark`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 8 --burst-size 12 --sweep-seconds 2.0 --runs 2 --output-csv /tmp/cap-scrub-benchmark.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-4k60.mp4 --fps 60 --bursts 8 --burst-size 12 --sweep-seconds 2.0 --runs 2 --output-csv /tmp/cap-scrub-benchmark.csv`
+
+**Results**:
+- ✅ CSV output captured run-level and aggregate metrics for both test clips.
+- ✅ Export includes supersession env values, enabling apples-to-apples threshold sweeps across machines.
+- ✅ No request failures in validation passes.
+
+**Stopping point**: macOS and Windows scrub passes can now produce directly comparable CSV artifacts without manual copy/paste from terminal output.
 
 ---
 
