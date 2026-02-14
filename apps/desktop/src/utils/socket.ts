@@ -450,6 +450,14 @@ export function createImageDataWS(
 				sabFallbackCount += 1;
 				if (isOversized) {
 					sabOversizeFallbackCount += 1;
+				} else {
+					isProcessing = false;
+					if (nextFrame) {
+						framesDropped++;
+					}
+					nextFrame = buffer;
+					requestAnimationFrame(() => processNextFrame());
+					return;
 				}
 				framesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
