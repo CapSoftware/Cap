@@ -420,11 +420,7 @@ impl CameraLayer {
                             )
                             .is_ok()
                     {
-                        self.copy_from_yuv_output_to_encoder(
-                            encoder,
-                            next_texture,
-                            frame_size,
-                        );
+                        self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -457,11 +453,7 @@ impl CameraLayer {
                         )
                         .is_ok()
                     {
-                        self.copy_from_yuv_output_to_encoder(
-                            encoder,
-                            next_texture,
-                            frame_size,
-                        );
+                        self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
                     }
                 }
             }
