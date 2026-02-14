@@ -1326,26 +1326,28 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 **What was done**:
 1. Added producer fallback policy to reclaim READY slots when no EMPTY slots are available.
-2. Kept WRITING/READING slots protected; only READY slots are eligible for replacement.
-3. Added unit coverage for overwrite-on-full behavior.
+2. Prioritized reclaiming the oldest READY slot under full-buffer pressure.
+3. Kept WRITING/READING slots protected; only READY slots are eligible for replacement.
+4. Added unit coverage for overwrite-on-full behavior.
 
 **Changes Made**:
 - `apps/desktop/src/utils/shared-frame-buffer.ts`
   - producer write now:
     - probes EMPTY slots first
-    - if none available, probes READY slots and replaces the first claimable READY slot
+    - if none available, probes READY slots and replaces the oldest claimable READY slot
 - `apps/desktop/src/utils/shared-frame-buffer.test.ts`
   - added tests verifying:
     - full-ring overwrite keeps latest frame set (`[2, 3]`) after writing `1,2,3` into 2 slots
     - READING slots are not overwritten when ring is saturated
+    - oldest READY slot is replaced under mixed full-pressure conditions (`[4,5,6,7]` retained)
 
 **Verification**:
 - `pnpm exec biome format --write apps/desktop/src/utils/shared-frame-buffer.ts apps/desktop/src/utils/shared-frame-buffer.test.ts`
-- `pnpm --dir apps/desktop exec vitest run src/utils/shared-frame-buffer.test.ts` (5 passed)
+- `pnpm --dir apps/desktop exec vitest run src/utils/shared-frame-buffer.test.ts` (6 passed)
 - `pnpm --dir apps/desktop exec tsc --noEmit`
 
 **Results**:
-- ✅ Desktop unit tests pass (5/5) for sparse-slot, overwrite-on-full, and READING-slot protection behaviors.
+- ✅ Desktop unit tests pass (6/6) for sparse-slot, oldest-ready overwrite, and READING-slot protection behaviors.
 - ✅ Producer now avoids avoidable write failures when buffer is saturated with READY slots and can keep newer frames flowing.
 
 **Stopping point**: validate on macOS/Windows with SAB telemetry to confirm reduced worker fallback rate under sustained high-resolution playback.

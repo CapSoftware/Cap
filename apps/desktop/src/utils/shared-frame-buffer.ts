@@ -161,28 +161,53 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 			}
 
 			if (writeIdx < 0 || slotMetaIdx < 0) {
-				for (let probe = 0; probe < config.slotCount; probe++) {
-					const candidateIdx = (initialWriteIdx + probe) % config.slotCount;
-					const candidateMetaIdx =
-						(metadataOffset + candidateIdx * METADATA_ENTRY_SIZE) / 4;
+				const MAX_READY_RECLAIM_RETRIES = 4;
+				for (
+					let reclaimAttempt = 0;
+					reclaimAttempt < MAX_READY_RECLAIM_RETRIES;
+					reclaimAttempt++
+				) {
+					let oldestFrameNumber = Number.MAX_SAFE_INTEGER;
+					let oldestIdx = -1;
+					let oldestMetaIdx = -1;
 
-					const currentState = Atomics.load(
-						metadataView,
-						candidateMetaIdx + META_SLOT_STATE,
-					);
-					if (currentState !== SLOT_STATE.READY) {
-						continue;
+					for (let probe = 0; probe < config.slotCount; probe++) {
+						const candidateIdx = (initialWriteIdx + probe) % config.slotCount;
+						const candidateMetaIdx =
+							(metadataOffset + candidateIdx * METADATA_ENTRY_SIZE) / 4;
+
+						const currentState = Atomics.load(
+							metadataView,
+							candidateMetaIdx + META_SLOT_STATE,
+						);
+						if (currentState !== SLOT_STATE.READY) {
+							continue;
+						}
+
+						const frameNumber = Atomics.load(
+							metadataView,
+							candidateMetaIdx + META_FRAME_NUMBER,
+						);
+						if (frameNumber < oldestFrameNumber) {
+							oldestFrameNumber = frameNumber;
+							oldestIdx = candidateIdx;
+							oldestMetaIdx = candidateMetaIdx;
+						}
+					}
+
+					if (oldestIdx < 0 || oldestMetaIdx < 0) {
+						break;
 					}
 
 					const exchanged = Atomics.compareExchange(
 						metadataView,
-						candidateMetaIdx + META_SLOT_STATE,
+						oldestMetaIdx + META_SLOT_STATE,
 						SLOT_STATE.READY,
 						SLOT_STATE.WRITING,
 					);
 					if (exchanged === SLOT_STATE.READY) {
-						writeIdx = candidateIdx;
-						slotMetaIdx = candidateMetaIdx;
+						writeIdx = oldestIdx;
+						slotMetaIdx = oldestMetaIdx;
 						break;
 					}
 				}

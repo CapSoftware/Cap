@@ -123,4 +123,35 @@ describe("shared-frame-buffer", () => {
 		heldFirst?.release();
 		expect(readFirstByte(consumer.read(0))).toBeNull();
 	});
+
+	it("prefers replacing oldest ready slot under full pressure", () => {
+		const init = createSharedFrameBuffer({ slotCount: 4, slotSize: 64 });
+		const producer = createProducer(init);
+		const consumer = createConsumer(init.buffer);
+
+		expect(producer.write(makeFrame(1))).toBe(true);
+		expect(producer.write(makeFrame(2))).toBe(true);
+		expect(producer.write(makeFrame(3))).toBe(true);
+		expect(producer.write(makeFrame(4))).toBe(true);
+
+		const held = consumer.borrow(0);
+		expect(held?.data[0]).toBe(1);
+
+		expect(producer.write(makeFrame(5))).toBe(true);
+		held?.release();
+
+		expect(producer.write(makeFrame(6))).toBe(true);
+		expect(producer.write(makeFrame(7))).toBe(true);
+
+		const values = [
+			readFirstByte(consumer.read(0)),
+			readFirstByte(consumer.read(0)),
+			readFirstByte(consumer.read(0)),
+			readFirstByte(consumer.read(0)),
+		]
+			.filter((value): value is number => value !== null)
+			.sort((a, b) => a - b);
+
+		expect(values).toEqual([4, 5, 6, 7]);
+	});
 });
