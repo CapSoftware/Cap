@@ -2013,6 +2013,85 @@ impl RendererLayers {
         Ok(())
     }
 
+    pub async fn prepare_with_encoder(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+        segment_frames: &DecodedSegmentFrames,
+        cursor: &CursorEvents,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), RenderingError> {
+        self.background
+            .prepare(
+                constants,
+                uniforms,
+                Background::from(uniforms.project.background.source.clone()),
+            )
+            .await?;
+
+        if uniforms.project.background.blur > 0.0 {
+            self.background_blur.prepare(&constants.queue, uniforms);
+        }
+
+        self.display.prepare_with_encoder(
+            &constants.device,
+            &constants.queue,
+            segment_frames,
+            constants.options.screen_size,
+            uniforms.display,
+            encoder,
+        );
+
+        self.cursor.prepare(
+            segment_frames,
+            uniforms.resolution_base,
+            cursor,
+            &uniforms.zoom,
+            uniforms,
+            constants,
+        );
+
+        self.camera.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.camera,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
+        );
+
+        self.camera_only.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.camera_only,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
+        );
+
+        self.text.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.output_size,
+            &uniforms.texts,
+        );
+
+        self.captions.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
+        Ok(())
+    }
+
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -2112,15 +2191,15 @@ async fn produce_frame(
     layers: &mut RendererLayers,
     session: &mut RenderSession,
 ) -> Result<RenderedFrame, RenderingError> {
-    layers
-        .prepare(constants, &uniforms, &segment_frames, cursor)
-        .await?;
-
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
     );
+
+    layers
+        .prepare_with_encoder(constants, &uniforms, &segment_frames, cursor, &mut encoder)
+        .await?;
 
     layers.render(
         &constants.device,
