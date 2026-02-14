@@ -121,6 +121,12 @@ fn pack_frame_data(
     data
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WSFrameFormat {
+    Rgba,
+    Nv12,
+}
+
 #[derive(Clone)]
 pub struct WSFrame {
     pub data: Vec<u8>,
@@ -129,8 +135,52 @@ pub struct WSFrame {
     pub stride: u32,
     pub frame_number: u32,
     pub target_time_ns: u64,
+    pub format: WSFrameFormat,
     #[allow(dead_code)]
     pub created_at: Instant,
+}
+
+impl WSFrame {
+    pub fn from_rendered_frame_nv12(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        stride: u32,
+        frame_number: u32,
+        target_time_ns: u64,
+    ) -> Self {
+        let nv12_data = convert_to_nv12(&data, width, height, stride);
+        Self {
+            data: nv12_data,
+            width: width & !1,
+            height: height & !1,
+            stride: width & !1,
+            frame_number,
+            target_time_ns,
+            format: WSFrameFormat::Nv12,
+            created_at: Instant::now(),
+        }
+    }
+}
+
+fn pack_ws_frame(frame: WSFrame) -> Vec<u8> {
+    match frame.format {
+        WSFrameFormat::Nv12 => pack_nv12_frame(
+            frame.data,
+            frame.width,
+            frame.height,
+            frame.frame_number,
+            frame.target_time_ns,
+        ),
+        WSFrameFormat::Rgba => pack_frame_data(
+            frame.data,
+            frame.stride,
+            frame.height,
+            frame.width,
+            frame.frame_number,
+            frame.target_time_ns,
+        ),
+    }
 }
 
 pub async fn create_watch_frame_ws(
@@ -162,14 +212,7 @@ pub async fn create_watch_frame_ws(
         {
             let frame_opt = camera_rx.borrow().clone();
             if let Some(frame) = frame_opt {
-                let packed = pack_frame_data(
-                    frame.data,
-                    frame.stride,
-                    frame.height,
-                    frame.width,
-                    frame.frame_number,
-                    frame.target_time_ns,
-                );
+                let packed = pack_ws_frame(frame);
 
                 if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
@@ -198,16 +241,12 @@ pub async fn create_watch_frame_ws(
                     if let Some(frame) = frame_opt {
                         let width = frame.width;
                         let height = frame.height;
+                        let format_label = match frame.format {
+                            WSFrameFormat::Nv12 => "NV12",
+                            WSFrameFormat::Rgba => "RGBA",
+                        };
 
-                        let packed = pack_frame_data(
-                            frame.data,
-                            frame.stride,
-                            frame.height,
-                            frame.width,
-                            frame.frame_number,
-                            frame.target_time_ns,
-                        );
-
+                        let packed = pack_ws_frame(frame);
                         let packed_len = packed.len();
 
                         match socket.send(Message::Binary(packed)).await {
@@ -226,7 +265,7 @@ pub async fn create_watch_frame_ws(
                                         mb_per_sec = format!("{:.1}", mb_per_sec),
                                         avg_kb = format!("{:.1}", (total_bytes as f64 / total_frames.max(1) as f64) / 1024.0),
                                         dims = format!("{}x{}", width, height),
-                                        format = "RGBA",
+                                        format = format_label,
                                         "WS frame stats"
                                     );
                                 }

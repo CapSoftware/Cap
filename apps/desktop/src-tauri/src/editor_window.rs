@@ -28,15 +28,14 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         &app,
         path,
         Box::new(move |frame| {
-            let _ = frame_tx.send(Some(WSFrame {
-                data: frame.data,
-                width: frame.width,
-                height: frame.height,
-                stride: frame.padded_bytes_per_row,
-                frame_number: frame.frame_number,
-                target_time_ns: frame.target_time_ns,
-                created_at: Instant::now(),
-            }));
+            let _ = frame_tx.send(Some(WSFrame::from_rendered_frame_nv12(
+                frame.data,
+                frame.width,
+                frame.height,
+                frame.padded_bytes_per_row,
+                frame.frame_number,
+                frame.target_time_ns,
+            )));
         }),
     )
     .await?;
@@ -219,15 +218,14 @@ impl EditorInstances {
                     window.app_handle(),
                     path,
                     Box::new(move |frame| {
-                        let _ = frame_tx.send(Some(WSFrame {
-                            data: frame.data,
-                            width: frame.width,
-                            height: frame.height,
-                            stride: frame.padded_bytes_per_row,
-                            frame_number: frame.frame_number,
-                            target_time_ns: frame.target_time_ns,
-                            created_at: Instant::now(),
-                        }));
+                        let _ = frame_tx.send(Some(WSFrame::from_rendered_frame_nv12(
+                            frame.data,
+                            frame.width,
+                            frame.height,
+                            frame.padded_bytes_per_row,
+                            frame.frame_number,
+                            frame.target_time_ns,
+                        )));
                     }),
                 )
                 .await?;
