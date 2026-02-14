@@ -1352,6 +1352,43 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Frame transport config extraction and memory-budgeted SAB sizing)
+
+**Goal**: Make SAB sizing policy testable and enforce a bounded total shared-memory footprint
+
+**What was done**:
+1. Extracted SAB sizing policy into a dedicated utility module.
+2. Replaced socket-local sizing heuristics with shared `computeSharedBufferConfig` logic.
+3. Added explicit total shared-memory budget handling (`FRAME_BUFFER_MAX_TOTAL_BYTES`) to derive slot counts from slot size.
+4. Added dedicated unit tests for default sizing, growth behavior, and max-size budget caps.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-transport-config.ts`
+  - new constants and helpers for SAB sizing policy
+  - exported `computeSharedBufferConfig`
+- `apps/desktop/src/utils/socket.ts`
+  - now imports and uses extracted SAB sizing utility
+  - removed inline sizing heuristics
+- `apps/desktop/src/utils/frame-transport-config.test.ts`
+  - added 3 tests covering:
+    - default behavior for small frames
+    - aligned growth for larger frames
+    - slot-size cap and total-memory budget enforcement
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/socket.ts apps/desktop/src/utils/frame-transport-config.ts apps/desktop/src/utils/frame-transport-config.test.ts`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/shared-frame-buffer.test.ts` (8 passed)
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ SAB sizing policy is now reusable and test-covered.
+- ✅ Shared memory usage now remains bounded while still scaling slot size for large frames.
+- ✅ Desktop tests and TypeScript checks pass.
+
+**Stopping point**: next target-machine runs should use SAB diagnostics to confirm lower fallback counts with memory budget still within acceptable limits.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

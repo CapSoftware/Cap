@@ -8,6 +8,10 @@ import {
 	type Producer,
 	type SharedFrameBufferConfig,
 } from "./shared-frame-buffer";
+import {
+	DEFAULT_FRAME_BUFFER_CONFIG,
+	computeSharedBufferConfig,
+} from "./frame-transport-config";
 import type { StrideCorrectionResponse } from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
 import {
@@ -19,12 +23,6 @@ import {
 } from "./webgpu-renderer";
 
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
-const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
-	slotCount: 6,
-	slotSize: 16 * 1024 * 1024,
-};
-const FRAME_BUFFER_RESIZE_ALIGNMENT = 2 * 1024 * 1024;
-const FRAME_BUFFER_MAX_SLOT_SIZE = 64 * 1024 * 1024;
 const SAB_WRITE_RETRY_LIMIT = 2;
 
 export type FpsStats = {
@@ -157,26 +155,6 @@ export function createImageDataWS(
 		}
 	}
 
-	function nextSharedBufferConfig(
-		requiredBytes: number,
-	): SharedFrameBufferConfig {
-		const withHeadroom = Math.ceil(requiredBytes * 1.25);
-		const alignedBytes =
-			Math.ceil(withHeadroom / FRAME_BUFFER_RESIZE_ALIGNMENT) *
-			FRAME_BUFFER_RESIZE_ALIGNMENT;
-		const slotSize = Math.max(
-			FRAME_BUFFER_CONFIG.slotSize,
-			Math.min(FRAME_BUFFER_MAX_SLOT_SIZE, alignedBytes),
-		);
-		const slotCount =
-			slotSize >= 48 * 1024 * 1024
-				? 3
-				: slotSize >= 24 * 1024 * 1024
-					? 4
-					: FRAME_BUFFER_CONFIG.slotCount;
-		return { slotCount, slotSize };
-	}
-
 	function ensureSharedBufferCapacity(requiredBytes: number) {
 		if (
 			!producer ||
@@ -187,7 +165,10 @@ export function createImageDataWS(
 			return;
 		}
 
-		const config = nextSharedBufferConfig(requiredBytes);
+		const config = computeSharedBufferConfig(
+			requiredBytes,
+			DEFAULT_FRAME_BUFFER_CONFIG,
+		);
 		if (config.slotSize <= sharedBufferConfig.slotSize) {
 			return;
 		}
@@ -199,7 +180,7 @@ export function createImageDataWS(
 	}
 
 	if (SAB_SUPPORTED) {
-		if (!initializeSharedBuffer(FRAME_BUFFER_CONFIG)) {
+		if (!initializeSharedBuffer(DEFAULT_FRAME_BUFFER_CONFIG)) {
 			producer = null;
 			sharedBufferConfig = null;
 		}
