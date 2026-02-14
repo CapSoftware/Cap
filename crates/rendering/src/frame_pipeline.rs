@@ -315,8 +315,15 @@ impl PendingNv12Readback {
             y_stride: self.y_stride,
             frame_number: self.frame_number,
             target_time_ns,
+            format: GpuOutputFormat::Nv12,
         })
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GpuOutputFormat {
+    Nv12,
+    Rgba,
 }
 
 pub struct Nv12RenderedFrame {
@@ -326,6 +333,7 @@ pub struct Nv12RenderedFrame {
     pub y_stride: u32,
     pub frame_number: u32,
     pub target_time_ns: u64,
+    pub format: GpuOutputFormat,
 }
 
 pub struct PendingReadback {
@@ -841,6 +849,7 @@ pub async fn finish_encoder_nv12(
             y_stride: rgba_frame.padded_bytes_per_row,
             frame_number: rgba_frame.frame_number,
             target_time_ns: rgba_frame.target_time_ns,
+            format: GpuOutputFormat::Rgba,
         })
     }
 }

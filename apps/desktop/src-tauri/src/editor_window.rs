@@ -29,16 +29,29 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         path,
         Box::new(move |output| {
             let ws_frame = match output {
-                cap_editor::editor::EditorFrameOutput::Nv12(frame) => WSFrame {
-                    data: frame.data,
-                    width: frame.width,
-                    height: frame.height,
-                    stride: frame.y_stride,
-                    frame_number: frame.frame_number,
-                    target_time_ns: frame.target_time_ns,
-                    format: WSFrameFormat::Nv12,
-                    created_at: Instant::now(),
-                },
+                cap_editor::editor::EditorFrameOutput::Nv12(frame) => {
+                    if frame.format == cap_rendering::GpuOutputFormat::Nv12 {
+                        WSFrame {
+                            data: frame.data,
+                            width: frame.width,
+                            height: frame.height,
+                            stride: frame.y_stride,
+                            frame_number: frame.frame_number,
+                            target_time_ns: frame.target_time_ns,
+                            format: WSFrameFormat::Nv12,
+                            created_at: Instant::now(),
+                        }
+                    } else {
+                        WSFrame::from_rendered_frame_nv12(
+                            frame.data,
+                            frame.width,
+                            frame.height,
+                            frame.y_stride,
+                            frame.frame_number,
+                            frame.target_time_ns,
+                        )
+                    }
+                }
                 cap_editor::editor::EditorFrameOutput::Rgba(frame) => {
                     WSFrame::from_rendered_frame_nv12(
                         frame.data,
@@ -234,16 +247,29 @@ impl EditorInstances {
                     path,
                     Box::new(move |output| {
                         let ws_frame = match output {
-                            cap_editor::editor::EditorFrameOutput::Nv12(frame) => WSFrame {
-                                data: frame.data,
-                                width: frame.width,
-                                height: frame.height,
-                                stride: frame.y_stride,
-                                frame_number: frame.frame_number,
-                                target_time_ns: frame.target_time_ns,
-                                format: WSFrameFormat::Nv12,
-                                created_at: Instant::now(),
-                            },
+                            cap_editor::editor::EditorFrameOutput::Nv12(frame) => {
+                                if frame.format == cap_rendering::GpuOutputFormat::Nv12 {
+                                    WSFrame {
+                                        data: frame.data,
+                                        width: frame.width,
+                                        height: frame.height,
+                                        stride: frame.y_stride,
+                                        frame_number: frame.frame_number,
+                                        target_time_ns: frame.target_time_ns,
+                                        format: WSFrameFormat::Nv12,
+                                        created_at: Instant::now(),
+                                    }
+                                } else {
+                                    WSFrame::from_rendered_frame_nv12(
+                                        frame.data,
+                                        frame.width,
+                                        frame.height,
+                                        frame.y_stride,
+                                        frame.frame_number,
+                                        frame.target_time_ns,
+                                    )
+                                }
+                            }
                             cap_editor::editor::EditorFrameOutput::Rgba(frame) => {
                                 WSFrame::from_rendered_frame_nv12(
                                     frame.data,
