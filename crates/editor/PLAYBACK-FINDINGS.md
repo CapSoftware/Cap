@@ -2764,6 +2764,52 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (out-of-order frame stale gating in worker queue)
+
+**Goal**: Prevent slightly stale out-of-order frames from displacing newer queued/rendered frames while preserving large backward jumps for seek transitions
+
+**What was done**:
+1. Added frame-order utility helpers for unsigned frame-number comparisons.
+2. Added stale-frame drop gating in worker queue ingestion against queued or last-rendered frame numbers.
+3. Added stale-frame drop gating in shared WebGPU immediate render path before render submission.
+4. Reused a shared seek threshold for both stale suppression and seek detection.
+5. Added dedicated unit tests for frame-order behavior, including wraparound semantics.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-order.ts`
+  - added:
+    - `frameNumberForwardDelta`
+    - `isFrameNumberNewer`
+    - `shouldDropOutOfOrderFrame`
+  - defines `FRAME_ORDER_STALE_WINDOW` default threshold
+- `apps/desktop/src/utils/frame-order.test.ts`
+  - added tests for:
+    - forward progression
+    - wraparound progression
+    - duplicate drop
+    - stale-window drop
+    - seek-distance acceptance
+- `apps/desktop/src/utils/frame-worker.ts`
+  - imports new frame-order helpers
+  - adds `FRAME_ORDER_SEEK_THRESHOLD`
+  - `renderBorrowedWebGPU` now drops stale out-of-order frames before rendering
+  - queue ingestion now drops stale out-of-order frames relative to queued/latest rendered frame
+  - seek detection now uses unsigned forward delta helper
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts src/utils/frame-order.ts src/utils/frame-order.test.ts`
+
+**Results**:
+- ✅ Worker queue now resists small out-of-order regressions that previously could replace newer frames.
+- ✅ Large backward frame jumps remain eligible for seek behavior.
+- ✅ Frame-order logic is covered by focused unit tests (23/23 utility tests passing).
+
+**Stopping point**: Ready for target-machine playback traces to verify reduced jitter during fallback/shared mixed transport bursts.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

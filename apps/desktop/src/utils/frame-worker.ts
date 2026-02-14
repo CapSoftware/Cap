@@ -1,5 +1,10 @@
 import { type Consumer, createConsumer } from "./shared-frame-buffer";
 import {
+	frameNumberForwardDelta,
+	isFrameNumberNewer,
+	shouldDropOutOfOrderFrame,
+} from "./frame-order";
+import {
 	disposeWebGPU,
 	initWebGPU,
 	isWebGPUSupported,
@@ -135,6 +140,7 @@ let rafRunning = false;
 let playbackStartTime: number | null = null;
 let playbackStartTargetTimeNs: bigint | null = null;
 let lastRenderedFrameNumber = -1;
+const FRAME_ORDER_SEEK_THRESHOLD = 30;
 
 interface FrameMetadata {
 	width: number;
@@ -196,10 +202,23 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 
 	const { width, height, frameNumber, targetTimeNs } = meta;
 
+	if (
+		lastRenderedFrameNumber >= 0 &&
+		shouldDropOutOfOrderFrame(
+			frameNumber,
+			lastRenderedFrameNumber,
+			FRAME_ORDER_SEEK_THRESHOLD,
+		)
+	) {
+		release();
+		return false;
+	}
+
 	const isSeek =
 		lastRenderedFrameNumber >= 0 &&
-		(frameNumber < lastRenderedFrameNumber ||
-			frameNumber > lastRenderedFrameNumber + 30);
+		(!isFrameNumberNewer(frameNumber, lastRenderedFrameNumber) ||
+			frameNumberForwardDelta(frameNumber, lastRenderedFrameNumber) >
+				FRAME_ORDER_SEEK_THRESHOLD);
 
 	if (
 		playbackStartTime === null ||
@@ -295,6 +314,21 @@ function queueFrameFromBytes(
 
 	const { width, height, frameNumber, targetTimeNs } = meta;
 	const timing: FrameTiming = { frameNumber, targetTimeNs };
+	const referenceFrameNumber =
+		queuedFrame?.timing.frameNumber ??
+		(lastRenderedFrameNumber >= 0 ? lastRenderedFrameNumber : null);
+
+	if (
+		referenceFrameNumber !== null &&
+		shouldDropOutOfOrderFrame(
+			frameNumber,
+			referenceFrameNumber,
+			FRAME_ORDER_SEEK_THRESHOLD,
+		)
+	) {
+		releaseCallback?.();
+		return false;
+	}
 
 	if (renderMode === "webgpu" || renderMode === "pending") {
 		clearQueuedFrames();
