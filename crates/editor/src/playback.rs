@@ -100,6 +100,25 @@ impl FrameCache {
         self.cache
             .put(frame_number, (segment_frames, segment_index));
     }
+
+    fn evict_far_from(&mut self, current_frame: u32, max_distance: u32) {
+        let keys_to_remove: Vec<u32> = self
+            .cache
+            .iter()
+            .filter_map(|(k, _)| {
+                let distance = if *k > current_frame {
+                    *k - current_frame
+                } else {
+                    current_frame - *k
+                };
+                if distance > max_distance { Some(*k) } else { None }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            self.cache.pop(&key);
+        }
+    }
 }
 
 impl Playback {
@@ -741,6 +760,7 @@ impl Playback {
                         total_frames_skipped += skipped as u64;
 
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        frame_cache.evict_far_from(frame_number, MAX_PREFETCH_AHEAD);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                         if has_audio
