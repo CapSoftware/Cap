@@ -165,22 +165,12 @@ export function createImageDataWS(
 		height: number,
 		strideBytes: number,
 	) {
-		if (
-			lastRenderedFrameData &&
-			lastRenderedFrameData.data.length === frameData.length
-		) {
-			lastRenderedFrameData.data.set(frameData);
-			lastRenderedFrameData.width = width;
-			lastRenderedFrameData.height = height;
-			lastRenderedFrameData.strideBytes = strideBytes;
-		} else {
-			lastRenderedFrameData = {
-				data: new Uint8ClampedArray(frameData),
-				width,
-				height,
-				strideBytes,
-			};
-		}
+		lastRenderedFrameData = {
+			data: frameData,
+			width,
+			height,
+			strideBytes,
+		};
 		if (!hasRenderedFrame()) {
 			setHasRenderedFrame(true);
 		}

@@ -1161,6 +1161,32 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Desktop socket frame-copy reduction)
+
+**Goal**: Remove per-frame buffer copies from desktop websocket hot path to reduce CPU/memory overhead during preview playback
+
+**What was done**:
+1. Updated `storeRenderedFrame` in `socket.ts` to store the current frame view directly instead of copying every frame into a mirrored buffer.
+2. Kept frame-capture behavior intact by cloning only at capture time.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - replaced per-frame `Uint8ClampedArray.set` copy path with direct frame-reference assignment
+  - preserved width/height/stride metadata tracking for capture
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop run preparescript`
+- `pnpm --dir apps/desktop build` (fails in this environment due pre-existing missing `src/app.tsx` entry expectation)
+
+**Results**:
+- ✅ Desktop TypeScript checks pass after copy-removal change.
+- ✅ Hot path no longer performs a full-frame duplicate memory copy for every rendered frame.
+
+**Stopping point**: next validation should be in-app playback profiling on macOS/Windows to quantify frame-time and CPU impact from reduced per-frame copying.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
