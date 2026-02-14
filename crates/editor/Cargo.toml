@@ -10,6 +10,10 @@ workspace = true
 name = "decode-benchmark"
 path = "examples/decode-benchmark.rs"
 
+[[example]]
+name = "playback-pipeline-benchmark"
+path = "examples/playback-pipeline-benchmark.rs"
+
 [dependencies]
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
@@ -30,4 +34,5 @@ flume.workspace = true
 tokio-util = "0.7.15"
 ringbuf = "0.4.8"
 lru = "0.12"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
