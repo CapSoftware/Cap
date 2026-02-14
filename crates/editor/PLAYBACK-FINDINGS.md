@@ -2172,6 +2172,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (render loop single-frame fast path)
+
+**Goal**: Reduce worker render-loop overhead by removing unnecessary queue scans after queue compaction to single-latest semantics
+
+**What was done**:
+1. Simplified render-loop frame selection to direct head lookup (`frameQueue[0]`).
+2. Removed full-queue max-frame scan and duplicate frame cleanup loop.
+3. Preserved pending-mode behavior by keeping frame queued until renderer becomes available.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - render loop no longer computes `frameToRender`/`frameIndex` via queue iteration
+  - now uses direct frame head check with targeted `shift()` when rendering/converting
+  - pending-mode `webgpu` frame retention remains intact until renderer init completes
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Render-loop queue-selection overhead reduced to O(1) after single-slot queue compaction.
+- ✅ Pending-mode frame retention semantics preserved.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for desktop playback validation to confirm lower worker-loop overhead under sustained shared-buffer traffic.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

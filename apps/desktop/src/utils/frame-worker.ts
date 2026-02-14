@@ -434,45 +434,16 @@ function renderLoop() {
 		}
 	}
 
-	let frameToRender: PendingFrame | null = null;
-	let frameIndex = -1;
+	const frame = frameQueue[0] ?? null;
 
-	for (let i = 0; i < frameQueue.length; i++) {
-		const frame = frameQueue[i];
-		if (
-			frameToRender === null ||
-			frame.timing.frameNumber > frameToRender.timing.frameNumber
-		) {
-			frameToRender = frame;
-			frameIndex = i;
-		}
-	}
-
-	if (frameToRender !== null) {
-		for (let i = frameQueue.length - 1; i >= 0; i--) {
-			if (i !== frameIndex) {
-				const oldFrame = frameQueue[i];
-				if (oldFrame.mode === "webgpu" && oldFrame.releaseCallback) {
-					oldFrame.releaseCallback();
-				}
-				frameQueue.splice(i, 1);
-				if (i < frameIndex) {
-					frameIndex--;
-				}
-			}
-		}
-	}
-
-	if (frameToRender !== null && frameIndex >= 0) {
-		const frame = frameToRender;
-
+	if (frame) {
 		if (frame.mode === "webgpu" && !webgpuRenderer) {
 			if (renderMode === "pending") {
 				_rafId = requestAnimationFrame(renderLoop);
 				return;
 			}
 			if (renderMode === "canvas2d" && offscreenCanvas && offscreenCtx) {
-				frameQueue.splice(frameIndex, 1);
+				frameQueue.shift();
 				lastRenderedFrameNumber = frame.timing.frameNumber;
 
 				if (
@@ -541,7 +512,7 @@ function renderLoop() {
 			return;
 		}
 
-		frameQueue.splice(frameIndex, 1);
+		frameQueue.shift();
 		lastRenderedFrameNumber = frame.timing.frameNumber;
 
 		if (frame.mode === "webgpu" && webgpuRenderer) {
