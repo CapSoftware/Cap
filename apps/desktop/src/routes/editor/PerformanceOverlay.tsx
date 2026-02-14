@@ -36,6 +36,9 @@ type TransportStats = {
 	sabSlotSizeBytes: number;
 	sabSlotCount: number;
 	sabTotalBytes: number;
+	sabTotalFramesReceived: number;
+	sabTotalFramesSentToWorker: number;
+	sabTotalSupersededDrops: number;
 };
 
 const STATS_WINDOW_MS = 1000;
@@ -70,6 +73,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabSlotSizeBytes: 0,
 		sabSlotCount: 0,
 		sabTotalBytes: 0,
+		sabTotalFramesReceived: 0,
+		sabTotalFramesSentToWorker: 0,
+		sabTotalSupersededDrops: 0,
 	});
 
 	const calculateStats = (): FrameStats => {
@@ -194,6 +200,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabSlotSizeBytes: 0,
 			sabSlotCount: 0,
 			sabTotalBytes: 0,
+			sabTotalFramesReceived: 0,
+			sabTotalFramesSentToWorker: 0,
+			sabTotalSupersededDrops: 0,
 		});
 	};
 
@@ -224,6 +233,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				sabSlotSizeBytes: socketStats.sabSlotSizeBytes,
 				sabSlotCount: socketStats.sabSlotCount,
 				sabTotalBytes: socketStats.sabTotalBytes,
+				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
+				sabTotalFramesSentToWorker: socketStats.sabTotalFramesSentToWorker,
+				sabTotalSupersededDrops: socketStats.sabTotalSupersededDrops,
 			});
 		};
 		updateTransportStats();
@@ -254,6 +266,9 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Slot: ${formatSlotMb(t.sabSlotSizeBytes)} MB`,
 			`SAB Slot Count: ${t.sabSlotCount}`,
 			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
+			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
+			`SAB Frames Sent to Worker: ${t.sabTotalFramesSentToWorker}`,
+			`SAB Superseded Drops: ${t.sabTotalSupersededDrops}`,
 			`SAB Resizes: ${t.sabResizes}`,
 			`SAB Fallbacks: ${t.sabFallbacks}`,
 			`SAB Oversize Fallbacks: ${t.sabOversizeFallbacks}`,
@@ -365,6 +380,19 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 								{transportStats().sabResizes} resizes
 							</span>
 						</div>
+						<Show when={transportStats().sabTotalFramesReceived > 0}>
+							<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+								<span>SAB totals: </span>
+								<span style={{ color: "#93c5fd" }}>
+									{transportStats().sabTotalFramesReceived} recv
+								</span>
+								<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
+									{" "}
+									/ {transportStats().sabTotalFramesSentToWorker} worker /{" "}
+									{transportStats().sabTotalSupersededDrops} superseded
+								</span>
+							</div>
+						</Show>
 						<Show when={transportStats().sabFallbacks > 0}>
 							<div style={{ color: "#fbbf24" }}>
 								SAB fallback {transportStats().sabFallbacks} (oversize{" "}

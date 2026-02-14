@@ -41,6 +41,9 @@ export type FpsStats = {
 	sabSlotSizeBytes: number;
 	sabSlotCount: number;
 	sabTotalBytes: number;
+	sabTotalFramesReceived: number;
+	sabTotalFramesSentToWorker: number;
+	sabTotalSupersededDrops: number;
 };
 
 let globalFpsStatsGetter: (() => FpsStats) | null = null;
@@ -480,6 +483,7 @@ export function createImageDataWS(
 					sabRetryLimitFallbackWindowCount += 1;
 				}
 				framesSentToWorker++;
+				totalFramesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
 			} else {
 				sabWriteRetryCount = 0;
@@ -487,6 +491,7 @@ export function createImageDataWS(
 		} else {
 			sabWriteRetryCount = 0;
 			framesSentToWorker++;
+			totalFramesSentToWorker++;
 			worker.postMessage({ type: "frame", buffer }, [buffer]);
 		}
 	}
@@ -507,6 +512,9 @@ export function createImageDataWS(
 	let frameCount = 0;
 	let frameTimeSum = 0;
 	let totalBytesReceived = 0;
+	let totalFramesReceived = 0;
+	let totalFramesSentToWorker = 0;
+	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
 	let framesReceived = 0;
 	let framesDropped = 0;
@@ -536,6 +544,9 @@ export function createImageDataWS(
 		sabTotalBytes:
 			(sharedBufferConfig?.slotSize ?? 0) *
 			(sharedBufferConfig?.slotCount ?? 0),
+		sabTotalFramesReceived: totalFramesReceived,
+		sabTotalFramesSentToWorker: totalFramesSentToWorker,
+		sabTotalSupersededDrops: totalSupersededDrops,
 	});
 
 	globalFpsStatsGetter = getLocalFpsStats;
@@ -547,6 +558,7 @@ export function createImageDataWS(
 		const now = performance.now();
 		totalBytesReceived += buffer.byteLength;
 		framesReceived++;
+		totalFramesReceived++;
 
 		if (lastFrameTime > 0) {
 			const delta = now - lastFrameTime;
@@ -687,6 +699,7 @@ export function createImageDataWS(
 		if (isProcessing) {
 			if (nextFrame) {
 				framesDropped++;
+				totalSupersededDrops++;
 			}
 			nextFrame = buffer;
 		} else {

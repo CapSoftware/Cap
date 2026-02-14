@@ -1712,6 +1712,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (SAB lifetime transport counters in overlay)
+
+**Goal**: Improve real-machine playback diagnostics with cumulative SAB transport counters for longer editor runs
+
+**What was done**:
+1. Extended `FpsStats` in the desktop socket transport with cumulative counters for received frames, worker fallback frames, and superseded frame drops.
+2. Wired cumulative counter increments through websocket receive and fallback/drop paths while keeping existing 60-frame window counters unchanged.
+3. Added the new cumulative counters to the performance overlay state and clipboard export payload.
+4. Added an always-on overlay row showing lifetime SAB transport totals once traffic is present.
+5. Re-ran desktop typecheck and targeted frame-transport vitest coverage.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - Added `sabTotalFramesReceived`, `sabTotalFramesSentToWorker`, `sabTotalSupersededDrops` to `FpsStats`
+  - Added lifetime counter bookkeeping and metric emission in `getLocalFpsStats`
+  - Incremented lifetime counters in receive, fallback-to-worker, and superseded-drop branches
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - Extended transport state/reset and socket polling to include new lifetime counters
+  - Included lifetime counters in clipboard dump
+  - Rendered a new `SAB totals` row in overlay diagnostics
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Overlay now reports lifetime transport behavior during extended playback sessions.
+- ✅ Clipboard exports now include cumulative SAB receive/fallback/superseded counters for cross-machine comparisons.
+- ✅ Desktop TS typecheck and all targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows runs to capture longer-session SAB behavior and correlate fallback totals with observed FPS/audio startup traces.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
