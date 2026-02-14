@@ -470,6 +470,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Warmup and playback queue-drain paths now insert prefetched frames without per-item trim checks and apply one bounded trim pass after the batch.
    - Reduces repeated trim work when multiple prefetched frames are drained in the same loop iteration.
 
+68. **Limited prefetch state resets to major/backward rebases (2026-02-13)**
+   - Frame-request rebases now only reset decoded-ramp and behind-prefetch tracking on backward seeks or large seek-distance jumps.
+   - Preserves prefetch ramp state on small forward rebases to reduce unnecessary throughput drops.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -633,6 +637,7 @@ Decoder Pipeline:
 71. Added seek-aware short-circuiting in in-flight/startup frame wait paths to avoid waiting full frame-fetch budgets when seek updates arrive.
 72. Added pre-wait seek guards in startup/direct-decode fallback paths so pending seeks skip timeout waits and avoid stale synchronous decode work.
 73. Batched keyed-buffer trimming during warmup/playback prefetch queue drains to avoid per-insert trim checks under burst frame arrivals.
+74. Limited prefetch state resets to backward/major frame-request rebases so small forward rebases preserve decode-ramp and behind-prefetch tracking state.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -675,6 +680,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: in-flight and startup frame wait paths now short-circuit when seek updates are pending to improve scrub responsiveness under wait pressure.
 - `crates/editor/src/playback.rs`: startup prefetch wait and direct-decode fallback paths now pre-check seek updates before waiting/synchronous decode scheduling to skip stale work under active seeks.
 - `crates/editor/src/playback.rs`: warmup and playback queue-drain insertion paths now perform untrimmed batch insertions and run a single keyed-buffer trim pass after each drain batch.
+- `crates/editor/src/playback.rs`: frame-request rebases now only clear prefetch ramp/behind-tracking state on backward or large-distance jumps, preserving throughput state on small forward rebases.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
