@@ -117,6 +117,9 @@ cargo run -p cap-editor --example playback-startup-report -- --log /path/to/edit
 # Filter startup CSV events to a specific labeled run id
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --run-id macos-pass-1
 
+# List run-id sample counts discovered in startup CSV logs
+cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-runs
+
 # Aggregate multiple session logs
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/macos.log --log /path/to/windows.log
 
@@ -177,6 +180,19 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - CLI smoke run:
   - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --run-id sample-run`
   - Completed successfully with filtered metric output path active.
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (startup report run-id listing + strict filtering)
+
+**Environment:** Linux runner, startup report parser validation  
+**Commands:** `playback-startup-report --list-runs`, `playback-startup-report --run-id ...`
+
+#### Startup Report CLI Validation
+- `--list-runs` mode prints grouped run-id sample counts from CSV traces.
+- Requesting a `--run-id` with zero matched startup samples now exits with an explicit failure.
+- Validation commands:
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --list-runs`
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --run-id missing-run` (expected non-zero exit)
+- Unit tests remain green: `cargo test -p cap-editor --example playback-startup-report` (**6 passed**).
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (supersession span retune to 20)
 

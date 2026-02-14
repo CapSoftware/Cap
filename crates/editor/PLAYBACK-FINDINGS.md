@@ -1009,7 +1009,9 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 **What was done**:
 1. Extended startup report parser to read optional CSV run-id column.
 2. Added run-id filters for aggregate mode and baseline/candidate comparison mode.
-3. Added parser tests that validate run-id filtering behavior on mixed-run CSV traces.
+3. Added `--list-runs` mode to enumerate run-id sample counts from startup CSV traces.
+4. Added strict failures when a requested run-id filter matches zero startup samples.
+5. Added parser tests that validate run-id filtering behavior on mixed-run CSV traces.
 
 **Changes Made**:
 - `crates/editor/examples/playback-startup-report.rs`
@@ -1018,18 +1020,22 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
     - `--run-id`
     - `--baseline-run-id`
     - `--candidate-run-id`
+    - `--list-runs`
   - run-id filter now excludes non-matching CSV rows before metric aggregation
+  - run-id filtered queries now return explicit non-zero exit on zero matches
   - added unit test coverage for run-id-filtered parsing
 - `crates/editor/PLAYBACK-BENCHMARKS.md`
-  - added command examples for run-id filtering and same-file baseline/candidate comparisons
+  - added command examples for run-id filtering, run listing, and same-file baseline/candidate comparisons
 
 **Verification**:
 - `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
-- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --run-id sample-run`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-runs`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --run-id missing-run` (expected non-zero exit)
 
 **Results**:
 - ✅ Startup parser supports grouped analysis across repeated sessions in one CSV file.
 - ✅ Baseline/candidate deltas can now target specific labeled runs in shared trace files.
+- ✅ Run-id inventory can be listed before comparisons to avoid manual CSV inspection.
 - ✅ All startup report example tests passing (6/6).
 
 **Stopping point**: macOS/Windows startup captures can remain in a single trace file while still enabling precise per-run before/after reporting.

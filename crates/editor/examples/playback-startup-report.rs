@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{BufRead, BufReader},
     path::PathBuf,
@@ -10,6 +11,15 @@ struct EventStats {
     render_startup_ms: Vec<f64>,
     audio_stream_startup_ms: Vec<f64>,
     audio_prerender_startup_ms: Vec<f64>,
+}
+
+impl EventStats {
+    fn total_samples(&self) -> usize {
+        self.decode_startup_ms.len()
+            + self.render_startup_ms.len()
+            + self.audio_stream_startup_ms.len()
+            + self.audio_prerender_startup_ms.len()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -121,9 +131,10 @@ fn parse_log(
     path: &PathBuf,
     stats: &mut EventStats,
     run_id_filter: Option<&str>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let file = File::open(path).map_err(|error| format!("open {} / {error}", path.display()))?;
     let reader = BufReader::new(file);
+    let mut matched = 0usize;
 
     for line in reader.lines() {
         let line = line.map_err(|error| format!("read {} / {error}", path.display()))?;
@@ -135,10 +146,22 @@ fn parse_log(
                 }
             }
             match event {
-                "first_decoded_frame" => stats.decode_startup_ms.push(startup_ms),
-                "first_rendered_frame" => stats.render_startup_ms.push(startup_ms),
-                "audio_streaming_callback" => stats.audio_stream_startup_ms.push(startup_ms),
-                "audio_prerender_callback" => stats.audio_prerender_startup_ms.push(startup_ms),
+                "first_decoded_frame" => {
+                    stats.decode_startup_ms.push(startup_ms);
+                    matched += 1;
+                }
+                "first_rendered_frame" => {
+                    stats.render_startup_ms.push(startup_ms);
+                    matched += 1;
+                }
+                "audio_streaming_callback" => {
+                    stats.audio_stream_startup_ms.push(startup_ms);
+                    matched += 1;
+                }
+                "audio_prerender_callback" => {
+                    stats.audio_prerender_startup_ms.push(startup_ms);
+                    matched += 1;
+                }
                 _ => {}
             }
             continue;
@@ -154,16 +177,20 @@ fn parse_log(
 
         if line.contains("Playback first decoded frame ready") {
             stats.decode_startup_ms.push(startup_ms);
+            matched += 1;
         } else if line.contains("Playback first frame rendered") {
             stats.render_startup_ms.push(startup_ms);
+            matched += 1;
         } else if line.contains("Audio streaming callback started") {
             stats.audio_stream_startup_ms.push(startup_ms);
+            matched += 1;
         } else if line.contains("Audio pre-rendered callback started") {
             stats.audio_prerender_startup_ms.push(startup_ms);
+            matched += 1;
         }
     }
 
-    Ok(())
+    Ok(matched)
 }
 
 fn parse_csv_startup_event(line: &str) -> Option<(&str, f64, Option<&str>)> {
@@ -178,11 +205,29 @@ fn parse_csv_startup_event(line: &str) -> Option<(&str, f64, Option<&str>)> {
     Some((event, startup_ms, run_id))
 }
 
+fn collect_run_id_counts(path: &PathBuf) -> Result<BTreeMap<String, usize>, String> {
+    let file = File::open(path).map_err(|error| format!("open {} / {error}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut counts = BTreeMap::<String, usize>::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("read {} / {error}", path.display()))?;
+        if let Some((_, _, run_id)) = parse_csv_startup_event(&line)
+            && let Some(run_id) = run_id
+        {
+            let entry = counts.entry(run_id.to_string()).or_insert(0);
+            *entry += 1;
+        }
+    }
+
+    Ok(counts)
+}
+
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "Usage: playback-startup-report [--log <path> ...] [--run-id <id>] [--baseline-log <path> ... --candidate-log <path> ...] [--baseline-run-id <id>] [--candidate-run-id <id>]"
+            "Usage: playback-startup-report [--log <path> ...] [--run-id <id>] [--list-runs] [--baseline-log <path> ... --candidate-log <path> ...] [--baseline-run-id <id>] [--candidate-run-id <id>]"
         );
         std::process::exit(1);
     }
@@ -193,6 +238,7 @@ fn main() {
     let mut run_id: Option<String> = None;
     let mut baseline_run_id: Option<String> = None;
     let mut candidate_run_id: Option<String> = None;
+    let mut list_runs = false;
     let mut index = 0usize;
 
     while index < args.len() {
@@ -251,6 +297,11 @@ fn main() {
                 eprintln!("Missing value for --candidate-run-id");
                 std::process::exit(1);
             }
+            "--list-runs" => {
+                list_runs = true;
+                index += 1;
+                continue;
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[index]);
                 std::process::exit(1);
@@ -268,6 +319,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    if list_runs && (!baseline_logs.is_empty() || !candidate_logs.is_empty()) {
+        eprintln!("--list-runs supports only --log inputs");
+        std::process::exit(1);
+    }
+
     if baseline_logs.is_empty() && baseline_run_id.is_some() {
         eprintln!("--baseline-run-id requires --baseline-log");
         std::process::exit(1);
@@ -279,12 +335,50 @@ fn main() {
     }
 
     if !logs.is_empty() {
-        let mut stats = EventStats::default();
-        for log in &logs {
-            if let Err(error) = parse_log(log, &mut stats, run_id.as_deref()) {
-                eprintln!("{error}");
-                std::process::exit(1);
+        if list_runs {
+            let mut aggregated = BTreeMap::<String, usize>::new();
+            for log in &logs {
+                match collect_run_id_counts(log) {
+                    Ok(counts) => {
+                        for (run_id_key, count) in counts {
+                            let entry = aggregated.entry(run_id_key).or_insert(0);
+                            *entry += count;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
             }
+
+            println!("Startup trace run-id counts");
+            if aggregated.is_empty() {
+                println!("no run ids found");
+            } else {
+                for (run_id_key, count) in aggregated {
+                    println!("{run_id_key}: {count}");
+                }
+            }
+            return;
+        }
+
+        let mut stats = EventStats::default();
+        let mut matched = 0usize;
+        for log in &logs {
+            match parse_log(log, &mut stats, run_id.as_deref()) {
+                Ok(count) => {
+                    matched += count;
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        if run_id.is_some() && matched == 0 {
+            eprintln!("No startup samples matched the requested --run-id");
+            std::process::exit(1);
         }
 
         println!("Playback startup metrics");
@@ -300,19 +394,43 @@ fn main() {
     if !baseline_logs.is_empty() {
         let mut baseline_stats = EventStats::default();
         let baseline_filter = baseline_run_id.as_deref().or(run_id.as_deref());
+        let mut baseline_matched = 0usize;
         for log in &baseline_logs {
-            if let Err(error) = parse_log(log, &mut baseline_stats, baseline_filter) {
-                eprintln!("{error}");
-                std::process::exit(1);
+            match parse_log(log, &mut baseline_stats, baseline_filter) {
+                Ok(count) => {
+                    baseline_matched += count;
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
             }
+        }
+        if baseline_filter.is_some() && baseline_matched == 0 {
+            eprintln!("No baseline startup samples matched the requested run id filter");
+            std::process::exit(1);
         }
         let mut candidate_stats = EventStats::default();
         let candidate_filter = candidate_run_id.as_deref().or(run_id.as_deref());
+        let mut candidate_matched = 0usize;
         for log in &candidate_logs {
-            if let Err(error) = parse_log(log, &mut candidate_stats, candidate_filter) {
-                eprintln!("{error}");
-                std::process::exit(1);
+            match parse_log(log, &mut candidate_stats, candidate_filter) {
+                Ok(count) => {
+                    candidate_matched += count;
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
             }
+        }
+        if candidate_filter.is_some() && candidate_matched == 0 {
+            eprintln!("No candidate startup samples matched the requested run id filter");
+            std::process::exit(1);
+        }
+        if baseline_stats.total_samples() == 0 || candidate_stats.total_samples() == 0 {
+            eprintln!("No startup samples available for baseline/candidate comparison");
+            std::process::exit(1);
         }
 
         println!("Startup delta (candidate - baseline)");
