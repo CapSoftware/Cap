@@ -1816,6 +1816,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (direct-render metadata parse gating)
+
+**Goal**: Reduce main-thread websocket overhead by avoiding duplicate metadata parsing when frames are routed directly to worker/SAB transport
+
+**What was done**:
+1. Added a shared `enqueueFrameBuffer` path for worker/SAB dispatch.
+2. Added a direct-render capability gate in websocket message handling.
+3. Bypassed metadata decode/validation on the main thread when direct canvas rendering is inactive.
+4. Kept metadata parsing on direct-render path only (main-thread WebGPU/canvas fallback).
+5. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - introduced `enqueueFrameBuffer(buffer)` helper for consistent pending/next-frame supersession handling
+  - `ws.onmessage` now computes `shouldRenderDirect`
+  - when direct rendering is unavailable, frame buffers are enqueued immediately without local metadata parse
+  - retained existing metadata parse/validation for direct-render branches only
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+
+**Results**:
+- ✅ Worker/SAB path now avoids duplicate per-frame metadata parsing on main thread.
+- ✅ Direct-render behavior remains unchanged and still validates frame metadata before rendering.
+- ✅ Desktop typecheck and transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows editor sessions to validate whether reduced main-thread frame parsing lowers transport-side frame jitter under sustained playback.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

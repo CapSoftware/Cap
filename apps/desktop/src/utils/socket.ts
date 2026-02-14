@@ -433,6 +433,19 @@ export function createImageDataWS(
 		}
 	};
 
+	function enqueueFrameBuffer(buffer: ArrayBuffer) {
+		if (isProcessing) {
+			if (nextFrame) {
+				framesDropped++;
+				totalSupersededDrops++;
+			}
+			nextFrame = buffer;
+		} else {
+			pendingFrame = buffer;
+			processNextFrame();
+		}
+	}
+
 	function processNextFrame() {
 		if (isProcessing) return;
 
@@ -615,6 +628,14 @@ export function createImageDataWS(
 		}
 		lastFrameTime = now;
 
+		const shouldRenderDirect = Boolean(
+			directCanvas && (mainThreadWebGPU || (directCtx && strideWorker)),
+		);
+		if (!shouldRenderDirect) {
+			enqueueFrameBuffer(buffer);
+			return;
+		}
+
 		if (buffer.byteLength < 24) {
 			return;
 		}
@@ -710,16 +731,7 @@ export function createImageDataWS(
 			return;
 		}
 
-		if (isProcessing) {
-			if (nextFrame) {
-				framesDropped++;
-				totalSupersededDrops++;
-			}
-			nextFrame = buffer;
-		} else {
-			pendingFrame = buffer;
-			processNextFrame();
-		}
+		enqueueFrameBuffer(buffer);
 	};
 
 	return [ws, isConnected, isWorkerReady, canvasControls];
