@@ -303,6 +303,15 @@ fn metric_brief(values: &[f64]) -> String {
         .unwrap_or_else(|| "samples=0".to_string())
 }
 
+fn audio_callback_startup_values(stats: &EventStats) -> Vec<f64> {
+    let mut values = Vec::with_capacity(
+        stats.audio_stream_startup_ms.len() + stats.audio_prerender_startup_ms.len(),
+    );
+    values.extend(stats.audio_stream_startup_ms.iter().copied());
+    values.extend(stats.audio_prerender_startup_ms.iter().copied());
+    values
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AudioStartupPath {
     None,
@@ -524,6 +533,7 @@ fn append_run_metrics_csv(
         .unwrap_or_default();
 
     for (run_id, stats) in metrics_by_run_id {
+        let effective_audio_callback = audio_callback_startup_values(stats);
         let metric_rows = [
             ("first decoded frame", stats.decode_startup_ms.as_slice()),
             ("first rendered frame", stats.render_startup_ms.as_slice()),
@@ -534,6 +544,10 @@ fn append_run_metrics_csv(
             (
                 "audio pre-rendered callback",
                 stats.audio_prerender_startup_ms.as_slice(),
+            ),
+            (
+                "audio callback effective",
+                effective_audio_callback.as_slice(),
             ),
             (
                 "audio startup path streaming",
@@ -747,13 +761,15 @@ fn main() {
                 for (run_id_key, stats) in &aggregated {
                     let (audio_path, stream_samples, prerendered_samples) =
                         detect_audio_startup_path(stats);
+                    let effective_audio_callback = audio_callback_startup_values(stats);
                     println!(
-                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}] audio_path_streaming[{}] audio_path_prerendered[{}] audio_path={} stream_samples={} prerender_samples={}",
+                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}] audio_callback_effective[{}] audio_path_streaming[{}] audio_path_prerendered[{}] audio_path={} stream_samples={} prerender_samples={}",
                         run_id_key,
                         metric_brief(&stats.decode_startup_ms),
                         metric_brief(&stats.render_startup_ms),
                         metric_brief(&stats.audio_stream_startup_ms),
                         metric_brief(&stats.audio_prerender_startup_ms),
+                        metric_brief(&effective_audio_callback),
                         metric_brief(&stats.audio_stream_path_selected_ms),
                         metric_brief(&stats.audio_prerender_path_selected_ms),
                         audio_startup_path_label(audio_path),
@@ -831,6 +847,8 @@ fn main() {
             "audio pre-rendered callback",
             &stats.audio_prerender_startup_ms,
         );
+        let effective_audio_callback = audio_callback_startup_values(&stats);
+        print_metric("audio callback effective", &effective_audio_callback);
         print_metric(
             "audio startup path streaming",
             &stats.audio_stream_path_selected_ms,
@@ -848,6 +866,7 @@ fn main() {
         );
 
         if let Some(path) = &output_csv {
+            let effective_audio_callback = audio_callback_startup_values(&stats);
             let metrics = [
                 ("first decoded frame", stats.decode_startup_ms.as_slice()),
                 ("first rendered frame", stats.render_startup_ms.as_slice()),
@@ -858,6 +877,10 @@ fn main() {
                 (
                     "audio pre-rendered callback",
                     stats.audio_prerender_startup_ms.as_slice(),
+                ),
+                (
+                    "audio callback effective",
+                    effective_audio_callback.as_slice(),
                 ),
                 (
                     "audio startup path streaming",
@@ -941,6 +964,13 @@ fn main() {
             &baseline_stats.audio_prerender_startup_ms,
             &candidate_stats.audio_prerender_startup_ms,
         );
+        let baseline_effective_audio_callback = audio_callback_startup_values(&baseline_stats);
+        let candidate_effective_audio_callback = audio_callback_startup_values(&candidate_stats);
+        print_delta(
+            "audio callback effective",
+            &baseline_effective_audio_callback,
+            &candidate_effective_audio_callback,
+        );
         print_delta(
             "audio startup path streaming",
             &baseline_stats.audio_stream_path_selected_ms,
@@ -966,6 +996,9 @@ fn main() {
         );
 
         if let Some(path) = &output_csv {
+            let baseline_effective_audio_callback = audio_callback_startup_values(&baseline_stats);
+            let candidate_effective_audio_callback =
+                audio_callback_startup_values(&candidate_stats);
             let metrics = [
                 (
                     "first decoded frame",
@@ -986,6 +1019,11 @@ fn main() {
                     "audio pre-rendered callback",
                     baseline_stats.audio_prerender_startup_ms.as_slice(),
                     candidate_stats.audio_prerender_startup_ms.as_slice(),
+                ),
+                (
+                    "audio callback effective",
+                    baseline_effective_audio_callback.as_slice(),
+                    candidate_effective_audio_callback.as_slice(),
                 ),
                 (
                     "audio startup path streaming",
@@ -1017,10 +1055,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioStartupPath, EventStats, append_aggregate_csv, append_delta_csv,
-        append_run_counts_csv, append_run_metrics_csv, collect_run_id_metrics,
-        detect_audio_startup_path, parse_csv_startup_event, parse_log, parse_startup_ms, summarize,
-        summarize_delta,
+        append_aggregate_csv, append_delta_csv, append_run_counts_csv, append_run_metrics_csv,
+        collect_run_id_metrics, detect_audio_startup_path, parse_csv_startup_event, parse_log,
+        parse_startup_ms, summarize, summarize_delta, AudioStartupPath, EventStats,
     };
     use std::fs;
     use std::path::PathBuf;

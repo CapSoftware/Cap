@@ -3643,6 +3643,39 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (startup report effective audio callback metric)
+
+**Goal**: Make startup latency comparisons resilient when runs switch between streaming and pre-rendered audio paths
+
+**What was done**:
+1. Added a shared helper that merges streaming and pre-render callback startup samples into one effective callback series.
+2. Surfaced effective callback summaries in run-metric console output.
+3. Added effective callback metric rows to run-metrics CSV output.
+4. Added effective callback metric output to aggregate and baseline-vs-candidate delta displays.
+5. Added effective callback metric rows to aggregate/delta CSV exports.
+6. Re-ran startup report example tests with Rust 1.88 toolchain.
+
+**Changes Made**:
+- `crates/editor/examples/playback-startup-report.rs`
+  - added `audio_callback_startup_values(&EventStats) -> Vec<f64>`
+  - `--list-run-metrics` output now includes `audio_callback_effective[...]`
+  - `append_run_metrics_csv` now writes `audio callback effective`
+  - aggregate display/CSV now include `audio callback effective`
+  - delta display/CSV now include `audio callback effective`
+
+**Verification**:
+- `rustfmt crates/editor/examples/playback-startup-report.rs`
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+
+**Results**:
+- ✅ Startup reports now provide a single callback-startup metric that remains comparable across mixed path-selection runs.
+- ✅ Structured CSV exports now include effective callback rows for downstream analysis tooling.
+- ✅ Example test suite passes (12/12) with the updated metric outputs.
+
+**Stopping point**: Ready to collect macOS/Windows startup traces and compare baseline/candidate runs with the new effective audio callback metric.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
