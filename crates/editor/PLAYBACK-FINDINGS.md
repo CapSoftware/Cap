@@ -804,6 +804,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Startup report baseline/candidate deltas)
+
+**Goal**: Improve startup-latency evidence workflow for before/after validation
+
+**What was done**:
+1. Extended startup report tool with paired baseline/candidate log support.
+2. Added delta output for avg and p95 startup latency per event.
+3. Added tests for metric summarization path.
+
+**Changes Made**:
+- `crates/editor/examples/playback-startup-report.rs`
+  - new args:
+    - `--baseline-log <path>`
+    - `--candidate-log <path>`
+  - prints candidate-minus-baseline deltas for:
+    - first decoded frame
+    - first rendered frame
+    - audio streaming callback
+    - audio pre-rendered callback
+  - kept existing `--log` aggregate mode
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - documented baseline/candidate comparison command
+
+**Verification**:
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 check -p cap-editor --example playback-startup-report`
+
+**Stopping point**: startup instrumentation evidence can now be reported as explicit before/after deltas once macOS and Windows traces are collected.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

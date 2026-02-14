@@ -110,6 +110,9 @@ cargo run -p cap-editor --example playback-startup-report -- --log /path/to/edit
 
 # Aggregate multiple session logs
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/macos.log --log /path/to/windows.log
+
+# Compare candidate logs against baseline logs
+cargo run -p cap-editor --example playback-startup-report -- --baseline-log /path/to/baseline.log --candidate-log /path/to/candidate.log
 ```
 
 #### Combined Workflow (Recording → Playback)
