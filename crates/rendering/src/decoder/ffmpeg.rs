@@ -79,6 +79,7 @@ struct ScrubSupersessionConfig {
     min_span_frames: u32,
     min_pixels: u64,
     disabled: bool,
+    latest_first_disabled: bool,
 }
 
 static SCRUB_SUPERSESSION_CONFIG: OnceLock<ScrubSupersessionConfig> = OnceLock::new();
@@ -95,6 +96,13 @@ fn parse_u64_env(key: &str) -> Option<u64> {
     env::var(key).ok()?.parse::<u64>().ok()
 }
 
+fn parse_bool_env(key: &str) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 fn scrub_supersession_config() -> ScrubSupersessionConfig {
     *SCRUB_SUPERSESSION_CONFIG.get_or_init(|| {
         let min_requests = parse_usize_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS")
@@ -106,16 +114,15 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
         let min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS")
             .filter(|value| *value > 0)
             .unwrap_or(2_000_000);
-        let disabled = env::var("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED")
-            .ok()
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let disabled = parse_bool_env("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED");
+        let latest_first_disabled = parse_bool_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED");
 
         ScrubSupersessionConfig {
             min_requests,
             min_span_frames,
             min_pixels,
             disabled,
+            latest_first_disabled,
         }
     })
 }
@@ -179,7 +186,7 @@ fn should_prioritize_latest_request(
     enabled: bool,
     config: ScrubSupersessionConfig,
 ) -> bool {
-    if !enabled || pending_requests.len() <= 1 {
+    if !enabled || config.latest_first_disabled || pending_requests.len() <= 1 {
         return false;
     }
 
@@ -1214,9 +1221,31 @@ mod tests {
                 min_span_frames: 20,
                 min_pixels: 2_000_000,
                 disabled: false,
+                latest_first_disabled: false,
             },
         );
         assert!(should_prioritize);
+    }
+
+    #[test]
+    fn does_not_prioritize_when_latest_first_is_disabled() {
+        let requests = vec![
+            pending_request(200, 0),
+            pending_request(4000, 1),
+            pending_request(2500, 2),
+        ];
+        let should_prioritize = should_prioritize_latest_request(
+            &requests,
+            true,
+            ScrubSupersessionConfig {
+                min_requests: 7,
+                min_span_frames: 20,
+                min_pixels: 2_000_000,
+                disabled: false,
+                latest_first_disabled: true,
+            },
+        );
+        assert!(!should_prioritize);
     }
 
     #[test]

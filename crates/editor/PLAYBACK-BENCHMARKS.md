@@ -131,6 +131,10 @@ CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=7 \
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES=20 \
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
 
+# Disable latest-request-first ordering for A/B comparisons
+CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED=1 \
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
+
 # Export per-run and aggregate scrub metrics to CSV
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --runs 3 --output-csv /tmp/cap-scrub-benchmark.csv
 
@@ -209,6 +213,38 @@ cargo run -p cap-recording --example playback-test-runner -- full
 ## Benchmark History
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (latest-request prioritization runtime toggle)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4 asset  
+**Change under test:** runtime override `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED` for A/B validation of latest-request-first ordering in wide scrub bursts
+
+#### Validation commands
+- `cargo +1.88.0 test -p cap-rendering decoder::ffmpeg::tests:: --lib`
+- `cargo +1.88.0 test -p cap-editor --example scrub-benchmark --example scrub-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 3 --run-label linux-latest-first-toggle-enabled-r3 --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED=1 cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 3 --run-label linux-latest-first-toggle-disabled-r3 --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-latest-first-toggle-disabled-r3 --candidate-label linux-latest-first-toggle-enabled-r3`
+
+#### Medium-seek comparison (`sweep_seconds=8.0`, runs=3, candidate - baseline)
+- Baseline `linux-latest-first-toggle-disabled-r3`:
+  - all-request avg **224.09ms**, p95 **518.35ms**
+  - last-request avg **244.52ms**, p95 **518.35ms**
+  - medium bucket p95 **465.57ms**
+- Candidate `linux-latest-first-toggle-enabled-r3`:
+  - all-request avg **142.84ms**, p95 **429.08ms**
+  - last-request avg **112.48ms**, p95 **429.08ms**
+  - medium bucket p95 **429.08ms**
+- Deltas:
+  - all-request avg **-81.26ms**
+  - all-request p95 **-89.27ms**
+  - last-request avg **-132.03ms**
+  - last-request p95 **-89.27ms**
+  - medium bucket p95 **-36.49ms**
+
+#### Result
+- Keep latest-request-first ordering enabled by default.
+- Keep `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED` as an explicit runtime fallback for platform-specific A/B sweeps and regression triage.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (latest-request prioritization for non-collapsed scrub bursts)
 
@@ -525,7 +561,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 
 #### Validation
 - New utility parses scrub benchmark CSV aggregate rows and reports median summaries by run label + video.
-- Empty run labels now automatically fall back to a derived config label (`min_pixels`, `min_requests`, `min_span`, `disabled`) so unlabeled sweeps remain distinguishable.
+- Empty run labels now automatically fall back to a derived config label (`min_pixels`, `min_requests`, `min_span`, `disabled`, `latest_first`) so unlabeled sweeps remain distinguishable.
 - Smoke run against labeled CSV:
   - `cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
   - output summary:

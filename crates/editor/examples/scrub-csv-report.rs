@@ -109,9 +109,13 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
     let supersede_min_pixels = fields[11].trim_matches('"');
     let supersede_min_requests = fields[12].trim_matches('"');
     let supersede_min_span_frames = fields[13].trim_matches('"');
+    let latest_first_disabled = fields
+        .get(42)
+        .map(|value| value.trim_matches('"'))
+        .unwrap_or_default();
     let run_label = fields[3].trim_matches('"');
     let config_label = format!(
-        "cfg(disabled={},min_pixels={},min_requests={},min_span={})",
+        "cfg(disabled={},min_pixels={},min_requests={},min_span={},latest_first={})",
         if supersede_disabled.is_empty() {
             "default"
         } else {
@@ -131,6 +135,11 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
             "default"
         } else {
             supersede_min_span_frames
+        },
+        if latest_first_disabled.is_empty() {
+            "default"
+        } else {
+            latest_first_disabled
         }
     );
 
@@ -536,7 +545,17 @@ mod tests {
         let row = parse_csv_line(line).expect("expected row");
         assert_eq!(
             row.run_label,
-            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20)"
+            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20,latest_first=default)"
+        );
+    }
+
+    #[test]
+    fn parses_latest_first_flag_from_extended_rows() {
+        let line = "1771039415444,aggregate,0,\"\",\"/tmp/cap-bench-1080p60.mp4\",60,6,12,2.000,2,\"\",\"2000000\",\"7\",\"20\",199.009,410.343,410.344,410.346,213.930,410.343,410.343,410.343,144,0,199.009,410.343,410.344,410.346,120,0,220.009,430.343,430.344,430.346,20,0,240.009,450.343,450.344,450.346,4,0,\"1\"";
+        let row = parse_csv_line(line).expect("expected row");
+        assert_eq!(
+            row.run_label,
+            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20,latest_first=1)"
         );
     }
 

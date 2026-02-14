@@ -3764,6 +3764,54 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (latest-request ordering runtime override + A/B validation)
+
+**Goal**: Add runtime control for latest-request-first scrub ordering and validate default-on behavior with repeatable A/B evidence
+
+**What was done**:
+1. Added `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED` parsing in FFmpeg scrub configuration.
+2. Wired prioritization gating so latest-first ordering is skipped when override is enabled.
+3. Added focused unit test coverage for override-gated prioritization behavior.
+4. Extended scrub benchmark CSV export with `latest_first_disabled` metadata column.
+5. Extended scrub CSV report config-label fallback parsing to include `latest_first` state.
+6. Ran repeated (`runs=3`) medium-seek A/B sweeps with latest-first enabled vs disabled.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - `ScrubSupersessionConfig` now includes `latest_first_disabled`
+  - added reusable bool env parser
+  - `should_prioritize_latest_request(...)` now respects `latest_first_disabled`
+  - added test `does_not_prioritize_when_latest_first_is_disabled`
+- `crates/editor/examples/scrub-benchmark.rs`
+  - CSV output now appends `latest_first_disabled` column from `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED`
+- `crates/editor/examples/scrub-csv-report.rs`
+  - config-label fallback now includes `latest_first=<value|default>`
+  - added parser test for extended rows carrying latest-first flag
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - documented runtime toggle command and benchmark A/B results
+
+**Verification**:
+- `rustfmt --edition 2024 crates/rendering/src/decoder/ffmpeg.rs crates/editor/examples/scrub-benchmark.rs crates/editor/examples/scrub-csv-report.rs`
+- `cargo +1.88.0 test -p cap-rendering decoder::ffmpeg::tests:: --lib`
+- `cargo +1.88.0 test -p cap-editor --example scrub-benchmark --example scrub-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 3 --run-label linux-latest-first-toggle-enabled-r3 --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED=1 cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 3 --run-label linux-latest-first-toggle-disabled-r3 --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-latest-first-toggle-disabled-r3 --candidate-label linux-latest-first-toggle-enabled-r3`
+
+**Results**:
+- ✅ Latest-first enabled outperformed disabled in repeated medium-seek sweeps:
+  - all-request avg **-81.26ms**
+  - all-request p95 **-89.27ms**
+  - last-request avg **-132.03ms**
+  - last-request p95 **-89.27ms**
+  - medium-bucket p95 **-36.49ms**
+- ✅ Runtime override provides safe rollback path for platform-specific regressions without recompiling.
+- ✅ Decoder + scrub tooling tests pass (FFmpeg decoder tests 4/4, scrub report tests 6/6).
+
+**Stopping point**: Keep latest-first enabled and proceed with macOS/Windows labeled sweeps using the new toggle for cross-platform confirmation.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

@@ -431,6 +431,7 @@ fn write_csv(
             "long_seek_max_ms",
             "long_seek_successful_requests",
             "long_seek_failed_requests",
+            "latest_first_disabled",
         ]
         .join(",");
         writeln!(file, "{header}")
@@ -446,6 +447,7 @@ fn write_csv(
     let supersede_min_pixels = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS");
     let supersede_min_requests = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS");
     let supersede_min_span_frames = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES");
+    let latest_first_disabled = scrub_env_value("CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED");
     let run_label = scrub_run_label(config);
     let common_prefix = format!(
         "{timestamp_ms},{{scope}},{{run_index}},\"{}\",\"{}\",{},{},{},{:.3},{},\"{}\",\"{}\",\"{}\",\"{}\"",
@@ -468,7 +470,7 @@ fn write_csv(
         let long = summary.seek_distance[SeekDistanceBucket::Long.as_index()];
         writeln!(
             file,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},\"{}\"",
             common_prefix
                 .replace("{scope}", "run")
                 .replace("{run_index}", &(index + 1).to_string()),
@@ -499,7 +501,8 @@ fn write_csv(
             long.p99_ms,
             long.max_ms,
             long.successful_requests,
-            long.failed_requests
+            long.failed_requests,
+            latest_first_disabled
         )
         .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
@@ -509,7 +512,7 @@ fn write_csv(
     let long = aggregate.seek_distance[SeekDistanceBucket::Long.as_index()];
     writeln!(
         file,
-        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{}",
+        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},\"{}\"",
         common_prefix
             .replace("{scope}", "aggregate")
             .replace("{run_index}", "0"),
@@ -540,7 +543,8 @@ fn write_csv(
         long.p99_ms,
         long.max_ms,
         long.successful_requests,
-        long.failed_requests
+        long.failed_requests,
+        latest_first_disabled
     )
     .map_err(|error| format!("write {} / {error}", path.display()))?;
 
