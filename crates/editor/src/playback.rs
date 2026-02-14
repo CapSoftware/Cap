@@ -34,11 +34,13 @@ use crate::{
     audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 60;
-const PARALLEL_DECODE_TASKS: usize = 4;
-const MAX_PREFETCH_AHEAD: u32 = 60;
-const PREFETCH_BEHIND: u32 = 15;
-const FRAME_CACHE_SIZE: usize = 60;
+const PREFETCH_BUFFER_SIZE: usize = 90;
+const PARALLEL_DECODE_TASKS: usize = 6;
+const INITIAL_PARALLEL_DECODE_TASKS: usize = 8;
+const MAX_PREFETCH_AHEAD: u32 = 90;
+const PREFETCH_BEHIND: u32 = 10;
+const FRAME_CACHE_SIZE: usize = 90;
+const RAMP_UP_FRAME_COUNT: u32 = 15;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -161,8 +163,6 @@ impl Playback {
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
-            const INITIAL_PARALLEL_TASKS: usize = 4;
-            const RAMP_UP_AFTER_FRAMES: u32 = 5;
 
             let mut cached_project = prefetch_project.borrow().clone();
 
@@ -203,8 +203,8 @@ impl Playback {
                 let current_playback_frame = *playback_position_rx.borrow();
                 let max_prefetch_frame = current_playback_frame + MAX_PREFETCH_AHEAD;
 
-                let effective_parallel = if frames_decoded < RAMP_UP_AFTER_FRAMES {
-                    INITIAL_PARALLEL_TASKS
+                let effective_parallel = if frames_decoded < RAMP_UP_FRAME_COUNT {
+                    INITIAL_PARALLEL_DECODE_TASKS
                 } else {
                     PARALLEL_DECODE_TASKS
                 };
@@ -382,13 +382,13 @@ impl Playback {
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
-            let aggressive_skip_threshold = 10u32;
+            let aggressive_skip_threshold = 6u32;
 
             let mut total_frames_rendered = 0u64;
             let mut _total_frames_skipped = 0u64;
 
-            let warmup_target_frames = 20usize;
-            let warmup_after_first_timeout = Duration::from_millis(1000);
+            let warmup_target_frames = 10usize;
+            let warmup_after_first_timeout = Duration::from_millis(500);
             let warmup_no_frames_timeout = Duration::from_secs(5);
             let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
@@ -506,7 +506,7 @@ impl Playback {
 
                         if is_in_flight {
                             let wait_start = Instant::now();
-                            let max_wait = Duration::from_millis(200);
+                            let max_wait = Duration::from_millis(100);
                             let mut found_frame = None;
 
                             while wait_start.elapsed() < max_wait {
@@ -557,7 +557,7 @@ impl Playback {
                             let _ = frame_request_tx.send(frame_number);
 
                             let wait_result = tokio::time::timeout(
-                                Duration::from_millis(200),
+                                Duration::from_millis(100),
                                 prefetch_rx.recv(),
                             )
                             .await;
@@ -604,7 +604,7 @@ impl Playback {
                                 guard.insert(frame_number);
                             }
 
-                            let max_wait = Duration::from_millis(200);
+                            let max_wait = Duration::from_millis(100);
                             let data = tokio::select! {
                                 _ = stop_rx.changed() => {
                                     if let Ok(mut guard) = main_in_flight.write() {
