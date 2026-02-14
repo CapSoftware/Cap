@@ -125,7 +125,11 @@ function timestampOrEpoch(value) {
 function upsertLatestCell(cells, candidate) {
 	const key = cellKey(candidate.platform, candidate.gpu, candidate.scenario);
 	const existing = cells.get(key);
-	if (!existing || timestampOrEpoch(candidate.generatedAt) >= timestampOrEpoch(existing.generatedAt)) {
+	if (
+		!existing ||
+		timestampOrEpoch(candidate.generatedAt) >=
+			timestampOrEpoch(existing.generatedAt)
+	) {
 		cells.set(key, candidate);
 	}
 }
@@ -222,7 +226,8 @@ function buildReport(requiredCells, latestCells, formatCoverage) {
 	markdown += "# Playback Matrix Status Report\n\n";
 	markdown += `Generated: ${new Date().toISOString()}\n\n`;
 	markdown += `Rows: ${rows.length}, Missing rows: ${missingCount}, Rows with failures: ${failCount}\n\n`;
-	markdown += "| Platform | GPU | Full | Scrub | MP4 Seen | Fragmented Seen | Full Timestamp | Scrub Timestamp |\n";
+	markdown +=
+		"| Platform | GPU | Full | Scrub | MP4 Seen | Fragmented Seen | Full Timestamp | Scrub Timestamp |\n";
 	markdown += "|---|---|---|---|---|---|---|---|\n";
 	for (const row of rows) {
 		markdown += `| ${row.platform} | ${row.gpu} | ${row.fullStatus} | ${row.scrubStatus} | ${row.mp4} | ${row.fragmented} | ${row.fullTime} | ${row.scrubTime} |\n`;

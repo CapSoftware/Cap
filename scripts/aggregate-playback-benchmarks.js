@@ -91,9 +91,7 @@ function numberOrNull(value) {
 }
 
 function maxOrNull(values) {
-	const numeric = values
-		.map(numberOrNull)
-		.filter((value) => value !== null);
+	const numeric = values.map(numberOrNull).filter((value) => value !== null);
 	if (numeric.length === 0) {
 		return null;
 	}
@@ -101,9 +99,7 @@ function maxOrNull(values) {
 }
 
 function avgOrNull(values) {
-	const numeric = values
-		.map(numberOrNull)
-		.filter((value) => value !== null);
+	const numeric = values.map(numberOrNull).filter((value) => value !== null);
 	if (numeric.length === 0) {
 		return null;
 	}
@@ -191,7 +187,8 @@ function buildMarkdown(rows) {
 	md += `# Playback Benchmark Aggregate\n\n`;
 	md += `Generated: ${new Date().toISOString()}\n\n`;
 	md += `Total rows: ${sorted.length}, Passed: ${passed}, Failed: ${failed}\n\n`;
-	md += "| Run Time (UTC) | Platform | GPU | Scenario | Recording | Format | Status | FPS(min) | Scrub p95(ms) | Startup avg(ms) | Mic diff max(ms) | Sys diff max(ms) |\n";
+	md +=
+		"| Run Time (UTC) | Platform | GPU | Scenario | Recording | Format | Status | FPS(min) | Scrub p95(ms) | Startup avg(ms) | Mic diff max(ms) | Sys diff max(ms) |\n";
 	md += "|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|\n";
 	for (const row of sorted) {
 		md += `| ${row.runTime} | ${row.platform} | ${row.gpu} | ${row.scenario} | ${row.recording} | ${row.format} | ${row.status} | ${formatMetric(row.effectiveFpsMin)} | ${formatMetric(row.scrubP95Max)} | ${formatMetric(row.startupAvg)} | ${formatMetric(row.micDiffMax)} | ${formatMetric(row.sysDiffMax)} |\n`;
