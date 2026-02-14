@@ -7,6 +7,292 @@ use crate::{ProjectUniforms, RenderingError};
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 
+pub struct RgbaToNv12Converter {
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    params_buffer: wgpu::Buffer,
+    nv12_buffer: Option<wgpu::Buffer>,
+    readback_buffer: Option<Arc<wgpu::Buffer>>,
+    cached_width: u32,
+    cached_height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Nv12Params {
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    uv_stride: u32,
+}
+
+impl RgbaToNv12Converter {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("RGBA to NV12 Converter"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shaders/rgba_to_nv12.wgsl"
+            ))),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("RGBA to NV12 Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("RGBA to NV12 Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("RGBA to NV12 Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("NV12 Params Buffer"),
+            size: std::mem::size_of::<Nv12Params>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            pipeline,
+            bind_group_layout,
+            params_buffer,
+            nv12_buffer: None,
+            readback_buffer: None,
+            cached_width: 0,
+            cached_height: 0,
+        }
+    }
+
+    fn nv12_size(width: u32, height: u32) -> u64 {
+        let y_size = (width as u64) * (height as u64);
+        let uv_size = (width as u64) * (height as u64 / 2);
+        y_size + uv_size
+    }
+
+    fn ensure_buffers(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self.cached_width == width && self.cached_height == height {
+            return;
+        }
+
+        let nv12_size = Self::nv12_size(width, height);
+        let aligned_size = ((nv12_size + 3) / 4) * 4;
+
+        self.nv12_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("NV12 Storage Buffer"),
+            size: aligned_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        self.readback_buffer = Some(Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("NV12 Readback Buffer"),
+            size: nv12_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })));
+
+        self.cached_width = width;
+        self.cached_height = height;
+    }
+
+    pub fn convert_and_readback(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source_texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        frame_number: u32,
+        frame_rate: u32,
+    ) -> Option<PendingNv12Readback> {
+        if width == 0 || height == 0 || width % 4 != 0 || height % 2 != 0 {
+            return None;
+        }
+
+        self.ensure_buffers(device, width, height);
+
+        let nv12_buffer = self.nv12_buffer.as_ref()?;
+        let readback_buffer = self.readback_buffer.as_ref()?.clone();
+
+        let y_stride = width;
+        let uv_stride = width;
+
+        let params = Nv12Params {
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        };
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
+
+        let source_view = source_texture.create_view(&Default::default());
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to NV12 Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: nv12_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("RGBA to NV12 Conversion"),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
+        }
+
+        let nv12_size = Self::nv12_size(width, height);
+        encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
+
+        let (tx, rx) = oneshot::channel();
+        readback_buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+
+        Some(PendingNv12Readback {
+            rx,
+            buffer: readback_buffer,
+            width,
+            height,
+            y_stride,
+            frame_number,
+            frame_rate,
+        })
+    }
+}
+
+pub struct PendingNv12Readback {
+    rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    buffer: Arc<wgpu::Buffer>,
+    pub width: u32,
+    pub height: u32,
+    pub y_stride: u32,
+    pub frame_number: u32,
+    pub frame_rate: u32,
+}
+
+impl PendingNv12Readback {
+    pub async fn wait(mut self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+        let mut poll_count = 0u32;
+        let start_time = Instant::now();
+        let timeout_duration = std::time::Duration::from_secs(GPU_BUFFER_WAIT_TIMEOUT_SECS);
+
+        loop {
+            if start_time.elapsed() > timeout_duration {
+                return Err(RenderingError::BufferMapWaitingFailed);
+            }
+
+            match self.rx.try_recv() {
+                Ok(result) => {
+                    result?;
+                    break;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    device.poll(wgpu::PollType::Poll)?;
+                    poll_count += 1;
+                    if poll_count < 10 {
+                        tokio::task::yield_now().await;
+                    } else if poll_count < 100 {
+                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    }
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    return Err(RenderingError::BufferMapWaitingFailed);
+                }
+            }
+        }
+
+        let buffer_slice = self.buffer.slice(..);
+        let data = buffer_slice.get_mapped_range();
+        let nv12_data = data.to_vec();
+
+        drop(data);
+        self.buffer.unmap();
+
+        let target_time_ns =
+            (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
+
+        Ok(Nv12RenderedFrame {
+            data: nv12_data,
+            width: self.width,
+            height: self.height,
+            y_stride: self.y_stride,
+            frame_number: self.frame_number,
+            target_time_ns,
+        })
+    }
+}
+
+pub struct Nv12RenderedFrame {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub y_stride: u32,
+    pub frame_number: u32,
+    pub target_time_ns: u64,
+}
+
 pub struct PendingReadback {
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
     buffer: Arc<wgpu::Buffer>,
