@@ -3456,6 +3456,33 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (socket dead render counter cleanup)
+
+**Goal**: Remove unused render counter state from socket transport hot paths to reduce bookkeeping overhead
+
+**What was done**:
+1. Removed unused `renderFrameCount` state from socket transport.
+2. Removed associated increments from direct render branches.
+3. Re-ran desktop typecheck and utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - removed `renderFrameCount` declaration
+  - removed direct-path increment sites that did not feed any stats output
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Socket hot path no longer updates unused render counter state.
+- ✅ Desktop typecheck and utility tests pass (30/30).
+
+**Stopping point**: Ready for continued direct-path tuning with leaner per-frame bookkeeping.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

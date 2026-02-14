@@ -361,7 +361,6 @@ export function createImageDataWS(
 			directCtx.putImageData(cachedStrideImageData, 0, 0);
 
 			actualRendersCount++;
-			renderFrameCount++;
 			storeRenderedFrame(cachedStrideImageData.data, width, height, width * 4);
 			onmessage({ width, height });
 		};
@@ -709,7 +708,6 @@ export function createImageDataWS(
 	let framesDropped = 0;
 	let framesSentToWorker = 0;
 	let actualRendersCount = 0;
-	let renderFrameCount = 0;
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
 
@@ -886,7 +884,6 @@ export function createImageDataWS(
 				strideBytes,
 			);
 			actualRendersCount++;
-			renderFrameCount++;
 			storeRenderedFrame(frameData, width, height, strideBytes);
 			lastDirectRenderedFrameNumber = frameNumber;
 			onmessage({ width, height });
@@ -927,7 +924,6 @@ export function createImageDataWS(
 					width * 4,
 				);
 				actualRendersCount++;
-				renderFrameCount++;
 				lastDirectRenderedFrameNumber = frameNumber;
 				onmessage({ width, height });
 			} else {
