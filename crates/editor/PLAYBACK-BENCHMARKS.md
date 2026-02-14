@@ -1197,6 +1197,24 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - baseline: `streaming (1 stream / 0 prerender)`
   - candidate: `prerendered (0 stream / 1 prerender)`
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Startup path selection events)
+
+**Environment:** Linux runner, startup report parser validation  
+**Commands:** `playback-startup-report --list-run-metrics --output-csv`  
+**Change under test:** startup report now consumes `audio_startup_path_streaming` / `audio_startup_path_prerendered` events even when callback events are missing
+
+#### Validation Dataset
+- Source log: `/workspace/tmp-startup-path-only.csv` (decoded/rendered + `audio_startup_path_prerendered`, no callback rows)
+- Export target: `/tmp/playback-startup-path-only.csv`
+
+#### Results
+- `list-run-metrics` output classified run as:
+  - `audio_path=prerendered stream_samples=0 prerender_samples=1`
+- CSV includes `run_metric_audio_path` row with:
+  - `audio_path=prerendered`
+  - `audio_stream_samples=0`
+  - `audio_prerender_samples=1`
+
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
 ---

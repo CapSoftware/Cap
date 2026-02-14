@@ -12,6 +12,8 @@ struct EventStats {
     render_startup_ms: Vec<f64>,
     audio_stream_startup_ms: Vec<f64>,
     audio_prerender_startup_ms: Vec<f64>,
+    audio_stream_path_selected_ms: Vec<f64>,
+    audio_prerender_path_selected_ms: Vec<f64>,
 }
 
 impl EventStats {
@@ -20,6 +22,8 @@ impl EventStats {
             + self.render_startup_ms.len()
             + self.audio_stream_startup_ms.len()
             + self.audio_prerender_startup_ms.len()
+            + self.audio_stream_path_selected_ms.len()
+            + self.audio_prerender_path_selected_ms.len()
     }
 }
 
@@ -183,6 +187,14 @@ fn parse_log(
                     stats.audio_prerender_startup_ms.push(startup_ms);
                     matched += 1;
                 }
+                "audio_startup_path_streaming" => {
+                    stats.audio_stream_path_selected_ms.push(startup_ms);
+                    matched += 1;
+                }
+                "audio_startup_path_prerendered" => {
+                    stats.audio_prerender_path_selected_ms.push(startup_ms);
+                    matched += 1;
+                }
                 _ => {}
             }
             continue;
@@ -207,6 +219,12 @@ fn parse_log(
             matched += 1;
         } else if line.contains("Audio pre-rendered callback started") {
             stats.audio_prerender_startup_ms.push(startup_ms);
+            matched += 1;
+        } else if line.contains("Audio startup path selected: streaming") {
+            stats.audio_stream_path_selected_ms.push(startup_ms);
+            matched += 1;
+        } else if line.contains("Audio startup path selected: prerendered") {
+            stats.audio_prerender_path_selected_ms.push(startup_ms);
             matched += 1;
         }
     }
@@ -260,6 +278,12 @@ fn collect_run_id_metrics(path: &PathBuf) -> Result<BTreeMap<String, EventStats>
                 "first_rendered_frame" => stats.render_startup_ms.push(startup_ms),
                 "audio_streaming_callback" => stats.audio_stream_startup_ms.push(startup_ms),
                 "audio_prerender_callback" => stats.audio_prerender_startup_ms.push(startup_ms),
+                "audio_startup_path_streaming" => {
+                    stats.audio_stream_path_selected_ms.push(startup_ms)
+                }
+                "audio_startup_path_prerendered" => {
+                    stats.audio_prerender_path_selected_ms.push(startup_ms)
+                }
                 _ => {}
             }
         }
@@ -288,8 +312,14 @@ enum AudioStartupPath {
 }
 
 fn detect_audio_startup_path(stats: &EventStats) -> (AudioStartupPath, usize, usize) {
-    let streaming_samples = stats.audio_stream_startup_ms.len();
-    let prerendered_samples = stats.audio_prerender_startup_ms.len();
+    let streaming_samples = stats
+        .audio_stream_startup_ms
+        .len()
+        .max(stats.audio_stream_path_selected_ms.len());
+    let prerendered_samples = stats
+        .audio_prerender_startup_ms
+        .len()
+        .max(stats.audio_prerender_path_selected_ms.len());
 
     let path = match (streaming_samples > 0, prerendered_samples > 0) {
         (true, true) => AudioStartupPath::Mixed,
@@ -687,6 +717,12 @@ fn main() {
                             entry
                                 .audio_prerender_startup_ms
                                 .extend(stats.audio_prerender_startup_ms);
+                            entry
+                                .audio_stream_path_selected_ms
+                                .extend(stats.audio_stream_path_selected_ms);
+                            entry
+                                .audio_prerender_path_selected_ms
+                                .extend(stats.audio_prerender_path_selected_ms);
                         }
                     }
                     Err(error) => {
@@ -1110,7 +1146,9 @@ mod tests {
         let contents = [
             "1739530000000,first_decoded_frame,100.0,1,run-a",
             "1739530000001,first_rendered_frame,120.0,1,run-a",
+            "1739530000002,audio_startup_path_streaming,121.0,1,run-a",
             "1739530000002,first_decoded_frame,80.0,1,run-b",
+            "1739530000003,audio_startup_path_prerendered,90.0,1,run-b",
         ]
         .join("\n");
         fs::write(&path, contents).expect("write startup csv");
@@ -1128,6 +1166,18 @@ mod tests {
                 .get("run-b")
                 .map(|stats| stats.decode_startup_ms.clone()),
             Some(vec![80.0])
+        );
+        assert_eq!(
+            metrics
+                .get("run-a")
+                .map(|stats| stats.audio_stream_path_selected_ms.clone()),
+            Some(vec![121.0])
+        );
+        assert_eq!(
+            metrics
+                .get("run-b")
+                .map(|stats| stats.audio_prerender_path_selected_ms.clone()),
+            Some(vec![90.0])
         );
 
         let _ = fs::remove_file(path);

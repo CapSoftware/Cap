@@ -3287,6 +3287,51 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (startup path selection trace event plumbing)
+
+**Goal**: Ensure startup audio mode classification still works when callback startup events are absent but explicit path-selection events are present
+
+**What was done**:
+1. Added explicit startup trace events for selected audio startup path in playback runtime.
+2. Extended startup report parser to ingest selected-path events.
+3. Updated audio-path detection to fall back to selected-path counts when callback counts are missing.
+4. Fixed run-metrics aggregation to merge selected-path vectors across logs.
+5. Added test coverage for selected-path event parsing in run-id metrics.
+6. Validated parser behavior on a path-selection-only sample trace.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - records startup trace events at stream selection:
+    - `audio_startup_path_streaming`
+    - `audio_startup_path_prerendered`
+  - logs selected audio startup mode with startup timing
+- `crates/editor/examples/playback-startup-report.rs`
+  - `EventStats` now stores:
+    - `audio_stream_path_selected_ms`
+    - `audio_prerender_path_selected_ms`
+  - parser now maps new startup path events from CSV and structured log lines
+  - run-metrics aggregation now merges selected-path vectors
+  - `detect_audio_startup_path` now uses callback counts with selected-path fallback
+  - tests extended in `collects_run_id_metrics` for selected-path events
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added validation run entry for path-selection-only startup logs
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 check -p cap-editor`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --max-frames 120 --seek-iterations 4`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/tmp-startup-path-only.csv --list-run-metrics --output-csv /tmp/playback-startup-path-only.csv`
+
+**Results**:
+- ✅ Startup classification now reports prerender/streaming mode from explicit path-selection events even without callback samples.
+- ✅ Path-selection event aggregation across logs is now correct in run-metrics mode.
+- ✅ Startup report tests pass (11/11) and editor crate check remains green.
+
+**Stopping point**: Ready for macOS/Windows traces to verify selected startup mode immediately from trace events before waiting for callback evidence.
+
+---
+
 ### Session 2026-02-14 (startup capture docs for pre-render override)
 
 **Goal**: Make A/B startup capture workflow explicit for streaming-first vs forced pre-render audio startup comparisons

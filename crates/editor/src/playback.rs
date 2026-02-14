@@ -881,6 +881,12 @@ impl AudioPlayback {
             let duration_secs = self.duration_secs;
             let force_prerender = env_flag_enabled("CAP_AUDIO_PRERENDER_ONLY");
 
+            #[derive(Clone, Copy)]
+            enum AudioStartupMode {
+                Streaming,
+                Prerendered,
+            }
+
             macro_rules! create_audio_stream {
                 ($sample_ty:ty, $startup:expr) => {{
                     let fallback = self.clone();
@@ -891,12 +897,16 @@ impl AudioPlayback {
                             duration_secs,
                             $startup,
                         )
+                        .map(|(stop_rx, stream)| {
+                            (stop_rx, stream, AudioStartupMode::Prerendered)
+                        })
                     } else {
                         self.create_stream::<$sample_ty>(
                             device.clone(),
                             supported_config.clone(),
                             $startup,
                         )
+                        .map(|(stop_rx, stream)| (stop_rx, stream, AudioStartupMode::Streaming))
                             .or_else(|err| {
                                 warn!(
                                     error = %err,
@@ -908,6 +918,9 @@ impl AudioPlayback {
                                     duration_secs,
                                     $startup,
                                 )
+                                .map(|(stop_rx, stream)| {
+                                    (stop_rx, stream, AudioStartupMode::Prerendered)
+                                })
                             })
                     }
                 }};
@@ -929,7 +942,7 @@ impl AudioPlayback {
                 }
             };
 
-            let (mut stop_rx, stream) = match result {
+            let (mut stop_rx, stream, startup_mode) = match result {
                 Ok(s) => s,
                 Err(e) => {
                     error!(
@@ -939,6 +952,18 @@ impl AudioPlayback {
                     return;
                 }
             };
+
+            let startup_ms = startup_instant.elapsed().as_secs_f64() * 1000.0;
+            match startup_mode {
+                AudioStartupMode::Streaming => {
+                    info!(startup_ms, "Audio startup path selected: streaming");
+                    record_startup_trace("audio_startup_path_streaming", startup_ms, None);
+                }
+                AudioStartupMode::Prerendered => {
+                    info!(startup_ms, "Audio startup path selected: prerendered");
+                    record_startup_trace("audio_startup_path_prerendered", startup_ms, None);
+                }
+            }
 
             if let Err(e) = stream.play() {
                 error!(
