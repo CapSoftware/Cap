@@ -1225,6 +1225,34 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Rejected adaptive FFmpeg seek-window scaling)
+
+**Goal**: Improve long forward seek behavior by scaling preferred FFmpeg seek windows based on seek distance
+
+**What was done**:
+1. Implemented adaptive forward/backtrack window scaling in `cap-video-decode` FFmpeg reset path.
+2. Ran full decode/playback regression benchmarks on synthetic 1080p60 and 4k60 assets.
+3. Reverted the code change after evaluating seek-tail regressions.
+
+**Verification**:
+- `cargo +1.88.0 check -p cap-editor`
+- `cargo +1.88.0 run -p cap-editor --example decode-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --seek-iterations 10`
+- `cargo +1.88.0 run -p cap-editor --example decode-benchmark -- --video /tmp/cap-bench-4k60.mp4 --fps 60 --seek-iterations 10`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --max-frames 240 --seek-iterations 10`
+- `cargo +1.88.0 run -p cap-editor --example playback-benchmark -- --video /tmp/cap-bench-4k60.mp4 --fps 60 --max-frames 240 --seek-iterations 10`
+
+**Results**:
+- ❌ Long-distance 4k seek metrics regressed:
+  - decode 5.0s seek avg/p95: **1068.25 / 1734.44ms**
+  - playback 5.0s seek avg/p95: **1007.51 / 1663.69ms**
+- ✅ Playback throughput remained near 60fps, but seek-tail regression failed acceptance criteria.
+
+**Decision**: keep current FFmpeg seek-window defaults and reject adaptive scaling variant.
+
+**Stopping point**: continue seek-latency improvements through other decoder strategies; this adaptive window variant is closed.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

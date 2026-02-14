@@ -496,6 +496,40 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - `cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --baseline-label linux-pass-a --candidate-label linux-pass-b --output-csv /tmp/cap-playback-summary.csv`
 - Unit tests: **5 passed** (`parses_sequential_csv_line`, `parses_seek_csv_line`, `summarizes_sequential_and_seek_medians`, `groups_rows_by_label_and_video`, `writes_summary_and_delta_csv_rows`).
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (rejected adaptive FFmpeg seek-window scaling)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `decode-benchmark --seek-iterations 10`, `playback-benchmark --seek-iterations 10`  
+**Change under test:** adaptive preferred seek window scaling based on forward seek distance in `cap-video-decode` FFmpeg reset path
+
+#### Decode benchmark results
+- 1080p:
+  - seek avg/p95:
+    - 0.5s: **47.42 / 93.91ms**
+    - 1.0s: **72.91 / 158.23ms**
+    - 2.0s: **163.64 / 370.53ms**
+    - 5.0s: **232.74 / 371.60ms**
+  - random access avg/p95: **115.74 / 343.67ms**
+- 4k:
+  - seek avg/p95:
+    - 0.5s: **191.74 / 382.95ms**
+    - 1.0s: **322.25 / 621.32ms**
+    - 2.0s: **606.82 / 1445.27ms**
+    - 5.0s: **1068.25 / 1734.44ms**
+  - random access avg/p95: **486.56 / 1407.30ms**
+
+#### Playback throughput regression checks
+- 1080p: **60.23 fps**, missed deadlines **0**
+- 4k: **60.15 fps**, missed deadlines **1**
+- 4k seek avg/p95:
+  - 0.5s: **208.79 / 365.07ms**
+  - 1.0s: **362.89 / 734.88ms**
+  - 2.0s: **621.30 / 1482.17ms**
+  - 5.0s: **1007.51 / 1663.69ms**
+
+#### Decision
+- Rejected. While throughput remained ~60fps, long-distance seek tails regressed compared with the current default seek-window profile.
+
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
 **Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
