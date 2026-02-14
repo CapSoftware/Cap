@@ -5,7 +5,7 @@ use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderingError};
 
-const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 30;
+const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 
 pub struct PendingReadback {
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
@@ -43,8 +43,12 @@ impl PendingReadback {
                 Err(oneshot::error::TryRecvError::Empty) => {
                     device.poll(wgpu::PollType::Poll)?;
                     poll_count += 1;
-                    if poll_count.is_multiple_of(3) {
+                    if poll_count < 10 {
                         tokio::task::yield_now().await;
+                    } else if poll_count < 100 {
+                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                     }
                     if poll_count.is_multiple_of(10000) {
                         tracing::warn!(
