@@ -72,7 +72,7 @@
 ### Active Work Items
 *(Update this section as you work)*
 
-- [ ] **Capture audio startup latency before/after** - Validate streaming audio path startup behavior against prior path
+- [ ] **Capture audio startup latency before/after** - Use new playback log metrics (`Audio streaming callback started`) to validate startup on macOS/Windows
 - [ ] **Tune medium/long seek latency** - Reduce 2s+ seek spikes visible in decode and playback benchmarks
 - [ ] **Run full desktop editor validation on macOS + Windows** - Confirm in-app FPS and A/V behavior on target platforms
 
@@ -387,6 +387,30 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - Long 5.0s seek latency is still elevated on 4k and remains an active tuning target
 
 **Stopping point**: Keep current seek tuning; next focus is long-seek (5s+) latency and real desktop A/V startup measurements.
+
+---
+
+### Session 2026-02-14 (Audio startup instrumentation)
+
+**Goal**: Add measurable startup telemetry for audio output callback timing
+
+**What was done**:
+1. Instrumented audio output callback startup in both streaming and pre-rendered playback paths
+2. Added one-time startup latency logs from playback start thread spawn to first output callback invocation
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - Added startup timing capture in `AudioPlayback::spawn`
+  - Logs:
+    - `Audio streaming callback started`
+    - `Audio pre-rendered callback started`
+  - Includes startup latency in milliseconds
+
+**Results**:
+- No compile regressions in `cap-editor`
+- Playback now has explicit, low-overhead startup latency telemetry for validating user-reported delayed audio start
+
+**Stopping point**: Run this instrumentation on macOS and Windows editor sessions to collect before/after startup latency evidence.
 
 ---
 
