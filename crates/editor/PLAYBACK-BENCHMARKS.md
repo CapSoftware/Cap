@@ -65,6 +65,9 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 
 # Increase seek sampling per distance for more stable tails
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --seek-iterations 20
+
+# Includes duplicate-request burst stats (burst sizes 4/8/16) by default
+cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60
 ```
 
 #### Playback Throughput Benchmark (Linux-compatible)
@@ -365,6 +368,40 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - 1.0s: **332.09 / 662.63 / 662.63ms**
   - 2.0s: **584.79 / 1411.56 / 1411.56ms**
   - 5.0s: **1012.17 / 1722.61 / 1722.61ms**
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Duplicate burst metric stabilization)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `decode-benchmark --seek-iterations 10`  
+**Change under test:** duplicate-request burst benchmark now includes warmup seek to remove first-request cold-start distortion
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **7.31ms**
+- Sequential decode: **392.4 fps**, avg **2.55ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **45.99 / 87.99 / 87.99ms**
+  - 1.0s: **69.52 / 146.76 / 146.76ms**
+  - 2.0s: **148.12 / 359.00 / 359.00ms**
+  - 5.0s: **231.81 / 375.66 / 375.66ms**
+- Random access: avg **115.46ms**, p95 **352.45ms**, p99 **378.86ms**
+- Duplicate burst batch avg / p95:
+  - burst 4: **3.68 / 3.84ms**
+  - burst 8: **3.68 / 3.74ms**
+  - burst 16: **2.33 / 3.69ms**
+
+#### Decode Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Decoder init: **30.03ms**
+- Sequential decode: **94.3 fps**, avg **10.61ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **188.28 / 356.06 / 356.06ms**
+  - 1.0s: **337.66 / 681.87 / 681.87ms**
+  - 2.0s: **635.27 / 1455.41 / 1455.41ms**
+  - 5.0s: **922.75 / 1510.31 / 1510.31ms**
+- Random access: avg **527.08ms**, p95 **1481.91ms**, p99 **1649.11ms**
+- Duplicate burst batch avg / p95:
+  - burst 4: **21.25 / 21.98ms**
+  - burst 8: **21.76 / 21.95ms**
+  - burst 16: **16.89 / 21.72ms**
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

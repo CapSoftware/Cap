@@ -622,6 +622,33 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Duplicate burst benchmark signal hardening)
+
+**Goal**: Stabilize duplicate-request benchmark signal for evaluating coalescing behavior
+
+**What was done**:
+1. Extended `decode-benchmark` with an explicit duplicate-request burst section (burst sizes 4/8/16).
+2. Added warmup frame fetch before burst sampling to remove cold-start outlier distortion.
+3. Re-ran 1080p and 4k decode benchmarks with hardened seek sampling and burst metrics.
+
+**Changes Made**:
+- `crates/editor/examples/decode-benchmark.rs`
+  - added duplicate burst metric table output
+  - added burst warmup call prior to timing iterations
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - recorded stabilized duplicate burst metrics and updated decode-benchmark command notes
+
+**Results**:
+- ✅ Duplicate burst metrics now stable and interpretable:
+  - 1080p burst batch p95: **~3.7–3.8ms**
+  - 4k burst batch p95: **~21.7–22.0ms**
+- ✅ No failures in duplicate burst requests across tested burst sizes.
+- ✅ Existing throughput and seek-tail profile remained consistent with recent runs.
+
+**Stopping point**: duplicate burst metric is now productionized for ongoing coalescing validation; remaining performance gap is still long-distance 4k seek tails.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

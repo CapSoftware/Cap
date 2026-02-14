@@ -1,4 +1,5 @@
 use cap_rendering::decoder::{AsyncVideoDecoderHandle, spawn_decoder};
+use futures::future::join_all;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -58,6 +59,9 @@ struct BenchmarkResults {
     random_access_times_ms: Vec<f64>,
     random_access_avg_ms: f64,
     random_access_failures: usize,
+    duplicate_burst_batch_ms: Vec<(usize, Vec<f64>)>,
+    duplicate_burst_request_ms: Vec<(usize, Vec<f64>)>,
+    duplicate_burst_failures: Vec<(usize, usize)>,
     cache_hits: usize,
     cache_misses: usize,
 }
@@ -184,6 +188,65 @@ impl BenchmarkResults {
                 "  P99: {:.2}ms",
                 percentile(&self.random_access_times_ms, 99.0)
             );
+        }
+        println!();
+
+        println!("DUPLICATE REQUEST BURST");
+        if !self.duplicate_burst_batch_ms.is_empty() {
+            println!(
+                "  {:>10} | {:>12} | {:>12} | {:>12} | {:>12} | {:>8}",
+                "Burst Size",
+                "BatchAvg(ms)",
+                "BatchP95(ms)",
+                "ReqAvg(ms)",
+                "ReqP95(ms)",
+                "Failures"
+            );
+            println!(
+                "  {}-+-{}-+-{}-+-{}-+-{}-+-{}",
+                "-".repeat(10),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(12),
+                "-".repeat(8)
+            );
+
+            for (burst_size, batch_samples) in &self.duplicate_burst_batch_ms {
+                let request_samples = self
+                    .duplicate_burst_request_ms
+                    .iter()
+                    .find(|(size, _)| size == burst_size)
+                    .map(|(_, samples)| samples.as_slice())
+                    .unwrap_or(&[]);
+                let failures = self
+                    .duplicate_burst_failures
+                    .iter()
+                    .find(|(size, _)| size == burst_size)
+                    .map(|(_, failures)| *failures)
+                    .unwrap_or(0);
+
+                let batch_avg = if batch_samples.is_empty() {
+                    0.0
+                } else {
+                    batch_samples.iter().sum::<f64>() / batch_samples.len() as f64
+                };
+                let req_avg = if request_samples.is_empty() {
+                    0.0
+                } else {
+                    request_samples.iter().sum::<f64>() / request_samples.len() as f64
+                };
+
+                println!(
+                    "  {:>10} | {:>12.2} | {:>12.2} | {:>12.2} | {:>12.2} | {:>8}",
+                    burst_size,
+                    batch_avg,
+                    percentile(batch_samples, 95.0),
+                    req_avg,
+                    percentile(request_samples, 95.0),
+                    failures
+                );
+            }
         }
         println!();
 
@@ -334,6 +397,41 @@ async fn benchmark_random_access(
     (times, failures)
 }
 
+async fn benchmark_duplicate_burst(
+    decoder: &AsyncVideoDecoderHandle,
+    burst_size: usize,
+    iterations: usize,
+    target_time: f32,
+) -> (Vec<f64>, Vec<f64>, usize) {
+    let mut batch_samples_ms = Vec::with_capacity(iterations);
+    let mut request_samples_ms = Vec::with_capacity(iterations.saturating_mul(burst_size));
+    let mut failures = 0usize;
+
+    let _ = decoder.get_frame(target_time).await;
+
+    for _ in 0..iterations {
+        let batch_start = Instant::now();
+        let requests = (0..burst_size).map(|_| async {
+            let request_start = Instant::now();
+            let decoded = decoder.get_frame(target_time).await.is_some();
+            let request_ms = request_start.elapsed().as_secs_f64() * 1000.0;
+            (decoded, request_ms)
+        });
+
+        let results = join_all(requests).await;
+        batch_samples_ms.push(batch_start.elapsed().as_secs_f64() * 1000.0);
+
+        for (decoded, request_ms) in results {
+            request_samples_ms.push(request_ms);
+            if !decoded {
+                failures = failures.saturating_add(1);
+            }
+        }
+    }
+
+    (batch_samples_ms, request_samples_ms, failures)
+}
+
 async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     let mut results = BenchmarkResults::default();
 
@@ -442,6 +540,36 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     println!("      Done: {:.2}ms avg", results.random_access_avg_ms);
     if random_failures > 0 {
         println!("      Warning: {random_failures} random accesses failed");
+    }
+
+    println!("[Extra] Benchmarking duplicate request burst handling...");
+    let burst_target = (video_duration * 0.75).min(video_duration - 0.01).max(0.0);
+    for burst_size in [4usize, 8usize, 16usize] {
+        let (batch_samples, request_samples, failures) =
+            benchmark_duplicate_burst(&decoder, burst_size, 10, burst_target).await;
+        let batch_avg = if batch_samples.is_empty() {
+            0.0
+        } else {
+            batch_samples.iter().sum::<f64>() / batch_samples.len() as f64
+        };
+        let request_avg = if request_samples.is_empty() {
+            0.0
+        } else {
+            request_samples.iter().sum::<f64>() / request_samples.len() as f64
+        };
+        println!(
+            "      burst={burst_size}: batch avg {batch_avg:.2}ms, req avg {request_avg:.2}ms, failures {failures}"
+        );
+
+        results
+            .duplicate_burst_batch_ms
+            .push((burst_size, batch_samples));
+        results
+            .duplicate_burst_request_ms
+            .push((burst_size, request_samples));
+        results
+            .duplicate_burst_failures
+            .push((burst_size, failures));
     }
 
     results
