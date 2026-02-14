@@ -129,6 +129,7 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 | `crates/audio/src/lib.rs` | AudioData loading and sync analysis |
 | `crates/recording/examples/playback-test-runner.rs` | Playback benchmark runner |
 | `crates/editor/examples/playback-benchmark.rs` | Linux-compatible playback throughput benchmark |
+| `crates/editor/examples/scrub-benchmark.rs` | Scrub burst latency benchmark |
 
 ---
 
@@ -676,6 +677,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - ✅ Benchmark now exposes scrub-specific latency that decode/playback sequential tests do not capture.
 
 **Stopping point**: next optimization pass should target reducing last-request-in-burst latency (especially 4k) and use scrub-benchmark plus seek-iteration benchmarks as acceptance gates.
+
+---
+
+### Session 2026-02-14 (Decoder scrub supersession heuristic)
+
+**Goal**: Reduce latest-request latency during wide-span scrub bursts without breaking throughput
+
+**What was done**:
+1. Added a burst supersession heuristic in FFmpeg decoder request batching:
+   - when request queue is large and frame span is wide, collapse batch to the newest request target while fanning responses to waiting receivers.
+2. Applied heuristic to both software and hardware FFmpeg decoder paths.
+3. Re-ran scrub, decode, and playback benchmarks for validation.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - request metadata now tracks enqueue order
+  - added `maybe_supersede_scrub_burst` to collapse large-span batches to newest target
+  - retained same-frame coalescing and response fan-out
+
+**Results**:
+- ✅ Scrub burst latency improved materially for 4k:
+  - last-request avg: **1524ms -> 870ms**
+  - all-request avg: **1072ms -> 834ms**
+  - last-request p95: **2116ms -> 1941ms**
+- ✅ 1080p scrub average improved:
+  - last-request avg: **313ms -> 221ms**
+- ⚠️ 1080p scrub tail widened in this pass (p95/p99), so heuristic still needs refinement for consistency.
+- ✅ Throughput remains ~60fps in playback benchmark:
+  - 1080p: **60.23 fps**
+  - 4k: **60.16 fps**
+
+**Stopping point**: heuristic improves 4k scrub responsiveness but has mixed 1080p tail behavior; next iteration should preserve 4k gains while tightening 1080p scrub p95/p99.
 
 ---
 

@@ -68,6 +68,7 @@ struct PendingRequest {
     frame: u32,
     reply: oneshot::Sender<DecodedFrame>,
     additional_replies: Vec<oneshot::Sender<DecodedFrame>>,
+    order: u64,
 }
 
 fn send_to_replies(
@@ -81,6 +82,47 @@ fn send_to_replies(
             log::warn!("FFmpeg '{name}': Failed to send frame {frame_number}: receiver dropped");
         }
     }
+}
+
+fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>) {
+    const SCRUB_SUPERSEDE_MIN_REQUESTS: usize = 8;
+
+    if pending_requests.len() < SCRUB_SUPERSEDE_MIN_REQUESTS {
+        return;
+    }
+
+    let min_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .min()
+        .unwrap_or(0);
+    let max_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .max()
+        .unwrap_or(0);
+
+    if max_frame.saturating_sub(min_frame) <= (FRAME_CACHE_SIZE as u32 / 2) {
+        return;
+    }
+
+    let Some(latest_index) = pending_requests
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, request)| request.order)
+        .map(|(index, _)| index)
+    else {
+        return;
+    };
+
+    let mut collapsed = pending_requests.swap_remove(latest_index);
+    for request in pending_requests.drain(..) {
+        collapsed.additional_replies.push(request.reply);
+        collapsed
+            .additional_replies
+            .extend(request.additional_replies);
+    }
+    pending_requests.push(collapsed);
 }
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
@@ -317,6 +359,7 @@ impl FfmpegDecoder {
                     const MAX_FRAME_TOLERANCE: u32 = 2;
 
                     let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+                    let mut request_order = 0u64;
                     let mut push_request =
                         |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
                             if reply.is_closed() {
@@ -325,18 +368,22 @@ impl FfmpegDecoder {
 
                             let requested_time = requested_time.max(0.0);
                             let requested_frame = (requested_time * fps as f32).floor() as u32;
+                            let current_order = request_order;
+                            request_order = request_order.saturating_add(1);
 
                             if let Some(existing) = pending_requests
                                 .iter_mut()
                                 .find(|r| r.frame == requested_frame)
                             {
                                 existing.additional_replies.push(reply);
+                                existing.order = current_order;
                             } else {
                                 pending_requests.push(PendingRequest {
                                     time: requested_time,
                                     frame: requested_frame,
                                     reply,
                                     additional_replies: Vec::new(),
+                                    order: current_order,
                                 });
                             }
                         };
@@ -355,6 +402,7 @@ impl FfmpegDecoder {
                         }
                     }
 
+                    maybe_supersede_scrub_burst(&mut pending_requests);
                     pending_requests.sort_by_key(|r| r.frame);
 
                     for PendingRequest {
@@ -362,6 +410,7 @@ impl FfmpegDecoder {
                         frame: requested_frame,
                         reply,
                         additional_replies,
+                        ..
                     } in pending_requests
                     {
                         let mut replies = Vec::with_capacity(1 + additional_replies.len());
@@ -651,6 +700,7 @@ impl FfmpegDecoder {
                 const MAX_FRAME_TOLERANCE: u32 = 2;
 
                 let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+                let mut request_order = 0u64;
                 let mut push_request =
                     |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
                         if reply.is_closed() {
@@ -659,18 +709,22 @@ impl FfmpegDecoder {
 
                         let requested_time = requested_time.max(0.0);
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        let current_order = request_order;
+                        request_order = request_order.saturating_add(1);
 
                         if let Some(existing) = pending_requests
                             .iter_mut()
                             .find(|r| r.frame == requested_frame)
                         {
                             existing.additional_replies.push(reply);
+                            existing.order = current_order;
                         } else {
                             pending_requests.push(PendingRequest {
                                 time: requested_time,
                                 frame: requested_frame,
                                 reply,
                                 additional_replies: Vec::new(),
+                                order: current_order,
                             });
                         }
                     };
@@ -689,6 +743,7 @@ impl FfmpegDecoder {
                     }
                 }
 
+                maybe_supersede_scrub_burst(&mut pending_requests);
                 pending_requests.sort_by_key(|r| r.frame);
 
                 for PendingRequest {
@@ -696,6 +751,7 @@ impl FfmpegDecoder {
                     frame: requested_frame,
                     reply,
                     additional_replies,
+                    ..
                 } in pending_requests
                 {
                     let mut replies = Vec::with_capacity(1 + additional_replies.len());
