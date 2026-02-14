@@ -649,6 +649,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Scrub burst benchmark baseline)
+
+**Goal**: Add direct scrub-queue stress evidence for latest-request latency
+
+**What was done**:
+1. Added `scrub-benchmark` example that issues bursty decoder requests over a configurable sweep window.
+2. Captured two key metrics:
+   - all-request latency distribution
+   - last-request-in-burst latency distribution
+3. Ran 1080p and 4k baseline passes with 20 bursts × 12 requests.
+
+**Changes Made**:
+- `crates/editor/examples/scrub-benchmark.rs`
+  - new benchmark for scrub queue stress behavior
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added command usage and baseline results for scrub burst runs
+
+**Results**:
+- 1080p scrub burst:
+  - all-request avg **217.97ms**, p95 **434.83ms**
+  - last-request avg **312.50ms**, p95 **455.72ms**
+- 4k scrub burst:
+  - all-request avg **1071.64ms**, p95 **2098.98ms**
+  - last-request avg **1524.00ms**, p95 **2116.35ms**
+- ✅ Benchmark now exposes scrub-specific latency that decode/playback sequential tests do not capture.
+
+**Stopping point**: next optimization pass should target reducing last-request-in-burst latency (especially 4k) and use scrub-benchmark plus seek-iteration benchmarks as acceptance gates.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

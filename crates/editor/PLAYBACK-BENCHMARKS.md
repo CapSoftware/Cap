@@ -83,6 +83,13 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600 --seek-iterations 20
 ```
 
+#### Scrub Burst Benchmark (queue stress)
+
+```bash
+# Simulate rapid scrub bursts and track latest-request latency
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 20 --burst-size 12 --sweep-seconds 2.0
+```
+
 #### Playback Startup Latency Report (log analysis)
 
 ```bash
@@ -402,6 +409,22 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - burst 4: **21.25 / 21.98ms**
   - burst 8: **21.76 / 21.95ms**
   - burst 16: **16.89 / 21.72ms**
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Scrub burst queue stress baseline)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Command:** `scrub-benchmark --bursts 20 --burst-size 12 --sweep-seconds 2.0`  
+**Goal:** measure latest-request latency under rapid scrub-like request bursts
+
+#### Scrub Burst Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Requests: **240 success / 0 failures**
+- All-request latency: avg **217.97ms**, p95 **434.83ms**, p99 **455.72ms**, max **461.85ms**
+- Last-request-in-burst latency: avg **312.50ms**, p95 **455.72ms**, p99 **461.85ms**, max **461.85ms**
+
+#### Scrub Burst Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Requests: **240 success / 0 failures**
+- All-request latency: avg **1071.64ms**, p95 **2098.98ms**, p99 **2204.29ms**, max **2204.29ms**
+- Last-request-in-burst latency: avg **1524.00ms**, p95 **2116.35ms**, p99 **2204.29ms**, max **2204.29ms**
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
