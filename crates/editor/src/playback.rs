@@ -836,6 +836,10 @@ impl Playback {
                                 }
                             }
                         } else if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
+                            if seek_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
+
                             send_watch_u32_if_changed(&frame_request_tx, frame_number);
 
                             let wait_result =
@@ -867,11 +871,18 @@ impl Playback {
                                     continue;
                                 }
                             } else {
+                                if seek_rx.has_changed().unwrap_or(false) {
+                                    continue;
+                                }
                                 frame_number = frame_number.saturating_add(1);
                                 total_frames_skipped += 1;
                                 continue;
                             }
                         } else {
+                            if seek_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
+
                             let Some((segment_time, segment)) =
                                 cached_project.get_segment_time(playback_time)
                             else {
