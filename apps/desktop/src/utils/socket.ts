@@ -226,6 +226,7 @@ export function createImageDataWS(
 	let mainThreadWebGPU: WebGPURenderer | null = null;
 	let mainThreadWebGPUInitializing = false;
 	let latestQueuedFrameNumber: number | null = null;
+	let latestDirectAcceptedFrameNumber: number | null = null;
 	let lastDirectRenderedFrameNumber: number | null = null;
 
 	let lastRenderedFrameData: {
@@ -287,6 +288,7 @@ export function createImageDataWS(
 		queuedOutOfOrderDropsWindow = 0;
 		directOutOfOrderDropsWindow = 0;
 		latestQueuedFrameNumber = null;
+		latestDirectAcceptedFrameNumber = null;
 		lastDirectRenderedFrameNumber = null;
 
 		if (mainThreadWebGPU) {
@@ -325,6 +327,7 @@ export function createImageDataWS(
 				directCtx = null;
 				mainThreadWebGPUInitializing = false;
 				latestQueuedFrameNumber = null;
+				latestDirectAcceptedFrameNumber = null;
 				lastDirectRenderedFrameNumber = null;
 			}
 
@@ -360,7 +363,20 @@ export function createImageDataWS(
 			strideWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
 				if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
 
-				const { buffer, width, height } = e.data;
+				const { buffer, width, height, frameNumber } = e.data;
+				const responseOrderDecision = decideFrameOrder(
+					frameNumber,
+					lastDirectRenderedFrameNumber,
+					FRAME_ORDER_STALE_WINDOW,
+				);
+				if (responseOrderDecision.action === "drop") {
+					directOutOfOrderDropsTotal += responseOrderDecision.dropsIncrement;
+					directOutOfOrderDropsWindow += responseOrderDecision.dropsIncrement;
+					return;
+				}
+				lastDirectRenderedFrameNumber =
+					responseOrderDecision.nextLatestFrameNumber;
+
 				if (directCanvas.width !== width || directCanvas.height !== height) {
 					directCanvas.width = width;
 					directCanvas.height = height;
@@ -390,6 +406,7 @@ export function createImageDataWS(
 		},
 		resetFrameState: () => {
 			latestQueuedFrameNumber = null;
+			latestDirectAcceptedFrameNumber = null;
 			lastDirectRenderedFrameNumber = null;
 			worker.postMessage({ type: "reset-frame-state" });
 		},
@@ -775,6 +792,8 @@ export function createImageDataWS(
 			directCanvas && (mainThreadWebGPU || (directCtx && strideWorker)),
 		);
 		if (!shouldRenderDirect) {
+			latestDirectAcceptedFrameNumber = null;
+			lastDirectRenderedFrameNumber = null;
 			enqueueFrameBuffer(buffer);
 			return;
 		}
@@ -805,7 +824,7 @@ export function createImageDataWS(
 
 		const directOrderDecision = decideFrameOrder(
 			frameNumber,
-			lastDirectRenderedFrameNumber,
+			latestDirectAcceptedFrameNumber,
 			FRAME_ORDER_STALE_WINDOW,
 		);
 		if (directOrderDecision.action === "drop") {
@@ -813,7 +832,7 @@ export function createImageDataWS(
 			directOutOfOrderDropsWindow += directOrderDecision.dropsIncrement;
 			return;
 		}
-		lastDirectRenderedFrameNumber = directOrderDecision.nextLatestFrameNumber;
+		latestDirectAcceptedFrameNumber = directOrderDecision.nextLatestFrameNumber;
 
 		if (mainThreadWebGPU && directCanvas) {
 			const frameData = new Uint8ClampedArray(buffer, 0, frameDataSize);
@@ -833,6 +852,7 @@ export function createImageDataWS(
 			actualRendersCount++;
 			renderFrameCount++;
 			storeRenderedFrame(frameData, width, height, strideBytes);
+			lastDirectRenderedFrameNumber = frameNumber;
 			onmessage({ width, height });
 			return;
 		}
@@ -872,6 +892,7 @@ export function createImageDataWS(
 				);
 				actualRendersCount++;
 				renderFrameCount++;
+				lastDirectRenderedFrameNumber = frameNumber;
 				onmessage({ width, height });
 			} else {
 				strideWorker.postMessage(
@@ -881,6 +902,7 @@ export function createImageDataWS(
 						strideBytes,
 						width,
 						height,
+						frameNumber,
 					},
 					[buffer],
 				);

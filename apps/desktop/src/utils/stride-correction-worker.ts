@@ -4,6 +4,7 @@ interface StrideCorrectionRequest {
 	strideBytes: number;
 	width: number;
 	height: number;
+	frameNumber: number;
 }
 
 interface StrideCorrectionResponse {
@@ -11,6 +12,7 @@ interface StrideCorrectionResponse {
 	buffer: ArrayBuffer;
 	width: number;
 	height: number;
+	frameNumber: number;
 }
 
 interface ErrorResponse {
@@ -24,7 +26,7 @@ let correctionBufferSize = 0;
 self.onmessage = (e: MessageEvent<StrideCorrectionRequest>) => {
 	if (e.data.type !== "correct-stride") return;
 
-	const { buffer, strideBytes, width, height } = e.data;
+	const { buffer, strideBytes, width, height, frameNumber } = e.data;
 	const expectedRowBytes = width * 4;
 	const expectedLength = expectedRowBytes * height;
 
@@ -49,6 +51,7 @@ self.onmessage = (e: MessageEvent<StrideCorrectionRequest>) => {
 		buffer: result.buffer,
 		width,
 		height,
+		frameNumber,
 	};
 	self.postMessage(response, { transfer: [result.buffer] });
 };

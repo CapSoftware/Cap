@@ -3044,6 +3044,43 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (stride-correction response frame-order guard)
+
+**Goal**: Prevent asynchronous stride-correction worker responses from rendering stale direct-path frames out of order
+
+**What was done**:
+1. Added frame-number payload to stride correction request/response messages.
+2. Split direct-path ordering state into accepted-frame and rendered-frame trackers.
+3. Added response-time stale-order checks before applying corrected stride frames.
+4. Reset direct ordering trackers when direct rendering is unavailable or frame state resets.
+5. Re-ran desktop typecheck and transport utility test suite.
+
+**Changes Made**:
+- `apps/desktop/src/utils/stride-correction-worker.ts`
+  - request/response contracts now include `frameNumber`
+  - corrected responses echo originating frame number
+- `apps/desktop/src/utils/socket.ts`
+  - added `latestDirectAcceptedFrameNumber` tracker for ingress ordering decisions
+  - retained `lastDirectRenderedFrameNumber` for render completion ordering decisions
+  - direct ingress stale gating now compares against accepted tracker
+  - stride-correction response handler now compares response `frameNumber` against rendered tracker and drops stale responses
+  - updates rendered tracker only after actual direct render completion
+  - resets direct ordering trackers when direct path is unavailable or reset
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/utils/stride-correction-worker.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Stride-correction responses now honor frame-order stale gating before main-thread render.
+- ✅ Direct-path ordering state now distinguishes accepted ingress ordering from completed render ordering.
+- ✅ Desktop typecheck and transport utility tests pass (28/28).
+
+**Stopping point**: Ready for target-machine sessions to validate reduced direct-path visual regressions under stride-correction-heavy clips.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
