@@ -103,6 +103,12 @@ cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 
 
 # Add explicit run label for cross-machine comparisons
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --runs 3 --output-csv /tmp/cap-scrub-benchmark.csv --run-label windows-pass-1
+
+# Summarize scrub CSV runs grouped by run label
+cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-benchmark.csv
+
+# Compare two run labels directly
+cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1
 ```
 
 #### Playback Startup Latency Report (log analysis)
@@ -347,6 +353,21 @@ cargo run -p cap-recording --example playback-test-runner -- full
 #### Decision
 - Keep `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES` default at **20**.
 - Candidate spans 15 and 25 were rejected; neither improved both 1080p and 4k tails versus 20 under the new defaults.
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub CSV report tooling)
+
+**Environment:** Linux runner, CSV analysis utility validation  
+**Commands:** `scrub-csv-report`, `cargo test -p cap-editor --example scrub-csv-report`
+
+#### Validation
+- New utility parses scrub benchmark CSV aggregate rows and reports median summaries by run label.
+- Smoke run against labeled CSV:
+  - `cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
+  - output summary:
+    - all_avg **199.01ms**
+    - last_avg **213.93ms**
+    - successful **144**, failed **0**
+- Unit tests: **2 passed** (`parses_aggregate_csv_line`, `summarizes_medians`).
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
