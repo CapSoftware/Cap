@@ -308,6 +308,26 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - 1080p random access avg **115.49ms**, p95 **350.30ms**
   - 4k random access avg **511.55ms**, p95 **1394.69ms**
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (span threshold recheck after default retunes)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES={15,20,25} scrub-benchmark --runs 3`  
+**Context:** defaults already retuned to `min_requests=7`, `min_pixels=2_000_000`
+
+#### Span sweep medians (last-request latency)
+- 1080p:
+  - **15**: avg **216.43ms**, p95 **457.45ms**
+  - **20**: avg **209.63ms**, p95 **442.04ms**
+  - **25**: avg **213.84ms**, p95 **447.71ms**
+- 4k:
+  - **15**: avg **862.02ms**, p95 **1789.73ms**
+  - **20**: avg **860.43ms**, p95 **1761.25ms**
+  - **25**: avg **866.03ms**, p95 **1781.42ms**
+
+#### Decision
+- Keep `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES` default at **20**.
+- Candidate spans 15 and 25 were rejected; neither improved both 1080p and 4k tails versus 20 under the new defaults.
+
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
 **Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  

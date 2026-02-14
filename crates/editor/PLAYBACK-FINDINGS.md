@@ -948,6 +948,31 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Rejected span threshold changes after default retunes)
+
+**Goal**: Verify whether span threshold should move again after adopting `min_requests=7` and `min_pixels=2_000_000`
+
+**What was done**:
+1. Re-ran span sweep with `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES={15,20,25}`.
+2. Executed 1080p and 4k scrub benchmarks (`--runs 3`) for each span candidate.
+3. Compared median last-request averages and p95 tails.
+
+**Results**:
+- 1080p (avg / p95):
+  - span 15: **216.43ms / 457.45ms**
+  - span 20: **209.63ms / 442.04ms**
+  - span 25: **213.84ms / 447.71ms**
+- 4k (avg / p95):
+  - span 15: **862.02ms / 1789.73ms**
+  - span 20: **860.43ms / 1761.25ms**
+  - span 25: **866.03ms / 1781.42ms**
+
+**Decision**: keep `min_span_frames=20`; candidates 15 and 25 were rejected.
+
+**Stopping point**: supersession defaults remain `min_requests=7`, `min_span_frames=20`, `min_pixels=2_000_000`.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
