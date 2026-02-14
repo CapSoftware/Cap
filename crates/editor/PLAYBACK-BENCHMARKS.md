@@ -1173,6 +1173,30 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - 2.0s: **557.40 / 1412.22 / 1412.22ms**
   - 5.0s: **1070.92 / 1530.27 / 1530.27ms**
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Startup CSV structured audio path columns)
+
+**Environment:** Linux runner, startup report parser validation  
+**Commands:** `playback-startup-report --list-run-metrics --output-csv`, `playback-startup-report --baseline-run-id ... --candidate-run-id ... --output-csv`  
+**Change under test:** startup report CSV now emits structured audio path columns for aggregate/run-metrics/delta outputs
+
+#### Validation Dataset
+- Source log: `/workspace/tmp-startup-sample.csv` (baseline stream callback, candidate prerender callback)
+- Export target: `/tmp/playback-startup-run-export-v2.csv`
+
+#### Results
+- Run metrics output now includes:
+  - `run_metric_audio_path` rows
+  - `audio_path`, `audio_stream_samples`, `audio_prerender_samples` columns
+- Delta output now includes:
+  - `delta_audio_path` rows
+  - baseline + candidate audio path columns:
+    - `audio_path` / `candidate_audio_path`
+    - `audio_stream_samples` / `candidate_audio_stream_samples`
+    - `audio_prerender_samples` / `candidate_audio_prerender_samples`
+- Example delta audio path row:
+  - baseline: `streaming (1 stream / 0 prerender)`
+  - candidate: `prerendered (0 stream / 1 prerender)`
+
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
 ---

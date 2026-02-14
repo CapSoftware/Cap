@@ -332,6 +332,12 @@ fn write_csv_header(path: &PathBuf, file: &mut File) -> Result<(), String> {
         "candidate_p95_ms",
         "avg_delta_ms",
         "p95_delta_ms",
+        "audio_path",
+        "audio_stream_samples",
+        "audio_prerender_samples",
+        "candidate_audio_path",
+        "candidate_audio_stream_samples",
+        "candidate_audio_prerender_samples",
     ]
     .join(",");
     writeln!(file, "{header}").map_err(|error| format!("write {} / {error}", path.display()))
@@ -358,7 +364,7 @@ fn append_aggregate_csv(
         if let Some(summary) = summarize(values) {
             writeln!(
                 file,
-                "{timestamp_ms},aggregate,\"{}\",\"{}\",\"\",\"\",{},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+                "{timestamp_ms},aggregate,\"{}\",\"{}\",\"\",\"\",{},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
                 name,
                 run_id.unwrap_or(""),
                 summary.samples,
@@ -370,18 +376,15 @@ fn append_aggregate_csv(
     }
 
     if let Some((audio_path, stream_samples, prerender_samples)) = audio_summary {
-        let metric = format!(
-            "audio_path={} stream_samples={} prerender_samples={}",
+        writeln!(
+            file,
+            "{timestamp_ms},aggregate_audio_path,\"audio startup path\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"{}\",{},{},\"\",\"\"",
+            run_id.unwrap_or(""),
+            stream_samples + prerender_samples
+            ,
             audio_startup_path_label(audio_path),
             stream_samples,
             prerender_samples
-        );
-        writeln!(
-            file,
-            "{timestamp_ms},aggregate_audio_path,\"{}\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
-            metric,
-            run_id.unwrap_or(""),
-            stream_samples + prerender_samples
         )
         .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
@@ -414,7 +417,7 @@ fn append_delta_csv(
         if let Some(delta) = summarize_delta(baseline_values, candidate_values) {
             writeln!(
                 file,
-                "{timestamp_ms},delta,\"{}\",\"\",\"{}\",\"{}\",\"\",\"\",\"\",{},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3}",
+                "{timestamp_ms},delta,\"{}\",\"\",\"{}\",\"{}\",\"\",\"\",\"\",{},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\"",
                 name,
                 baseline_run_id.unwrap_or(""),
                 candidate_run_id.unwrap_or(""),
@@ -432,25 +435,17 @@ fn append_delta_csv(
     }
 
     if let Some((baseline_audio, candidate_audio)) = audio_summary {
-        let baseline_metric = format!(
-            "baseline_audio_path={} stream_samples={} prerender_samples={}",
-            audio_startup_path_label(baseline_audio.0),
-            baseline_audio.1,
-            baseline_audio.2
-        );
-        let candidate_metric = format!(
-            "candidate_audio_path={} stream_samples={} prerender_samples={}",
-            audio_startup_path_label(candidate_audio.0),
-            candidate_audio.1,
-            candidate_audio.2
-        );
-        let metric = format!("{baseline_metric} {candidate_metric}");
         writeln!(
             file,
-            "{timestamp_ms},delta_audio_path,\"{}\",\"\",\"{}\",\"{}\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
-            metric,
+            "{timestamp_ms},delta_audio_path,\"audio startup path\",\"\",\"{}\",\"{}\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"{}\",{},{},\"{}\",{},{}",
             baseline_run_id.unwrap_or(""),
             candidate_run_id.unwrap_or(""),
+            audio_startup_path_label(baseline_audio.0),
+            baseline_audio.1,
+            baseline_audio.2,
+            audio_startup_path_label(candidate_audio.0),
+            candidate_audio.1,
+            candidate_audio.2,
         )
         .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
@@ -473,7 +468,7 @@ fn append_run_counts_csv(path: &PathBuf, counts: &BTreeMap<String, usize>) -> Re
     for (run_id, count) in counts {
         writeln!(
             file,
-            "{timestamp_ms},run_count,\"run_count\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+            "{timestamp_ms},run_count,\"run_count\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
             run_id,
             count
         )
@@ -516,7 +511,7 @@ fn append_run_metrics_csv(
             if let Some(summary) = summarize(values) {
                 writeln!(
                     file,
-                    "{timestamp_ms},run_metric,\"{}\",\"{}\",\"\",\"\",{},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+                    "{timestamp_ms},run_metric,\"{}\",\"{}\",\"\",\"\",{},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
                     name,
                     run_id,
                     summary.samples,
@@ -528,18 +523,15 @@ fn append_run_metrics_csv(
         }
 
         let (audio_path, stream_samples, prerender_samples) = detect_audio_startup_path(stats);
-        let metric = format!(
-            "audio_path={} stream_samples={} prerender_samples={}",
+        writeln!(
+            file,
+            "{timestamp_ms},run_metric_audio_path,\"audio startup path\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"{}\",{},{},\"\",\"\"",
+            run_id,
+            stream_samples + prerender_samples
+            ,
             audio_startup_path_label(audio_path),
             stream_samples,
             prerender_samples
-        );
-        writeln!(
-            file,
-            "{timestamp_ms},run_metric_audio_path,\"{}\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
-            metric,
-            run_id,
-            stream_samples + prerender_samples
         )
         .map_err(|error| format!("write {} / {error}", path.display()))?;
     }

@@ -3246,11 +3246,20 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 1. Extended aggregate CSV export with `aggregate_audio_path` rows.
 2. Extended delta CSV export with `delta_audio_path` rows.
 3. Extended run-metrics CSV export with `run_metric_audio_path` rows.
-4. Added tests validating new audio-path CSV rows.
-5. Updated benchmark docs to note audio-path run-metric CSV mode.
+4. Added structured audio-path columns in CSV schema for machine-readable parsing.
+5. Added tests validating new audio-path CSV rows.
+6. Updated benchmark docs to note audio-path run-metric CSV mode.
+7. Validated with synthetic baseline/candidate startup trace export.
 
 **Changes Made**:
 - `crates/editor/examples/playback-startup-report.rs`
+  - CSV header now includes:
+    - `audio_path`
+    - `audio_stream_samples`
+    - `audio_prerender_samples`
+    - `candidate_audio_path`
+    - `candidate_audio_stream_samples`
+    - `candidate_audio_prerender_samples`
   - `append_aggregate_csv` now appends `aggregate_audio_path` row with:
     - audio path label
     - stream callback sample count
@@ -3266,9 +3275,12 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo +1.88.0 fmt --all`
 - `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics --output-csv /tmp/playback-startup-run-export.csv`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/tmp-startup-sample.csv --list-run-metrics --output-csv /tmp/playback-startup-run-export-v2.csv`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --baseline-log /workspace/tmp-startup-sample.csv --candidate-log /workspace/tmp-startup-sample.csv --baseline-run-id baseline --candidate-run-id candidate --output-csv /tmp/playback-startup-run-export-v2.csv`
 
 **Results**:
 - ✅ Startup report CSV outputs now carry explicit audio startup mode rows for aggregate, delta, and run-metrics exports.
+- ✅ Audio path rows now populate structured columns for direct CSV querying.
 - ✅ Updated startup report tests pass with new row modes (11/11).
 
 **Stopping point**: Ready to ingest macOS/Windows startup trace CSVs and query audio startup mode directly from exported rows.
