@@ -127,6 +127,7 @@ export function createImageDataWS(
 	let sabOversizeFallbackCount = 0;
 	let sabRetryLimitFallbackCount = 0;
 	let sabWriteRetryCount = 0;
+	let sabRetryScheduled = false;
 
 	function initializeSharedBuffer(config: SharedFrameBufferConfig): boolean {
 		try {
@@ -261,6 +262,7 @@ export function createImageDataWS(
 		pendingFrame = null;
 		nextFrame = null;
 		isProcessing = false;
+		sabRetryScheduled = false;
 
 		if (mainThreadWebGPU) {
 			disposeWebGPU(mainThreadWebGPU);
@@ -465,7 +467,13 @@ export function createImageDataWS(
 						framesDropped++;
 					}
 					nextFrame = buffer;
-					requestAnimationFrame(() => processNextFrame());
+					if (!sabRetryScheduled) {
+						sabRetryScheduled = true;
+						requestAnimationFrame(() => {
+							sabRetryScheduled = false;
+							processNextFrame();
+						});
+					}
 					return;
 				}
 				framesSentToWorker++;

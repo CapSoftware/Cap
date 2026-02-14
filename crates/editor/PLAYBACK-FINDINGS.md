@@ -1209,6 +1209,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 8. Expanded SAB telemetry to separate:
    - oversize-triggered fallbacks
    - retry-limit-triggered fallbacks
+9. Added SAB retry scheduling guard:
+   - retry requeue now uses a single pending animation-frame callback to avoid stacking duplicate retry callbacks under burst pressure
 
 **Changes Made**:
 - `apps/desktop/src/utils/socket.ts`
