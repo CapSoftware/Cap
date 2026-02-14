@@ -161,6 +161,34 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 			}
 
 			if (writeIdx < 0 || slotMetaIdx < 0) {
+				for (let probe = 0; probe < config.slotCount; probe++) {
+					const candidateIdx = (initialWriteIdx + probe) % config.slotCount;
+					const candidateMetaIdx =
+						(metadataOffset + candidateIdx * METADATA_ENTRY_SIZE) / 4;
+
+					const currentState = Atomics.load(
+						metadataView,
+						candidateMetaIdx + META_SLOT_STATE,
+					);
+					if (currentState !== SLOT_STATE.READY) {
+						continue;
+					}
+
+					const exchanged = Atomics.compareExchange(
+						metadataView,
+						candidateMetaIdx + META_SLOT_STATE,
+						SLOT_STATE.READY,
+						SLOT_STATE.WRITING,
+					);
+					if (exchanged === SLOT_STATE.READY) {
+						writeIdx = candidateIdx;
+						slotMetaIdx = candidateMetaIdx;
+						break;
+					}
+				}
+			}
+
+			if (writeIdx < 0 || slotMetaIdx < 0) {
 				return false;
 			}
 

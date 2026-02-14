@@ -1314,6 +1314,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Shared frame buffer overwrite-on-full policy)
+
+**Goal**: Preserve latest-frame delivery under sustained pressure without unnecessary SAB write failures
+
+**What was done**:
+1. Added producer fallback policy to reclaim READY slots when no EMPTY slots are available.
+2. Kept WRITING/READING slots protected; only READY slots are eligible for replacement.
+3. Added unit coverage for overwrite-on-full behavior.
+
+**Changes Made**:
+- `apps/desktop/src/utils/shared-frame-buffer.ts`
+  - producer write now:
+    - probes EMPTY slots first
+    - if none available, probes READY slots and replaces the first claimable READY slot
+- `apps/desktop/src/utils/shared-frame-buffer.test.ts`
+  - added test verifying full-ring overwrite keeps latest frame set (`[2, 3]`) after writing `1,2,3` into 2 slots
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/shared-frame-buffer.ts apps/desktop/src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec vitest run src/utils/shared-frame-buffer.test.ts` (4 passed)
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Desktop unit tests pass (4/4) for sparse-slot and overwrite-on-full behaviors.
+- ✅ Producer now avoids avoidable write failures when buffer is saturated with READY slots and can keep newer frames flowing.
+
+**Stopping point**: validate on macOS/Windows with SAB telemetry to confirm reduced worker fallback rate under sustained high-resolution playback.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

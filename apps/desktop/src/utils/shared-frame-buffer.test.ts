@@ -39,7 +39,10 @@ describe("shared-frame-buffer", () => {
 
 		const firstRemaining = consumer.read(0);
 		const secondRemaining = consumer.read(0);
-		const remaining = [readFirstByte(firstRemaining), readFirstByte(secondRemaining)]
+		const remaining = [
+			readFirstByte(firstRemaining),
+			readFirstByte(secondRemaining),
+		]
 			.filter((value): value is number => value !== null)
 			.sort((a, b) => a - b);
 		expect(remaining).toEqual([3, 4]);
@@ -80,5 +83,23 @@ describe("shared-frame-buffer", () => {
 		expect(Array.from(target.subarray(0, 2))).toEqual([31, 32]);
 
 		held?.release();
+	});
+
+	it("overwrites ready slot when ring is full", () => {
+		const init = createSharedFrameBuffer({ slotCount: 2, slotSize: 64 });
+		const producer = createProducer(init);
+		const consumer = createConsumer(init.buffer);
+
+		expect(producer.write(makeFrame(1))).toBe(true);
+		expect(producer.write(makeFrame(2))).toBe(true);
+		expect(producer.write(makeFrame(3))).toBe(true);
+
+		const first = readFirstByte(consumer.read(0));
+		const second = readFirstByte(consumer.read(0));
+		const values = [first, second]
+			.filter((value): value is number => value !== null)
+			.sort((a, b) => a - b);
+
+		expect(values).toEqual([2, 3]);
 	});
 });
