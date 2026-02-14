@@ -1040,14 +1040,14 @@ impl AudioPlayback {
             #[cfg(target_os = "windows")]
             const FIXED_LATENCY_SECS: f64 = 0.08;
             #[cfg(target_os = "windows")]
-            const SYNC_THRESHOLD_SECS: f64 = 0.20;
+            const SYNC_THRESHOLD_SECS: f64 = 0.10;
             #[cfg(target_os = "windows")]
-            const HARD_SEEK_THRESHOLD_SECS: f64 = 0.5;
+            const HARD_SEEK_THRESHOLD_SECS: f64 = 0.3;
             #[cfg(target_os = "windows")]
-            const MIN_SYNC_INTERVAL_CALLBACKS: u32 = 50;
+            const MIN_SYNC_INTERVAL_CALLBACKS: u32 = 30;
 
             #[cfg(not(target_os = "windows"))]
-            const SYNC_THRESHOLD_SECS: f64 = 0.12;
+            const SYNC_THRESHOLD_SECS: f64 = 0.08;
 
             #[cfg(target_os = "windows")]
             let mut callbacks_since_last_sync: u32 = MIN_SYNC_INTERVAL_CALLBACKS;
@@ -1205,7 +1205,7 @@ impl AudioPlayback {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
                         let jump = (video_playhead - last_video_playhead).abs();
 
-                        if jump > 0.1 {
+                        if jump > 0.05 {
                             audio_buffer.set_playhead(video_playhead);
                         }
 
