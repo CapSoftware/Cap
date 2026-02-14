@@ -43,6 +43,10 @@ type TransportStats = {
 	workerFramesInFlightPeakTotal: number;
 	workerInFlightSupersededDrops: number;
 	workerInFlightSupersededDropsWindow: number;
+	renderedFromSharedTotal: number;
+	renderedFromSharedWindow: number;
+	renderedFromWorkerTotal: number;
+	renderedFromWorkerWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -90,6 +94,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		workerFramesInFlightPeakTotal: 0,
 		workerInFlightSupersededDrops: 0,
 		workerInFlightSupersededDropsWindow: 0,
+		renderedFromSharedTotal: 0,
+		renderedFromSharedWindow: 0,
+		renderedFromWorkerTotal: 0,
+		renderedFromWorkerWindow: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -227,6 +235,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			workerFramesInFlightPeakTotal: 0,
 			workerInFlightSupersededDrops: 0,
 			workerInFlightSupersededDropsWindow: 0,
+			renderedFromSharedTotal: 0,
+			renderedFromSharedWindow: 0,
+			renderedFromWorkerTotal: 0,
+			renderedFromWorkerWindow: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -276,6 +288,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 					socketStats.workerInFlightSupersededDrops,
 				workerInFlightSupersededDropsWindow:
 					socketStats.workerInFlightSupersededDropsWindow,
+				renderedFromSharedTotal: socketStats.renderedFromSharedTotal,
+				renderedFromSharedWindow: socketStats.renderedFromSharedWindow,
+				renderedFromWorkerTotal: socketStats.renderedFromWorkerTotal,
+				renderedFromWorkerWindow: socketStats.renderedFromWorkerWindow,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -356,6 +372,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Worker In-Flight Peak (Total): ${t.workerFramesInFlightPeakTotal}`,
 			`Worker In-Flight Superseded Drops: ${t.workerInFlightSupersededDrops}`,
 			`Worker In-Flight Superseded Drops (Window): ${t.workerInFlightSupersededDropsWindow}`,
+			`Rendered From Shared (Total): ${t.renderedFromSharedTotal}`,
+			`Rendered From Shared (Window): ${t.renderedFromSharedWindow}`,
+			`Rendered From Worker (Total): ${t.renderedFromWorkerTotal}`,
+			`Rendered From Worker (Window): ${t.renderedFromWorkerWindow}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -528,6 +548,23 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 								Worker in-flight peak:{" "}
 								{transportStats().workerFramesInFlightPeakWindow} window /{" "}
 								{transportStats().workerFramesInFlightPeakTotal} total
+							</div>
+						</Show>
+						<Show
+							when={
+								transportStats().renderedFromSharedTotal > 0 ||
+								transportStats().renderedFromWorkerTotal > 0
+							}
+						>
+							<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+								Render source: {transportStats().renderedFromSharedWindow}{" "}
+								shared / {transportStats().renderedFromWorkerWindow} worker
+								window
+								<span style={{ color: "rgba(255, 255, 255, 0.5)" }}>
+									{" "}
+									({transportStats().renderedFromSharedTotal} shared /{" "}
+									{transportStats().renderedFromWorkerTotal} worker total)
+								</span>
 							</div>
 						</Show>
 						<Show when={transportStats().workerInFlightBackpressureHits > 0}>

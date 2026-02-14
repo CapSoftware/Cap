@@ -2722,6 +2722,48 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (render-source window/total diagnostics)
+
+**Goal**: Improve mixed-path visibility by tracking shared-rendered vs worker-rendered frame counts in both rolling windows and cumulative totals
+
+**What was done**:
+1. Added render-source counters (shared/worker) to socket transport stats.
+2. Incremented counters from `frame-rendered` events based on `source`.
+3. Extended periodic frame logs with render-source window/total counts.
+4. Exposed counters in overlay and clipboard diagnostics.
+5. Re-ran desktop typecheck and expanded transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `FpsStats` fields:
+    - `renderedFromSharedTotal`
+    - `renderedFromSharedWindow`
+    - `renderedFromWorkerTotal`
+    - `renderedFromWorkerWindow`
+  - updates counters in `worker.onmessage` `frame-rendered` branch using `source`
+  - periodic frame log now includes render-source counters
+  - window counters reset on each stats window flush
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling includes render-source counters
+  - clipboard export includes render-source window/total fields
+  - new overlay row shows:
+    - `<shared window> shared / <worker window> worker`
+    - plus cumulative totals
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx src/utils/frame-worker.ts src/utils/frame-transport-inflight.ts src/utils/frame-transport-inflight.test.ts`
+
+**Results**:
+- ✅ Diagnostics now show how much rendering work is coming from shared-buffer vs fallback worker frames over both short windows and full sessions.
+- ✅ Frame logs carry the same split for terminal-driven perf sampling.
+- ✅ Desktop typecheck and expanded transport tests pass (17/17).
+
+**Stopping point**: Ready for target-machine runs to compare render-source mix against fallback pressure counters and FPS outcomes.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
