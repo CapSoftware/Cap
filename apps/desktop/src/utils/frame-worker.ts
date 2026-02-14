@@ -280,6 +280,28 @@ function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
 	return renderBorrowedWebGPU(latest.bytes, latest.release);
 }
 
+function drainAndQueueLatestSharedCanvas(maxDrain: number): boolean {
+	if (!consumer || !useSharedBuffer || consumer.isShutdown()) return false;
+	if (renderMode !== "canvas2d") return false;
+
+	let latest: { bytes: Uint8Array; release: () => void } | null = null;
+
+	for (let i = 0; i < maxDrain; i += 1) {
+		const borrowed = consumer.borrow(0);
+		if (!borrowed) break;
+
+		if (latest) {
+			latest.release();
+		}
+		latest = { bytes: borrowed.data, release: borrowed.release };
+	}
+
+	if (!latest) return false;
+
+	queueFrameFromBytes(latest.bytes, latest.release, false);
+	return true;
+}
+
 function queueFrameFromBytes(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
@@ -411,9 +433,13 @@ function renderLoop() {
 			}
 		}
 
-		let polled = 0;
-		while (polled < 4 && tryPollSharedBuffer()) {
-			polled++;
+		if (renderMode === "canvas2d") {
+			drainAndQueueLatestSharedCanvas(4);
+		} else {
+			let polled = 0;
+			while (polled < 4 && tryPollSharedBuffer()) {
+				polled++;
+			}
 		}
 	}
 

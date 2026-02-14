@@ -2007,6 +2007,39 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (canvas shared-buffer latest-frame draining)
+
+**Goal**: Reduce wasted parse/copy work in canvas fallback mode by draining SAB bursts to the latest frame before queueing
+
+**What was done**:
+1. Added canvas-mode SAB drain helper in worker.
+2. Changed render loop SAB polling branch to drain up to four borrowed frames and keep only latest for canvas mode.
+3. Kept existing WebGPU drain behavior unchanged.
+4. Preserved pending-mode polling behavior.
+5. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - added `drainAndQueueLatestSharedCanvas(maxDrain)` helper
+  - render loop now:
+    - uses `drainAndRenderLatestSharedWebGPU(8)` for webgpu mode
+    - uses `drainAndQueueLatestSharedCanvas(4)` for canvas2d mode
+    - retains existing `tryPollSharedBuffer` loop for pending mode
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Canvas SAB path now avoids processing multiple stale frames when bursts arrive between render ticks.
+- ✅ WebGPU and pending paths remain behaviorally unchanged.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows fallback validation to confirm reduced canvas-path copy pressure during sustained playback bursts.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
