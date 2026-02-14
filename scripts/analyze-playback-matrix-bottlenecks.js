@@ -150,7 +150,9 @@ function collectIssues(files, options) {
 			const playback = Array.isArray(report.playback_results)
 				? report.playback_results
 				: [];
-			const scrub = Array.isArray(report.scrub_results) ? report.scrub_results : [];
+			const scrub = Array.isArray(report.scrub_results)
+				? report.scrub_results
+				: [];
 
 			const fpsValues = playback
 				.map((entry) => entry.effective_fps)
@@ -190,7 +192,9 @@ function recommendation(issue, options) {
 		recommendations.push("inspect decode/render path and frame wait behavior");
 	}
 	if (issue.scrubP95 !== null && issue.scrubP95 > options.maxScrubP95Ms) {
-		recommendations.push("investigate seek dispatch pressure and decoder reposition cost");
+		recommendations.push(
+			"investigate seek dispatch pressure and decoder reposition cost",
+		);
 	}
 	if (issue.startupAvg !== null && issue.startupAvg > options.maxStartupMs) {
 		recommendations.push("optimize startup warmup and first-frame path");
@@ -209,7 +213,8 @@ function buildMarkdown(issues, options) {
 		return md;
 	}
 
-	md += "| Rank | Platform | GPU | Scenario | Recording | Format | FPS(min) | Startup avg(ms) | Scrub p95(ms) | Score | Recommendation |\n";
+	md +=
+		"| Rank | Platform | GPU | Scenario | Recording | Format | FPS(min) | Startup avg(ms) | Scrub p95(ms) | Score | Recommendation |\n";
 	md += "|---:|---|---|---|---|---|---:|---:|---:|---:|---|\n";
 	issues.forEach((issue, index) => {
 		md += `| ${index + 1} | ${issue.platform} | ${issue.gpu} | ${issue.scenario} | ${issue.recording} | ${issue.format} | ${formatValue(issue.fpsMin)} | ${formatValue(issue.startupAvg)} | ${formatValue(issue.scrubP95)} | ${formatValue(issue.score, 2)} | ${recommendation(issue, options)} |\n`;
