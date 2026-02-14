@@ -12,6 +12,7 @@ struct Config {
     bursts: usize,
     burst_size: usize,
     sweep_seconds: f32,
+    runs: usize,
 }
 
 #[derive(Debug, Default)]
@@ -20,6 +21,20 @@ struct ScrubStats {
     request_latency_ms: Vec<f64>,
     failed_requests: usize,
     successful_requests: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ScrubSummary {
+    all_avg_ms: f64,
+    all_p95_ms: f64,
+    all_p99_ms: f64,
+    all_max_ms: f64,
+    last_avg_ms: f64,
+    last_p95_ms: f64,
+    last_p99_ms: f64,
+    last_max_ms: f64,
+    successful_requests: usize,
+    failed_requests: usize,
 }
 
 fn get_video_duration(path: &PathBuf) -> Result<f32, String> {
@@ -134,7 +149,93 @@ async fn run_scrub_benchmark(config: &Config) -> Result<ScrubStats, String> {
     Ok(stats)
 }
 
-fn print_report(config: &Config, stats: &ScrubStats) {
+fn summarize(stats: &ScrubStats) -> ScrubSummary {
+    let all_avg_ms = if stats.request_latency_ms.is_empty() {
+        0.0
+    } else {
+        stats.request_latency_ms.iter().sum::<f64>() / stats.request_latency_ms.len() as f64
+    };
+
+    let all_max_ms = stats
+        .request_latency_ms
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let last_avg_ms = if stats.last_request_latency_ms.is_empty() {
+        0.0
+    } else {
+        stats.last_request_latency_ms.iter().sum::<f64>()
+            / stats.last_request_latency_ms.len() as f64
+    };
+
+    let last_max_ms = stats
+        .last_request_latency_ms
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    ScrubSummary {
+        all_avg_ms,
+        all_p95_ms: percentile(&stats.request_latency_ms, 95.0),
+        all_p99_ms: percentile(&stats.request_latency_ms, 99.0),
+        all_max_ms: if all_max_ms.is_finite() {
+            all_max_ms
+        } else {
+            0.0
+        },
+        last_avg_ms,
+        last_p95_ms: percentile(&stats.last_request_latency_ms, 95.0),
+        last_p99_ms: percentile(&stats.last_request_latency_ms, 99.0),
+        last_max_ms: if last_max_ms.is_finite() {
+            last_max_ms
+        } else {
+            0.0
+        },
+        successful_requests: stats.successful_requests,
+        failed_requests: stats.failed_requests,
+    }
+}
+
+fn median_of(samples: &[f64]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut values = samples.to_vec();
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
+}
+
+fn aggregate_summaries(summaries: &[ScrubSummary]) -> ScrubSummary {
+    if summaries.is_empty() {
+        return ScrubSummary::default();
+    }
+
+    let all_avg_ms = summaries.iter().map(|s| s.all_avg_ms).collect::<Vec<_>>();
+    let all_p95_ms = summaries.iter().map(|s| s.all_p95_ms).collect::<Vec<_>>();
+    let all_p99_ms = summaries.iter().map(|s| s.all_p99_ms).collect::<Vec<_>>();
+    let all_max_ms = summaries.iter().map(|s| s.all_max_ms).collect::<Vec<_>>();
+    let last_avg_ms = summaries.iter().map(|s| s.last_avg_ms).collect::<Vec<_>>();
+    let last_p95_ms = summaries.iter().map(|s| s.last_p95_ms).collect::<Vec<_>>();
+    let last_p99_ms = summaries.iter().map(|s| s.last_p99_ms).collect::<Vec<_>>();
+    let last_max_ms = summaries.iter().map(|s| s.last_max_ms).collect::<Vec<_>>();
+
+    ScrubSummary {
+        all_avg_ms: median_of(&all_avg_ms),
+        all_p95_ms: median_of(&all_p95_ms),
+        all_p99_ms: median_of(&all_p99_ms),
+        all_max_ms: median_of(&all_max_ms),
+        last_avg_ms: median_of(&last_avg_ms),
+        last_p95_ms: median_of(&last_p95_ms),
+        last_p99_ms: median_of(&last_p99_ms),
+        last_max_ms: median_of(&last_max_ms),
+        successful_requests: summaries.iter().map(|s| s.successful_requests).sum(),
+        failed_requests: summaries.iter().map(|s| s.failed_requests).sum(),
+    }
+}
+
+fn print_report(config: &Config, summaries: &[ScrubSummary]) {
+    let stats = aggregate_summaries(summaries);
     println!("\n{}", "=".repeat(68));
     println!("Scrub Burst Benchmark Report");
     println!("{}", "=".repeat(68));
@@ -143,54 +244,28 @@ fn print_report(config: &Config, stats: &ScrubStats) {
     println!("Bursts: {}", config.bursts);
     println!("Burst size: {}", config.burst_size);
     println!("Sweep seconds: {:.2}", config.sweep_seconds);
+    println!("Runs: {}", config.runs);
     println!("Successful requests: {}", stats.successful_requests);
     println!("Failed requests: {}", stats.failed_requests);
 
-    if !stats.request_latency_ms.is_empty() {
-        let avg =
-            stats.request_latency_ms.iter().sum::<f64>() / stats.request_latency_ms.len() as f64;
-        println!("\nAll Request Latency");
-        println!("  avg: {:.2}ms", avg);
-        println!(
-            "  p95: {:.2}ms",
-            percentile(&stats.request_latency_ms, 95.0)
-        );
-        println!(
-            "  p99: {:.2}ms",
-            percentile(&stats.request_latency_ms, 99.0)
-        );
-        println!(
-            "  max: {:.2}ms",
-            stats
-                .request_latency_ms
-                .iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, f64::max)
-        );
+    if config.runs > 1 {
+        println!("\nPer-run last-request average latency");
+        for (index, summary) in summaries.iter().enumerate() {
+            println!("  run {:>2}: {:.2}ms", index + 1, summary.last_avg_ms);
+        }
     }
 
-    if !stats.last_request_latency_ms.is_empty() {
-        let avg = stats.last_request_latency_ms.iter().sum::<f64>()
-            / stats.last_request_latency_ms.len() as f64;
-        println!("\nLast Request In Burst Latency");
-        println!("  avg: {:.2}ms", avg);
-        println!(
-            "  p95: {:.2}ms",
-            percentile(&stats.last_request_latency_ms, 95.0)
-        );
-        println!(
-            "  p99: {:.2}ms",
-            percentile(&stats.last_request_latency_ms, 99.0)
-        );
-        println!(
-            "  max: {:.2}ms",
-            stats
-                .last_request_latency_ms
-                .iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, f64::max)
-        );
-    }
+    println!("\nAll Request Latency (median across runs)");
+    println!("  avg: {:.2}ms", stats.all_avg_ms);
+    println!("  p95: {:.2}ms", stats.all_p95_ms);
+    println!("  p99: {:.2}ms", stats.all_p99_ms);
+    println!("  max: {:.2}ms", stats.all_max_ms);
+
+    println!("\nLast Request In Burst Latency (median across runs)");
+    println!("  avg: {:.2}ms", stats.last_avg_ms);
+    println!("  p95: {:.2}ms", stats.last_p95_ms);
+    println!("  p99: {:.2}ms", stats.last_p99_ms);
+    println!("  max: {:.2}ms", stats.last_max_ms);
 
     println!("{}", "=".repeat(68));
 }
@@ -202,6 +277,7 @@ fn parse_args() -> Result<Config, String> {
     let mut bursts = 50usize;
     let mut burst_size = 12usize;
     let mut sweep_seconds = 2.0f32;
+    let mut runs = 1usize;
 
     let mut index = 1usize;
     while index < args.len() {
@@ -249,9 +325,18 @@ fn parse_args() -> Result<Config, String> {
                     .parse::<f32>()
                     .map_err(|_| "invalid value for --sweep-seconds".to_string())?;
             }
+            "--runs" => {
+                index += 1;
+                if index >= args.len() {
+                    return Err("missing value for --runs".to_string());
+                }
+                runs = args[index]
+                    .parse::<usize>()
+                    .map_err(|_| "invalid value for --runs".to_string())?;
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: scrub-benchmark --video <path> [--fps <n>] [--bursts <n>] [--burst-size <n>] [--sweep-seconds <n>]"
+                    "Usage: scrub-benchmark --video <path> [--fps <n>] [--bursts <n>] [--burst-size <n>] [--sweep-seconds <n>] [--runs <n>]"
                 );
                 std::process::exit(0);
             }
@@ -278,6 +363,9 @@ fn parse_args() -> Result<Config, String> {
     if sweep_seconds <= 0.0 {
         return Err("--sweep-seconds must be > 0".to_string());
     }
+    if runs == 0 {
+        return Err("--runs must be > 0".to_string());
+    }
 
     Ok(Config {
         video_path,
@@ -285,6 +373,7 @@ fn parse_args() -> Result<Config, String> {
         bursts,
         burst_size,
         sweep_seconds,
+        runs,
     })
 }
 
@@ -298,11 +387,27 @@ fn main() {
     };
 
     let runtime = Runtime::new().expect("failed to create tokio runtime");
-    match runtime.block_on(run_scrub_benchmark(&config)) {
-        Ok(stats) => print_report(&config, &stats),
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
+    let mut summaries = Vec::with_capacity(config.runs);
+    for run in 0..config.runs {
+        match runtime.block_on(run_scrub_benchmark(&config)) {
+            Ok(stats) => {
+                let summary = summarize(&stats);
+                if config.runs > 1 {
+                    println!(
+                        "Completed run {}/{}: last-request avg {:.2}ms",
+                        run + 1,
+                        config.runs,
+                        summary.last_avg_ms
+                    );
+                }
+                summaries.push(summary);
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
         }
     }
+
+    print_report(&config, &summaries);
 }

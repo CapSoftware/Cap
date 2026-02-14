@@ -89,6 +89,9 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 # Simulate rapid scrub bursts and track latest-request latency
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 20 --burst-size 12 --sweep-seconds 2.0
 
+# Aggregate multiple runs (median across runs) for lower-variance comparisons
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 10 --burst-size 12 --sweep-seconds 2.0 --runs 3
+
 # Runtime tuning for FFmpeg scrub supersession heuristic
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS=3686400 \
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=8 \
@@ -581,6 +584,24 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Missed deadlines: **2**
 - Effective FPS: **60.17**
 - Decode: avg **6.43ms**, p95 **8.82ms**, p99 **14.14ms**, max **17.52ms**
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Scrub multi-run aggregation support)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Command:** `scrub-benchmark --bursts 10 --burst-size 12 --sweep-seconds 2.0 --runs 3`  
+**Change under test:** scrub benchmark now supports repeated runs with median aggregation
+
+#### Scrub Burst Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Runs: **3**, requests: **360 success / 0 failures**
+- Per-run last-request averages: **303.69ms**, **284.95ms**, **310.89ms**
+- Median all-request latency: avg **210.56ms**, p95 **429.62ms**, p99 **442.55ms**, max **457.71ms**
+- Median last-request latency: avg **303.69ms**, p95 **457.71ms**, p99 **457.71ms**, max **457.71ms**
+
+#### Scrub Burst Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Runs: **3**, requests: **360 success / 0 failures**
+- Per-run last-request averages: **963.69ms**, **887.58ms**, **1001.96ms**
+- Median all-request latency: avg **957.47ms**, p95 **2087.13ms**, p99 **2087.15ms**, max **2087.15ms**
+- Median last-request latency: avg **963.69ms**, p95 **2087.13ms**, p99 **2087.13ms**, max **2087.13ms**
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

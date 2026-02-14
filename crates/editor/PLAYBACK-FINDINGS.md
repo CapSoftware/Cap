@@ -777,6 +777,33 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Scrub benchmark multi-run aggregation)
+
+**Goal**: Improve scrub benchmark repeatability by reducing single-run noise in comparisons
+
+**What was done**:
+1. Extended `scrub-benchmark` with `--runs <n>` support.
+2. Added per-run summaries and median-across-runs aggregate reporting.
+3. Validated on 1080p and 4k with 3-run aggregated passes.
+
+**Changes Made**:
+- `crates/editor/examples/scrub-benchmark.rs`
+  - added `--runs` option (default 1)
+  - added `ScrubSummary` and median aggregation across runs
+  - output now includes per-run last-request averages when runs > 1
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added command usage and benchmark data for multi-run aggregation mode
+
+**Results**:
+- ✅ Benchmark output now exposes run-to-run variance directly and provides median summary.
+- ✅ 1080p (3 runs) median last-request avg: **303.69ms**.
+- ✅ 4k (3 runs) median last-request avg: **963.69ms**.
+- ✅ No failures in aggregated scrub runs.
+
+**Stopping point**: scrub tuning can now use multi-run medians as acceptance criteria, reducing false positives from one-off noisy runs.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
