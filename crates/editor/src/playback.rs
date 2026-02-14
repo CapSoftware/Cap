@@ -46,6 +46,7 @@ const PREFETCH_BEHIND: u32 = 15;
 const FRAME_CACHE_SIZE: usize = 60;
 
 static STARTUP_TRACE_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+static STARTUP_TRACE_RUN_ID: OnceLock<Option<String>> = OnceLock::new();
 
 fn startup_trace_writer() -> Option<&'static Mutex<std::fs::File>> {
     STARTUP_TRACE_FILE
@@ -61,6 +62,12 @@ fn startup_trace_writer() -> Option<&'static Mutex<std::fs::File>> {
         .as_ref()
 }
 
+fn startup_trace_run_id() -> Option<&'static str> {
+    STARTUP_TRACE_RUN_ID
+        .get_or_init(|| std::env::var("CAP_PLAYBACK_STARTUP_TRACE_RUN_ID").ok())
+        .as_deref()
+}
+
 fn record_startup_trace(event: &'static str, startup_ms: f64, frame: Option<u32>) {
     let Some(writer) = startup_trace_writer() else {
         return;
@@ -71,7 +78,8 @@ fn record_startup_trace(event: &'static str, startup_ms: f64, frame: Option<u32>
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
     let frame = frame.map_or_else(String::new, |value| value.to_string());
-    let line = format!("{timestamp_ms},{event},{startup_ms:.3},{frame}\n");
+    let run_id = startup_trace_run_id().unwrap_or_default();
+    let line = format!("{timestamp_ms},{event},{startup_ms:.3},{frame},{run_id}\n");
 
     if let Ok(mut writer) = writer.lock() {
         if writer.write_all(line.as_bytes()).is_err() {

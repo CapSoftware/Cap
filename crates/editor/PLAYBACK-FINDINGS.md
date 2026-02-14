@@ -850,6 +850,25 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Startup trace run labeling)
+
+**Goal**: Improve startup trace collection hygiene across repeated platform sessions
+
+**What was done**:
+1. Added optional startup trace run label sourced from `CAP_PLAYBACK_STARTUP_TRACE_RUN_ID`.
+2. Startup CSV rows now include a fifth `run_id` column.
+3. Updated benchmark docs with labeled trace capture example.
+
+**Changes Made**:
+- `crates/editor/src/playback.rs`
+  - added run-id capture for startup trace rows
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - documented labeled startup trace collection command
+
+**Stopping point**: startup traces from macOS/Windows can now carry explicit run labels for easier before/after grouping.
+
+---
+
 ### Session 2026-02-14 (Scrub benchmark multi-run aggregation)
 
 **Goal**: Improve scrub benchmark repeatability by reducing single-run noise in comparisons

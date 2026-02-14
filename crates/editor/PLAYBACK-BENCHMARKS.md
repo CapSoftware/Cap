@@ -105,6 +105,9 @@ cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
 # Capture startup traces from desktop editor playback sessions
 CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv pnpm dev:desktop
 
+# Optional run label embedded in each CSV line
+CAP_PLAYBACK_STARTUP_TRACE_FILE=/tmp/playback-startup.csv CAP_PLAYBACK_STARTUP_TRACE_RUN_ID=macos-pass-1 pnpm dev:desktop
+
 # Parse startup timing logs captured from desktop editor sessions
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/editor.log
 
