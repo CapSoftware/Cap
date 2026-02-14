@@ -134,6 +134,16 @@ fn insert_prefetched_frame(
     prefetched: PrefetchedFrame,
     current_frame: u32,
 ) -> bool {
+    let inserted_new = insert_prefetched_frame_untrimmed(buffer, prefetched, current_frame);
+    let trimmed = trim_prefetch_buffer(buffer, current_frame);
+    inserted_new || trimmed
+}
+
+fn insert_prefetched_frame_untrimmed(
+    buffer: &mut BTreeMap<u32, PrefetchedFrame>,
+    prefetched: PrefetchedFrame,
+    current_frame: u32,
+) -> bool {
     if prefetched.frame_number < current_frame {
         return false;
     }
@@ -146,8 +156,7 @@ fn insert_prefetched_frame(
         }
         std::collections::btree_map::Entry::Occupied(_) => false,
     };
-    let trimmed = trim_prefetch_buffer(buffer, current_frame);
-    inserted_new || trimmed
+    inserted_new
 }
 
 fn prune_prefetch_buffer_before_frame(
@@ -619,6 +628,7 @@ impl Playback {
                 tokio::select! {
                     Some(prefetched) = prefetch_rx.recv() => {
                         let mut next_prefetched = Some(prefetched);
+                        let mut prefetched_batch_changed = false;
 
                         loop {
                             let Some(prefetched) = next_prefetched.take() else {
@@ -626,16 +636,24 @@ impl Playback {
                             };
 
                             if prefetched.generation == seek_generation
-                                && insert_prefetched_frame(
+                                && insert_prefetched_frame_untrimmed(
                                     &mut prefetch_buffer,
                                     prefetched,
                                     frame_number,
                                 )
                             {
-                                warmup_buffer_changed = true;
+                                prefetched_batch_changed = true;
                             }
 
                             next_prefetched = prefetch_rx.try_recv().ok();
+                        }
+
+                        if trim_prefetch_buffer(&mut prefetch_buffer, frame_number) {
+                            prefetched_batch_changed = true;
+                        }
+
+                        if prefetched_batch_changed {
+                            warmup_buffer_changed = true;
                         }
 
                         if first_frame_time.is_none() && !prefetch_buffer.is_empty() {
@@ -704,11 +722,20 @@ impl Playback {
                     cached_project = self.project.borrow_and_update().clone();
                     playback_clip_offsets = build_clip_offsets_lookup(&cached_project);
                 }
+                let mut drained_prefetch_changed = false;
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
                     if prefetched.generation == seek_generation {
-                        let _ =
-                            insert_prefetched_frame(&mut prefetch_buffer, prefetched, frame_number);
+                        if insert_prefetched_frame_untrimmed(
+                            &mut prefetch_buffer,
+                            prefetched,
+                            frame_number,
+                        ) {
+                            drained_prefetch_changed = true;
+                        }
                     }
+                }
+                if drained_prefetch_changed {
+                    let _ = trim_prefetch_buffer(&mut prefetch_buffer, frame_number);
                 }
                 prune_prefetch_buffer_before_frame(&mut prefetch_buffer, frame_number);
 
