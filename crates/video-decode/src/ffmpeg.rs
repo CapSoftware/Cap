@@ -177,6 +177,7 @@ pub struct FFmpegDecoder {
     stream_index: usize,
     hw_device: Option<HwDevice>,
     start_time: i64,
+    last_seek_position: i64,
     _temp_file: Option<NamedTempFile>,
 }
 
@@ -306,6 +307,7 @@ impl FFmpegDecoder {
             stream_index,
             hw_device,
             start_time,
+            last_seek_position: 0,
             _temp_file: temp_file,
         })
     }
@@ -314,9 +316,26 @@ impl FFmpegDecoder {
         use ffmpeg::rescale;
         let timestamp_us = (requested_time * 1_000_000.0) as i64;
         let position = rescale::Rescale::rescale(&timestamp_us, (1, 1_000_000), rescale::TIME_BASE);
+        let seek_window =
+            rescale::Rescale::rescale(&(2_000_000_i64), (1, 1_000_000), rescale::TIME_BASE);
 
         self.decoder.flush();
-        self.input.seek(position, ..position)
+
+        let seek_result = if position >= self.last_seek_position {
+            let min = position.saturating_sub(seek_window);
+            let max = position.saturating_add(seek_window);
+            self.input
+                .seek(position, min..max)
+                .or_else(|_| self.input.seek(position, ..position))
+        } else {
+            self.input.seek(position, ..position)
+        };
+
+        if seek_result.is_ok() {
+            self.last_seek_position = position;
+        }
+
+        seek_result
     }
 
     pub fn frames(&mut self) -> FramesIter<'_> {
