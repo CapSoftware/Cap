@@ -129,10 +129,14 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 | `crates/video-decode/src/ffmpeg.rs` | FFmpeg software fallback |
 | `crates/audio/src/lib.rs` | AudioData loading and sync analysis |
 | `crates/recording/examples/playback-test-runner.rs` | Playback benchmark runner |
+| `crates/editor/examples/decode-benchmark.rs` | Decode benchmark + CSV export |
+| `crates/editor/examples/decode-csv-report.rs` | Decode CSV summary + label-delta analysis |
 | `crates/editor/examples/playback-benchmark.rs` | Linux-compatible playback throughput benchmark |
 | `crates/editor/examples/playback-csv-report.rs` | Playback CSV summary and label-delta analysis |
 | `crates/editor/examples/scrub-benchmark.rs` | Scrub burst latency benchmark |
 | `crates/editor/examples/scrub-csv-report.rs` | Scrub CSV summary and label-delta analysis |
+| `apps/desktop/src/utils/frame-order.ts` | Wrap-safe frame-order comparisons |
+| `apps/desktop/src/utils/frame-transport-order.ts` | Shared transport stale-order decision helper |
 
 ---
 
