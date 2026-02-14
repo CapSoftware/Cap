@@ -71,7 +71,10 @@ impl PipelineTimings {
             let total_time: f64 = self.total_ms.iter().sum();
             let effective_fps = self.frames_rendered as f64 / (total_time / 1000.0);
             println!("  Effective FPS: {effective_fps:.1}");
-            println!("  Total time: {total_time:.0}ms for {} frames", self.frames_rendered);
+            println!(
+                "  Total time: {total_time:.0}ms for {} frames",
+                self.frames_rendered
+            );
         }
 
         println!();
@@ -106,11 +109,10 @@ async fn load_recording(
         let timeline_segments = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => {
                 let display_path = recording_meta.path(&segment.display.path);
-                let duration =
-                    match cap_rendering::Video::new(&display_path, 0.0) {
-                        Ok(v) => v.duration,
-                        Err(_) => 5.0,
-                    };
+                let duration = match cap_rendering::Video::new(&display_path, 0.0) {
+                    Ok(v) => v.duration,
+                    Err(_) => 5.0,
+                };
                 vec![TimelineSegment {
                     recording_clip: 0,
                     start: 0.0,
@@ -183,13 +185,14 @@ async fn run_decode_only_benchmark(
         StudioRecordingMeta::MultipleSegments { inner } => inner.segments[0].display.fps,
     };
 
-    let decoder = match spawn_decoder("benchmark-screen", display_path, display_fps, 0.0, false).await {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Failed to create decoder: {e}");
-            return timings;
-        }
-    };
+    let decoder =
+        match spawn_decoder("benchmark-screen", display_path, display_fps, 0.0, false).await {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Failed to create decoder: {e}");
+                return timings;
+            }
+        };
 
     println!("  Decoder type: {}", decoder.decoder_type());
     println!(
@@ -258,14 +261,13 @@ async fn run_full_pipeline_benchmark(
         render_constants.is_software_adapter
     );
 
-    let segments =
-        match cap_editor::create_segments(recording_meta, meta, false).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to create segments: {e}");
-                return timings;
-            }
-        };
+    let segments = match cap_editor::create_segments(recording_meta, meta, false).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to create segments: {e}");
+            return timings;
+        }
+    };
 
     if segments.is_empty() {
         eprintln!("No segments found");
@@ -297,14 +299,16 @@ async fn run_full_pipeline_benchmark(
         .unwrap_or(10.0);
     let max_frames = ((duration * fps as f64).ceil() as usize).min(frame_count);
 
-    println!("  Rendering {max_frames} frames at {fps}fps, resolution base: {}x{}...", resolution_base.x, resolution_base.y);
+    println!(
+        "  Rendering {max_frames} frames at {fps}fps, resolution base: {}x{}...",
+        resolution_base.x, resolution_base.y
+    );
 
-    let cursor_smoothing =
-        (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: project.cursor.tension,
-            mass: project.cursor.mass,
-            friction: project.cursor.friction,
-        });
+    let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+        tension: project.cursor.tension,
+        mass: project.cursor.mass,
+        friction: project.cursor.friction,
+    });
 
     for i in 0..max_frames {
         let frame_time = i as f64 / fps as f64;
@@ -332,11 +336,7 @@ async fn run_full_pipeline_benchmark(
         let segment_frames_opt = if i == 0 {
             segment_media
                 .decoders
-                .get_frames_initial(
-                    segment_time as f32,
-                    !project.camera.hide,
-                    clip_offsets,
-                )
+                .get_frames_initial(segment_time as f32, !project.camera.hide, clip_offsets)
                 .await
         } else {
             segment_media
@@ -374,12 +374,7 @@ async fn run_full_pipeline_benchmark(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render(
-                segment_frames,
-                uniforms,
-                &segment_media.cursor,
-                &mut layers,
-            )
+            .render(segment_frames, uniforms, &segment_media.cursor, &mut layers)
             .await
         {
             Ok(_frame) => {
@@ -428,14 +423,13 @@ async fn run_scrubbing_benchmark(
         }
     };
 
-    let segments =
-        match cap_editor::create_segments(recording_meta, meta, false).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to create segments: {e}");
-                return timings;
-            }
-        };
+    let segments = match cap_editor::create_segments(recording_meta, meta, false).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to create segments: {e}");
+            return timings;
+        }
+    };
 
     if segments.is_empty() {
         eprintln!("No segments found");
@@ -466,12 +460,11 @@ async fn run_scrubbing_benchmark(
         .map(|t| t.duration())
         .unwrap_or(10.0);
 
-    let cursor_smoothing =
-        (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: project.cursor.tension,
-            mass: project.cursor.mass,
-            friction: project.cursor.friction,
-        });
+    let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+        tension: project.cursor.tension,
+        mass: project.cursor.mass,
+        friction: project.cursor.friction,
+    });
 
     let scrub_positions: Vec<f64> = {
         let golden_ratio = 1.618_034;
@@ -484,7 +477,10 @@ async fn run_scrubbing_benchmark(
         positions
     };
 
-    println!("  Scrubbing to {} random positions...", scrub_positions.len());
+    println!(
+        "  Scrubbing to {} random positions...",
+        scrub_positions.len()
+    );
 
     for (i, &scrub_time) in scrub_positions.iter().enumerate() {
         let Some((segment_time, segment)) = project.get_segment_time(scrub_time) else {
@@ -540,12 +536,7 @@ async fn run_scrubbing_benchmark(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render(
-                segment_frames,
-                uniforms,
-                &segment_media.cursor,
-                &mut layers,
-            )
+            .render(segment_frames, uniforms, &segment_media.cursor, &mut layers)
             .await
         {
             Ok(_frame) => {
@@ -631,14 +622,8 @@ async fn main() {
     ];
 
     println!("\n--- DECODE-ONLY BENCHMARK ---");
-    let decode_timings = run_decode_only_benchmark(
-        &recording_meta,
-        meta.as_ref(),
-        &project,
-        fps,
-        frame_count,
-    )
-    .await;
+    let decode_timings =
+        run_decode_only_benchmark(&recording_meta, meta.as_ref(), &project, fps, frame_count).await;
     decode_timings.print_report("DECODE-ONLY");
 
     for (resolution_base, label) in &resolutions {
@@ -678,9 +663,7 @@ async fn main() {
     if !decode_timings.decode_ms.is_empty() {
         let decode_p95 = percentile(&decode_timings.decode_ms, 95.0);
         let decode_budget_pct = decode_p95 / target_frame_time_ms * 100.0;
-        println!(
-            "Decode p95 ({decode_p95:.2}ms) uses {decode_budget_pct:.0}% of frame budget"
-        );
+        println!("Decode p95 ({decode_p95:.2}ms) uses {decode_budget_pct:.0}% of frame budget");
     }
 
     for (_resolution_base, label) in &resolutions {
