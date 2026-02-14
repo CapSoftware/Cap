@@ -2371,6 +2371,43 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (socket microtask dispatch scheduling)
+
+**Goal**: Reduce synchronous recursion pressure in socket dispatch path by deferring chained `processNextFrame` calls through a guarded microtask scheduler
+
+**What was done**:
+1. Added guarded microtask scheduler for `processNextFrame`.
+2. Replaced immediate recursive/inline `processNextFrame` calls in worker error path and post-dispatch continuation branches.
+3. Updated enqueue path to schedule processing instead of direct invocation.
+4. Reset scheduling guard during cleanup.
+5. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `processNextScheduled` guard and `scheduleProcessNextFrame()` helper
+  - uses `queueMicrotask` to coalesce follow-up processing into one pending microtask
+  - replaced direct continuation calls in:
+    - worker `error` handling
+    - worker fallback postMessage continuation
+    - SAB success continuation
+    - non-SAB postMessage continuation
+    - enqueue initial dispatch
+  - cleanup now resets `processNextScheduled`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+
+**Results**:
+- ✅ Socket dispatch path now avoids deep synchronous chaining when multiple pending frames are waiting.
+- ✅ Processing remains coalesced via single scheduled microtask guard.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for sustained playback validation to confirm flatter main-thread call stacks under fallback-heavy transport conditions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

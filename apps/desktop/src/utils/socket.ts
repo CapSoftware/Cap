@@ -129,6 +129,7 @@ export function createImageDataWS(
 	let sabRetryLimitFallbackWindowCount = 0;
 	let sabWriteRetryCount = 0;
 	let sabRetryScheduled = false;
+	let processNextScheduled = false;
 
 	function initializeSharedBuffer(config: SharedFrameBufferConfig): boolean {
 		try {
@@ -247,6 +248,7 @@ export function createImageDataWS(
 		nextFrame = null;
 		isProcessing = false;
 		sabRetryScheduled = false;
+		processNextScheduled = false;
 		sabFallbackWindowCount = 0;
 		sabOversizeFallbackWindowCount = 0;
 		sabRetryLimitFallbackWindowCount = 0;
@@ -384,7 +386,7 @@ export function createImageDataWS(
 		if (e.data.type === "error") {
 			console.error("[FrameWorker]", e.data.message);
 			isProcessing = false;
-			processNextFrame();
+			scheduleProcessNextFrame();
 			return;
 		}
 
@@ -404,6 +406,15 @@ export function createImageDataWS(
 		}
 	};
 
+	function scheduleProcessNextFrame() {
+		if (processNextScheduled) return;
+		processNextScheduled = true;
+		queueMicrotask(() => {
+			processNextScheduled = false;
+			processNextFrame();
+		});
+	}
+
 	function enqueueFrameBuffer(buffer: ArrayBuffer) {
 		if (isProcessing) {
 			if (nextFrame) {
@@ -413,7 +424,7 @@ export function createImageDataWS(
 			nextFrame = buffer;
 		} else {
 			pendingFrame = buffer;
-			processNextFrame();
+			scheduleProcessNextFrame();
 		}
 	}
 
@@ -476,7 +487,7 @@ export function createImageDataWS(
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
 				isProcessing = false;
 				if (nextFrame || pendingFrame) {
-					processNextFrame();
+					scheduleProcessNextFrame();
 				}
 				return;
 			} else {
@@ -484,7 +495,7 @@ export function createImageDataWS(
 				totalFramesWrittenToSharedBuffer++;
 				isProcessing = false;
 				if (nextFrame || pendingFrame) {
-					processNextFrame();
+					scheduleProcessNextFrame();
 				}
 				return;
 			}
@@ -496,7 +507,7 @@ export function createImageDataWS(
 			worker.postMessage({ type: "frame", buffer }, [buffer]);
 			isProcessing = false;
 			if (nextFrame || pendingFrame) {
-				processNextFrame();
+				scheduleProcessNextFrame();
 			}
 			return;
 		}
