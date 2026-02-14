@@ -501,7 +501,6 @@ export function createImageDataWS(
 						totalSupersededDrops++;
 					}
 					nextFrame = buffer;
-					scheduleProcessNextFrame();
 					return;
 				}
 				framesSentToWorker++;
@@ -532,7 +531,6 @@ export function createImageDataWS(
 					totalSupersededDrops++;
 				}
 				nextFrame = buffer;
-				scheduleProcessNextFrame();
 				return;
 			}
 			framesSentToWorker++;

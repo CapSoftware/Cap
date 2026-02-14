@@ -2450,6 +2450,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (in-flight cap backoff spin avoidance)
+
+**Goal**: Prevent microtask reschedule spin when worker fallback in-flight cap is reached
+
+**What was done**:
+1. Removed immediate `scheduleProcessNextFrame()` calls from both fallback branches when `workerFramesInFlight` is already at cap.
+2. Kept latest-frame supersession behavior (`nextFrame` replacement) unchanged.
+3. Relied on existing worker completion callbacks (`frame-rendered` / `error`) to resume queued dispatch.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - in `processNextFrame` fallback paths:
+    - when `workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT`, now stores latest frame and returns without scheduling another immediate microtask
+  - avoids tight no-progress scheduling loops while worker backlog is saturated
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+
+**Results**:
+- ✅ In-flight cap path no longer schedules repeated microtasks without worker capacity.
+- ✅ Dispatch resumes via worker completion events as intended.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback contention validation to confirm reduced main-thread scheduling churn when worker in-flight cap is active.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
