@@ -38,12 +38,12 @@ cap-desktop://action?value=<url-encoded-json>
 
 Unit actions (no parameters):
 ```
-cap-desktop://action?value="stop_recording"
+cap-desktop://action?value=%22stop_recording%22
 ```
 
-Actions with parameters:
-```
-cap-desktop://action?value={"start_recording":{"capture_mode":{"screen":"Main Display"},"camera":null,"mic_label":null,"capture_system_audio":false,"mode":"normal"}}
+Actions with parameters (URL-encode the JSON):
+```json
+{"start_recording":{"capture_mode":{"screen":"Main Display"},"camera":null,"mic_label":null,"capture_system_audio":false,"mode":"studio"}}
 ```
 
 ## Development

@@ -21,18 +21,11 @@ type DeepLinkAction =
   | { open_editor: { project_path: string } }
   | { open_settings: { page: string | null } };
 
-/**
- * Builds a Cap deeplink URL for the given action.
- * Format: cap-desktop://action?value=<json-encoded-action>
- */
 function buildDeeplink(action: DeepLinkAction): string {
   const json = JSON.stringify(action);
   return `${SCHEME}://action?value=${encodeURIComponent(json)}`;
 }
 
-/**
- * Opens a Cap deeplink. Shows a toast on failure.
- */
 export async function openDeeplink(
   action: DeepLinkAction,
   successMessage?: string,

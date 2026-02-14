@@ -1,4 +1,4 @@
-import { Action, ActionPanel, List, getApplications } from "@raycast/api";
+import { Action, ActionPanel, List } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import { readdirSync, statSync } from "fs";
 import { join } from "path";
@@ -6,7 +6,6 @@ import { homedir } from "os";
 import { openDeeplink } from "./deeplink";
 
 function getRecordingsDir(): string {
-  // Cap stores recordings in its app data directory
   return join(
     homedir(),
     "Library",
@@ -63,7 +62,7 @@ export default function RecentRecordings() {
               <ActionPanel>
                 <Action
                   title="Open in Editor"
-                  onAction={() =>
+                  onAction={async () =>
                     openDeeplink({ open_editor: { project_path: rec.path } })
                   }
                 />
