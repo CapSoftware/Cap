@@ -1111,6 +1111,38 @@ mod tests {
         assert_eq!(mixed_path, AudioStartupPath::Mixed);
         assert_eq!(mixed_streaming, 2);
         assert_eq!(mixed_prerendered, 1);
+
+        let mut selected_path_only = EventStats::default();
+        selected_path_only
+            .audio_prerender_path_selected_ms
+            .push(88.0);
+        let (selected_path, selected_streaming, selected_prerendered) =
+            detect_audio_startup_path(&selected_path_only);
+        assert_eq!(selected_path, AudioStartupPath::Prerendered);
+        assert_eq!(selected_streaming, 0);
+        assert_eq!(selected_prerendered, 1);
+    }
+
+    #[test]
+    fn parses_structured_path_selection_lines() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("timestamp")
+            .as_nanos();
+        let path = PathBuf::from(format!("/tmp/playback-startup-path-select-{unique}.log"));
+        let contents = [
+            "INFO Audio startup path selected: streaming startup_ms=55.0",
+            "INFO Audio startup path selected: prerendered startup_ms=77.0",
+        ]
+        .join("\n");
+        fs::write(&path, contents).expect("write startup log");
+
+        let mut stats = EventStats::default();
+        parse_log(&path, &mut stats, None).expect("parse startup log");
+        assert_eq!(stats.audio_stream_path_selected_ms, vec![55.0]);
+        assert_eq!(stats.audio_prerender_path_selected_ms, vec![77.0]);
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]

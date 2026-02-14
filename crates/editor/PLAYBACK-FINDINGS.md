@@ -3361,7 +3361,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 **Results**:
 - ✅ Startup report now emits path-selection metric summaries in both console and CSV flows.
-- ✅ Existing startup report tests remain green (11/11).
+- ✅ Added structured-log parsing coverage for path-selection-only lines.
+- ✅ Existing startup report tests remain green (12/12).
 
 **Stopping point**: Ready for real startup traces where path-selection event timing should be compared directly against callback startup timing.
 
