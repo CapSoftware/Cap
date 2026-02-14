@@ -1902,57 +1902,89 @@ impl<'a> FrameRenderer<'a> {
         cursor: &CursorEvents,
         layers: &mut RendererLayers,
     ) -> Result<frame_pipeline::Nv12RenderedFrame, RenderingError> {
-        let session = self.session.get_or_insert_with(|| {
-            RenderSession::new(
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying NV12 frame render after GPU error"
+                );
+                self.reset_session();
+                self.nv12_converter = None;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                )
+            });
+
+            session.update_texture_size(
                 &self.constants.device,
                 uniforms.output_size.0,
                 uniforms.output_size.1,
-            )
-        });
+            );
 
-        session.update_texture_size(
-            &self.constants.device,
-            uniforms.output_size.0,
-            uniforms.output_size.1,
-        );
+            let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
+                frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
+            });
 
-        let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
-            frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
-        });
+            let mut encoder = self.constants.device.create_command_encoder(
+                &(wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder (NV12)"),
+                }),
+            );
 
-        let mut encoder = self.constants.device.create_command_encoder(
-            &(wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder (NV12)"),
-            }),
-        );
+            if let Err(e) = layers
+                .prepare_with_encoder(
+                    self.constants,
+                    &uniforms,
+                    &segment_frames,
+                    cursor,
+                    &mut encoder,
+                )
+                .await
+            {
+                last_error = Some(e);
+                continue;
+            }
 
-        layers
-            .prepare_with_encoder(
-                self.constants,
-                &uniforms,
-                &segment_frames,
-                cursor,
+            layers.render(
+                &self.constants.device,
+                &self.constants.queue,
                 &mut encoder,
+                session,
+                &uniforms,
+            );
+
+            match finish_encoder_nv12(
+                session,
+                nv12_converter,
+                &self.constants.device,
+                &self.constants.queue,
+                &uniforms,
+                encoder,
             )
-            .await?;
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(e)) => {
+                    last_error = Some(RenderingError::BufferMapFailed(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
-        layers.render(
-            &self.constants.device,
-            &self.constants.queue,
-            &mut encoder,
-            session,
-            &uniforms,
-        );
-
-        finish_encoder_nv12(
-            session,
-            nv12_converter,
-            &self.constants.device,
-            &self.constants.queue,
-            &uniforms,
-            encoder,
-        )
-        .await
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
     }
 }
 
