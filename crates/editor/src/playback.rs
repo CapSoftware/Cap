@@ -809,6 +809,7 @@ impl Playback {
                             let wait_start = Instant::now();
                             let max_wait = frame_fetch_timeout;
                             let mut found_frame = None;
+                            let mut buffered_wait_prefetch_changed = false;
 
                             while wait_start.elapsed() < max_wait {
                                 tokio::select! {
@@ -821,11 +822,13 @@ impl Playback {
                                             found_frame = Some(prefetched);
                                             break;
                                         } else if prefetched.frame_number >= frame_number {
-                                            let _ = insert_prefetched_frame(
+                                            if insert_prefetched_frame_untrimmed(
                                                 &mut prefetch_buffer,
                                                 prefetched,
                                                 frame_number,
-                                            );
+                                            ) {
+                                                buffered_wait_prefetch_changed = true;
+                                            }
                                         }
                                     }
                                     _ = tokio::time::sleep(in_flight_poll_interval) => {
@@ -845,6 +848,10 @@ impl Playback {
                                         }
                                     }
                                 }
+                            }
+
+                            if buffered_wait_prefetch_changed {
+                                let _ = trim_prefetch_buffer(&mut prefetch_buffer, frame_number);
                             }
 
                             if seek_rx.has_changed().unwrap_or(false) {
