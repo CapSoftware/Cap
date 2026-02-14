@@ -796,6 +796,9 @@ impl Playback {
                                         }
                                     }
                                     _ = tokio::time::sleep(in_flight_poll_interval) => {
+                                        if seek_rx.has_changed().unwrap_or(false) {
+                                            break;
+                                        }
                                         let still_in_flight = playback_prefetch_in_flight
                                             .read()
                                             .map(|guard| guard.contains(&in_flight_key))
@@ -809,6 +812,10 @@ impl Playback {
                                         }
                                     }
                                 }
+                            }
+
+                            if seek_rx.has_changed().unwrap_or(false) {
+                                continue;
                             }
 
                             if let Some(prefetched) = found_frame {
@@ -833,6 +840,10 @@ impl Playback {
 
                             let wait_result =
                                 tokio::time::timeout(frame_fetch_timeout, prefetch_rx.recv()).await;
+
+                            if seek_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
 
                             if let Ok(Some(prefetched)) = wait_result {
                                 if prefetched.generation != seek_generation {
