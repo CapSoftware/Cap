@@ -2106,6 +2106,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (frame-worker queue path deduplication)
+
+**Goal**: Reduce fallback-frame processing overhead by removing duplicate frame parsing/queueing code paths in worker message handling
+
+**What was done**:
+1. Refactored worker `frame` message handling to use `queueFrameFromBytes` directly.
+2. Removed `processFrameBytesSync` duplicate decode/queue implementation.
+3. Updated `queueFrameFromBytes` to:
+   - return boolean success/failure
+   - start render loop internally
+4. Preserved worker error reporting when metadata parsing fails.
+5. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - `queueFrameFromBytes` now returns `boolean` and calls `startRenderLoop()`
+  - `self.onmessage` `type === "frame"` path now:
+    - calls `queueFrameFromBytes(new Uint8Array(buffer), undefined, false)`
+    - emits `error` message on failed parse
+  - removed obsolete `DecodeResult` type and `processFrameBytesSync` function
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Worker fallback frame handling now follows a single queueing/parsing path.
+- ✅ Duplicate parse/stride/copy branches removed from worker message handler.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback-heavy desktop runs to validate reduced worker-side overhead under sustained postMessage transport.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

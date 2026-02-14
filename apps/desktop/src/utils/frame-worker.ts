@@ -296,11 +296,11 @@ function queueFrameFromBytes(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
 	emitQueuedMessage: boolean = true,
-): void {
+): boolean {
 	const meta = parseFrameMetadata(bytes);
 	if (!meta) {
 		releaseCallback?.();
-		return;
+		return false;
 	}
 
 	const { width, height, frameNumber, targetTimeNs } = meta;
@@ -388,6 +388,8 @@ function queueFrameFromBytes(
 		});
 	}
 
+	startRenderLoop();
+
 	if (emitQueuedMessage) {
 		self.postMessage({
 			type: "frame-queued",
@@ -395,6 +397,8 @@ function queueFrameFromBytes(
 			height,
 		} satisfies FrameQueuedMessage);
 	}
+
+	return true;
 }
 
 function renderLoop() {
@@ -750,122 +754,6 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 	return initializationPromise;
 }
 
-type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
-
-function processFrameBytesSync(
-	bytes: Uint8Array,
-	releaseCallback?: () => void,
-): DecodeResult {
-	if (bytes.byteLength < 24) {
-		releaseCallback?.();
-		return {
-			type: "error",
-			message: "Received frame too small to contain metadata",
-		};
-	}
-
-	const meta = parseFrameMetadata(bytes);
-	if (!meta) {
-		releaseCallback?.();
-		return {
-			type: "error",
-			message: "Failed to parse frame metadata",
-		};
-	}
-
-	const { width, height, frameNumber, targetTimeNs } = meta;
-	const timing: FrameTiming = { frameNumber, targetTimeNs };
-
-	if (renderMode === "webgpu" || renderMode === "pending") {
-		while (frameQueue.length >= FRAME_QUEUE_SIZE) {
-			const dropped = frameQueue.shift();
-			if (dropped?.mode === "webgpu" && dropped.releaseCallback) {
-				dropped.releaseCallback();
-			}
-		}
-
-		const frameData = new Uint8ClampedArray(
-			bytes.buffer,
-			bytes.byteOffset,
-			bytes.byteLength - 24,
-		);
-		frameQueue.push({
-			mode: "webgpu",
-			data: frameData.subarray(0, meta.availableLength),
-			width,
-			height,
-			strideBytes: meta.strideBytes,
-			timing,
-			releaseCallback,
-		});
-		startRenderLoop();
-		return { type: "frame-queued", width, height };
-	}
-
-	const expectedRowBytes = width * 4;
-	const expectedLength = expectedRowBytes * height;
-	let processedFrameData: Uint8ClampedArray;
-
-	const frameData = new Uint8ClampedArray(
-		bytes.buffer,
-		bytes.byteOffset,
-		bytes.byteLength - 24,
-	);
-
-	if (meta.strideBytes === expectedRowBytes) {
-		processedFrameData = frameData.subarray(0, expectedLength);
-	} else {
-		if (!strideBuffer || strideBufferSize < expectedLength) {
-			strideBuffer = new Uint8ClampedArray(expectedLength);
-			strideBufferSize = expectedLength;
-		}
-		for (let row = 0; row < height; row += 1) {
-			const srcStart = row * meta.strideBytes;
-			const destStart = row * expectedRowBytes;
-			strideBuffer.set(
-				frameData.subarray(srcStart, srcStart + expectedRowBytes),
-				destStart,
-			);
-		}
-		processedFrameData = strideBuffer.subarray(0, expectedLength);
-	}
-
-	if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {
-		lastRawFrameData = new Uint8ClampedArray(expectedLength);
-	}
-	lastRawFrameData.set(processedFrameData);
-	lastRawFrameWidth = width;
-	lastRawFrameHeight = height;
-
-	if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
-		cachedImageData = new ImageData(width, height);
-		cachedWidth = width;
-		cachedHeight = height;
-	}
-	cachedImageData.data.set(processedFrameData);
-	lastImageData = cachedImageData;
-
-	releaseCallback?.();
-
-	while (frameQueue.length >= FRAME_QUEUE_SIZE) {
-		frameQueue.shift();
-	}
-
-	frameQueue.push({
-		mode: "canvas2d",
-		imageData: cachedImageData,
-		width,
-		height,
-		timing,
-	});
-
-	if (offscreenCanvas && offscreenCtx) {
-		startRenderLoop();
-	}
-
-	return { type: "frame-queued", width, height };
-}
-
 self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	if (e.data.type === "cleanup") {
 		cleanup();
@@ -929,8 +817,16 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	}
 
 	if (e.data.type === "frame") {
-		const result = processFrameBytesSync(new Uint8Array(e.data.buffer));
-		if (result.type === "error") {
+		const queued = queueFrameFromBytes(
+			new Uint8Array(e.data.buffer),
+			undefined,
+			false,
+		);
+		if (!queued) {
+			const result: ErrorMessage = {
+				type: "error",
+				message: "Failed to parse frame metadata",
+			};
 			self.postMessage(result);
 		}
 	}
