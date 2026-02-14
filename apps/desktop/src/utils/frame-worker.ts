@@ -141,8 +141,6 @@ let lastRawFrameHeight = 0;
 
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
-let sharedReadBuffer: Uint8Array | null = null;
-let sharedReadBufferSize = 0;
 
 const FRAME_QUEUE_SIZE = 5;
 let frameQueue: PendingFrame[] = [];
@@ -155,18 +153,13 @@ let lastRenderedFrameNumber = -1;
 
 function tryPollSharedBuffer(): boolean {
 	if (!consumer || !useSharedBuffer) return false;
-
 	if (renderMode !== "webgpu") {
-		if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
-			sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
-			sharedReadBufferSize = sharedReadBuffer.byteLength;
+		const borrowed = consumer.borrow(0);
+		if (!borrowed) {
+			return false;
 		}
-
-		const size = consumer.readInto(sharedReadBuffer, 0);
-		if (size != null && size > 0) {
-			queueFrameFromBytes(sharedReadBuffer.subarray(0, size));
-			return true;
-		}
+		queueFrameFromBytes(borrowed.data, borrowed.release);
+		return true;
 	}
 	return false;
 }
@@ -617,8 +610,6 @@ function cleanup() {
 	offscreenCtx = null;
 	consumer = null;
 	useSharedBuffer = false;
-	sharedReadBuffer = null;
-	sharedReadBufferSize = 0;
 	lastImageData = null;
 	cachedImageData = null;
 	cachedWidth = 0;
@@ -881,8 +872,6 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	if (e.data.type === "init-shared-buffer") {
 		consumer = createConsumer(e.data.buffer);
 		useSharedBuffer = true;
-		sharedReadBuffer = null;
-		sharedReadBufferSize = 0;
 
 		if (workerReady) {
 			startRenderLoop();

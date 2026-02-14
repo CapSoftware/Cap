@@ -1916,6 +1916,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker SAB polling borrow-path optimization)
+
+**Goal**: Reduce worker-side frame copy overhead when consuming shared-buffer frames in non-WebGPU render mode
+
+**What was done**:
+1. Reworked shared-buffer polling in frame worker canvas path to use borrowed SAB frames.
+2. Removed extra `readInto` copy buffer path for non-WebGPU polling.
+3. Kept release-callback semantics through existing `queueFrameFromBytes` flow.
+4. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - `tryPollSharedBuffer` now uses `consumer.borrow(0)` and forwards borrowed data to `queueFrameFromBytes`
+  - removed `sharedReadBuffer` / `sharedReadBufferSize` scratch buffer state
+  - removed obsolete shared buffer reset assignments in cleanup/init paths
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Worker canvas fallback path no longer copies SAB frames through an intermediate `readInto` buffer.
+- ✅ Existing release lifecycle remains managed by `queueFrameFromBytes`.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows validation to confirm reduced copy pressure in non-WebGPU fallback sessions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
