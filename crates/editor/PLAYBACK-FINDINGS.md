@@ -808,6 +808,28 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Supersession min-request threshold sweep)
+
+**Goal**: Validate whether lowering supersession queue threshold improves scrub latency further
+
+**What was done**:
+1. Ran 3-run scrub benchmarks for candidate `min_requests=6`, `min_span_frames=25`.
+2. Compared medians against current default (`min_requests=8`, `min_span_frames=25`).
+
+**Results**:
+- 1080p improved with threshold 6:
+  - median last-request avg: **~294ms -> ~286ms**
+  - median last-request p95: **~456ms -> ~428ms**
+- 4k regressed vs threshold 8:
+  - median last-request avg: **~809ms -> ~842ms**
+  - median last-request p95: **~1694ms -> ~1744ms**
+
+**Decision**: keep default `min_requests=8` because it gives better 4k scrub responsiveness while still materially improving 1080p over the original baseline.
+
+**Stopping point**: defaults remain `min_requests=8`, `min_span_frames=25`, with runtime overrides available for platform-specific tuning.
+
+---
+
 ### Session 2026-02-14 (Scrub benchmark multi-run aggregation)
 
 **Goal**: Improve scrub benchmark repeatability by reducing single-run noise in comparisons
