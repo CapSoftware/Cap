@@ -123,7 +123,7 @@ let cachedHeight = 0;
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
 
-let frameQueue: PendingFrame[] = [];
+let queuedFrame: PendingFrame | null = null;
 let _rafId: number | null = null;
 let rafRunning = false;
 
@@ -270,12 +270,10 @@ function drainAndQueueLatestSharedFrame(maxDrain: number): boolean {
 }
 
 function clearQueuedFrames() {
-	for (const queued of frameQueue) {
-		if (queued.mode === "webgpu" && queued.releaseCallback) {
-			queued.releaseCallback();
-		}
+	if (queuedFrame?.mode === "webgpu" && queuedFrame.releaseCallback) {
+		queuedFrame.releaseCallback();
 	}
-	frameQueue = [];
+	queuedFrame = null;
 }
 
 function queueFrameFromBytes(
@@ -300,7 +298,7 @@ function queueFrameFromBytes(
 			bytes.byteOffset,
 			bytes.byteLength - metadataSize,
 		);
-		frameQueue.push({
+		queuedFrame = {
 			mode: "webgpu",
 			data: frameData.subarray(0, meta.availableLength),
 			width,
@@ -308,7 +306,7 @@ function queueFrameFromBytes(
 			strideBytes: meta.strideBytes,
 			timing,
 			releaseCallback,
-		});
+		};
 	} else {
 		const expectedRowBytes = width * 4;
 		const metadataSize = 24;
@@ -349,13 +347,13 @@ function queueFrameFromBytes(
 		releaseCallback?.();
 		clearQueuedFrames();
 
-		frameQueue.push({
+		queuedFrame = {
 			mode: "canvas2d",
 			imageData: cachedImageData,
 			width,
 			height,
 			timing,
-		});
+		};
 	}
 
 	startRenderLoop();
@@ -371,7 +369,7 @@ function renderLoop() {
 			: offscreenCanvas !== null && offscreenCtx !== null;
 
 	if (!hasRenderer) {
-		if (renderMode === "pending" && frameQueue.length > 0) {
+		if (renderMode === "pending" && queuedFrame !== null) {
 			_rafId = requestAnimationFrame(renderLoop);
 			return;
 		}
@@ -395,7 +393,7 @@ function renderLoop() {
 		}
 	}
 
-	const frame = frameQueue[0] ?? null;
+	const frame = queuedFrame;
 
 	if (frame) {
 		if (frame.mode === "webgpu" && !webgpuRenderer) {
@@ -404,7 +402,7 @@ function renderLoop() {
 				return;
 			}
 			if (renderMode === "canvas2d" && offscreenCanvas && offscreenCtx) {
-				frameQueue.shift();
+				queuedFrame = null;
 				lastRenderedFrameNumber = frame.timing.frameNumber;
 
 				if (
@@ -459,7 +457,7 @@ function renderLoop() {
 				} satisfies FrameRenderedMessage);
 
 				const shouldContinue =
-					frameQueue.length > 0 ||
+					queuedFrame !== null ||
 					(useSharedBuffer && consumer && !consumer.isShutdown());
 
 				if (shouldContinue) {
@@ -473,7 +471,7 @@ function renderLoop() {
 			return;
 		}
 
-		frameQueue.shift();
+		queuedFrame = null;
 		lastRenderedFrameNumber = frame.timing.frameNumber;
 
 		if (frame.mode === "webgpu" && webgpuRenderer) {
@@ -508,7 +506,7 @@ function renderLoop() {
 	}
 
 	const shouldContinue =
-		frameQueue.length > 0 ||
+		queuedFrame !== null ||
 		(useSharedBuffer && consumer && !consumer.isShutdown());
 
 	if (shouldContinue) {

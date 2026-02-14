@@ -2338,6 +2338,39 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (single-slot queue variable refactor)
+
+**Goal**: Reduce worker render-loop bookkeeping overhead by replacing array-backed single-item queue usage with explicit nullable frame slot
+
+**What was done**:
+1. Replaced `frameQueue: PendingFrame[]` with `queuedFrame: PendingFrame | null`.
+2. Updated queue clear helper to release and clear single slot.
+3. Updated enqueue and render-loop logic to use direct nullable slot checks and assignments.
+4. Preserved pending-mode behavior and shared-buffer polling flow.
+5. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - replaced queue storage with `queuedFrame`
+  - `clearQueuedFrames` now releases one pending webgpu borrowed frame if present
+  - `queueFrameFromBytes` writes directly to `queuedFrame`
+  - render loop now reads `queuedFrame` directly and clears via `queuedFrame = null` on consume
+  - `shouldContinue` checks now use `queuedFrame !== null`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Worker queue bookkeeping now fully O(1) with no array operations on hot path.
+- ✅ Queue semantics remain single-latest as intended.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for runtime validation of reduced worker-loop overhead under sustained playback.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
