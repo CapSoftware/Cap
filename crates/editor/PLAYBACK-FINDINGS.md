@@ -3076,6 +3076,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - ✅ Stride-correction responses now honor frame-order stale gating before main-thread render.
 - ✅ Direct-path ordering state now distinguishes accepted ingress ordering from completed render ordering.
 - ✅ Desktop typecheck and transport utility tests pass (28/28).
+- ✅ Transport order helper coverage now includes duplicate-frame and wraparound-forward decision cases (30/30 utility tests).
 
 **Stopping point**: Ready for target-machine sessions to validate reduced direct-path visual regressions under stride-correction-heavy clips.
 

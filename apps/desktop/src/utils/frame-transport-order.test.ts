@@ -29,6 +29,15 @@ describe("decideFrameOrder", () => {
 		});
 	});
 
+	it("drops duplicate frame numbers", () => {
+		const decision = decideFrameOrder(120, 120, 30);
+		expect(decision).toEqual({
+			action: "drop",
+			nextLatestFrameNumber: 120,
+			dropsIncrement: 1,
+		});
+	});
+
 	it("accepts large backward jumps for seeks", () => {
 		const decision = decideFrameOrder(80, 120, 30);
 		expect(decision).toEqual({
@@ -43,6 +52,15 @@ describe("decideFrameOrder", () => {
 		expect(decision).toEqual({
 			action: "accept",
 			nextLatestFrameNumber: 121,
+			dropsIncrement: 0,
+		});
+	});
+
+	it("accepts wraparound forward progression", () => {
+		const decision = decideFrameOrder(2, 0xffffffff, 30);
+		expect(decision).toEqual({
+			action: "accept",
+			nextLatestFrameNumber: 2,
 			dropsIncrement: 0,
 		});
 	});
