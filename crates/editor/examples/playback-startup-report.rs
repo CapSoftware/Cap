@@ -535,6 +535,14 @@ fn append_run_metrics_csv(
                 "audio pre-rendered callback",
                 stats.audio_prerender_startup_ms.as_slice(),
             ),
+            (
+                "audio startup path streaming",
+                stats.audio_stream_path_selected_ms.as_slice(),
+            ),
+            (
+                "audio startup path prerendered",
+                stats.audio_prerender_path_selected_ms.as_slice(),
+            ),
         ];
 
         for (name, values) in metric_rows {
@@ -740,12 +748,14 @@ fn main() {
                     let (audio_path, stream_samples, prerendered_samples) =
                         detect_audio_startup_path(stats);
                     println!(
-                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}] audio_path={} stream_samples={} prerender_samples={}",
+                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}] audio_path_streaming[{}] audio_path_prerendered[{}] audio_path={} stream_samples={} prerender_samples={}",
                         run_id_key,
                         metric_brief(&stats.decode_startup_ms),
                         metric_brief(&stats.render_startup_ms),
                         metric_brief(&stats.audio_stream_startup_ms),
                         metric_brief(&stats.audio_prerender_startup_ms),
+                        metric_brief(&stats.audio_stream_path_selected_ms),
+                        metric_brief(&stats.audio_prerender_path_selected_ms),
                         audio_startup_path_label(audio_path),
                         stream_samples,
                         prerendered_samples,
@@ -821,6 +831,14 @@ fn main() {
             "audio pre-rendered callback",
             &stats.audio_prerender_startup_ms,
         );
+        print_metric(
+            "audio startup path streaming",
+            &stats.audio_stream_path_selected_ms,
+        );
+        print_metric(
+            "audio startup path prerendered",
+            &stats.audio_prerender_path_selected_ms,
+        );
         let (audio_path, stream_samples, prerendered_samples) = detect_audio_startup_path(&stats);
         println!(
             "audio startup path: {} (stream_samples={} prerender_samples={})",
@@ -840,6 +858,14 @@ fn main() {
                 (
                     "audio pre-rendered callback",
                     stats.audio_prerender_startup_ms.as_slice(),
+                ),
+                (
+                    "audio startup path streaming",
+                    stats.audio_stream_path_selected_ms.as_slice(),
+                ),
+                (
+                    "audio startup path prerendered",
+                    stats.audio_prerender_path_selected_ms.as_slice(),
                 ),
             ];
             let audio_summary = detect_audio_startup_path(&stats);
@@ -915,6 +941,16 @@ fn main() {
             &baseline_stats.audio_prerender_startup_ms,
             &candidate_stats.audio_prerender_startup_ms,
         );
+        print_delta(
+            "audio startup path streaming",
+            &baseline_stats.audio_stream_path_selected_ms,
+            &candidate_stats.audio_stream_path_selected_ms,
+        );
+        print_delta(
+            "audio startup path prerendered",
+            &baseline_stats.audio_prerender_path_selected_ms,
+            &candidate_stats.audio_prerender_path_selected_ms,
+        );
         let (baseline_audio_path, baseline_stream_samples, baseline_prerendered_samples) =
             detect_audio_startup_path(&baseline_stats);
         let (candidate_audio_path, candidate_stream_samples, candidate_prerendered_samples) =
@@ -950,6 +986,16 @@ fn main() {
                     "audio pre-rendered callback",
                     baseline_stats.audio_prerender_startup_ms.as_slice(),
                     candidate_stats.audio_prerender_startup_ms.as_slice(),
+                ),
+                (
+                    "audio startup path streaming",
+                    baseline_stats.audio_stream_path_selected_ms.as_slice(),
+                    candidate_stats.audio_stream_path_selected_ms.as_slice(),
+                ),
+                (
+                    "audio startup path prerendered",
+                    baseline_stats.audio_prerender_path_selected_ms.as_slice(),
+                    candidate_stats.audio_prerender_path_selected_ms.as_slice(),
                 ),
             ];
             let baseline_audio_summary = detect_audio_startup_path(&baseline_stats);

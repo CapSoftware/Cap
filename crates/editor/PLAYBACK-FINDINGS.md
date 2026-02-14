@@ -3332,6 +3332,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (startup report path-selection metric summaries)
+
+**Goal**: Surface explicit startup path-selection timing metrics alongside callback metrics in startup report outputs
+
+**What was done**:
+1. Added path-selection metric rows to run-metrics CSV export.
+2. Added path-selection metric printing in list-run-metrics output.
+3. Added path-selection metric printing in aggregate and delta modes.
+4. Added path-selection metric participation in aggregate/delta CSV metric arrays.
+
+**Changes Made**:
+- `crates/editor/examples/playback-startup-report.rs`
+  - run metrics now include:
+    - `audio startup path streaming`
+    - `audio startup path prerendered`
+  - list-run-metrics console output now prints metric briefs for selected-path events
+  - aggregate mode now prints selected-path metric summaries
+  - delta mode now prints selected-path metric deltas
+  - aggregate/delta CSV exports now receive selected-path metric slices
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - startup report command description updated to include path-selection event summaries
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics`
+
+**Results**:
+- ✅ Startup report now emits path-selection metric summaries in both console and CSV flows.
+- ✅ Existing startup report tests remain green (11/11).
+
+**Stopping point**: Ready for real startup traces where path-selection event timing should be compared directly against callback startup timing.
+
+---
+
 ### Session 2026-02-14 (startup capture docs for pre-render override)
 
 **Goal**: Make A/B startup capture workflow explicit for streaming-first vs forced pre-render audio startup comparisons
