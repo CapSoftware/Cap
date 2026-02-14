@@ -830,6 +830,26 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
+
+**Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
+
+**What was done**:
+1. Implemented a reduced cache window path for requests marked as superseded bursts.
+2. Ran scrub, decode, and playback regression benchmarks on 1080p and 4k.
+3. Compared multi-run scrub medians and tail behavior to current default.
+
+**Results**:
+- 4k scrub median last-request average improved (roughly **809ms -> 782ms**), but p95 tail worsened materially in sampled runs (up to **~1952ms**).
+- 1080p scrub average regressed vs current default (roughly **294ms -> 313ms**).
+- Decode/playback regressions remained generally stable, but scrub-tail tradeoff was unfavorable.
+
+**Decision**: reverted the cache-window reduction experiment; keep current supersession behavior unchanged.
+
+**Stopping point**: continue tuning through runtime thresholds and benchmark methodology rather than superseded-request decode-window specialization.
+
+---
+
 ### Session 2026-02-14 (Scrub benchmark multi-run aggregation)
 
 **Goal**: Improve scrub benchmark repeatability by reducing single-run noise in comparisons
