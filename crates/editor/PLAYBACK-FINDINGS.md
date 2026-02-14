@@ -567,6 +567,35 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Rejected FFmpeg seek/thread tuning under hardened benchmarks)
+
+**Goal**: Test low-risk FFmpeg decode tuning ideas against hardened seek benchmark tails
+
+**What was done**:
+1. Tested backward-only forward-seek window ordering in `cap-video-decode`.
+2. Benchmarked 1080p/4k decode with `--seek-iterations 10`.
+3. Reverted due regressions, then tested software thread-count cap for 4k decode.
+4. Benchmarked again and reverted second experiment due seek-tail regressions.
+
+**Results**:
+- ❌ Backward-only seek preference regressed seek tails and random access:
+  - 4k seek avg/p95 reached roughly:
+    - 0.5s: **320 / 407ms**
+    - 1.0s: **577 / 714ms**
+    - 2.0s: **1076 / 1670ms**
+    - 5.0s: **1051 / 1725ms**
+  - 4k random access avg rose to **~925ms**
+- ❌ 4k thread-count cap experiment also worsened seek tails:
+  - 4k seek avg/p95 reached roughly:
+    - 0.5s: **224 / 395ms**
+    - 1.0s: **367 / 734ms**
+    - 2.0s: **638 / 1479ms**
+    - 5.0s: **975 / 1523ms**
+
+**Stopping point**: both candidates reverted. Next viable direction should focus on architecture-level seek improvements (decoder pool/keyframe-aware jump scheduling) rather than small FFmpeg seek-window tweaks.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
