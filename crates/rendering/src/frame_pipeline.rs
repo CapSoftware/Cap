@@ -12,7 +12,9 @@ pub struct RgbaToNv12Converter {
     bind_group_layout: wgpu::BindGroupLayout,
     params_buffer: wgpu::Buffer,
     nv12_buffer: Option<wgpu::Buffer>,
-    readback_buffer: Option<Arc<wgpu::Buffer>>,
+    readback_buffers: [Option<Arc<wgpu::Buffer>>; 2],
+    current_readback: usize,
+    pending: Option<PendingNv12Readback>,
     cached_width: u32,
     cached_height: u32,
 }
@@ -98,7 +100,9 @@ impl RgbaToNv12Converter {
             bind_group_layout,
             params_buffer,
             nv12_buffer: None,
-            readback_buffer: None,
+            readback_buffers: [None, None],
+            current_readback: 0,
+            pending: None,
             cached_width: 0,
             cached_height: 0,
         }
@@ -125,19 +129,23 @@ impl RgbaToNv12Converter {
             mapped_at_creation: false,
         }));
 
-        self.readback_buffer = Some(Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("NV12 Readback Buffer"),
-            size: nv12_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        })));
+        let make_readback = || {
+            Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("NV12 Readback Buffer"),
+                size: nv12_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }))
+        };
 
+        self.readback_buffers = [Some(make_readback()), Some(make_readback())];
+        self.current_readback = 0;
         self.cached_width = width;
         self.cached_height = height;
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn convert_and_readback(
+    pub fn submit_conversion(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -147,15 +155,22 @@ impl RgbaToNv12Converter {
         height: u32,
         frame_number: u32,
         frame_rate: u32,
-    ) -> Option<PendingNv12Readback> {
+    ) -> bool {
         if width == 0 || height == 0 || !width.is_multiple_of(4) || !height.is_multiple_of(2) {
-            return None;
+            return false;
         }
 
         self.ensure_buffers(device, width, height);
 
-        let nv12_buffer = self.nv12_buffer.as_ref()?;
-        let readback_buffer = self.readback_buffer.as_ref()?.clone();
+        let Some(nv12_buffer) = self.nv12_buffer.as_ref() else {
+            return false;
+        };
+
+        let readback_buffer = match self.readback_buffers[self.current_readback].as_ref() {
+            Some(b) => b.clone(),
+            None => return false,
+        };
+        self.current_readback = 1 - self.current_readback;
 
         let y_stride = width;
         let uv_stride = width;
@@ -202,27 +217,39 @@ impl RgbaToNv12Converter {
         let nv12_size = Self::nv12_size(width, height);
         encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
 
-        let (tx, rx) = oneshot::channel();
-        readback_buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
-
-        Some(PendingNv12Readback {
-            rx,
+        self.pending = Some(PendingNv12Readback {
+            rx: None,
             buffer: readback_buffer,
             width,
             height,
             y_stride,
             frame_number,
             frame_rate,
-        })
+        });
+
+        true
+    }
+
+    pub fn start_readback(&mut self) {
+        if let Some(ref mut pending) = self.pending {
+            let (tx, rx) = oneshot::channel();
+            pending
+                .buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = tx.send(result);
+                });
+            pending.rx = Some(rx);
+        }
+    }
+
+    pub fn take_pending(&mut self) -> Option<PendingNv12Readback> {
+        self.pending.take()
     }
 }
 
 pub struct PendingNv12Readback {
-    rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    rx: Option<oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     buffer: Arc<wgpu::Buffer>,
     pub width: u32,
     pub height: u32,
@@ -236,6 +263,10 @@ impl PendingNv12Readback {
         mut self,
         device: &wgpu::Device,
     ) -> Result<Nv12RenderedFrame, RenderingError> {
+        let Some(mut rx) = self.rx.take() else {
+            return Err(RenderingError::BufferMapWaitingFailed);
+        };
+
         let mut poll_count = 0u32;
         let start_time = Instant::now();
         let timeout_duration = std::time::Duration::from_secs(GPU_BUFFER_WAIT_TIMEOUT_SECS);
@@ -245,7 +276,7 @@ impl PendingNv12Readback {
                 return Err(RenderingError::BufferMapWaitingFailed);
             }
 
-            match self.rx.try_recv() {
+            match rx.try_recv() {
                 Ok(result) => {
                     result?;
                     break;
@@ -763,13 +794,19 @@ pub async fn finish_encoder_nv12(
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
+    let previous_frame = if let Some(prev) = nv12_converter.take_pending() {
+        Some(prev.wait(device).await?)
+    } else {
+        None
+    };
+
     let texture = if session.current_is_left {
         &session.textures.0
     } else {
         &session.textures.1
     };
 
-    if let Some(pending) = nv12_converter.convert_and_readback(
+    let submitted = nv12_converter.submit_conversion(
         device,
         queue,
         &mut encoder,
@@ -778,9 +815,23 @@ pub async fn finish_encoder_nv12(
         height,
         uniforms.frame_number,
         uniforms.frame_rate,
-    ) {
+    );
+
+    if submitted {
         queue.submit(std::iter::once(encoder.finish()));
+        nv12_converter.start_readback();
+
+        if let Some(prev_frame) = previous_frame {
+            return Ok(prev_frame);
+        }
+
+        let pending = nv12_converter
+            .take_pending()
+            .expect("just submitted a conversion");
         pending.wait(device).await
+    } else if let Some(prev_frame) = previous_frame {
+        queue.submit(std::iter::once(encoder.finish()));
+        Ok(prev_frame)
     } else {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
         Ok(Nv12RenderedFrame {
