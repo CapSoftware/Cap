@@ -2554,6 +2554,45 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker in-flight peak diagnostics)
+
+**Goal**: Add peak worker in-flight visibility to complement cap-hit counters and better characterize fallback backlog pressure
+
+**What was done**:
+1. Added worker in-flight peak counters (window and cumulative) to socket transport metrics.
+2. Updated fallback dispatch paths to update peak counters whenever in-flight count increments.
+3. Extended periodic frame logs with peak in-flight window/total values.
+4. Reset window peak at each stats window flush while preserving cumulative peak.
+5. Added peak metrics to overlay and clipboard diagnostics.
+6. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `workerFramesInFlightPeakWindow` and `workerFramesInFlightPeakTotal` to `FpsStats`
+  - tracks peak counters during fallback postMessage dispatch
+  - periodic `[Frame]` log now includes:
+    - `worker_inflight_peak_window`
+    - `worker_inflight_peak_total`
+  - resets window peak on each log-window flush
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling now includes both peak metrics
+  - clipboard export includes worker in-flight peak values
+  - overlay shows `Worker in-flight peak: <window> window / <total> total`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Diagnostics now expose instantaneous, windowed, and cumulative backlog pressure for fallback worker dispatch.
+- ✅ Frame logs include peak pressure context for terminal-only benchmark sessions.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback stress validation to correlate peak in-flight backlog with cap-hit frequencies and superseded-drop behavior.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

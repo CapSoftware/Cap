@@ -39,6 +39,8 @@ type TransportStats = {
 	workerFramesInFlight: number;
 	workerInFlightBackpressureHits: number;
 	workerInFlightBackpressureWindowHits: number;
+	workerFramesInFlightPeakWindow: number;
+	workerFramesInFlightPeakTotal: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -82,6 +84,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		workerFramesInFlight: 0,
 		workerInFlightBackpressureHits: 0,
 		workerInFlightBackpressureWindowHits: 0,
+		workerFramesInFlightPeakWindow: 0,
+		workerFramesInFlightPeakTotal: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -215,6 +219,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			workerFramesInFlight: 0,
 			workerInFlightBackpressureHits: 0,
 			workerInFlightBackpressureWindowHits: 0,
+			workerFramesInFlightPeakWindow: 0,
+			workerFramesInFlightPeakTotal: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -256,6 +262,10 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 					socketStats.workerInFlightBackpressureHits,
 				workerInFlightBackpressureWindowHits:
 					socketStats.workerInFlightBackpressureWindowHits,
+				workerFramesInFlightPeakWindow:
+					socketStats.workerFramesInFlightPeakWindow,
+				workerFramesInFlightPeakTotal:
+					socketStats.workerFramesInFlightPeakTotal,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -332,6 +342,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Worker Frames In Flight: ${t.workerFramesInFlight}`,
 			`Worker In-Flight Cap Hits: ${t.workerInFlightBackpressureHits}`,
 			`Worker In-Flight Cap Hits (Window): ${t.workerInFlightBackpressureWindowHits}`,
+			`Worker In-Flight Peak (Window): ${t.workerFramesInFlightPeakWindow}`,
+			`Worker In-Flight Peak (Total): ${t.workerFramesInFlightPeakTotal}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -497,6 +509,13 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 						<Show when={transportStats().workerFramesInFlight > 0}>
 							<div style={{ color: "#fbbf24" }}>
 								Worker frames in flight: {transportStats().workerFramesInFlight}
+							</div>
+						</Show>
+						<Show when={transportStats().workerFramesInFlightPeakTotal > 0}>
+							<div style={{ color: "#f59e0b" }}>
+								Worker in-flight peak:{" "}
+								{transportStats().workerFramesInFlightPeakWindow} window /{" "}
+								{transportStats().workerFramesInFlightPeakTotal} total
 							</div>
 						</Show>
 						<Show when={transportStats().workerInFlightBackpressureHits > 0}>
