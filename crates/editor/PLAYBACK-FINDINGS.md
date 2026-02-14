@@ -3717,6 +3717,53 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (FFmpeg latest-request prioritization for non-collapsed scrub bursts)
+
+**Goal**: Reduce medium-distance scrub latency tails when pending request bursts do not meet full supersession collapse criteria
+
+**What was done**:
+1. Added a pending-request ordering helper for FFmpeg scrub handling.
+2. Kept existing full burst supersession behavior unchanged.
+3. Added a secondary ordering mode that processes the most recently requested frame first for wide-span multi-request bursts.
+4. Added focused unit tests for prioritization decision and ordering behavior in `cap-rendering`.
+5. Re-ran scrub benchmark comparisons against pre-change labels using the seek-distance bucket report flow.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - added:
+    - `should_prioritize_latest_request(...)`
+    - `order_pending_requests_for_seek(...)`
+  - both FFmpeg decoder request loops now call `order_pending_requests_for_seek(...)` after `maybe_supersede_scrub_burst(...)`
+  - added unit tests:
+    - latest-request prioritization threshold behavior
+    - disabled-path frame ordering
+    - latest-first ordering behavior
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added benchmark evidence for medium-seek improvements and short-seek guardrails
+
+**Verification**:
+- `rustfmt --edition 2024 crates/rendering/src/decoder/ffmpeg.rs`
+- `cargo +1.88.0 test -p cap-rendering decoder::ffmpeg::tests:: --lib`
+- `cargo +1.88.0 test -p cap-editor --example scrub-benchmark --example scrub-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 1 --run-label linux-latest-first-medium --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 6 --burst-size 12 --sweep-seconds 2.0 --runs 2 --run-label linux-latest-first-short --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-distance-medium --candidate-label linux-latest-first-medium`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-distance-metric --candidate-label linux-latest-first-short`
+
+**Results**:
+- ✅ Medium-seek scrub profile improved:
+  - all-request avg **-77.99ms**
+  - all-request p95 **-93.26ms**
+  - last-request avg **-134.57ms**
+  - last-request p95 **-93.29ms**
+  - medium-bucket p95 **-13.01ms**
+- ✅ Short-seek profile stayed near-neutral (avg improvement, sub-1ms p95 increase).
+- ✅ New FFmpeg ordering unit tests pass (3/3).
+
+**Stopping point**: Ready to run the same labeled scrub sweeps on macOS and Windows and validate whether latest-request prioritization yields similar medium-seek tail reductions on target hardware.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

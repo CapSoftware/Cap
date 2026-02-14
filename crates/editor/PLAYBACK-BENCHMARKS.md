@@ -210,6 +210,43 @@ cargo run -p cap-recording --example playback-test-runner -- full
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (latest-request prioritization for non-collapsed scrub bursts)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4 asset  
+**Change under test:** FFmpeg scrub queue now prioritizes the most recently requested frame first for wide-span pending bursts that do not collapse into single-request supersession
+
+#### Validation commands
+- `cargo +1.88.0 test -p cap-rendering decoder::ffmpeg::tests:: --lib`
+- `cargo +1.88.0 test -p cap-editor --example scrub-benchmark --example scrub-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 1 --run-label linux-latest-first-medium --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 6 --burst-size 12 --sweep-seconds 2.0 --runs 2 --run-label linux-latest-first-short --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-distance-medium --candidate-label linux-latest-first-medium`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-distance-metric --candidate-label linux-latest-first-short`
+
+#### Medium-seek profile comparison (`sweep_seconds=8.0`)
+- Baseline label `linux-distance-medium`:
+  - all-request avg **231.84ms**, p95 **542.69ms**
+  - last-request avg **251.89ms**, p95 **542.69ms**
+  - medium bucket p95 **462.71ms**
+- Candidate label `linux-latest-first-medium`:
+  - all-request avg **153.86ms**, p95 **449.43ms**
+  - last-request avg **117.32ms**, p95 **449.40ms**
+  - medium bucket p95 **449.70ms**
+- Delta (`candidate - baseline`):
+  - all-request avg **-77.99ms**
+  - all-request p95 **-93.26ms**
+  - last-request avg **-134.57ms**
+  - last-request p95 **-93.29ms**
+  - medium bucket p95 **-13.01ms**
+
+#### Short-seek profile guardrail (`sweep_seconds=2.0`)
+- Baseline label `linux-distance-metric` vs candidate label `linux-latest-first-short`:
+  - all-request avg delta **-1.95ms**
+  - all-request p95 delta **+0.49ms**
+  - last-request avg delta **-1.95ms**
+  - last-request p95 delta **+0.49ms**
+- Result: short-seek profile remains effectively neutral while medium-seek burst responsiveness improves materially.
+
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub seek-distance bucket metrics)
 
 **Environment:** Linux runner, synthetic 1080p60 MP4 asset  

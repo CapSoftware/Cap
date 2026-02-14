@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::OnceLock,
-    sync::{Arc, mpsc},
+    sync::{mpsc, Arc},
 };
 use tokio::sync::oneshot;
 use tracing::info;
@@ -20,8 +20,8 @@ use crate::{DecodedFrame, PixelFormat};
 use cap_video_decode::FrameTextures;
 
 use super::{
-    DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage,
-    frame_converter::FrameConverter, pts_to_frame,
+    frame_converter::FrameConverter, pts_to_frame, DecoderInitResult, DecoderType,
+    VideoDecoderMessage, FRAME_CACHE_SIZE,
 };
 
 #[derive(Clone)]
@@ -172,6 +172,55 @@ fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>, enabl
             .extend(request.additional_replies);
     }
     pending_requests.push(collapsed);
+}
+
+fn should_prioritize_latest_request(
+    pending_requests: &[PendingRequest],
+    enabled: bool,
+    config: ScrubSupersessionConfig,
+) -> bool {
+    if !enabled || pending_requests.len() <= 1 {
+        return false;
+    }
+
+    let min_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .min()
+        .unwrap_or(0);
+    let max_frame = pending_requests
+        .iter()
+        .map(|request| request.frame)
+        .max()
+        .unwrap_or(0);
+
+    max_frame.saturating_sub(min_frame) > config.min_span_frames
+}
+
+fn order_pending_requests_for_seek(
+    pending_requests: &mut Vec<PendingRequest>,
+    enable_scrub_supersession: bool,
+) {
+    let config = scrub_supersession_config();
+
+    if !should_prioritize_latest_request(pending_requests, enable_scrub_supersession, config) {
+        pending_requests.sort_by_key(|request| request.frame);
+        return;
+    }
+
+    let Some(latest_order) = pending_requests.iter().map(|request| request.order).max() else {
+        return;
+    };
+
+    pending_requests.sort_by(|left, right| {
+        let left_is_latest = left.order == latest_order;
+        let right_is_latest = right.order == latest_order;
+        match (left_is_latest, right_is_latest) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => left.frame.cmp(&right.frame),
+        }
+    });
 }
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
@@ -456,7 +505,10 @@ impl FfmpegDecoder {
                     }
 
                     maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
-                    pending_requests.sort_by_key(|r| r.frame);
+                    order_pending_requests_for_seek(
+                        &mut pending_requests,
+                        enable_scrub_supersession,
+                    );
 
                     for PendingRequest {
                         time: requested_time,
@@ -637,7 +689,11 @@ impl FfmpegDecoder {
                                         } else {
                                             let min = *sw_cache.keys().min().unwrap();
                                             let max = *sw_cache.keys().max().unwrap();
-                                            if current_frame > max { min } else { max }
+                                            if current_frame > max {
+                                                min
+                                            } else {
+                                                max
+                                            }
                                         };
                                         sw_cache.remove(&frame);
                                     } else {
@@ -800,7 +856,7 @@ impl FfmpegDecoder {
                 }
 
                 maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
-                pending_requests.sort_by_key(|r| r.frame);
+                order_pending_requests_for_seek(&mut pending_requests, enable_scrub_supersession);
 
                 for PendingRequest {
                     time: requested_time,
@@ -978,7 +1034,11 @@ impl FfmpegDecoder {
                                         let min = *cache.keys().min().unwrap();
                                         let max = *cache.keys().max().unwrap();
 
-                                        if current_frame > max { min } else { max }
+                                        if current_frame > max {
+                                            min
+                                        } else {
+                                            max
+                                        }
                                     };
 
                                     cache.remove(&frame);
@@ -1119,3 +1179,74 @@ impl FfmpegDecoder {
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        order_pending_requests_for_seek, should_prioritize_latest_request, PendingRequest,
+        ScrubSupersessionConfig,
+    };
+    use tokio::sync::oneshot;
+
+    fn pending_request(frame: u32, order: u64) -> PendingRequest {
+        let (reply, _) = oneshot::channel();
+        PendingRequest {
+            time: 0.0,
+            frame,
+            reply,
+            additional_replies: Vec::new(),
+            order,
+        }
+    }
+
+    #[test]
+    fn prioritizes_latest_request_when_span_exceeds_threshold() {
+        let requests = vec![
+            pending_request(200, 0),
+            pending_request(4000, 1),
+            pending_request(2500, 2),
+        ];
+        let should_prioritize = should_prioritize_latest_request(
+            &requests,
+            true,
+            ScrubSupersessionConfig {
+                min_requests: 7,
+                min_span_frames: 20,
+                min_pixels: 2_000_000,
+                disabled: false,
+            },
+        );
+        assert!(should_prioritize);
+    }
+
+    #[test]
+    fn keeps_frame_order_when_prioritization_disabled() {
+        let mut requests = vec![
+            pending_request(500, 1),
+            pending_request(100, 2),
+            pending_request(300, 3),
+        ];
+        order_pending_requests_for_seek(&mut requests, false);
+        let ordered_frames = requests
+            .iter()
+            .map(|request| request.frame)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_frames, vec![100, 300, 500]);
+    }
+
+    #[test]
+    fn places_latest_request_first_when_prioritizing() {
+        let mut requests = vec![
+            pending_request(120, 0),
+            pending_request(4096, 1),
+            pending_request(2800, 2),
+            pending_request(40, 3),
+        ];
+        order_pending_requests_for_seek(&mut requests, true);
+        let ordered_frames = requests
+            .iter()
+            .map(|request| request.frame)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_frames[0], 40);
+    }
+}
