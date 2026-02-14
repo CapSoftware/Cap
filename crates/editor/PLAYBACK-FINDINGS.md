@@ -2040,6 +2040,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (pending-mode SAB drain coalescing)
+
+**Goal**: Reduce stale-frame churn and queue-message volume in renderer-pending startup windows under shared-buffer burst traffic
+
+**What was done**:
+1. Removed per-frame shared-buffer polling loop for pending mode.
+2. Unified non-WebGPU SAB draining into latest-frame coalescing helper.
+3. Kept one queue notification for pending mode while preserving zero queue notifications for canvas-mode SAB drains.
+4. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - removed `tryPollSharedBuffer` per-frame borrow loop
+  - renamed/generalized canvas drain helper to:
+    - `drainAndQueueLatestSharedFrame(maxDrain, emitQueuedMessage)`
+  - render loop now uses:
+    - `drainAndQueueLatestSharedFrame(4, false)` for `canvas2d`
+    - `drainAndQueueLatestSharedFrame(4, true)` for `pending`
+  - WebGPU drain path remains unchanged (`drainAndRenderLatestSharedWebGPU`)
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Pending mode now coalesces SAB bursts to latest frame before queueing, reducing stale queued-frame churn.
+- ✅ Canvas mode retains queue-message suppression behavior introduced previously.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for startup-heavy playback validation to verify smoother pending-to-renderer transition under bursty shared-buffer traffic.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

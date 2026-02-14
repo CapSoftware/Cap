@@ -151,19 +151,6 @@ let playbackStartTime: number | null = null;
 let playbackStartTargetTimeNs: bigint | null = null;
 let lastRenderedFrameNumber = -1;
 
-function tryPollSharedBuffer(): boolean {
-	if (!consumer || !useSharedBuffer) return false;
-	if (renderMode !== "webgpu") {
-		const borrowed = consumer.borrow(0);
-		if (!borrowed) {
-			return false;
-		}
-		queueFrameFromBytes(borrowed.data, borrowed.release, false);
-		return true;
-	}
-	return false;
-}
-
 interface FrameMetadata {
 	width: number;
 	height: number;
@@ -280,9 +267,12 @@ function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
 	return renderBorrowedWebGPU(latest.bytes, latest.release);
 }
 
-function drainAndQueueLatestSharedCanvas(maxDrain: number): boolean {
+function drainAndQueueLatestSharedFrame(
+	maxDrain: number,
+	emitQueuedMessage: boolean,
+): boolean {
 	if (!consumer || !useSharedBuffer || consumer.isShutdown()) return false;
-	if (renderMode !== "canvas2d") return false;
+	if (renderMode === "webgpu") return false;
 
 	let latest: { bytes: Uint8Array; release: () => void } | null = null;
 
@@ -298,7 +288,7 @@ function drainAndQueueLatestSharedCanvas(maxDrain: number): boolean {
 
 	if (!latest) return false;
 
-	queueFrameFromBytes(latest.bytes, latest.release, false);
+	queueFrameFromBytes(latest.bytes, latest.release, emitQueuedMessage);
 	return true;
 }
 
@@ -434,12 +424,9 @@ function renderLoop() {
 		}
 
 		if (renderMode === "canvas2d") {
-			drainAndQueueLatestSharedCanvas(4);
-		} else {
-			let polled = 0;
-			while (polled < 4 && tryPollSharedBuffer()) {
-				polled++;
-			}
+			drainAndQueueLatestSharedFrame(4, false);
+		} else if (renderMode === "pending") {
+			drainAndQueueLatestSharedFrame(4, true);
 		}
 	}
 
