@@ -1457,6 +1457,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Performance overlay transport diagnostics)
+
+**Goal**: Surface SAB transport telemetry directly in overlay UI for faster cross-platform validation
+
+**What was done**:
+1. Wired overlay to read live socket transport stats via `getFpsStats`.
+2. Added transport diagnostics to overlay panel:
+   - render FPS
+   - transport MB/s
+   - SAB slot size and resize count
+   - SAB fallback counters (oversize vs retry-limit)
+   - in-flight SAB retry count
+3. Extended clipboard export payload with the same transport diagnostics.
+
+**Changes Made**:
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - added transport stats polling and reset behavior
+  - added transport diagnostics rows to overlay UI
+  - added transport fields to copied stats text
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Desktop TypeScript checks pass.
+- ✅ Overlay now exposes SAB transport metrics needed for target-machine playback tuning sessions.
+
+**Stopping point**: use this diagnostics panel in upcoming macOS/Windows runs to collect evidence for fallback-rate and transport-throughput behavior.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

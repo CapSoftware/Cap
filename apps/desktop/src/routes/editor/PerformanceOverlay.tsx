@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import toast from "solid-toast";
 import { useEditorContext } from "./context";
+import { getFpsStats } from "~/utils/socket";
 
 type PerformanceOverlayProps = {
 	size: { width: number; height: number };
@@ -22,6 +23,17 @@ type FrameStats = {
 	jitter: number;
 	droppedFrames: number;
 	totalFrames: number;
+};
+
+type TransportStats = {
+	renderFps: number;
+	mbPerSec: number;
+	sabResizes: number;
+	sabFallbacks: number;
+	sabOversizeFallbacks: number;
+	sabRetryLimitFallbacks: number;
+	sabRetriesInFlight: number;
+	sabSlotSizeBytes: number;
 };
 
 const STATS_WINDOW_MS = 1000;
@@ -44,6 +56,16 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		jitter: 0,
 		droppedFrames: 0,
 		totalFrames: 0,
+	});
+	const [transportStats, setTransportStats] = createSignal<TransportStats>({
+		renderFps: 0,
+		mbPerSec: 0,
+		sabResizes: 0,
+		sabFallbacks: 0,
+		sabOversizeFallbacks: 0,
+		sabRetryLimitFallbacks: 0,
+		sabRetriesInFlight: 0,
+		sabSlotSizeBytes: 0,
 	});
 
 	const calculateStats = (): FrameStats => {
@@ -156,26 +178,77 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		});
 	};
 
+	const resetTransportStats = () => {
+		setTransportStats({
+			renderFps: 0,
+			mbPerSec: 0,
+			sabResizes: 0,
+			sabFallbacks: 0,
+			sabOversizeFallbacks: 0,
+			sabRetryLimitFallbacks: 0,
+			sabRetriesInFlight: 0,
+			sabSlotSizeBytes: 0,
+		});
+	};
+
 	createEffect(() => {
 		if (!performanceMode()) {
 			resetStats();
+			resetTransportStats();
 		}
+	});
+
+	createEffect(() => {
+		if (!performanceMode()) {
+			return;
+		}
+		const updateTransportStats = () => {
+			const socketStats = getFpsStats();
+			if (!socketStats) {
+				return;
+			}
+			setTransportStats({
+				renderFps: socketStats.renderFps,
+				mbPerSec: socketStats.mbPerSec,
+				sabResizes: socketStats.sabResizes,
+				sabFallbacks: socketStats.sabFallbacks,
+				sabOversizeFallbacks: socketStats.sabOversizeFallbacks,
+				sabRetryLimitFallbacks: socketStats.sabRetryLimitFallbacks,
+				sabRetriesInFlight: socketStats.sabRetriesInFlight,
+				sabSlotSizeBytes: socketStats.sabSlotSizeBytes,
+			});
+		};
+		updateTransportStats();
+		const interval = setInterval(updateTransportStats, 250);
+		onCleanup(() => clearInterval(interval));
 	});
 
 	onCleanup(() => {
 		resetStats();
+		resetTransportStats();
 	});
 
 	const formatFps = (fps: number) => fps.toFixed(1);
 	const formatMs = (ms: number) => ms.toFixed(2);
+	const formatMb = (value: number) => value.toFixed(1);
+	const formatSlotMb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
 
 	const copyStatsToClipboard = async () => {
 		const s = stats();
+		const t = transportStats();
 		const statsText = [
 			`FPS: ${formatFps(s.fps)}`,
 			`Frame: ${formatMs(s.avgFrameMs)}ms avg`,
 			`Range: ${formatMs(s.minFrameMs)} - ${formatMs(s.maxFrameMs)}ms`,
 			`Jitter: ±${formatMs(s.jitter)}ms`,
+			`Render FPS: ${formatFps(t.renderFps)}`,
+			`Transport: ${formatMb(t.mbPerSec)} MB/s`,
+			`SAB Slot: ${formatSlotMb(t.sabSlotSizeBytes)} MB`,
+			`SAB Resizes: ${t.sabResizes}`,
+			`SAB Fallbacks: ${t.sabFallbacks}`,
+			`SAB Oversize Fallbacks: ${t.sabOversizeFallbacks}`,
+			`SAB Retry Limit Fallbacks: ${t.sabRetryLimitFallbacks}`,
+			`SAB Retries In Flight: ${t.sabRetriesInFlight}`,
 			s.droppedFrames > 0
 				? `Dropped: ${s.droppedFrames}/${s.totalFrames}`
 				: null,
@@ -258,6 +331,40 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 								±{formatMs(stats().jitter)}ms
 							</span>
 						</div>
+						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+							<span>Render: </span>
+							<span style={{ color: "#93c5fd" }}>
+								{formatFps(transportStats().renderFps)} fps
+							</span>
+						</div>
+						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+							<span>Transport: </span>
+							<span style={{ color: "#86efac" }}>
+								{formatMb(transportStats().mbPerSec)} MB/s
+							</span>
+						</div>
+						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+							<span>SAB: </span>
+							<span style={{ color: "#c4b5fd" }}>
+								{formatSlotMb(transportStats().sabSlotSizeBytes)}MB slot
+							</span>
+							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}>
+								{" "}
+								/ {transportStats().sabResizes} resizes
+							</span>
+						</div>
+						<Show when={transportStats().sabFallbacks > 0}>
+							<div style={{ color: "#fbbf24" }}>
+								SAB fallback {transportStats().sabFallbacks} (oversize{" "}
+								{transportStats().sabOversizeFallbacks}, retry-limit{" "}
+								{transportStats().sabRetryLimitFallbacks})
+							</div>
+						</Show>
+						<Show when={transportStats().sabRetriesInFlight > 0}>
+							<div style={{ color: "#f59e0b" }}>
+								SAB retries in flight: {transportStats().sabRetriesInFlight}
+							</div>
+						</Show>
 						<Show when={stats().droppedFrames > 0}>
 							<div style={{ color: "#f87171" }}>
 								Dropped: {stats().droppedFrames}/{stats().totalFrames}
