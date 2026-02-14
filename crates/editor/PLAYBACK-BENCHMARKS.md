@@ -88,6 +88,12 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 ```bash
 # Simulate rapid scrub bursts and track latest-request latency
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 20 --burst-size 12 --sweep-seconds 2.0
+
+# Runtime tuning for FFmpeg scrub supersession heuristic
+CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS=3686400 \
+CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=8 \
+CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES=45 \
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
 ```
 
 #### Playback Startup Latency Report (log analysis)
@@ -525,6 +531,56 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Missed deadlines: **0**
 - Effective FPS: **60.19**
 - Decode: avg **4.99ms**, p95 **7.17ms**, p99 **9.64ms**, max **13.37ms**
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Scrub supersession runtime controls)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `scrub-benchmark`, `decode-benchmark`, `playback-benchmark`  
+**Change under test:** FFmpeg scrub supersession thresholds moved to env-configurable runtime controls
+
+#### Scrub Burst Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Requests: **240 success / 0 failures**
+- All-request latency: avg **211.38ms**, p95 **417.65ms**, p99 **435.23ms**, max **454.51ms**
+- Last-request-in-burst latency: avg **303.76ms**, p95 **435.23ms**, p99 **454.51ms**, max **454.51ms**
+
+#### Scrub Burst Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Requests: **240 success / 0 failures**
+- All-request latency: avg **812.11ms**, p95 **1767.50ms**, p99 **1822.52ms**, max **1822.52ms**
+- Last-request-in-burst latency: avg **820.99ms**, p95 **1767.50ms**, p99 **1822.52ms**, max **1822.52ms**
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **6.64ms**
+- Sequential decode: **335.5 fps**, avg **2.98ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **48.41 / 96.68 / 96.68ms**
+  - 1.0s: **71.81 / 151.73 / 151.73ms**
+  - 2.0s: **152.21 / 372.41 / 372.41ms**
+  - 5.0s: **233.93 / 388.51 / 388.51ms**
+- Random access: avg **115.07ms**, p95 **354.67ms**, p99 **399.31ms**
+
+#### Decode Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Decoder init: **32.18ms**
+- Sequential decode: **98.7 fps**, avg **10.13ms**
+- Seek latency (avg / p95 / max):
+  - 0.5s: **201.24 / 387.51 / 387.51ms**
+  - 1.0s: **347.03 / 774.83 / 774.83ms**
+  - 2.0s: **623.25 / 1499.39 / 1499.39ms**
+  - 5.0s: **961.84 / 1629.35 / 1629.35ms**
+- Random access: avg **524.19ms**, p95 **1485.61ms**, p99 **1619.96ms**
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.22**
+- Decode: avg **1.33ms**, p95 **2.49ms**, p99 **2.80ms**, max **3.90ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **240/240**, failures **0**
+- Missed deadlines: **2**
+- Effective FPS: **60.17**
+- Decode: avg **6.43ms**, p95 **8.82ms**, p99 **14.14ms**, max **17.52ms**
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

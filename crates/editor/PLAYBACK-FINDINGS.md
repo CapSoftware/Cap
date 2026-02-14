@@ -743,6 +743,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Supersession runtime configurability)
+
+**Goal**: Enable faster cross-platform tuning of scrub supersession without code edits
+
+**What was done**:
+1. Added environment-driven controls for FFmpeg scrub supersession behavior:
+   - `CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED`
+   - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS`
+   - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS`
+   - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES`
+2. Kept default behavior equivalent to current tuned path.
+3. Re-ran scrub, decode, and playback benchmarks with defaults to verify no functional regressions.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - added `ScrubSupersessionConfig` with `OnceLock` initialization
+  - replaced hard-coded supersession thresholds with config values
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added command examples for runtime supersession tuning
+  - added validation benchmark run for the configurable defaults
+
+**Results**:
+- ✅ Scrub supersession behavior preserved with defaults:
+  - 4k last-request avg **~821ms**, p95 **~1768ms**
+  - 1080p last-request avg **~304ms**, p95 **~435ms**
+- ✅ Playback throughput remains at 60fps-class:
+  - 1080p: **60.22 fps**
+  - 4k: **60.17 fps**
+- ✅ Decode benchmark metrics remain in expected variance envelope after config refactor.
+
+**Stopping point**: supersession tuning is now runtime-configurable, enabling platform-specific calibration runs (especially macOS/Windows) without recompiling.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

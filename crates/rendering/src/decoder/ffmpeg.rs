@@ -6,8 +6,10 @@ use ffmpeg::{format, frame};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
+    env,
     path::PathBuf,
     rc::Rc,
+    sync::OnceLock,
     sync::{Arc, mpsc},
 };
 use tokio::sync::oneshot;
@@ -71,6 +73,53 @@ struct PendingRequest {
     order: u64,
 }
 
+#[derive(Clone, Copy)]
+struct ScrubSupersessionConfig {
+    min_requests: usize,
+    min_span_frames: u32,
+    min_pixels: u64,
+    disabled: bool,
+}
+
+static SCRUB_SUPERSESSION_CONFIG: OnceLock<ScrubSupersessionConfig> = OnceLock::new();
+
+fn parse_usize_env(key: &str) -> Option<usize> {
+    env::var(key).ok()?.parse::<usize>().ok()
+}
+
+fn parse_u32_env(key: &str) -> Option<u32> {
+    env::var(key).ok()?.parse::<u32>().ok()
+}
+
+fn parse_u64_env(key: &str) -> Option<u64> {
+    env::var(key).ok()?.parse::<u64>().ok()
+}
+
+fn scrub_supersession_config() -> ScrubSupersessionConfig {
+    *SCRUB_SUPERSESSION_CONFIG.get_or_init(|| {
+        let min_requests = parse_usize_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS")
+            .filter(|value| *value > 0)
+            .unwrap_or(8);
+        let min_span_frames = parse_u32_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES")
+            .filter(|value| *value > 0)
+            .unwrap_or((FRAME_CACHE_SIZE as u32 / 2).max(1));
+        let min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS")
+            .filter(|value| *value > 0)
+            .unwrap_or(3_686_400);
+        let disabled = env::var("CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED")
+            .ok()
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        ScrubSupersessionConfig {
+            min_requests,
+            min_span_frames,
+            min_pixels,
+            disabled,
+        }
+    })
+}
+
 fn send_to_replies(
     name: &str,
     frame_number: u32,
@@ -85,9 +134,9 @@ fn send_to_replies(
 }
 
 fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>, enabled: bool) {
-    const SCRUB_SUPERSEDE_MIN_REQUESTS: usize = 8;
+    let config = scrub_supersession_config();
 
-    if !enabled || pending_requests.len() < SCRUB_SUPERSEDE_MIN_REQUESTS {
+    if !enabled || pending_requests.len() < config.min_requests {
         return;
     }
 
@@ -102,7 +151,7 @@ fn maybe_supersede_scrub_burst(pending_requests: &mut Vec<PendingRequest>, enabl
         .max()
         .unwrap_or(0);
 
-    if max_frame.saturating_sub(min_frame) <= (FRAME_CACHE_SIZE as u32 / 2) {
+    if max_frame.saturating_sub(min_frame) <= config.min_span_frames {
         return;
     }
 
@@ -354,8 +403,10 @@ impl FfmpegDecoder {
                     decoder_type: sw_decoder_type,
                 };
                 let _ = ready_tx.send(Ok(sw_init_result));
-                let enable_scrub_supersession =
-                    (video_width as u64) * (video_height as u64) >= 3_686_400;
+                let supersession_config = scrub_supersession_config();
+                let enable_scrub_supersession = !supersession_config.disabled
+                    && (video_width as u64) * (video_height as u64)
+                        >= supersession_config.min_pixels;
 
                 while let Ok(r) = rx.recv() {
                     const MAX_FRAME_TOLERANCE: u32 = 2;
@@ -697,8 +748,9 @@ impl FfmpegDecoder {
                 decoder_type,
             };
             let _ = ready_tx.send(Ok(init_result));
-            let enable_scrub_supersession =
-                (video_width as u64) * (video_height as u64) >= 3_686_400;
+            let supersession_config = scrub_supersession_config();
+            let enable_scrub_supersession = !supersession_config.disabled
+                && (video_width as u64) * (video_height as u64) >= supersession_config.min_pixels;
 
             while let Ok(r) = rx.recv() {
                 const MAX_FRAME_TOLERANCE: u32 = 2;
