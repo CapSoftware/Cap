@@ -1211,6 +1211,10 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
    - retry-limit-triggered fallbacks
 9. Added SAB retry scheduling guard:
    - retry requeue now uses a single pending animation-frame callback to avoid stacking duplicate retry callbacks under burst pressure
+10. Expanded exported FPS stats payload to include SAB transport diagnostics:
+    - resize/fallback counters
+    - in-flight retry count
+    - current SAB slot size
 
 **Changes Made**:
 - `apps/desktop/src/utils/socket.ts`

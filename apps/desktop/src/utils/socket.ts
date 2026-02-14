@@ -34,6 +34,12 @@ export type FpsStats = {
 	minFrameMs: number;
 	maxFrameMs: number;
 	mbPerSec: number;
+	sabResizes: number;
+	sabFallbacks: number;
+	sabOversizeFallbacks: number;
+	sabRetryLimitFallbacks: number;
+	sabRetriesInFlight: number;
+	sabSlotSizeBytes: number;
 };
 
 let globalFpsStatsGetter: (() => FpsStats) | null = null;
@@ -523,6 +529,12 @@ export function createImageDataWS(
 		minFrameMs: minFrameTime === Number.MAX_VALUE ? 0 : minFrameTime,
 		maxFrameMs: maxFrameTime,
 		mbPerSec: totalBytesReceived / 1_000_000,
+		sabResizes: sharedBufferResizeCount,
+		sabFallbacks: sabFallbackCount,
+		sabOversizeFallbacks: sabOversizeFallbackCount,
+		sabRetryLimitFallbacks: sabRetryLimitFallbackCount,
+		sabRetriesInFlight: sabWriteRetryCount,
+		sabSlotSizeBytes: sharedBufferConfig?.slotSize ?? 0,
 	});
 
 	globalFpsStatsGetter = getLocalFpsStats;
