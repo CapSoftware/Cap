@@ -44,6 +44,7 @@ interface FrameRenderedMessage {
 	type: "frame-rendered";
 	width: number;
 	height: number;
+	source: "shared" | "worker";
 }
 
 interface RendererModeMessage {
@@ -81,12 +82,15 @@ interface FrameTiming {
 	targetTimeNs: bigint;
 }
 
+type FrameSource = "shared" | "worker";
+
 interface PendingFrameCanvas2D {
 	mode: "canvas2d";
 	imageData: ImageData;
 	width: number;
 	height: number;
 	timing: FrameTiming;
+	source: FrameSource;
 }
 
 interface PendingFrameWebGPURgba {
@@ -96,6 +100,7 @@ interface PendingFrameWebGPURgba {
 	height: number;
 	strideBytes: number;
 	timing: FrameTiming;
+	source: FrameSource;
 	releaseCallback?: () => void;
 }
 
@@ -219,6 +224,7 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 		type: "frame-rendered",
 		width,
 		height,
+		source: "shared",
 	} satisfies FrameRenderedMessage);
 
 	return true;
@@ -265,7 +271,7 @@ function drainAndQueueLatestSharedFrame(maxDrain: number): boolean {
 
 	if (!latest) return false;
 
-	queueFrameFromBytes(latest.bytes, latest.release);
+	queueFrameFromBytes(latest.bytes, latest.release, "shared");
 	return true;
 }
 
@@ -279,6 +285,7 @@ function clearQueuedFrames() {
 function queueFrameFromBytes(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
+	source: FrameSource = "worker",
 ): boolean {
 	const meta = parseFrameMetadata(bytes);
 	if (!meta) {
@@ -305,6 +312,7 @@ function queueFrameFromBytes(
 			height,
 			strideBytes: meta.strideBytes,
 			timing,
+			source,
 			releaseCallback,
 		};
 	} else {
@@ -353,6 +361,7 @@ function queueFrameFromBytes(
 			width,
 			height,
 			timing,
+			source,
 		};
 	}
 
@@ -454,6 +463,7 @@ function renderLoop() {
 					type: "frame-rendered",
 					width: frame.width,
 					height: frame.height,
+					source: frame.source,
 				} satisfies FrameRenderedMessage);
 
 				const shouldContinue =
@@ -502,6 +512,7 @@ function renderLoop() {
 			type: "frame-rendered",
 			width: frame.width,
 			height: frame.height,
+			source: frame.source,
 		} satisfies FrameRenderedMessage);
 	}
 
@@ -644,6 +655,7 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 				type: "frame-rendered",
 				width: lastImageData.width,
 				height: lastImageData.height,
+				source: "worker",
 			} satisfies FrameRenderedMessage);
 			frameRendered = true;
 		} else if (renderMode === "canvas2d" && lastImageData && offscreenCtx) {
@@ -654,6 +666,7 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 				type: "frame-rendered",
 				width: lastImageData.width,
 				height: lastImageData.height,
+				source: "worker",
 			} satisfies FrameRenderedMessage);
 			frameRendered = true;
 		} else if (renderMode === "canvas2d" && offscreenCtx) {
@@ -734,7 +747,11 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	}
 
 	if (e.data.type === "frame") {
-		const queued = queueFrameFromBytes(new Uint8Array(e.data.buffer));
+		const queued = queueFrameFromBytes(
+			new Uint8Array(e.data.buffer),
+			undefined,
+			"worker",
+		);
 		if (!queued) {
 			const result: ErrorMessage = {
 				type: "error",

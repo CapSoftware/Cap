@@ -89,6 +89,7 @@ interface FrameRenderedMessage {
 	type: "frame-rendered";
 	width: number;
 	height: number;
+	source: "shared" | "worker";
 }
 
 interface ErrorMessage {
@@ -407,9 +408,9 @@ export function createImageDataWS(
 		}
 
 		if (e.data.type === "frame-rendered") {
-			const { width, height } = e.data;
+			const { width, height, source } = e.data;
 			onmessage({ width, height });
-			if (workerFramesInFlight > 0) {
+			if (source === "worker" && workerFramesInFlight > 0) {
 				workerFramesInFlight--;
 			}
 			actualRendersCount++;

@@ -2633,6 +2633,48 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (render-source-aware in-flight accounting)
+
+**Goal**: Correct fallback in-flight accounting by distinguishing worker-posted renders from shared-buffer renders and extend backlog pressure telemetry
+
+**What was done**:
+1. Added render source tagging to worker `frame-rendered` messages (`shared` vs `worker`).
+2. Updated socket in-flight decrement logic to only decrement on `source === "worker"`.
+3. Added in-flight superseded-drop counters (window and cumulative) for cap-hit overwrite cases.
+4. Added worker in-flight peak counters (window and cumulative) plus periodic log output.
+5. Exposed all new counters through overlay and clipboard diagnostics.
+6. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - `FrameRenderedMessage` now includes `source`
+  - queued frames now carry source metadata
+  - shared-buffer immediate WebGPU renders emit `source: "shared"`
+  - fallback-posted renders emit `source: "worker"`
+- `apps/desktop/src/utils/socket.ts`
+  - decrements `workerFramesInFlight` only when render source is `worker`
+  - added `workerInFlightSupersededDrops` and `workerInFlightSupersededDropsWindow`
+  - added `workerFramesInFlightPeakWindow` and `workerFramesInFlightPeakTotal`
+  - periodic frame logs now include worker peak and superseded counters
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling now includes new worker source-aware counters
+  - clipboard export includes all added counters
+  - overlay rows now show worker in-flight peak and cap-induced superseded drops
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ In-flight fallback accounting no longer decrements on shared-buffer renders.
+- ✅ Diagnostics now capture cap-hit pressure, superseded consequences, and in-flight peaks with window and cumulative visibility.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback-heavy validation to measure true worker-posted backlog pressure and cap-induced dropping behavior on target machines.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
