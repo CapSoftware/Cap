@@ -502,6 +502,11 @@ export function createImageDataWS(
 				totalFramesSentToWorker++;
 				totalWorkerFallbackBytes += buffer.byteLength;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
+				isProcessing = false;
+				if (nextFrame || pendingFrame) {
+					processNextFrame();
+				}
+				return;
 			} else {
 				sabWriteRetryCount = 0;
 				totalFramesWrittenToSharedBuffer++;
@@ -517,6 +522,11 @@ export function createImageDataWS(
 			totalFramesSentToWorker++;
 			totalWorkerFallbackBytes += buffer.byteLength;
 			worker.postMessage({ type: "frame", buffer }, [buffer]);
+			isProcessing = false;
+			if (nextFrame || pendingFrame) {
+				processNextFrame();
+			}
+			return;
 		}
 	}
 

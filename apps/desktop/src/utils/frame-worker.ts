@@ -930,9 +930,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 
 	if (e.data.type === "frame") {
 		const result = processFrameBytesSync(new Uint8Array(e.data.buffer));
-		if (result.type === "frame-queued") {
-			self.postMessage(result);
-		} else if (result.type === "error") {
+		if (result.type === "error") {
 			self.postMessage(result);
 		}
 	}

@@ -2074,6 +2074,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker fallback ack bypass)
+
+**Goal**: Reduce fallback-path postMessage round-trips by removing queue-ack pacing between socket and worker
+
+**What was done**:
+1. Switched worker fallback dispatch in socket to non-blocking progression (mirroring SAB success path behavior).
+2. Removed worker `frame-queued` message emission for `frame` payload handling.
+3. Kept worker `frame-rendered` and error messaging unchanged.
+4. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - after worker fallback `postMessage({ type: "frame" })`, now clears `isProcessing` immediately
+  - continues dispatching pending `nextFrame` / `pendingFrame` without waiting for worker queue acknowledgements
+- `apps/desktop/src/utils/frame-worker.ts`
+  - `self.onmessage` `type === "frame"` path now suppresses `frame-queued` outbound message
+  - still forwards `error` messages from `processFrameBytesSync`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Fallback path no longer depends on per-frame queue acknowledgement messages for dispatch progress.
+- ✅ Worker->main-thread message volume reduced by dropping fallback `frame-queued` events.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for fallback-heavy playback validation to compare frame pacing and worker message traffic after ack bypass.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
