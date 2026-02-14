@@ -2914,6 +2914,48 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (direct-render out-of-order stale frame gating)
+
+**Goal**: Reduce direct-render jitter from stale out-of-order frame arrivals by dropping short-backward regressions before main-thread rendering
+
+**What was done**:
+1. Reused frame-order stale detection in socket direct-render path.
+2. Added direct-path out-of-order drop counters (window + cumulative).
+3. Extended periodic frame logs with direct-path drop counters.
+4. Exposed new counters in overlay and clipboard diagnostics.
+5. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - imports `shouldDropOutOfOrderFrame` and adds direct stale window constant
+  - direct render metadata path now reads `frameNumber`
+  - drops frame when it is stale out-of-order relative to latest direct rendered frame
+  - adds `FpsStats` fields:
+    - `directOutOfOrderDropsTotal`
+    - `directOutOfOrderDropsWindow`
+  - periodic `[Frame]` log now includes:
+    - `direct_ooo_window`
+    - `direct_ooo_total`
+  - resets direct drop window counter on each log flush
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - transport state/reset/polling now includes direct out-of-order drop counters
+  - clipboard export includes direct out-of-order drop metrics
+  - overlay row shows direct out-of-order drops with window suffix
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Direct render path now drops stale short-regression frames before render.
+- ✅ New diagnostics expose direct-path stale-drop behavior in overlay, clipboard, and frame logs.
+- ✅ Desktop typecheck and transport utility tests pass (23/23).
+
+**Stopping point**: Ready for target-machine playback sessions to correlate direct-path stale drops with render jitter and fallback pressure counters.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

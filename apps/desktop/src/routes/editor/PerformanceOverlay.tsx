@@ -47,6 +47,8 @@ type TransportStats = {
 	renderedFromSharedWindow: number;
 	renderedFromWorkerTotal: number;
 	renderedFromWorkerWindow: number;
+	directOutOfOrderDropsTotal: number;
+	directOutOfOrderDropsWindow: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -98,6 +100,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		renderedFromSharedWindow: 0,
 		renderedFromWorkerTotal: 0,
 		renderedFromWorkerWindow: 0,
+		directOutOfOrderDropsTotal: 0,
+		directOutOfOrderDropsWindow: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -239,6 +243,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			renderedFromSharedWindow: 0,
 			renderedFromWorkerTotal: 0,
 			renderedFromWorkerWindow: 0,
+			directOutOfOrderDropsTotal: 0,
+			directOutOfOrderDropsWindow: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -292,6 +298,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				renderedFromSharedWindow: socketStats.renderedFromSharedWindow,
 				renderedFromWorkerTotal: socketStats.renderedFromWorkerTotal,
 				renderedFromWorkerWindow: socketStats.renderedFromWorkerWindow,
+				directOutOfOrderDropsTotal: socketStats.directOutOfOrderDropsTotal,
+				directOutOfOrderDropsWindow: socketStats.directOutOfOrderDropsWindow,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -376,6 +384,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`Rendered From Shared (Window): ${t.renderedFromSharedWindow}`,
 			`Rendered From Worker (Total): ${t.renderedFromWorkerTotal}`,
 			`Rendered From Worker (Window): ${t.renderedFromWorkerWindow}`,
+			`Direct Out-Of-Order Drops (Total): ${t.directOutOfOrderDropsTotal}`,
+			`Direct Out-Of-Order Drops (Window): ${t.directOutOfOrderDropsWindow}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -565,6 +575,18 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 									({transportStats().renderedFromSharedTotal} shared /{" "}
 									{transportStats().renderedFromWorkerTotal} worker total)
 								</span>
+							</div>
+						</Show>
+						<Show when={transportStats().directOutOfOrderDropsTotal > 0}>
+							<div style={{ color: "#f97316" }}>
+								Direct out-of-order drops:{" "}
+								{transportStats().directOutOfOrderDropsTotal}
+								<Show when={transportStats().directOutOfOrderDropsWindow > 0}>
+									<span style={{ color: "rgba(255, 255, 255, 0.6)" }}>
+										{" "}
+										(window {transportStats().directOutOfOrderDropsWindow})
+									</span>
+								</Show>
 							</div>
 						</Show>
 						<Show when={transportStats().workerInFlightBackpressureHits > 0}>
