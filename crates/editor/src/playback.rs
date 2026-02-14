@@ -350,11 +350,11 @@ impl Playback {
                         };
 
                         next_prefetch_frame = requested;
-                        frames_decoded = 0;
-                        prefetched_behind.clear();
-                        prefetched_behind_order.clear();
 
                         if is_backward_seek || seek_distance > dynamic_prefetch_ahead / 2 {
+                            frames_decoded = 0;
+                            prefetched_behind.clear();
+                            prefetched_behind_order.clear();
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.clear();
                             }
