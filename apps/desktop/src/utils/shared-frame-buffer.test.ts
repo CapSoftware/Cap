@@ -62,4 +62,23 @@ describe("shared-frame-buffer", () => {
 
 		held?.release();
 	});
+
+	it("readInto consumes sparse-ready slot and returns size", () => {
+		const init = createSharedFrameBuffer({ slotCount: 3, slotSize: 64 });
+		const producer = createProducer(init);
+		const consumer = createConsumer(init.buffer);
+
+		expect(producer.write(makeFrame(21, 22, 23))).toBe(true);
+		expect(producer.write(makeFrame(31, 32))).toBe(true);
+
+		const held = consumer.borrow(0);
+		expect(held?.data[0]).toBe(21);
+
+		const target = new Uint8Array(64);
+		const bytesRead = consumer.readInto(target, 0);
+		expect(bytesRead).toBe(2);
+		expect(Array.from(target.subarray(0, 2))).toEqual([31, 32]);
+
+		held?.release();
+	});
 });

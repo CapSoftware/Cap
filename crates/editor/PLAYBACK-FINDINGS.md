@@ -1302,10 +1302,11 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 **Verification**:
 - `pnpm exec biome format --write apps/desktop/src/utils/shared-frame-buffer.ts`
+- `pnpm --dir apps/desktop exec vitest run src/utils/shared-frame-buffer.test.ts`
 - `pnpm --dir apps/desktop exec tsc --noEmit`
 
 **Results**:
-- ✅ Desktop unit tests pass (2/2) for writer-slot probing and consumer sparse-ready-slot reads.
+- ✅ Desktop unit tests pass (3/3) for writer-slot probing and sparse-ready `read`/`readInto` paths.
 - ✅ Desktop TypeScript checks pass.
 - ✅ Consumer path now remains compatible with producer-side sparse slot selection and avoids avoidable waits on empty read-index slots.
 
