@@ -137,6 +137,7 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 | `crates/editor/examples/scrub-csv-report.rs` | Scrub CSV summary and label-delta analysis |
 | `apps/desktop/src/utils/frame-order.ts` | Wrap-safe frame-order comparisons |
 | `apps/desktop/src/utils/frame-transport-order.ts` | Shared transport stale-order decision helper |
+| `apps/desktop/src/utils/frame-transport-stride.ts` | Shared stride dispatch/coalescing decision helper |
 
 ---
 
@@ -3562,6 +3563,42 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - ✅ Desktop typecheck and utility tests pass (30/30).
 
 **Stopping point**: Ready for stride-heavy direct-path sessions to correlate backlog telemetry with direct stale-drop counters and FPS stability.
+
+---
+
+### Session 2026-02-14 (stride dispatch decision helper extraction)
+
+**Goal**: Centralize stride-correction dispatch/coalescing decisions into a reusable tested helper
+
+**What was done**:
+1. Added a stride dispatch decision helper module.
+2. Added helper tests for dispatch/queue/supersede branches.
+3. Refactored socket stride queue logic to use helper decision output.
+4. Re-ran desktop typecheck and expanded utility test suite.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-transport-stride.ts` (new)
+  - added `decideStrideCorrectionDispatch(inFlight, hasPending)`
+  - returns dispatch/queue action and increment deltas
+- `apps/desktop/src/utils/frame-transport-stride.test.ts` (new)
+  - covers:
+    - immediate dispatch when idle
+    - queue when in-flight with no pending
+    - queue + supersede when in-flight with pending
+- `apps/desktop/src/utils/socket.ts`
+  - `queueStrideCorrection` now uses `decideStrideCorrectionDispatch`
+  - superseded drop counters now flow from helper increments
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/utils/frame-transport-stride.ts src/utils/frame-transport-stride.test.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-stride.test.ts src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Stride dispatch/coalescing logic now uses a single tested decision primitive.
+- ✅ Utility test suite expanded and passing (33/33).
+
+**Stopping point**: Ready for additional stride-path tuning with helper-backed decision logic and telemetry.
 
 ---
 

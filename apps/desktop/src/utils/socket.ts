@@ -18,6 +18,7 @@ import {
 } from "./frame-transport-inflight";
 import { decideFrameOrder } from "./frame-transport-order";
 import { decideSabWriteFailure } from "./frame-transport-retry";
+import { decideStrideCorrectionDispatch } from "./frame-transport-stride";
 import type {
 	ErrorResponse,
 	StrideCorrectionResponse,
@@ -370,14 +371,21 @@ export function createImageDataWS(
 		frameNumber: number;
 	}) {
 		if (!strideWorker) return;
-		if (!strideWorkerInFlight) {
+		const decision = decideStrideCorrectionDispatch(
+			strideWorkerInFlight,
+			pendingStrideCorrection !== null,
+		);
+		if (decision.action === "dispatch") {
 			dispatchStrideCorrection(request);
+			strideWorkerInFlight = decision.nextInFlight;
 			return;
 		}
-		if (pendingStrideCorrection) {
-			framesDropped++;
-			strideCorrectionSupersededDropsTotal++;
-			strideCorrectionSupersededDropsWindow++;
+		strideWorkerInFlight = decision.nextInFlight;
+		if (decision.supersededDropsIncrement > 0) {
+			framesDropped += decision.supersededDropsIncrement;
+			strideCorrectionSupersededDropsTotal += decision.supersededDropsIncrement;
+			strideCorrectionSupersededDropsWindow +=
+				decision.supersededDropsIncrement;
 		}
 		pendingStrideCorrection = request;
 	}
