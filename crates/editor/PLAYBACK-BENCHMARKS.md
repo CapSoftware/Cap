@@ -191,6 +191,40 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Decode: avg **4.76ms**, p95 **7.41ms**, p99 **9.82ms**, max **15.94ms**
 - Seek samples: 0.5s **29.80ms**, 1.0s **9.01ms**, 2.0s **8.80ms**, 5.0s **410.35ms**
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (FFmpeg long-seek tuning pass 3)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `decode-benchmark` and `playback-benchmark`  
+**Change under test:** seek fallback order adjusted (preferred -> legacy backward -> wide window)
+
+#### Decode Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Decoder init: **5.91ms**
+- Sequential decode: **393.7 fps**, avg **2.54ms**
+- Seek latency: 0.5s **2.04ms**, 1.0s **1.71ms**, 2.0s **4.61ms**, 5.0s **110.27ms**
+- Random access: avg **119.53ms**, p95 **364.02ms**, p99 **404.91ms**
+
+#### Decode Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Decoder init: **29.08ms**
+- Sequential decode: **104.1 fps**, avg **9.60ms**
+- Seek latency: 0.5s **6.72ms**, 1.0s **6.76ms**, 2.0s **11.48ms**, 5.0s **569.83ms**
+- Random access: avg **516.48ms**, p95 **1505.44ms**, p99 **1566.39ms**
+
+#### Playback Throughput Benchmark — 1080p60 (`/tmp/cap-bench-1080p60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **480/480**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.11**
+- Decode: avg **1.27ms**, p95 **2.33ms**, p99 **2.42ms**, max **3.74ms**
+- Seek samples: 0.5s **12.01ms**, 1.0s **2.68ms**, 2.0s **2.80ms**, 5.0s **144.54ms**
+
+#### Playback Throughput Benchmark — 4k60 (`/tmp/cap-bench-4k60.mp4`)
+- Target: **60 fps**, budget **16.67ms**
+- Decoded: **480/480**, failures **0**
+- Missed deadlines: **0**
+- Effective FPS: **60.12**
+- Decode: avg **4.95ms**, p95 **7.57ms**, p99 **10.04ms**, max **14.18ms**
+- Seek samples: 0.5s **30.56ms**, 1.0s **9.45ms**, 2.0s **8.94ms**, 5.0s **430.25ms**
+
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 
 ---

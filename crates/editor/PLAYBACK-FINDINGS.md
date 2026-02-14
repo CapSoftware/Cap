@@ -442,6 +442,35 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (FFmpeg long-seek tuning pass 3)
+
+**Goal**: Improve long-seek behavior by changing seek fallback ordering
+
+**What was done**:
+1. Changed forward seek fallback order in FFmpeg reset path:
+   - preferred bounded seek
+   - legacy backward seek
+   - wide bounded seek
+2. Re-ran decode and playback throughput benchmarks
+
+**Changes Made**:
+- `crates/video-decode/src/ffmpeg.rs`
+  - reordered fallback sequence in forward seek reset path
+
+**Results**:
+- 1080p:
+  - 5s decode seek: **142.01ms -> 110.27ms** (improved)
+  - random access avg: **114.64ms -> 119.53ms** (slight regression/noise)
+- 4k:
+  - random access avg: **525.90ms -> 516.48ms** (small improvement)
+  - 5s decode seek: **559.44ms -> 569.83ms** (flat/slightly worse)
+  - 5s playback seek sample: **410.35ms -> 430.25ms** (slight regression)
+- Throughput remains ~60fps in playback benchmark for both synthetic clips
+
+**Stopping point**: pass 3 did not materially improve long 4k seeks; code was reverted to pass 2 strategy and further gains will need a deeper keyframe-aware approach.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
