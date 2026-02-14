@@ -74,6 +74,15 @@ cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4
 
 # Add run labels for baseline/candidate grouping
 cargo run -p cap-editor --example decode-benchmark -- --video /path/to/video.mp4 --fps 60 --output-csv /tmp/cap-decode-benchmark.csv --run-label windows-pass-1
+
+# Summarize decode CSV rows grouped by run label and video
+cargo run -p cap-editor --example decode-csv-report -- --csv /tmp/cap-decode-benchmark.csv
+
+# Compare baseline/candidate decode labels
+cargo run -p cap-editor --example decode-csv-report -- --csv /tmp/cap-decode-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1
+
+# Export decode summary/delta rows to CSV
+cargo run -p cap-editor --example decode-csv-report -- --csv /tmp/cap-decode-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1 --output-csv /tmp/cap-decode-summary.csv
 ```
 
 #### Playback Throughput Benchmark (Linux-compatible)
@@ -1088,6 +1097,48 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - `random_access`
   - `duplicate_batch`
   - `duplicate_request`
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (Decode CSV report baseline/candidate validation)
+
+**Environment:** Linux runner with synthetic 1080p60 MP4 asset  
+**Commands:** `decode-benchmark --output-csv /tmp/cap-decode-benchmark-v2.csv --run-label linux-frame-order-pass-v2`, `decode-benchmark --output-csv /tmp/cap-decode-benchmark-v2.csv --run-label linux-frame-order-pass-v2b`, `decode-csv-report --baseline-label linux-frame-order-pass-v2 --candidate-label linux-frame-order-pass-v2b --output-csv /tmp/cap-decode-summary-v2.csv`  
+**Change under test:** decode CSV reporting utility for grouped summaries and deltas
+
+#### Decode CSV Report — Summary (1080p60)
+- `linux-frame-order-pass-v2`:
+  - Decoder creation: **10.28ms**
+  - Sequential FPS: **377.11**
+  - Sequential decode p95: **3.53ms**
+  - Random access avg/p95: **118.94 / 355.69ms**
+- `linux-frame-order-pass-v2b`:
+  - Decoder creation: **9.18ms**
+  - Sequential FPS: **378.80**
+  - Sequential decode p95: **3.42ms**
+  - Random access avg/p95: **116.85 / 354.24ms**
+
+#### Decode CSV Report — Delta (`v2b - v2`)
+- Core:
+  - Decoder creation: **-1.10ms**
+  - Sequential FPS: **+1.69**
+  - Sequential decode p95: **-0.11ms**
+  - Random access avg: **-2.09ms**
+  - Random access p95: **-1.45ms**
+- Seek deltas (avg / p95 / p99 / max):
+  - 0.5s: **+6.47 / +13.00 / +13.00 / +13.00ms**
+  - 1.0s: **+2.94 / +5.31 / +5.31 / +5.31ms**
+  - 2.0s: **+1.84 / +1.49 / +1.49 / +1.49ms**
+  - 5.0s: **-6.11 / -11.93 / -11.93 / -11.93ms**
+
+#### CSV Artifacts
+- Source decode rows: `/tmp/cap-decode-benchmark-v2.csv`
+- Report summary/delta rows: `/tmp/cap-decode-summary-v2.csv`
+- Report modes emitted:
+  - `summary_core`
+  - `summary_seek`
+  - `summary_duplicate`
+  - `delta_core`
+  - `delta_seek`
+  - `delta_duplicate`
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_END -->
 

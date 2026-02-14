@@ -2857,6 +2857,63 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (decode CSV report utility)
+
+**Goal**: Add grouped decode CSV summaries and baseline/candidate deltas to match existing scrub/playback CSV workflows
+
+**What was done**:
+1. Added a new decode CSV report example with summary and delta modes.
+2. Added parsing for decode benchmark row modes including seek and duplicate burst rows.
+3. Added optional CSV export for summary and delta outputs.
+4. Validated with two labeled decode benchmark runs and a baseline/candidate comparison.
+5. Added unit tests for parsing, summarization, and CSV append behavior.
+
+**Changes Made**:
+- `crates/editor/examples/decode-csv-report.rs` (new)
+  - CLI args:
+    - `--csv <path>` (repeatable)
+    - `--label <run-label>`
+    - `--baseline-label <run-label>`
+    - `--candidate-label <run-label>`
+    - `--output-csv <path>`
+  - grouped summary by `(run_label, video)` with medians for:
+    - decoder creation
+    - sequential fps + decode p95
+    - random-access avg/p95
+    - seek avg/p95/p99/max by distance
+    - duplicate burst avg/p95/p99/max by mode and burst size
+  - baseline/candidate delta output for core, seek, and duplicate metrics
+  - CSV output modes:
+    - `summary_core`
+    - `summary_seek`
+    - `summary_duplicate`
+    - `delta_core`
+    - `delta_seek`
+    - `delta_duplicate`
+  - unit tests:
+    - parse sequential row
+    - summarize mixed mode rows
+    - write summary + delta CSV rows
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added decode-csv-report command examples
+  - added validation run entry including baseline/candidate delta output
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 check -p cap-editor --example decode-csv-report`
+- `cargo +1.88.0 test -p cap-editor --example decode-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example decode-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --iterations 4 --seek-iterations 2 --output-csv /tmp/cap-decode-benchmark-v2.csv --run-label linux-frame-order-pass-v2b`
+- `cargo +1.88.0 run -p cap-editor --example decode-csv-report -- --csv /tmp/cap-decode-benchmark-v2.csv --baseline-label linux-frame-order-pass-v2 --candidate-label linux-frame-order-pass-v2b --output-csv /tmp/cap-decode-summary-v2.csv`
+
+**Results**:
+- ✅ Decode CSV workflows now support same-label summaries and baseline/candidate deltas, matching playback/scrub reporting ergonomics.
+- ✅ Delta output surfaces decode creation/fps/random-access/seek/duplicate changes in one command.
+- ✅ New example tests pass (3/3).
+
+**Stopping point**: Ready to ingest decode CSV runs from macOS + Windows and compute cross-platform baseline/candidate deltas without manual spreadsheet work.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
