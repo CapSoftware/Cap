@@ -462,6 +462,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - In-flight frame wait polling now exits early when a seek change is observed, instead of waiting through full wait budgets.
    - Startup prefetch wait path now also bails out immediately when seek state changes during wait.
 
+66. **Added pre-wait seek guards before startup and direct decode waits (2026-02-13)**
+   - Startup prefetch wait path now checks for pending seeks before entering timeout waits and before skip fallback on timeout.
+   - Direct decode fallback path now checks for pending seek updates before scheduling synchronous decode work.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -623,6 +627,7 @@ Decoder Pipeline:
 69. Replaced contains+entry prefetch insertion with single-entry map insertion to remove duplicate keyed-buffer lookups in frame-insert hot path.
 70. Centralized change-aware frame-request watch updates via shared helper for consistent no-op dedupe behavior across warmup/seek/skip paths.
 71. Added seek-aware short-circuiting in in-flight/startup frame wait paths to avoid waiting full frame-fetch budgets when seek updates arrive.
+72. Added pre-wait seek guards in startup/direct-decode fallback paths so pending seeks skip timeout waits and avoid stale synchronous decode work.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -663,6 +668,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: prefetch insertion now uses single `BTreeMap::entry` insertion path instead of separate contains-check + insert lookup.
 - `crates/editor/src/playback.rs`: frame-request watch updates now route through shared helper to keep no-op dedupe behavior and call-site logic consistent across warmup/seek/skip paths.
 - `crates/editor/src/playback.rs`: in-flight and startup frame wait paths now short-circuit when seek updates are pending to improve scrub responsiveness under wait pressure.
+- `crates/editor/src/playback.rs`: startup prefetch wait and direct-decode fallback paths now pre-check seek updates before waiting/synchronous decode scheduling to skip stale work under active seeks.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
