@@ -130,33 +130,37 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 				return false;
 			}
 
-			const writeIdx = Atomics.load(controlView, CONTROL_WRITE_INDEX);
-			const slotMetaIdx = (metadataOffset + writeIdx * METADATA_ENTRY_SIZE) / 4;
+			const initialWriteIdx = Atomics.load(controlView, CONTROL_WRITE_INDEX);
+			let writeIdx = -1;
+			let slotMetaIdx = -1;
 
-			const currentState = Atomics.load(
-				metadataView,
-				slotMetaIdx + META_SLOT_STATE,
-			);
-			if (currentState !== SLOT_STATE.EMPTY) {
-				return false;
-			}
+			for (let probe = 0; probe < config.slotCount; probe++) {
+				const candidateIdx = (initialWriteIdx + probe) % config.slotCount;
+				const candidateMetaIdx =
+					(metadataOffset + candidateIdx * METADATA_ENTRY_SIZE) / 4;
 
-			const exchanged = Atomics.compareExchange(
-				metadataView,
-				slotMetaIdx + META_SLOT_STATE,
-				SLOT_STATE.EMPTY,
-				SLOT_STATE.WRITING,
-			);
-			if (exchanged !== SLOT_STATE.EMPTY) {
-				return false;
-			}
-
-			if (writeIdx < 0 || writeIdx >= config.slotCount) {
-				Atomics.store(
+				const currentState = Atomics.load(
 					metadataView,
-					slotMetaIdx + META_SLOT_STATE,
-					SLOT_STATE.EMPTY,
+					candidateMetaIdx + META_SLOT_STATE,
 				);
+				if (currentState !== SLOT_STATE.EMPTY) {
+					continue;
+				}
+
+				const exchanged = Atomics.compareExchange(
+					metadataView,
+					candidateMetaIdx + META_SLOT_STATE,
+					SLOT_STATE.EMPTY,
+					SLOT_STATE.WRITING,
+				);
+				if (exchanged === SLOT_STATE.EMPTY) {
+					writeIdx = candidateIdx;
+					slotMetaIdx = candidateMetaIdx;
+					break;
+				}
+			}
+
+			if (writeIdx < 0 || slotMetaIdx < 0) {
 				return false;
 			}
 
@@ -191,10 +195,10 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 			);
 
 			const MAX_CAS_RETRIES = 10;
-			let observed = writeIdx;
+			let observed = Atomics.load(controlView, CONTROL_WRITE_INDEX);
 
 			for (let casAttempt = 0; casAttempt < MAX_CAS_RETRIES; casAttempt++) {
-				const nextIdx = (observed + 1) % config.slotCount;
+				const nextIdx = (writeIdx + 1) % config.slotCount;
 				const oldValue = Atomics.compareExchange(
 					controlView,
 					CONTROL_WRITE_INDEX,

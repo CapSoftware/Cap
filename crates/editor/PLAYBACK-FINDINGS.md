@@ -1253,6 +1253,33 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Shared frame buffer slot probing under contention)
+
+**Goal**: Reduce websocket frame transport fallback frequency when the current SAB write slot is busy
+
+**What was done**:
+1. Updated SAB producer write path to probe multiple ring slots instead of only attempting the current write index.
+2. Claimed the first empty slot via CAS and wrote frame payload there.
+3. Kept write-index advancement semantics, now advancing from the selected slot after a successful write.
+
+**Changes Made**:
+- `apps/desktop/src/utils/shared-frame-buffer.ts`
+  - `createProducer().write` now scans up to `slotCount` candidate slots for an empty write target
+  - preserves slot-state transitions (`EMPTY -> WRITING -> READY`) and metadata writes
+  - returns false only when no writable slot is available
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/shared-frame-buffer.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Desktop TypeScript checks pass.
+- ✅ SAB producer can now write into available slots under transient contention, reducing avoidable fallback pressure.
+
+**Stopping point**: combine with existing socket SAB telemetry on target machines to confirm lower fallback counts during high-FPS playback.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
