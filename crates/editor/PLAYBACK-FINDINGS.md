@@ -3870,6 +3870,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (scrub even-run median aggregation correction)
+
+**Goal**: Improve benchmark evidence quality by fixing even-run median aggregation bias in scrub benchmark summaries
+
+**What was done**:
+1. Updated scrub benchmark median helper to return the midpoint of the two middle values for even sample counts.
+2. Added unit tests for even-sample median behavior.
+3. Added aggregate-summaries test to verify even-run last-request median calculation.
+4. Re-ran scrub example test suite and a 2-run scrub benchmark command to validate runtime output.
+
+**Changes Made**:
+- `crates/editor/examples/scrub-benchmark.rs`
+  - `median_of(...)` now averages middle two values for even-length input
+  - added tests:
+    - `median_of_even_samples_averages_middle_values`
+    - `aggregate_summaries_uses_even_median_for_last_request_average`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - documented even-run median behavior in command guidance
+  - added benchmark history entry proving runtime aggregate equals average of two run values
+
+**Verification**:
+- `rustfmt --edition 2024 crates/editor/examples/scrub-benchmark.rs`
+- `cargo +1.88.0 test -p cap-editor --example scrub-benchmark --example scrub-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 2 --burst-size 12 --sweep-seconds 2.0 --runs 2 --run-label linux-median-even-check --output-csv /tmp/cap-scrub-median-even.csv`
+
+**Results**:
+- ✅ Even-run scrub medians now represent true midpoint values instead of upper-middle selection.
+- ✅ Runtime output validated with concrete 2-run sample where aggregate matches exact average of both run values.
+- ✅ Example tests pass (`scrub-benchmark` 2/2, `scrub-csv-report` 6/6).
+
+**Stopping point**: Continue macOS/Windows scrub threshold sweeps with corrected even-run aggregation for lower-bias comparisons.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

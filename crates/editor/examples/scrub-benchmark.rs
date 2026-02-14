@@ -294,7 +294,12 @@ fn median_of(samples: &[f64]) -> f64 {
     }
     let mut values = samples.to_vec();
     values.sort_by(f64::total_cmp);
-    values[values.len() / 2]
+    let index = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[index - 1] + values[index]) / 2.0
+    } else {
+        values[index]
+    }
 }
 
 fn aggregate_summaries(summaries: &[ScrubSummary]) -> ScrubSummary {
@@ -776,5 +781,52 @@ fn main() {
     {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{aggregate_summaries, median_of, ScrubSummary, SeekDistanceSummary};
+
+    #[test]
+    fn median_of_even_samples_averages_middle_values() {
+        let samples = vec![10.0, 20.0, 30.0, 50.0];
+        assert!((median_of(&samples) - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn aggregate_summaries_uses_even_median_for_last_request_average() {
+        let seek = [SeekDistanceSummary::default(); 3];
+        let summaries = vec![
+            ScrubSummary {
+                all_avg_ms: 0.0,
+                all_p95_ms: 0.0,
+                all_p99_ms: 0.0,
+                all_max_ms: 0.0,
+                last_avg_ms: 100.0,
+                last_p95_ms: 0.0,
+                last_p99_ms: 0.0,
+                last_max_ms: 0.0,
+                successful_requests: 1,
+                failed_requests: 0,
+                seek_distance: seek,
+            },
+            ScrubSummary {
+                all_avg_ms: 0.0,
+                all_p95_ms: 0.0,
+                all_p99_ms: 0.0,
+                all_max_ms: 0.0,
+                last_avg_ms: 300.0,
+                last_p95_ms: 0.0,
+                last_p99_ms: 0.0,
+                last_max_ms: 0.0,
+                successful_requests: 1,
+                failed_requests: 0,
+                seek_distance: seek,
+            },
+        ];
+
+        let aggregate = aggregate_summaries(&summaries);
+        assert!((aggregate.last_avg_ms - 200.0).abs() < f64::EPSILON);
     }
 }

@@ -125,6 +125,9 @@ cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 
 # Aggregate multiple runs (median across runs) for lower-variance comparisons
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 10 --burst-size 12 --sweep-seconds 2.0 --runs 3
 
+# For even run counts, aggregate medians now average the two middle runs
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 10 --burst-size 12 --sweep-seconds 2.0 --runs 2
+
 # Runtime tuning for FFmpeg scrub supersession heuristic
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS=2000000 \
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=7 \
@@ -222,6 +225,25 @@ cargo run -p cap-recording --example playback-test-runner -- full
 ## Benchmark History
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub even-run median aggregation fix)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4 asset  
+**Change under test:** scrub benchmark median aggregation now uses true median for even run counts (average of middle two runs)
+
+#### Validation commands
+- `cargo +1.88.0 test -p cap-editor --example scrub-benchmark --example scrub-csv-report`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 2 --burst-size 12 --sweep-seconds 2.0 --runs 2 --run-label linux-median-even-check --output-csv /tmp/cap-scrub-median-even.csv`
+
+#### Output validation highlights
+- Per-run last-request averages:
+  - run 1: **172.02ms**
+  - run 2: **173.90ms**
+- Reported aggregate last-request average:
+  - **172.96ms**
+- Check:
+  - `(172.02 + 173.90) / 2 = 172.96`
+- Result confirms even-run aggregation now reflects the midpoint between both runs rather than selecting only one run.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (latest-first min-pixels metadata capture)
 
