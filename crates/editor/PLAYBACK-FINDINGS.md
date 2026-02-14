@@ -2236,6 +2236,40 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker raw-frame cache copy removal)
+
+**Goal**: Reduce canvas-path per-frame memory copy overhead by removing redundant raw-frame cache maintenance
+
+**What was done**:
+1. Removed dedicated `lastRawFrame*` cache state from frame worker.
+2. Stopped copying every canvas-path frame into the removed raw cache.
+3. Updated WebGPU init replay path to use `lastImageData` directly.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - removed:
+    - `lastRawFrameData`
+    - `lastRawFrameWidth`
+    - `lastRawFrameHeight`
+  - removed per-frame `lastRawFrameData.set(processedFrameData)` copy in `queueFrameFromBytes`
+  - `initCanvas` WebGPU replay now renders from `lastImageData.data` and dimensions
+  - cleanup path no longer resets removed raw-cache fields
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Canvas-path enqueue no longer performs redundant full-frame copy into raw cache.
+- ✅ WebGPU initialization replay continues using latest rendered image data.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for desktop validation to confirm reduced worker memory bandwidth during canvas fallback sessions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

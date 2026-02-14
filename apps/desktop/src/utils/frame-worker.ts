@@ -128,10 +128,6 @@ let cachedImageData: ImageData | null = null;
 let cachedWidth = 0;
 let cachedHeight = 0;
 
-let lastRawFrameData: Uint8ClampedArray | null = null;
-let lastRawFrameWidth = 0;
-let lastRawFrameHeight = 0;
-
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
 
@@ -349,13 +345,6 @@ function queueFrameFromBytes(
 			}
 			processedFrameData = strideBuffer.subarray(0, expectedLength);
 		}
-
-		if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {
-			lastRawFrameData = new Uint8ClampedArray(expectedLength);
-		}
-		lastRawFrameData.set(processedFrameData);
-		lastRawFrameWidth = width;
-		lastRawFrameHeight = height;
 
 		if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
 			cachedImageData = new ImageData(width, height);
@@ -582,9 +571,6 @@ function cleanup() {
 	cachedHeight = 0;
 	strideBuffer = null;
 	strideBufferSize = 0;
-	lastRawFrameData = null;
-	lastRawFrameWidth = 0;
-	lastRawFrameHeight = 0;
 	playbackStartTime = null;
 	playbackStartTargetTimeNs = null;
 	lastRenderedFrameNumber = -1;
@@ -653,21 +639,21 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 		if (
 			renderMode === "webgpu" &&
 			webgpuRenderer &&
-			lastRawFrameData &&
-			lastRawFrameWidth > 0 &&
-			lastRawFrameHeight > 0
+			lastImageData &&
+			lastImageData.width > 0 &&
+			lastImageData.height > 0
 		) {
 			renderFrameWebGPU(
 				webgpuRenderer,
-				lastRawFrameData,
-				lastRawFrameWidth,
-				lastRawFrameHeight,
-				lastRawFrameWidth * 4,
+				lastImageData.data,
+				lastImageData.width,
+				lastImageData.height,
+				lastImageData.width * 4,
 			);
 			self.postMessage({
 				type: "frame-rendered",
-				width: lastRawFrameWidth,
-				height: lastRawFrameHeight,
+				width: lastImageData.width,
+				height: lastImageData.height,
 			} satisfies FrameRenderedMessage);
 			frameRendered = true;
 		} else if (renderMode === "canvas2d" && lastImageData && offscreenCtx) {
