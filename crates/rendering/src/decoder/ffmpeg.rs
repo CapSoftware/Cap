@@ -82,6 +82,7 @@ struct ScrubSupersessionConfig {
     latest_first_disabled: bool,
     latest_first_min_requests: usize,
     latest_first_min_span_frames: u32,
+    latest_first_min_pixels: u64,
 }
 
 static SCRUB_SUPERSESSION_CONFIG: OnceLock<ScrubSupersessionConfig> = OnceLock::new();
@@ -126,6 +127,9 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
             parse_u32_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES")
                 .filter(|value| *value > 0)
                 .unwrap_or(min_span_frames);
+        let latest_first_min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS")
+            .filter(|value| *value > 0)
+            .unwrap_or(min_pixels);
 
         ScrubSupersessionConfig {
             min_requests,
@@ -135,6 +139,7 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
             latest_first_disabled,
             latest_first_min_requests,
             latest_first_min_span_frames,
+            latest_first_min_pixels,
         }
     })
 }
@@ -475,9 +480,11 @@ impl FfmpegDecoder {
                 };
                 let _ = ready_tx.send(Ok(sw_init_result));
                 let supersession_config = scrub_supersession_config();
-                let enable_scrub_supersession = !supersession_config.disabled
-                    && (video_width as u64) * (video_height as u64)
-                        >= supersession_config.min_pixels;
+                let frame_pixels = (video_width as u64) * (video_height as u64);
+                let enable_scrub_supersession =
+                    !supersession_config.disabled && frame_pixels >= supersession_config.min_pixels;
+                let enable_latest_first = enable_scrub_supersession
+                    && frame_pixels >= supersession_config.latest_first_min_pixels;
 
                 while let Ok(r) = rx.recv() {
                     const MAX_FRAME_TOLERANCE: u32 = 2;
@@ -527,10 +534,7 @@ impl FfmpegDecoder {
                     }
 
                     maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
-                    order_pending_requests_for_seek(
-                        &mut pending_requests,
-                        enable_scrub_supersession,
-                    );
+                    order_pending_requests_for_seek(&mut pending_requests, enable_latest_first);
 
                     for PendingRequest {
                         time: requested_time,
@@ -827,8 +831,11 @@ impl FfmpegDecoder {
             };
             let _ = ready_tx.send(Ok(init_result));
             let supersession_config = scrub_supersession_config();
-            let enable_scrub_supersession = !supersession_config.disabled
-                && (video_width as u64) * (video_height as u64) >= supersession_config.min_pixels;
+            let frame_pixels = (video_width as u64) * (video_height as u64);
+            let enable_scrub_supersession =
+                !supersession_config.disabled && frame_pixels >= supersession_config.min_pixels;
+            let enable_latest_first = enable_scrub_supersession
+                && frame_pixels >= supersession_config.latest_first_min_pixels;
 
             while let Ok(r) = rx.recv() {
                 const MAX_FRAME_TOLERANCE: u32 = 2;
@@ -878,7 +885,7 @@ impl FfmpegDecoder {
                 }
 
                 maybe_supersede_scrub_burst(&mut pending_requests, enable_scrub_supersession);
-                order_pending_requests_for_seek(&mut pending_requests, enable_scrub_supersession);
+                order_pending_requests_for_seek(&mut pending_requests, enable_latest_first);
 
                 for PendingRequest {
                     time: requested_time,
@@ -1239,6 +1246,7 @@ mod tests {
                 latest_first_disabled: false,
                 latest_first_min_requests: 2,
                 latest_first_min_span_frames: 20,
+                latest_first_min_pixels: 2_000_000,
             },
         );
         assert!(should_prioritize);
@@ -1262,6 +1270,7 @@ mod tests {
                 latest_first_disabled: true,
                 latest_first_min_requests: 2,
                 latest_first_min_span_frames: 20,
+                latest_first_min_pixels: 2_000_000,
             },
         );
         assert!(!should_prioritize);
@@ -1281,6 +1290,7 @@ mod tests {
                 latest_first_disabled: false,
                 latest_first_min_requests: 3,
                 latest_first_min_span_frames: 20,
+                latest_first_min_pixels: 2_000_000,
             },
         );
         assert!(!should_prioritize);

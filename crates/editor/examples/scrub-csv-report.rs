@@ -103,6 +103,9 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
     let supersede_min_requests = fields[12].trim_matches('"');
     let supersede_min_span_frames = fields[13].trim_matches('"');
     let has_latest_first_threshold_columns = fields.get(44).is_some();
+    let has_latest_first_min_pixels_column = fields
+        .get(16)
+        .is_some_and(|value| value.parse::<f64>().is_err());
     let (
         all_avg_index,
         all_p95_index,
@@ -113,13 +116,19 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
         short_seek_p95_index,
         medium_seek_p95_index,
         long_seek_p95_index,
-    ) = if has_latest_first_threshold_columns {
+    ) = if has_latest_first_threshold_columns && has_latest_first_min_pixels_column {
+        (17, 18, 21, 22, 25, 26, 28, 34, 40)
+    } else if has_latest_first_threshold_columns {
         (16, 17, 20, 21, 24, 25, 27, 33, 39)
     } else {
         (14, 15, 18, 19, 22, 23, 25, 31, 37)
     };
     let latest_first_disabled = fields
-        .get(44)
+        .get(if has_latest_first_min_pixels_column {
+            45
+        } else {
+            44
+        })
         .or_else(|| fields.get(42))
         .map(|value| value.trim_matches('"'))
         .unwrap_or_default();
@@ -139,9 +148,17 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
     } else {
         ""
     };
+    let latest_first_min_pixels = if has_latest_first_min_pixels_column {
+        fields
+            .get(16)
+            .map(|value| value.trim_matches('"'))
+            .unwrap_or_default()
+    } else {
+        ""
+    };
     let run_label = fields[3].trim_matches('"');
     let config_label = format!(
-        "cfg(disabled={},min_pixels={},min_requests={},min_span={},latest_first_min_requests={},latest_first_min_span={},latest_first={})",
+        "cfg(disabled={},min_pixels={},min_requests={},min_span={},latest_first_min_requests={},latest_first_min_span={},latest_first_min_pixels={},latest_first={})",
         if supersede_disabled.is_empty() {
             "default"
         } else {
@@ -171,6 +188,11 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
             "default"
         } else {
             latest_first_min_span_frames
+        },
+        if latest_first_min_pixels.is_empty() {
+            "default"
+        } else {
+            latest_first_min_pixels
         },
         if latest_first_disabled.is_empty() {
             "default"
@@ -593,17 +615,17 @@ mod tests {
         let row = parse_csv_line(line).expect("expected row");
         assert_eq!(
             row.run_label,
-            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20,latest_first_min_requests=default,latest_first_min_span=default,latest_first=default)"
+            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20,latest_first_min_requests=default,latest_first_min_span=default,latest_first_min_pixels=default,latest_first=default)"
         );
     }
 
     #[test]
     fn parses_latest_first_flag_from_extended_rows() {
-        let line = "1771039415444,aggregate,0,\"\",\"/tmp/cap-bench-1080p60.mp4\",60,6,12,2.000,2,\"\",\"2000000\",\"7\",\"20\",\"3\",\"30\",199.009,410.343,410.344,410.346,213.930,410.343,410.343,410.343,144,0,199.009,410.343,410.344,410.346,120,0,220.009,430.343,430.344,430.346,20,0,240.009,450.343,450.344,450.346,4,0,\"1\"";
+        let line = "1771039415444,aggregate,0,\"\",\"/tmp/cap-bench-1080p60.mp4\",60,6,12,2.000,2,\"\",\"2000000\",\"7\",\"20\",\"3\",\"30\",\"2500000\",199.009,410.343,410.344,410.346,213.930,410.343,410.343,410.343,144,0,199.009,410.343,410.344,410.346,120,0,220.009,430.343,430.344,430.346,20,0,240.009,450.343,450.344,450.346,4,0,\"1\"";
         let row = parse_csv_line(line).expect("expected row");
         assert_eq!(
             row.run_label,
-            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20,latest_first_min_requests=3,latest_first_min_span=30,latest_first=1)"
+            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20,latest_first_min_requests=3,latest_first_min_span=30,latest_first_min_pixels=2500000,latest_first=1)"
         );
     }
 

@@ -3818,10 +3818,11 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 **What was done**:
 1. Added runtime env controls for latest-first minimum request count and span threshold.
-2. Kept existing default behavior by mapping defaults to current policy (`min_requests=2`, `min_span` inherited from supersession span).
-3. Extended scrub CSV output to persist latest-first threshold env values.
-4. Extended scrub CSV report config-label fallback parsing to include latest-first threshold values.
-5. Added targeted parser/unit test updates for both legacy and extended scrub CSV schemas.
+2. Added runtime env control for latest-first minimum pixel gating.
+3. Kept existing default behavior by mapping defaults to current policy (`min_requests=2`, `min_span` inherited from supersession span).
+4. Extended scrub CSV output to persist latest-first threshold env values.
+5. Extended scrub CSV report config-label fallback parsing to include latest-first threshold values.
+6. Added targeted parser/unit test updates for both legacy and extended scrub CSV schemas.
 
 **Changes Made**:
 - `crates/rendering/src/decoder/ffmpeg.rs`
@@ -3831,12 +3832,14 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
   - new env vars:
     - `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS`
     - `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES`
+    - `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS`
   - latest-first prioritization now gates on those thresholds
   - added request-count threshold unit test for prioritization guard
 - `crates/editor/examples/scrub-benchmark.rs`
   - CSV output now includes:
     - `latest_first_min_requests`
     - `latest_first_min_span_frames`
+    - `latest_first_min_pixels`
     - `latest_first_disabled`
 - `crates/editor/examples/scrub-csv-report.rs`
   - parser now supports both previous and extended CSV schemas using index fallbacks
@@ -3853,11 +3856,14 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS=3 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES=30 cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 3 --burst-size 12 --sweep-seconds 8.0 --runs 2 --output-csv /tmp/cap-scrub-latest-first-threshold.csv`
 - `CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED=1 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS=3 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES=30 cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 3 --burst-size 12 --sweep-seconds 8.0 --runs 2 --output-csv /tmp/cap-scrub-latest-first-threshold.csv`
 - `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-latest-first-threshold.csv`
+- `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS=3 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES=30 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS=2500000 cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 2 --burst-size 12 --sweep-seconds 8.0 --runs 1 --output-csv /tmp/cap-scrub-latest-first-threshold-v2.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-latest-first-threshold-v2.csv`
 
 **Results**:
 - ✅ Latest-first activation policy is now fully runtime-tunable without recompiling.
 - ✅ Scrub CSV pipelines remain backward-compatible with old row schema while emitting richer threshold metadata for new runs.
 - ✅ Unlabeled scrub rows now carry config-derived labels with `latest_first_min_requests` and `latest_first_min_span`, enabling grouped analysis without manual run labels.
+- ✅ Unlabeled scrub rows now also carry `latest_first_min_pixels`, enabling resolution-gating comparisons via config-derived grouping.
 - ✅ Decoder and scrub parser tests pass with expanded coverage.
 
 **Stopping point**: Use new latest-first threshold env knobs in macOS/Windows labeled sweeps to tune medium/long scrub tails per hardware profile.

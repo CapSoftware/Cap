@@ -136,6 +136,10 @@ CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS=3 \
 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES=30 \
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
 
+# Optionally gate latest-request-first ordering to higher-resolution streams
+CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS=2500000 \
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
+
 # Disable latest-request-first ordering for A/B comparisons
 CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED=1 \
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
@@ -218,6 +222,20 @@ cargo run -p cap-recording --example playback-test-runner -- full
 ## Benchmark History
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (latest-first min-pixels metadata capture)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4 asset  
+**Change under test:** scrub CSV metadata now includes `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS` for unlabeled config-derived grouping
+
+#### Validation commands
+- `CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS=3 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES=30 CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS=2500000 cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 2 --burst-size 12 --sweep-seconds 8.0 --runs 1 --output-csv /tmp/cap-scrub-latest-first-threshold-v2.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-latest-first-threshold-v2.csv`
+
+#### Output validation highlights
+- `scrub-csv-report` config-derived label now includes `latest_first_min_pixels=2500000`:
+  - `cfg(...,latest_first_min_requests=3,latest_first_min_span=30,latest_first_min_pixels=2500000,latest_first=default)`
+- Confirms CSV schema + parser stay aligned for latest-first threshold metadata without requiring explicit run labels.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (latest-first threshold metadata capture)
 
@@ -588,7 +606,7 @@ cargo run -p cap-recording --example playback-test-runner -- full
 
 #### Validation
 - New utility parses scrub benchmark CSV aggregate rows and reports median summaries by run label + video.
-- Empty run labels now automatically fall back to a derived config label (`min_pixels`, `min_requests`, `min_span`, `disabled`, `latest_first_min_requests`, `latest_first_min_span`, `latest_first`) so unlabeled sweeps remain distinguishable.
+- Empty run labels now automatically fall back to a derived config label (`min_pixels`, `min_requests`, `min_span`, `disabled`, `latest_first_min_requests`, `latest_first_min_span`, `latest_first_min_pixels`, `latest_first`) so unlabeled sweeps remain distinguishable.
 - Smoke run against labeled CSV:
   - `cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
   - output summary:

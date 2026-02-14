@@ -405,6 +405,7 @@ fn write_csv(
             "supersede_min_span_frames",
             "latest_first_min_requests",
             "latest_first_min_span_frames",
+            "latest_first_min_pixels",
             "all_avg_ms",
             "all_p95_ms",
             "all_p99_ms",
@@ -452,10 +453,11 @@ fn write_csv(
     let latest_first_min_requests = scrub_env_value("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_REQUESTS");
     let latest_first_min_span_frames =
         scrub_env_value("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_SPAN_FRAMES");
+    let latest_first_min_pixels = scrub_env_value("CAP_FFMPEG_SCRUB_LATEST_FIRST_MIN_PIXELS");
     let latest_first_disabled = scrub_env_value("CAP_FFMPEG_SCRUB_LATEST_FIRST_DISABLED");
     let run_label = scrub_run_label(config);
     let common_prefix = format!(
-        "{timestamp_ms},{{scope}},{{run_index}},\"{}\",\"{}\",{},{},{},{:.3},{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
+        "{timestamp_ms},{{scope}},{{run_index}},\"{}\",\"{}\",{},{},{},{:.3},{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
         run_label,
         config.video_path.display(),
         config.fps,
@@ -468,7 +470,8 @@ fn write_csv(
         supersede_min_requests,
         supersede_min_span_frames,
         latest_first_min_requests,
-        latest_first_min_span_frames
+        latest_first_min_span_frames,
+        latest_first_min_pixels
     );
 
     for (index, summary) in summaries.iter().enumerate() {
