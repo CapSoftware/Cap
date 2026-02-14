@@ -1781,6 +1781,41 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (SAB retry total diagnostics and drop accounting fix)
+
+**Goal**: Improve long-session transport diagnostics by exposing cumulative retry counts and correcting superseded-drop totals in retry pressure paths
+
+**What was done**:
+1. Added cumulative retry-attempt counter to socket transport stats.
+2. Fixed superseded-drop total accounting when retry scheduling replaces an already queued `nextFrame`.
+3. Extended overlay and clipboard diagnostics with retry totals.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `sabTotalRetryAttempts` to `FpsStats`
+  - increments cumulative retry counter on each `decision.action === "retry"` branch
+  - increments cumulative superseded-drop counter when retry path evicts an existing queued frame
+  - emits retry totals through `getLocalFpsStats`
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - extended transport state/reset/polling with `sabTotalRetryAttempts`
+  - added retry total to clipboard export
+  - expanded `SAB totals` row to include cumulative retry count
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Overlay/clipboard now expose cumulative retry pressure during long runs.
+- ✅ Superseded-drop totals now include retry-path queue replacement events.
+- ✅ Desktop typecheck and transport utility tests pass.
+
+**Stopping point**: Ready for cross-machine sessions to compare retry pressure against fallback and frame-drop totals when evaluating SAB contention behavior.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

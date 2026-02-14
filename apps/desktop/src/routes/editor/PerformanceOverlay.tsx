@@ -36,6 +36,7 @@ type TransportStats = {
 	sabSlotSizeBytes: number;
 	sabSlotCount: number;
 	sabTotalBytes: number;
+	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
 	sabTotalFramesSentToWorker: number;
@@ -74,6 +75,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabSlotSizeBytes: 0,
 		sabSlotCount: 0,
 		sabTotalBytes: 0,
+		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
 		sabTotalFramesSentToWorker: 0,
@@ -202,6 +204,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabSlotSizeBytes: 0,
 			sabSlotCount: 0,
 			sabTotalBytes: 0,
+			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
 			sabTotalFramesSentToWorker: 0,
@@ -236,6 +239,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				sabSlotSizeBytes: socketStats.sabSlotSizeBytes,
 				sabSlotCount: socketStats.sabSlotCount,
 				sabTotalBytes: socketStats.sabTotalBytes,
+				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
 					socketStats.sabTotalFramesWrittenToSharedBuffer,
@@ -271,6 +275,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Slot: ${formatSlotMb(t.sabSlotSizeBytes)} MB`,
 			`SAB Slot Count: ${t.sabSlotCount}`,
 			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
+			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
 			`SAB Frames Sent to Worker: ${t.sabTotalFramesSentToWorker}`,
@@ -396,7 +401,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 									{" "}
 									/ {transportStats().sabTotalFramesWrittenToSharedBuffer} sab /{" "}
 									{transportStats().sabTotalFramesSentToWorker} worker /{" "}
-									{transportStats().sabTotalSupersededDrops} superseded
+									{transportStats().sabTotalSupersededDrops} superseded /{" "}
+									{transportStats().sabTotalRetryAttempts} retries
 								</span>
 							</div>
 						</Show>

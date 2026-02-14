@@ -41,6 +41,7 @@ export type FpsStats = {
 	sabSlotSizeBytes: number;
 	sabSlotCount: number;
 	sabTotalBytes: number;
+	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
 	sabTotalFramesSentToWorker: number;
@@ -463,8 +464,10 @@ export function createImageDataWS(
 
 				if (decision.action === "retry") {
 					isProcessing = false;
+					totalSabRetryAttempts++;
 					if (nextFrame) {
 						framesDropped++;
+						totalSupersededDrops++;
 					}
 					nextFrame = buffer;
 					if (!sabRetryScheduled) {
@@ -519,6 +522,7 @@ export function createImageDataWS(
 	let frameCount = 0;
 	let frameTimeSum = 0;
 	let totalBytesReceived = 0;
+	let totalSabRetryAttempts = 0;
 	let totalFramesReceived = 0;
 	let totalFramesWrittenToSharedBuffer = 0;
 	let totalFramesSentToWorker = 0;
@@ -552,6 +556,7 @@ export function createImageDataWS(
 		sabTotalBytes:
 			(sharedBufferConfig?.slotSize ?? 0) *
 			(sharedBufferConfig?.slotCount ?? 0),
+		sabTotalRetryAttempts: totalSabRetryAttempts,
 		sabTotalFramesReceived: totalFramesReceived,
 		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
 		sabTotalFramesSentToWorker: totalFramesSentToWorker,
