@@ -102,4 +102,25 @@ describe("shared-frame-buffer", () => {
 
 		expect(values).toEqual([2, 3]);
 	});
+
+	it("does not overwrite reading slots when full", () => {
+		const init = createSharedFrameBuffer({ slotCount: 2, slotSize: 64 });
+		const producer = createProducer(init);
+		const consumer = createConsumer(init.buffer);
+
+		expect(producer.write(makeFrame(1))).toBe(true);
+		expect(producer.write(makeFrame(2))).toBe(true);
+
+		const heldFirst = consumer.borrow(0);
+		expect(heldFirst?.data[0]).toBe(1);
+
+		expect(producer.write(makeFrame(3))).toBe(true);
+		expect(readFirstByte(consumer.read(0))).toBe(3);
+
+		const heldSecond = consumer.borrow(0);
+		expect(heldSecond).toBeNull();
+
+		heldFirst?.release();
+		expect(readFirstByte(consumer.read(0))).toBeNull();
+	});
 });
