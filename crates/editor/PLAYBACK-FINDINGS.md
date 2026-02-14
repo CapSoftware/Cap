@@ -1976,6 +1976,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (socket frame-queued callback reduction)
+
+**Goal**: Reduce redundant main-thread update work by removing duplicate frame-dimension callback traffic from worker `frame-queued` events
+
+**What was done**:
+1. Removed `onmessage({ width, height })` dispatch on `frame-queued` worker events.
+2. Preserved `isProcessing` reset and `processNextFrame` scheduling behavior for worker fallback flow.
+3. Kept frame-dimension updates on `frame-rendered`, which already reflects the displayed frame.
+4. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - `worker.onmessage` `frame-queued` branch now only:
+    - clears `isProcessing`
+    - calls `processNextFrame()`
+  - removed redundant early `onmessage` callback for queued-but-not-yet-rendered frames
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+
+**Results**:
+- ✅ Worker fallback path still advances queue dispatch correctly.
+- ✅ Main-thread frame callback traffic reduced by dropping queued-frame duplicate notifications.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows validation to compare UI-thread callback load and transport-side stability under fallback-heavy sessions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

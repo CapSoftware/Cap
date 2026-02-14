@@ -404,8 +404,6 @@ export function createImageDataWS(
 		}
 
 		if (e.data.type === "frame-queued") {
-			const { width, height } = e.data;
-			onmessage({ width, height });
 			isProcessing = false;
 			processNextFrame();
 			return;
