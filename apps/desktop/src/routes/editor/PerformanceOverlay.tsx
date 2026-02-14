@@ -38,6 +38,7 @@ type TransportStats = {
 	sabTotalBytes: number;
 	workerFramesInFlight: number;
 	workerInFlightBackpressureHits: number;
+	workerInFlightBackpressureWindowHits: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -80,6 +81,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 		sabTotalBytes: 0,
 		workerFramesInFlight: 0,
 		workerInFlightBackpressureHits: 0,
+		workerInFlightBackpressureWindowHits: 0,
 		sabTotalRetryAttempts: 0,
 		sabTotalFramesReceived: 0,
 		sabTotalFramesWrittenToSharedBuffer: 0,
@@ -212,6 +214,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			sabTotalBytes: 0,
 			workerFramesInFlight: 0,
 			workerInFlightBackpressureHits: 0,
+			workerInFlightBackpressureWindowHits: 0,
 			sabTotalRetryAttempts: 0,
 			sabTotalFramesReceived: 0,
 			sabTotalFramesWrittenToSharedBuffer: 0,
@@ -251,6 +254,8 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 				workerFramesInFlight: socketStats.workerFramesInFlight,
 				workerInFlightBackpressureHits:
 					socketStats.workerInFlightBackpressureHits,
+				workerInFlightBackpressureWindowHits:
+					socketStats.workerInFlightBackpressureWindowHits,
 				sabTotalRetryAttempts: socketStats.sabTotalRetryAttempts,
 				sabTotalFramesReceived: socketStats.sabTotalFramesReceived,
 				sabTotalFramesWrittenToSharedBuffer:
@@ -326,6 +331,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			`SAB Total: ${formatSlotMb(t.sabTotalBytes)} MB`,
 			`Worker Frames In Flight: ${t.workerFramesInFlight}`,
 			`Worker In-Flight Cap Hits: ${t.workerInFlightBackpressureHits}`,
+			`Worker In-Flight Cap Hits (Window): ${t.workerInFlightBackpressureWindowHits}`,
 			`SAB Retry Attempts: ${t.sabTotalRetryAttempts}`,
 			`SAB Frames Received: ${t.sabTotalFramesReceived}`,
 			`SAB Frames Written: ${t.sabTotalFramesWrittenToSharedBuffer}`,
@@ -497,6 +503,14 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							<div style={{ color: "#f59e0b" }}>
 								Worker in-flight cap hits:{" "}
 								{transportStats().workerInFlightBackpressureHits}
+							</div>
+						</Show>
+						<Show
+							when={transportStats().workerInFlightBackpressureWindowHits > 0}
+						>
+							<div style={{ color: "#fbbf24" }}>
+								Worker cap hits (window):{" "}
+								{transportStats().workerInFlightBackpressureWindowHits}
 							</div>
 						</Show>
 						<Show when={stats().droppedFrames > 0}>

@@ -2515,6 +2515,45 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (worker cap-hit window diagnostics)
+
+**Goal**: Improve short-window fallback-pressure visibility by surfacing windowed worker in-flight cap-hit counters alongside cumulative totals
+
+**What was done**:
+1. Added window-scoped worker cap-hit counter in socket runtime metrics.
+2. Incremented window counter on each in-flight cap block event.
+3. Included both window and cumulative cap-hit metrics in periodic frame logs.
+4. Exposed window metric through `FpsStats` and Performance Overlay.
+5. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `workerInFlightBackpressureWindowHits` to `FpsStats`
+  - tracks `workerInFlightBackpressureWindowHits` per 60-frame logging window
+  - logs:
+    - `worker_inflight`
+    - `worker_cap_hits_window`
+    - `worker_cap_hits_total`
+  - resets window counter after each frame-log window flush
+- `apps/desktop/src/routes/editor/PerformanceOverlay.tsx`
+  - extended transport state/reset/polling with `workerInFlightBackpressureWindowHits`
+  - clipboard export includes window cap-hit value
+  - overlay shows `Worker cap hits (window)` when non-zero
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts src/routes/editor/PerformanceOverlay.tsx`
+
+**Results**:
+- ✅ Diagnostics now distinguish burst-window cap pressure from cumulative long-session totals.
+- ✅ Frame logs provide immediate cap-pressure context without requiring overlay inspection.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for cross-machine fallback stress sessions to compare cap-hit bursts across short windows and entire runs.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

@@ -44,6 +44,7 @@ export type FpsStats = {
 	sabTotalBytes: number;
 	workerFramesInFlight: number;
 	workerInFlightBackpressureHits: number;
+	workerInFlightBackpressureWindowHits: number;
 	sabTotalRetryAttempts: number;
 	sabTotalFramesReceived: number;
 	sabTotalFramesWrittenToSharedBuffer: number;
@@ -498,6 +499,7 @@ export function createImageDataWS(
 				if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
 					isProcessing = false;
 					totalWorkerInFlightBackpressureHits++;
+					workerInFlightBackpressureWindowHits++;
 					if (nextFrame) {
 						framesDropped++;
 						totalSupersededDrops++;
@@ -529,6 +531,7 @@ export function createImageDataWS(
 			if (workerFramesInFlight >= WORKER_IN_FLIGHT_LIMIT) {
 				isProcessing = false;
 				totalWorkerInFlightBackpressureHits++;
+				workerInFlightBackpressureWindowHits++;
 				if (nextFrame) {
 					framesDropped++;
 					totalSupersededDrops++;
@@ -571,6 +574,7 @@ export function createImageDataWS(
 	let totalFramesSentToWorker = 0;
 	let totalWorkerFallbackBytes = 0;
 	let totalWorkerInFlightBackpressureHits = 0;
+	let workerInFlightBackpressureWindowHits = 0;
 	let totalSupersededDrops = 0;
 	let lastLogTime = 0;
 	let framesReceived = 0;
@@ -603,6 +607,7 @@ export function createImageDataWS(
 			(sharedBufferConfig?.slotCount ?? 0),
 		workerFramesInFlight,
 		workerInFlightBackpressureHits: totalWorkerInFlightBackpressureHits,
+		workerInFlightBackpressureWindowHits,
 		sabTotalRetryAttempts: totalSabRetryAttempts,
 		sabTotalFramesReceived: totalFramesReceived,
 		sabTotalFramesWrittenToSharedBuffer: totalFramesWrittenToSharedBuffer,
@@ -640,7 +645,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}, worker_inflight: ${workerFramesInFlight}, worker_cap_hits_window: ${workerInFlightBackpressureWindowHits}, worker_cap_hits_total: ${totalWorkerInFlightBackpressureHits}`,
 				);
 
 				frameCount = 0;
@@ -654,6 +659,7 @@ export function createImageDataWS(
 				sabFallbackWindowCount = 0;
 				sabOversizeFallbackWindowCount = 0;
 				sabRetryLimitFallbackWindowCount = 0;
+				workerInFlightBackpressureWindowHits = 0;
 				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;
