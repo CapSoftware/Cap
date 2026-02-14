@@ -532,12 +532,13 @@ pub async fn render_video_to_channel(
         sender.send((frame, current_frame_number)).await?;
     }
 
-    if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline().await {
-        if final_frame.width > 0 && final_frame.height > 0 {
-            sender
-                .send((final_frame, frame_number.saturating_sub(1)))
-                .await?;
-        }
+    if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline().await
+        && final_frame.width > 0
+        && final_frame.height > 0
+    {
+        sender
+            .send((final_frame, frame_number.saturating_sub(1)))
+            .await?;
     }
 
     let total_time = start_time.elapsed();
