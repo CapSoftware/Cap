@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone)]
@@ -22,6 +24,13 @@ struct Summary {
     last_p95_ms: f64,
     successful_requests: usize,
     failed_requests: usize,
+}
+
+#[derive(Clone)]
+struct SummaryEntry {
+    label: String,
+    video: String,
+    summary: Summary,
 }
 
 fn median(values: &[f64]) -> f64 {
@@ -124,6 +133,97 @@ fn parse_csv_file(path: &PathBuf) -> Result<Vec<ScrubCsvRow>, String> {
         .collect())
 }
 
+fn write_csv_header(path: &PathBuf, file: &mut std::fs::File) -> Result<(), String> {
+    if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) > 0 {
+        return Ok(());
+    }
+    let header = [
+        "timestamp_ms",
+        "mode",
+        "label",
+        "video",
+        "samples",
+        "all_avg_ms",
+        "all_p95_ms",
+        "last_avg_ms",
+        "last_p95_ms",
+        "successful_requests",
+        "failed_requests",
+        "baseline_label",
+        "candidate_label",
+        "delta_all_avg_ms",
+        "delta_all_p95_ms",
+        "delta_last_avg_ms",
+        "delta_last_p95_ms",
+    ]
+    .join(",");
+    writeln!(file, "{header}").map_err(|error| format!("write {} / {error}", path.display()))
+}
+
+fn append_summary_csv(path: &PathBuf, summaries: &[SummaryEntry]) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    write_csv_header(path, &mut file)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+
+    for entry in summaries {
+        writeln!(
+            file,
+            "{timestamp_ms},summary,\"{}\",\"{}\",{},{:.3},{:.3},{:.3},{:.3},{},{},\"\",\"\",\"\",\"\",\"\",\"\"",
+            entry.label,
+            entry.video,
+            entry.summary.samples,
+            entry.summary.all_avg_ms,
+            entry.summary.all_p95_ms,
+            entry.summary.last_avg_ms,
+            entry.summary.last_p95_ms,
+            entry.summary.successful_requests,
+            entry.summary.failed_requests
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn append_delta_csv(
+    path: &PathBuf,
+    baseline_label: &str,
+    candidate_label: &str,
+    video: &str,
+    baseline: Summary,
+    candidate: Summary,
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    write_csv_header(path, &mut file)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    writeln!(
+        file,
+        "{timestamp_ms},delta,\"\",\"{}\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"{}\",\"{}\",{:.3},{:.3},{:.3},{:.3}",
+        video,
+        baseline_label,
+        candidate_label,
+        candidate.all_avg_ms - baseline.all_avg_ms,
+        candidate.all_p95_ms - baseline.all_p95_ms,
+        candidate.last_avg_ms - baseline.last_avg_ms,
+        candidate.last_p95_ms - baseline.last_p95_ms
+    )
+    .map_err(|error| format!("write {} / {error}", path.display()))
+}
+
 fn print_summary(label: &str, video: &str, summary: Summary) {
     println!(
         "{label} video={video}: samples={} all_avg={:.2}ms all_p95={:.2}ms last_avg={:.2}ms last_p95={:.2}ms successful={} failed={}",
@@ -171,7 +271,7 @@ fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "Usage: scrub-csv-report --csv <path> [--csv <path> ...] [--label <run-label>] [--baseline-label <run-label> --candidate-label <run-label>]"
+            "Usage: scrub-csv-report --csv <path> [--csv <path> ...] [--label <run-label>] [--baseline-label <run-label> --candidate-label <run-label>] [--output-csv <path>]"
         );
         std::process::exit(1);
     }
@@ -180,6 +280,7 @@ fn main() {
     let mut label: Option<String> = None;
     let mut baseline_label: Option<String> = None;
     let mut candidate_label: Option<String> = None;
+    let mut output_csv: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -220,6 +321,15 @@ fn main() {
                 eprintln!("Missing value for --candidate-label");
                 std::process::exit(1);
             }
+            "--output-csv" => {
+                if let Some(value) = args.get(index + 1) {
+                    output_csv = Some(PathBuf::from(value));
+                    index += 2;
+                    continue;
+                }
+                eprintln!("Missing value for --output-csv");
+                std::process::exit(1);
+            }
             unknown => {
                 eprintln!("Unknown argument: {unknown}");
                 std::process::exit(1);
@@ -250,6 +360,7 @@ fn main() {
 
     let grouped_rows = group_by_label_and_video(&all_rows);
 
+    let mut summary_entries = Vec::<SummaryEntry>::new();
     if let Some(label) = label {
         let rows = grouped_rows
             .iter()
@@ -263,14 +374,31 @@ fn main() {
         for (video, rows) in rows {
             if let Some(summary) = summarize(&rows) {
                 print_summary(&label, &video, summary);
+                summary_entries.push(SummaryEntry {
+                    label: label.clone(),
+                    video,
+                    summary,
+                });
             }
         }
     } else {
         for ((group_label, video), rows) in grouped_rows.clone() {
             if let Some(summary) = summarize(&rows) {
                 print_summary(&group_label, &video, summary);
+                summary_entries.push(SummaryEntry {
+                    label: group_label,
+                    video,
+                    summary,
+                });
             }
         }
+    }
+
+    if let Some(path) = &output_csv
+        && let Err(error) = append_summary_csv(path, &summary_entries)
+    {
+        eprintln!("{error}");
+        std::process::exit(1);
     }
 
     if let (Some(baseline_label), Some(candidate_label)) = (baseline_label, candidate_label) {
@@ -311,6 +439,19 @@ fn main() {
                 candidate_summary,
                 &video,
             );
+            if let Some(path) = &output_csv
+                && let Err(error) = append_delta_csv(
+                    path,
+                    &baseline_label,
+                    &candidate_label,
+                    &video,
+                    baseline_summary,
+                    candidate_summary,
+                )
+            {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
             printed = true;
         }
         if !printed {
@@ -322,7 +463,13 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{group_by_label_and_video, parse_csv_line, summarize};
+    use super::{
+        SummaryEntry, append_delta_csv, append_summary_csv, group_by_label_and_video,
+        parse_csv_line, summarize,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_aggregate_csv_line() {
@@ -419,5 +566,45 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert!(groups.contains_key(&("label-a".to_string(), "video-1".to_string())));
         assert!(groups.contains_key(&("label-a".to_string(), "video-2".to_string())));
+    }
+
+    #[test]
+    fn writes_summary_and_delta_csv_rows() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("timestamp")
+            .as_nanos();
+        let path = PathBuf::from(format!("/tmp/scrub-csv-report-{unique}.csv"));
+
+        let summary = super::Summary {
+            samples: 3,
+            all_avg_ms: 10.0,
+            all_p95_ms: 20.0,
+            last_avg_ms: 30.0,
+            last_p95_ms: 40.0,
+            successful_requests: 30,
+            failed_requests: 1,
+        };
+        append_summary_csv(
+            &path,
+            &[SummaryEntry {
+                label: "label-a".to_string(),
+                video: "video-1".to_string(),
+                summary,
+            }],
+        )
+        .expect("write summary rows");
+
+        append_delta_csv(&path, "base", "candidate", "video-1", summary, summary)
+            .expect("write delta row");
+
+        let contents = fs::read_to_string(&path).expect("read csv");
+        let rows = contents.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].contains("timestamp_ms,mode,label,video"));
+        assert!(rows[1].contains("summary"));
+        assert!(rows[2].contains("delta"));
+
+        let _ = fs::remove_file(path);
     }
 }

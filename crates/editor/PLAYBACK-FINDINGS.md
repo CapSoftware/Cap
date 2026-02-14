@@ -1010,7 +1010,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 2. Implemented aggregate-row parsing with run-label and video grouping.
 3. Added baseline/candidate label delta reporting per overlapping video.
 4. Added derived config-label fallback for rows without explicit run labels.
-5. Added unit tests for CSV parsing, config-label fallback, median summarization, and grouping behavior.
+5. Added `--output-csv` to persist summary and delta rows.
+6. Added unit tests for CSV parsing, config-label fallback, median summarization, grouping, and CSV writing.
 
 **Changes Made**:
 - `crates/editor/examples/scrub-csv-report.rs`
@@ -1019,21 +1020,25 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
     - `--label <run-label>`
     - `--baseline-label <run-label>`
     - `--candidate-label <run-label>`
+    - `--output-csv <path>`
   - reports median summaries per run label from aggregate rows
   - auto-labels unlabeled rows with config-derived keys
   - computes candidate-minus-baseline deltas for all/last request avg and p95 per video
+  - writes summary/delta rows for downstream reporting when output path is provided
 - `crates/editor/PLAYBACK-BENCHMARKS.md`
   - added command usage and validation run output for the new utility
 
 **Verification**:
 - `cargo +1.88.0 check -p cap-editor --example scrub-csv-report`
-- `cargo +1.88.0 test -p cap-editor --example scrub-csv-report` (4 tests)
+- `cargo +1.88.0 test -p cap-editor --example scrub-csv-report` (5 tests)
 - `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-span-20-22.csv --baseline-label span20 --candidate-label span22 --output-csv /tmp/cap-scrub-summary.csv`
 
 **Results**:
 - ✅ Cross-machine scrub CSVs can now be summarized and compared without manual spreadsheet work.
 - ✅ Unlabeled sweeps now group correctly by supersession config defaults/overrides.
-- ✅ Utility test suite passing (4/4).
+- ✅ Summary/delta exports can now be archived as machine-readable artifacts.
+- ✅ Utility test suite passing (5/5).
 
 **Stopping point**: startup and scrub evidence collection on macOS/Windows now has matching run-label analysis tools on Linux for post-capture evaluation.
 

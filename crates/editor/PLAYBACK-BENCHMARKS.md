@@ -109,6 +109,9 @@ cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-bench
 
 # Compare two run labels directly
 cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1
+
+# Export scrub summary/delta rows to CSV
+cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1 --output-csv /tmp/cap-scrub-summary.csv
 ```
 
 #### Playback Startup Latency Report (log analysis)
@@ -416,7 +419,21 @@ cargo run -p cap-recording --example playback-test-runner -- full
     - all_avg **199.01ms**
     - last_avg **213.93ms**
     - successful **144**, failed **0**
-- Unit tests: **4 passed** (`parses_aggregate_csv_line`, `falls_back_to_config_label_when_run_label_missing`, `summarizes_medians`, `groups_rows_by_label_and_video`).
+- Unit tests: **5 passed** (`parses_aggregate_csv_line`, `falls_back_to_config_label_when_run_label_missing`, `summarizes_medians`, `groups_rows_by_label_and_video`, `writes_summary_and_delta_csv_rows`).
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub CSV report export)
+
+**Environment:** Linux runner, scrub CSV analysis utility validation  
+**Commands:** `scrub-csv-report --output-csv`, `cargo test -p cap-editor --example scrub-csv-report`
+
+#### Validation
+- Added `--output-csv` to write summary and delta rows for downstream reporting.
+- Smoke run:
+  - `cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-span-20-22.csv --baseline-label span20 --candidate-label span22 --output-csv /tmp/cap-scrub-summary.csv`
+  - output CSV includes:
+    - summary rows per `(label, video)`
+    - delta rows per overlapping video
+- Utility tests remain green (**5 passed**).
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
