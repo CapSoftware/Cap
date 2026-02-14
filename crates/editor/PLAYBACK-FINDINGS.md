@@ -130,6 +130,7 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 | `crates/audio/src/lib.rs` | AudioData loading and sync analysis |
 | `crates/recording/examples/playback-test-runner.rs` | Playback benchmark runner |
 | `crates/editor/examples/playback-benchmark.rs` | Linux-compatible playback throughput benchmark |
+| `crates/editor/examples/playback-csv-report.rs` | Playback CSV summary and label-delta analysis |
 | `crates/editor/examples/scrub-benchmark.rs` | Scrub burst latency benchmark |
 | `crates/editor/examples/scrub-csv-report.rs` | Scrub CSV summary and label-delta analysis |
 
@@ -1076,6 +1077,47 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - ✅ CSV schema captures both real-time throughput and seek behavior under one run label.
 
 **Stopping point**: startup + scrub + playback benchmark tooling now all support labeled CSV exports, enabling cleaner macOS/Windows evidence ingestion once traces are collected.
+
+---
+
+### Session 2026-02-14 (Playback CSV report utility)
+
+**Goal**: Add analysis tooling for playback benchmark CSVs to support cross-machine run-label comparisons
+
+**What was done**:
+1. Added new `playback-csv-report` example to parse playback benchmark CSV outputs.
+2. Implemented grouping by `(run_label, video)` with median summaries for:
+   - sequential effective FPS / decode p95 / missed deadlines
+   - seek avg/p95/max per distance plus aggregate sample/failure counts
+3. Added baseline/candidate run-label delta output for overlapping videos and seek distances.
+4. Added optional `--output-csv` to export summary and delta rows for downstream reporting.
+5. Added unit tests for CSV parsing, grouping, median summarization, and CSV writer paths.
+
+**Changes Made**:
+- `crates/editor/examples/playback-csv-report.rs`
+  - new CLI args:
+    - `--csv <path>` (repeatable)
+    - `--label <run-label>`
+    - `--baseline-label <run-label>`
+    - `--candidate-label <run-label>`
+    - `--output-csv <path>`
+  - emits per-label summaries and baseline/candidate deltas
+  - writes `summary_sequential`, `summary_seek`, `delta_sequential`, and `delta_seek` CSV rows
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added usage commands and validation run notes for playback CSV report workflows
+
+**Verification**:
+- `cargo +1.88.0 check -p cap-editor --example playback-csv-report`
+- `cargo +1.88.0 test -p cap-editor --example playback-csv-report` (5 tests)
+- `cargo +1.88.0 run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --label linux-pass-a`
+- `cargo +1.88.0 run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --baseline-label linux-pass-a --candidate-label linux-pass-b --output-csv /tmp/cap-playback-summary.csv`
+
+**Results**:
+- ✅ Playback CSVs can now be summarized and compared without manual spreadsheet work.
+- ✅ Summary and delta exports provide machine-readable artifacts aligned with existing startup/scrub report flows.
+- ✅ Utility test suite passing (5/5).
+
+**Stopping point**: playback, scrub, and startup CSV workflows now all have matching summary/delta tooling for incoming macOS/Windows captures.
 
 ---
 

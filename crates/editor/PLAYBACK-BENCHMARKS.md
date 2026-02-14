@@ -87,6 +87,15 @@ cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.m
 
 # Add run label for cross-machine baseline/candidate grouping
 cargo run -p cap-editor --example playback-benchmark -- --video /path/to/video.mp4 --fps 60 --max-frames 600 --output-csv /tmp/cap-playback-benchmark.csv --run-label windows-pass-1
+
+# Summarize playback CSV rows grouped by run label and video
+cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv
+
+# Compare baseline/candidate playback labels
+cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1
+
+# Export playback summary/delta rows to CSV
+cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --baseline-label macos-pass-1 --candidate-label windows-pass-1 --output-csv /tmp/cap-playback-summary.csv
 ```
 
 #### Scrub Burst Benchmark (queue stress)
@@ -465,6 +474,27 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - 2.0s avg/p95 **149.21 / 364.12ms**
   - 5.0s avg/p95 **237.82 / 377.19ms**
 - CSV output includes `mode=sequential` and `mode=seek` rows with shared run label for downstream aggregation.
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (playback CSV report tooling)
+
+**Environment:** Linux runner, playback CSV analysis utility validation  
+**Commands:** `playback-csv-report`, `cargo test -p cap-editor --example playback-csv-report`
+
+#### Validation
+- New utility parses playback benchmark CSV sequential + seek rows and groups them by `(run_label, video)`.
+- Reports median sequential metrics:
+  - effective FPS
+  - decode p95
+  - missed deadlines
+- Reports median seek metrics per distance:
+  - seek avg/p95/max
+  - aggregated seek sample/failure counts
+- Supports baseline/candidate run-label deltas across overlapping videos and seek distances.
+- Supports `--output-csv` for summary and delta row export.
+- Smoke runs:
+  - `cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --label linux-pass-a`
+  - `cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback-benchmark.csv --baseline-label linux-pass-a --candidate-label linux-pass-b --output-csv /tmp/cap-playback-summary.csv`
+- Unit tests: **5 passed** (`parses_sequential_csv_line`, `parses_seek_csv_line`, `summarizes_sequential_and_seek_medians`, `groups_rows_by_label_and_video`, `writes_summary_and_delta_csv_rows`).
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 

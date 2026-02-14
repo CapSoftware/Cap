@@ -135,7 +135,8 @@ fn write_csv(path: &PathBuf, config: &Config, stats: &PlaybackStats) -> Result<(
             "seek_failures",
         ]
         .join(",");
-        writeln!(file, "{header}").map_err(|error| format!("write {} / {error}", path.display()))?;
+        writeln!(file, "{header}")
+            .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
 
     let timestamp_ms = std::time::SystemTime::now()
