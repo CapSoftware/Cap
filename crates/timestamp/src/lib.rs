@@ -79,6 +79,11 @@ impl Timestamp {
         {
             Self::MachAbsoluteTime(MachAbsoluteTimestamp::from_cpal(instant))
         }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let _ = instant;
+            Self::Instant(Instant::now())
+        }
     }
 }
 

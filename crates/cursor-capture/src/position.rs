@@ -1,5 +1,7 @@
 use device_query::{DeviceQuery, DeviceState};
-use scap_targets::{Display, bounds::*};
+#[cfg(any(windows, target_os = "macos"))]
+use scap_targets::bounds::*;
+use scap_targets::Display;
 
 // Physical on Windows, Logical on macOS
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +57,12 @@ impl RelativeCursorPosition {
                 display,
             })
         }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = (raw, display);
+            None
+        }
     }
 
     pub fn display(&self) -> &Display {
@@ -96,6 +104,11 @@ impl RelativeCursorPosition {
                 },
                 display: self.display,
             })
+        }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            None
         }
     }
 }

@@ -152,10 +152,9 @@ impl Window {
     }
 
     pub fn display_relative_logical_bounds(&self) -> Option<LogicalBounds> {
-        let display = self.display()?;
-
         #[cfg(target_os = "macos")]
         {
+            let display = self.display()?;
             let display_logical_bounds = display.raw_handle().logical_bounds()?;
             let window_logical_bounds = self.raw_handle().logical_bounds()?;
 
@@ -170,6 +169,7 @@ impl Window {
 
         #[cfg(windows)]
         {
+            let display = self.display()?;
             let display_physical_bounds = display.raw_handle().physical_bounds()?;
             let display_logical_size = display.logical_size()?;
             let window_physical_bounds: PhysicalBounds = self.raw_handle().physical_bounds()?;
@@ -194,6 +194,12 @@ impl Window {
                     display_relative_physical_bounds.size().height() * scale,
                 ),
             ))
+        }
+
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            self.logical_size()
+                .map(|size| LogicalBounds::new(LogicalPosition::new(0.0, 0.0), size))
         }
     }
 }
