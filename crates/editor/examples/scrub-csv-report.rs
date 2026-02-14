@@ -11,6 +11,9 @@ struct ScrubCsvRow {
     all_p95_ms: f64,
     last_avg_ms: f64,
     last_p95_ms: f64,
+    short_seek_p95_ms: f64,
+    medium_seek_p95_ms: f64,
+    long_seek_p95_ms: f64,
     successful_requests: usize,
     failed_requests: usize,
 }
@@ -22,6 +25,9 @@ struct Summary {
     all_p95_ms: f64,
     last_avg_ms: f64,
     last_p95_ms: f64,
+    short_seek_p95_ms: f64,
+    medium_seek_p95_ms: f64,
+    long_seek_p95_ms: f64,
     successful_requests: usize,
     failed_requests: usize,
 }
@@ -56,6 +62,18 @@ fn summarize(rows: &[ScrubCsvRow]) -> Option<Summary> {
     let all_p95 = rows.iter().map(|row| row.all_p95_ms).collect::<Vec<_>>();
     let last_avg = rows.iter().map(|row| row.last_avg_ms).collect::<Vec<_>>();
     let last_p95 = rows.iter().map(|row| row.last_p95_ms).collect::<Vec<_>>();
+    let short_seek_p95 = rows
+        .iter()
+        .map(|row| row.short_seek_p95_ms)
+        .collect::<Vec<_>>();
+    let medium_seek_p95 = rows
+        .iter()
+        .map(|row| row.medium_seek_p95_ms)
+        .collect::<Vec<_>>();
+    let long_seek_p95 = rows
+        .iter()
+        .map(|row| row.long_seek_p95_ms)
+        .collect::<Vec<_>>();
 
     Some(Summary {
         samples: rows.len(),
@@ -63,9 +81,19 @@ fn summarize(rows: &[ScrubCsvRow]) -> Option<Summary> {
         all_p95_ms: median(&all_p95),
         last_avg_ms: median(&last_avg),
         last_p95_ms: median(&last_p95),
+        short_seek_p95_ms: median(&short_seek_p95),
+        medium_seek_p95_ms: median(&medium_seek_p95),
+        long_seek_p95_ms: median(&long_seek_p95),
         successful_requests: rows.iter().map(|row| row.successful_requests).sum(),
         failed_requests: rows.iter().map(|row| row.failed_requests).sum(),
     })
+}
+
+fn parse_optional_f64(fields: &[&str], index: usize) -> f64 {
+    fields
+        .get(index)
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.0)
 }
 
 fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
@@ -118,6 +146,9 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
         all_p95_ms: fields[15].parse::<f64>().ok()?,
         last_avg_ms: fields[18].parse::<f64>().ok()?,
         last_p95_ms: fields[19].parse::<f64>().ok()?,
+        short_seek_p95_ms: parse_optional_f64(&fields, 25),
+        medium_seek_p95_ms: parse_optional_f64(&fields, 31),
+        long_seek_p95_ms: parse_optional_f64(&fields, 37),
         successful_requests: fields[22].parse::<usize>().ok()?,
         failed_requests: fields[23].parse::<usize>().ok()?,
     })
@@ -147,6 +178,9 @@ fn write_csv_header(path: &PathBuf, file: &mut std::fs::File) -> Result<(), Stri
         "all_p95_ms",
         "last_avg_ms",
         "last_p95_ms",
+        "short_seek_p95_ms",
+        "medium_seek_p95_ms",
+        "long_seek_p95_ms",
         "successful_requests",
         "failed_requests",
         "baseline_label",
@@ -155,6 +189,9 @@ fn write_csv_header(path: &PathBuf, file: &mut std::fs::File) -> Result<(), Stri
         "delta_all_p95_ms",
         "delta_last_avg_ms",
         "delta_last_p95_ms",
+        "delta_short_seek_p95_ms",
+        "delta_medium_seek_p95_ms",
+        "delta_long_seek_p95_ms",
     ]
     .join(",");
     writeln!(file, "{header}").map_err(|error| format!("write {} / {error}", path.display()))
@@ -175,7 +212,7 @@ fn append_summary_csv(path: &PathBuf, summaries: &[SummaryEntry]) -> Result<(), 
     for entry in summaries {
         writeln!(
             file,
-            "{timestamp_ms},summary,\"{}\",\"{}\",{},{:.3},{:.3},{:.3},{:.3},{},{},\"\",\"\",\"\",\"\",\"\",\"\"",
+            "{timestamp_ms},summary,\"{}\",\"{}\",{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
             entry.label,
             entry.video,
             entry.summary.samples,
@@ -183,6 +220,9 @@ fn append_summary_csv(path: &PathBuf, summaries: &[SummaryEntry]) -> Result<(), 
             entry.summary.all_p95_ms,
             entry.summary.last_avg_ms,
             entry.summary.last_p95_ms,
+            entry.summary.short_seek_p95_ms,
+            entry.summary.medium_seek_p95_ms,
+            entry.summary.long_seek_p95_ms,
             entry.summary.successful_requests,
             entry.summary.failed_requests
         )
@@ -212,26 +252,32 @@ fn append_delta_csv(
         .unwrap_or_default();
     writeln!(
         file,
-        "{timestamp_ms},delta,\"\",\"{}\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"{}\",\"{}\",{:.3},{:.3},{:.3},{:.3}",
+        "{timestamp_ms},delta,\"\",\"{}\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"{}\",\"{}\",{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
         video,
         baseline_label,
         candidate_label,
         candidate.all_avg_ms - baseline.all_avg_ms,
         candidate.all_p95_ms - baseline.all_p95_ms,
         candidate.last_avg_ms - baseline.last_avg_ms,
-        candidate.last_p95_ms - baseline.last_p95_ms
+        candidate.last_p95_ms - baseline.last_p95_ms,
+        candidate.short_seek_p95_ms - baseline.short_seek_p95_ms,
+        candidate.medium_seek_p95_ms - baseline.medium_seek_p95_ms,
+        candidate.long_seek_p95_ms - baseline.long_seek_p95_ms
     )
     .map_err(|error| format!("write {} / {error}", path.display()))
 }
 
 fn print_summary(label: &str, video: &str, summary: Summary) {
     println!(
-        "{label} video={video}: samples={} all_avg={:.2}ms all_p95={:.2}ms last_avg={:.2}ms last_p95={:.2}ms successful={} failed={}",
+        "{label} video={video}: samples={} all_avg={:.2}ms all_p95={:.2}ms last_avg={:.2}ms last_p95={:.2}ms short_p95={:.2}ms medium_p95={:.2}ms long_p95={:.2}ms successful={} failed={}",
         summary.samples,
         summary.all_avg_ms,
         summary.all_p95_ms,
         summary.last_avg_ms,
         summary.last_p95_ms,
+        summary.short_seek_p95_ms,
+        summary.medium_seek_p95_ms,
+        summary.long_seek_p95_ms,
         summary.successful_requests,
         summary.failed_requests
     );
@@ -245,11 +291,14 @@ fn print_delta(
     video: &str,
 ) {
     println!(
-        "delta({candidate_label}-{baseline_label}) video={video}: all_avg={:+.2}ms all_p95={:+.2}ms last_avg={:+.2}ms last_p95={:+.2}ms",
+        "delta({candidate_label}-{baseline_label}) video={video}: all_avg={:+.2}ms all_p95={:+.2}ms last_avg={:+.2}ms last_p95={:+.2}ms short_p95={:+.2}ms medium_p95={:+.2}ms long_p95={:+.2}ms",
         candidate.all_avg_ms - baseline.all_avg_ms,
         candidate.all_p95_ms - baseline.all_p95_ms,
         candidate.last_avg_ms - baseline.last_avg_ms,
-        candidate.last_p95_ms - baseline.last_p95_ms
+        candidate.last_p95_ms - baseline.last_p95_ms,
+        candidate.short_seek_p95_ms - baseline.short_seek_p95_ms,
+        candidate.medium_seek_p95_ms - baseline.medium_seek_p95_ms,
+        candidate.long_seek_p95_ms - baseline.long_seek_p95_ms
     );
 }
 
@@ -464,8 +513,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        SummaryEntry, append_delta_csv, append_summary_csv, group_by_label_and_video,
-        parse_csv_line, summarize,
+        append_delta_csv, append_summary_csv, group_by_label_and_video, parse_csv_line, summarize,
+        SummaryEntry,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -502,6 +551,9 @@ mod tests {
                 all_p95_ms: 20.0,
                 last_avg_ms: 30.0,
                 last_p95_ms: 40.0,
+                short_seek_p95_ms: 15.0,
+                medium_seek_p95_ms: 25.0,
+                long_seek_p95_ms: 35.0,
                 successful_requests: 10,
                 failed_requests: 0,
             },
@@ -513,6 +565,9 @@ mod tests {
                 all_p95_ms: 24.0,
                 last_avg_ms: 28.0,
                 last_p95_ms: 42.0,
+                short_seek_p95_ms: 17.0,
+                medium_seek_p95_ms: 27.0,
+                long_seek_p95_ms: 37.0,
                 successful_requests: 12,
                 failed_requests: 1,
             },
@@ -524,6 +579,9 @@ mod tests {
                 all_p95_ms: 16.0,
                 last_avg_ms: 26.0,
                 last_p95_ms: 38.0,
+                short_seek_p95_ms: 13.0,
+                medium_seek_p95_ms: 23.0,
+                long_seek_p95_ms: 33.0,
                 successful_requests: 8,
                 failed_requests: 0,
             },
@@ -532,6 +590,7 @@ mod tests {
         assert_eq!(summary.samples, 3);
         assert!((summary.all_avg_ms - 10.0).abs() < f64::EPSILON);
         assert!((summary.last_avg_ms - 28.0).abs() < f64::EPSILON);
+        assert!((summary.medium_seek_p95_ms - 25.0).abs() < f64::EPSILON);
         assert_eq!(summary.successful_requests, 30);
         assert_eq!(summary.failed_requests, 1);
     }
@@ -547,6 +606,9 @@ mod tests {
                 all_p95_ms: 20.0,
                 last_avg_ms: 30.0,
                 last_p95_ms: 40.0,
+                short_seek_p95_ms: 15.0,
+                medium_seek_p95_ms: 25.0,
+                long_seek_p95_ms: 35.0,
                 successful_requests: 10,
                 failed_requests: 0,
             },
@@ -558,6 +620,9 @@ mod tests {
                 all_p95_ms: 24.0,
                 last_avg_ms: 28.0,
                 last_p95_ms: 42.0,
+                short_seek_p95_ms: 17.0,
+                medium_seek_p95_ms: 27.0,
+                long_seek_p95_ms: 37.0,
                 successful_requests: 12,
                 failed_requests: 0,
             },
@@ -582,6 +647,9 @@ mod tests {
             all_p95_ms: 20.0,
             last_avg_ms: 30.0,
             last_p95_ms: 40.0,
+            short_seek_p95_ms: 15.0,
+            medium_seek_p95_ms: 25.0,
+            long_seek_p95_ms: 35.0,
             successful_requests: 30,
             failed_requests: 1,
         };

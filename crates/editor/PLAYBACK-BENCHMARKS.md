@@ -119,6 +119,9 @@ cargo run -p cap-editor --example playback-csv-report -- --csv /tmp/cap-playback
 # Simulate rapid scrub bursts and track latest-request latency
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 20 --burst-size 12 --sweep-seconds 2.0
 
+# Increase sweep distance to exercise medium/long seek-distance buckets explicitly
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 20 --burst-size 12 --sweep-seconds 8.0
+
 # Aggregate multiple runs (median across runs) for lower-variance comparisons
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --fps 60 --bursts 10 --burst-size 12 --sweep-seconds 2.0 --runs 3
 
@@ -134,7 +137,7 @@ cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 
 # Add explicit run label for cross-machine comparisons
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --runs 3 --output-csv /tmp/cap-scrub-benchmark.csv --run-label windows-pass-1
 
-# Summarize scrub CSV runs grouped by run label
+# Summarize scrub CSV runs grouped by run label (includes short/medium/long seek p95 columns when present)
 cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-benchmark.csv
 
 # Compare two run labels directly
@@ -206,6 +209,35 @@ cargo run -p cap-recording --example playback-test-runner -- full
 ## Benchmark History
 
 <!-- PLAYBACK_BENCHMARK_RESULTS_START -->
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub seek-distance bucket metrics)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4 asset  
+**Change under test:** scrub benchmark/report now emit seek-distance bucket latency metrics (`short`, `medium`, `long`) in console and CSV summaries
+
+#### Validation commands
+- `cargo +1.88.0 test -p cap-editor --example scrub-csv-report --example scrub-benchmark`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 6 --burst-size 12 --sweep-seconds 2.0 --runs 2 --run-label linux-distance-metric --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 1 --run-label linux-distance-medium --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-distance-metric --candidate-label linux-distance-medium`
+
+#### Scrub benchmark output highlights
+- `linux-distance-metric` (`sweep_seconds=2.0`, runs=2):
+  - all-request avg **163.69ms**, p95 **434.06ms**
+  - seek buckets:
+    - short p95 **434.06ms** (134 successful)
+    - medium p95 **0.00ms** (0 successful)
+    - long p95 **434.06ms** (10 successful)
+- `linux-distance-medium` (`sweep_seconds=8.0`, runs=1):
+  - all-request avg **231.84ms**, p95 **542.69ms**
+  - seek buckets:
+    - short p95 **542.69ms** (21 successful)
+    - medium p95 **462.71ms** (25 successful)
+    - long p95 **139.83ms** (2 successful)
+- `scrub-csv-report` now prints and deltas short/medium/long seek p95 values:
+  - delta(short p95): **+108.63ms**
+  - delta(medium p95): **+462.71ms**
+  - delta(long p95): **-294.23ms**
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub CSV export)
 

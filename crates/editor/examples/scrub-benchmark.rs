@@ -25,6 +25,19 @@ struct ScrubStats {
     request_latency_ms: Vec<f64>,
     failed_requests: usize,
     successful_requests: usize,
+    seek_distance_latency_ms: [Vec<f64>; 3],
+    seek_distance_successful_requests: [usize; 3],
+    seek_distance_failed_requests: [usize; 3],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SeekDistanceSummary {
+    avg_ms: f64,
+    p95_ms: f64,
+    p99_ms: f64,
+    max_ms: f64,
+    successful_requests: usize,
+    failed_requests: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -39,6 +52,44 @@ struct ScrubSummary {
     last_max_ms: f64,
     successful_requests: usize,
     failed_requests: usize,
+    seek_distance: [SeekDistanceSummary; 3],
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SeekDistanceBucket {
+    Short,
+    Medium,
+    Long,
+}
+
+impl SeekDistanceBucket {
+    const ALL: [Self; 3] = [Self::Short, Self::Medium, Self::Long];
+
+    fn from_delta_seconds(delta_seconds: f32) -> Self {
+        if delta_seconds < 0.5 {
+            Self::Short
+        } else if delta_seconds < 2.0 {
+            Self::Medium
+        } else {
+            Self::Long
+        }
+    }
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::Short => 0,
+            Self::Medium => 1,
+            Self::Long => 2,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Short => "short (<0.5s)",
+            Self::Medium => "medium (0.5s-<2.0s)",
+            Self::Long => "long (>=2.0s)",
+        }
+    }
 }
 
 fn get_video_duration(path: &PathBuf) -> Result<f32, String> {
@@ -113,6 +164,7 @@ async fn run_scrub_benchmark(config: &Config) -> Result<ScrubStats, String> {
     .map_err(|error| format!("decoder init failed: {error}"))?;
 
     let mut stats = ScrubStats::default();
+    let mut previous_target: Option<f32> = None;
 
     for burst_index in 0..config.bursts {
         let targets = generate_burst_targets(
@@ -121,31 +173,48 @@ async fn run_scrub_benchmark(config: &Config) -> Result<ScrubStats, String> {
             config.burst_size,
             config.sweep_seconds,
         );
-        let requests = targets.into_iter().enumerate().map(|(index, target)| {
-            let decoder = decoder.clone();
-            async move {
-                let start = Instant::now();
-                let decoded = decoder.get_frame(target).await.is_some();
-                let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
-                (index, decoded, latency_ms)
-            }
-        });
+        let mut request_inputs = Vec::with_capacity(targets.len());
+        for (index, target) in targets.into_iter().enumerate() {
+            let delta_seconds = previous_target
+                .map(|previous| (target - previous).abs())
+                .unwrap_or_default();
+            let seek_distance_bucket = SeekDistanceBucket::from_delta_seconds(delta_seconds);
+            previous_target = Some(target);
+            request_inputs.push((index, target, seek_distance_bucket));
+        }
+        let requests = request_inputs
+            .into_iter()
+            .map(|(index, target, seek_distance_bucket)| {
+                let decoder = decoder.clone();
+                async move {
+                    let start = Instant::now();
+                    let decoded = decoder.get_frame(target).await.is_some();
+                    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    (index, seek_distance_bucket, decoded, latency_ms)
+                }
+            });
 
         let mut results = join_all(requests).await;
-        results.sort_by_key(|(index, _, _)| *index);
+        results.sort_by_key(|(index, _, _, _)| *index);
 
-        if let Some((_, decoded, latency_ms)) = results.last().copied() {
+        if let Some((_, _, decoded, latency_ms)) = results.last().copied() {
             if decoded {
                 stats.last_request_latency_ms.push(latency_ms);
             }
         }
 
-        for (_, decoded, latency_ms) in results {
+        for (_, seek_distance_bucket, decoded, latency_ms) in results {
+            let bucket_index = seek_distance_bucket.as_index();
             if decoded {
                 stats.successful_requests = stats.successful_requests.saturating_add(1);
                 stats.request_latency_ms.push(latency_ms);
+                stats.seek_distance_successful_requests[bucket_index] =
+                    stats.seek_distance_successful_requests[bucket_index].saturating_add(1);
+                stats.seek_distance_latency_ms[bucket_index].push(latency_ms);
             } else {
                 stats.failed_requests = stats.failed_requests.saturating_add(1);
+                stats.seek_distance_failed_requests[bucket_index] =
+                    stats.seek_distance_failed_requests[bucket_index].saturating_add(1);
             }
         }
     }
@@ -198,6 +267,24 @@ fn summarize(stats: &ScrubStats) -> ScrubSummary {
         },
         successful_requests: stats.successful_requests,
         failed_requests: stats.failed_requests,
+        seek_distance: SeekDistanceBucket::ALL.map(|bucket| {
+            let bucket_index = bucket.as_index();
+            let samples = &stats.seek_distance_latency_ms[bucket_index];
+            let avg_ms = if samples.is_empty() {
+                0.0
+            } else {
+                samples.iter().sum::<f64>() / samples.len() as f64
+            };
+            let max_ms = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            SeekDistanceSummary {
+                avg_ms,
+                p95_ms: percentile(samples, 95.0),
+                p99_ms: percentile(samples, 99.0),
+                max_ms: if max_ms.is_finite() { max_ms } else { 0.0 },
+                successful_requests: stats.seek_distance_successful_requests[bucket_index],
+                failed_requests: stats.seek_distance_failed_requests[bucket_index],
+            }
+        }),
     }
 }
 
@@ -223,6 +310,41 @@ fn aggregate_summaries(summaries: &[ScrubSummary]) -> ScrubSummary {
     let last_p95_ms = summaries.iter().map(|s| s.last_p95_ms).collect::<Vec<_>>();
     let last_p99_ms = summaries.iter().map(|s| s.last_p99_ms).collect::<Vec<_>>();
     let last_max_ms = summaries.iter().map(|s| s.last_max_ms).collect::<Vec<_>>();
+    let mut seek_distance = [SeekDistanceSummary::default(); 3];
+
+    for bucket in SeekDistanceBucket::ALL {
+        let bucket_index = bucket.as_index();
+        let avg_ms = summaries
+            .iter()
+            .map(|summary| summary.seek_distance[bucket_index].avg_ms)
+            .collect::<Vec<_>>();
+        let p95_ms = summaries
+            .iter()
+            .map(|summary| summary.seek_distance[bucket_index].p95_ms)
+            .collect::<Vec<_>>();
+        let p99_ms = summaries
+            .iter()
+            .map(|summary| summary.seek_distance[bucket_index].p99_ms)
+            .collect::<Vec<_>>();
+        let max_ms = summaries
+            .iter()
+            .map(|summary| summary.seek_distance[bucket_index].max_ms)
+            .collect::<Vec<_>>();
+        seek_distance[bucket_index] = SeekDistanceSummary {
+            avg_ms: median_of(&avg_ms),
+            p95_ms: median_of(&p95_ms),
+            p99_ms: median_of(&p99_ms),
+            max_ms: median_of(&max_ms),
+            successful_requests: summaries
+                .iter()
+                .map(|summary| summary.seek_distance[bucket_index].successful_requests)
+                .sum(),
+            failed_requests: summaries
+                .iter()
+                .map(|summary| summary.seek_distance[bucket_index].failed_requests)
+                .sum(),
+        };
+    }
 
     ScrubSummary {
         all_avg_ms: median_of(&all_avg_ms),
@@ -235,6 +357,7 @@ fn aggregate_summaries(summaries: &[ScrubSummary]) -> ScrubSummary {
         last_max_ms: median_of(&last_max_ms),
         successful_requests: summaries.iter().map(|s| s.successful_requests).sum(),
         failed_requests: summaries.iter().map(|s| s.failed_requests).sum(),
+        seek_distance,
     }
 }
 
@@ -290,6 +413,24 @@ fn write_csv(
             "last_max_ms",
             "successful_requests",
             "failed_requests",
+            "short_seek_avg_ms",
+            "short_seek_p95_ms",
+            "short_seek_p99_ms",
+            "short_seek_max_ms",
+            "short_seek_successful_requests",
+            "short_seek_failed_requests",
+            "medium_seek_avg_ms",
+            "medium_seek_p95_ms",
+            "medium_seek_p99_ms",
+            "medium_seek_max_ms",
+            "medium_seek_successful_requests",
+            "medium_seek_failed_requests",
+            "long_seek_avg_ms",
+            "long_seek_p95_ms",
+            "long_seek_p99_ms",
+            "long_seek_max_ms",
+            "long_seek_successful_requests",
+            "long_seek_failed_requests",
         ]
         .join(",");
         writeln!(file, "{header}")
@@ -322,9 +463,12 @@ fn write_csv(
     );
 
     for (index, summary) in summaries.iter().enumerate() {
+        let short = summary.seek_distance[SeekDistanceBucket::Short.as_index()];
+        let medium = summary.seek_distance[SeekDistanceBucket::Medium.as_index()];
+        let long = summary.seek_distance[SeekDistanceBucket::Long.as_index()];
         writeln!(
             file,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{}",
             common_prefix
                 .replace("{scope}", "run")
                 .replace("{run_index}", &(index + 1).to_string()),
@@ -337,14 +481,35 @@ fn write_csv(
             summary.last_p99_ms,
             summary.last_max_ms,
             summary.successful_requests,
-            summary.failed_requests
+            summary.failed_requests,
+            short.avg_ms,
+            short.p95_ms,
+            short.p99_ms,
+            short.max_ms,
+            short.successful_requests,
+            short.failed_requests,
+            medium.avg_ms,
+            medium.p95_ms,
+            medium.p99_ms,
+            medium.max_ms,
+            medium.successful_requests,
+            medium.failed_requests,
+            long.avg_ms,
+            long.p95_ms,
+            long.p99_ms,
+            long.max_ms,
+            long.successful_requests,
+            long.failed_requests
         )
         .map_err(|error| format!("write {} / {error}", path.display()))?;
     }
 
+    let short = aggregate.seek_distance[SeekDistanceBucket::Short.as_index()];
+    let medium = aggregate.seek_distance[SeekDistanceBucket::Medium.as_index()];
+    let long = aggregate.seek_distance[SeekDistanceBucket::Long.as_index()];
     writeln!(
         file,
-        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
+        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{},{}",
         common_prefix
             .replace("{scope}", "aggregate")
             .replace("{run_index}", "0"),
@@ -357,7 +522,25 @@ fn write_csv(
         aggregate.last_p99_ms,
         aggregate.last_max_ms,
         aggregate.successful_requests,
-        aggregate.failed_requests
+        aggregate.failed_requests,
+        short.avg_ms,
+        short.p95_ms,
+        short.p99_ms,
+        short.max_ms,
+        short.successful_requests,
+        short.failed_requests,
+        medium.avg_ms,
+        medium.p95_ms,
+        medium.p99_ms,
+        medium.max_ms,
+        medium.successful_requests,
+        medium.failed_requests,
+        long.avg_ms,
+        long.p95_ms,
+        long.p99_ms,
+        long.max_ms,
+        long.successful_requests,
+        long.failed_requests
     )
     .map_err(|error| format!("write {} / {error}", path.display()))?;
 
@@ -396,6 +579,21 @@ fn print_report(config: &Config, summaries: &[ScrubSummary]) -> ScrubSummary {
     println!("  p95: {:.2}ms", stats.last_p95_ms);
     println!("  p99: {:.2}ms", stats.last_p99_ms);
     println!("  max: {:.2}ms", stats.last_max_ms);
+
+    println!("\nSeek Distance Buckets (all requests, median across runs)");
+    for bucket in SeekDistanceBucket::ALL {
+        let bucket_summary = stats.seek_distance[bucket.as_index()];
+        println!(
+            "  {}: avg {:.2}ms p95 {:.2}ms p99 {:.2}ms max {:.2}ms successful {} failed {}",
+            bucket.label(),
+            bucket_summary.avg_ms,
+            bucket_summary.p95_ms,
+            bucket_summary.p99_ms,
+            bucket_summary.max_ms,
+            bucket_summary.successful_requests,
+            bucket_summary.failed_requests
+        );
+    }
 
     println!("{}", "=".repeat(68));
     stats

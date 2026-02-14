@@ -3676,6 +3676,47 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (scrub benchmark seek-distance bucket instrumentation)
+
+**Goal**: Add direct medium/long seek-latency visibility to scrub benchmark and CSV analysis flow
+
+**What was done**:
+1. Added seek-distance bucket classification (`short`, `medium`, `long`) to scrub benchmark request sampling.
+2. Extended scrub benchmark summaries (console + CSV) with per-bucket avg/p95/p99/max and success/failure counts.
+3. Extended scrub CSV report parsing/summaries/deltas to include bucket p95 metrics for cross-label comparisons.
+4. Ran scrub benchmark sweeps with two sweep distances to exercise short/medium/long buckets.
+5. Verified updated scrub report output and delta output with bucket metrics.
+
+**Changes Made**:
+- `crates/editor/examples/scrub-benchmark.rs`
+  - added seek-distance bucket tracking in runtime stats
+  - summary/aggregate now include bucket metrics
+  - console report now prints bucket latency/counter rows
+  - CSV output now appends bucket metric columns
+- `crates/editor/examples/scrub-csv-report.rs`
+  - parses optional bucket p95 columns from scrub CSV rows
+  - summary output now prints short/medium/long p95
+  - delta output now includes short/medium/long p95 deltas
+  - summary/delta CSV exports now include bucket p95 columns/deltas
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - documented seek-distance bucket capability and captured Linux validation run outputs
+
+**Verification**:
+- `rustfmt --edition 2024 crates/editor/examples/scrub-benchmark.rs crates/editor/examples/scrub-csv-report.rs`
+- `cargo +1.88.0 test -p cap-editor --example scrub-csv-report --example scrub-benchmark`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 6 --burst-size 12 --sweep-seconds 2.0 --runs 2 --run-label linux-distance-metric --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 4 --burst-size 12 --sweep-seconds 8.0 --runs 1 --run-label linux-distance-medium --output-csv /tmp/cap-scrub-distance-buckets.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-distance-buckets.csv --baseline-label linux-distance-metric --candidate-label linux-distance-medium`
+
+**Results**:
+- ✅ Scrub benchmark now exposes medium/long seek-tail behavior directly instead of only aggregate burst latency.
+- ✅ Scrub CSV report can compare bucket p95 deltas across run labels, enabling targeted threshold tuning against medium/long seeks.
+- ✅ Updated examples compile/tests pass (`scrub-csv-report` tests 5/5).
+
+**Stopping point**: Ready for macOS/Windows scrub sweeps using run labels plus bucket p95 deltas to tune medium/long seek tails per platform.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
