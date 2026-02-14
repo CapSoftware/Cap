@@ -478,6 +478,10 @@ cargo run -p cap-recording --example playback-test-runner -- full
    - Behind-prefetch scheduling now scans at most once for each observed playback frame value.
    - Avoids repeated behind-window scan work in tight scheduler loops when playback position has not advanced.
 
+70. **Batched in-flight wait-path prefetch trims (2026-02-13)**
+   - In-flight wait buffering now inserts prefetched frames without per-frame trim checks while waiting.
+   - Applies one bounded trim pass after wait-loop buffering to reduce repeated trim overhead under burst receive windows.
+
 ---
 
 ## Root Cause Analysis Archive
@@ -643,6 +647,7 @@ Decoder Pipeline:
 73. Batched keyed-buffer trimming during warmup/playback prefetch queue drains to avoid per-insert trim checks under burst frame arrivals.
 74. Limited prefetch state resets to backward/major frame-request rebases so small forward rebases preserve decode-ramp and behind-prefetch tracking state.
 75. Gated behind-prefetch scheduling scans to one pass per playback frame to avoid repeated behind-window scan churn while playback position is unchanged.
+76. Batched in-flight wait-path prefetch trimming so buffered wait inserts trim once per wait pass instead of per buffered frame.
 
 **Changes Made**:
 - `crates/editor/src/playback.rs`: default low-latency audio mode, playback seek channel, seek-aware scheduling.
@@ -687,6 +692,7 @@ Decoder Pipeline:
 - `crates/editor/src/playback.rs`: warmup and playback queue-drain insertion paths now perform untrimmed batch insertions and run a single keyed-buffer trim pass after each drain batch.
 - `crates/editor/src/playback.rs`: frame-request rebases now only clear prefetch ramp/behind-tracking state on backward or large-distance jumps, preserving throughput state on small forward rebases.
 - `crates/editor/src/playback.rs`: behind-prefetch scheduling now scans at most once per playback frame value, reducing repeated behind-window scan overhead in tight scheduler loops.
+- `crates/editor/src/playback.rs`: in-flight wait buffering now uses untrimmed inserts plus a single post-wait trim pass, reducing repeated keyed-buffer trim operations during wait-path burst buffering.
 - `crates/editor/src/playback.rs`: split prefetch/direct decode in-flight tracking and combined both sets in wait-path in-flight checks.
 - `scripts/compare-playback-benchmark-runs.js`: comparison now reports baseline rows missing from candidate and fails by default on coverage gaps.
 - `scripts/finalize-playback-matrix.js`: compare stage now runs before publish stage in combined workflows and forwards allow-missing-candidate flag.
