@@ -414,6 +414,34 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (FFmpeg long-seek tuning pass 2)
+
+**Goal**: Improve long forward seek latency while preserving medium seek gains
+
+**What was done**:
+1. Adjusted FFmpeg forward-seek behavior to prefer keyframes closer to target time
+2. Re-ran decode and playback throughput benchmarks
+
+**Changes Made**:
+- `crates/video-decode/src/ffmpeg.rs`
+  - forward seek now first tries:
+    - small backtrack window (0.5s)
+    - larger forward allowance (2.0s)
+  - then falls back to wider symmetric window and legacy seek behavior
+
+**Results**:
+- 1080p60:
+  - random access avg: **120.87ms -> 114.64ms**
+  - playback 5s seek sample: **138.26ms -> 138.90ms** (flat)
+- 4k60:
+  - random access avg: **533.65ms -> 525.90ms**
+  - playback 5s seek sample: **432.97ms -> 410.35ms**
+- Playback throughput still meets 60fps target in synthetic real-time simulation
+
+**Stopping point**: Long-seek behavior improved but still high on 4k; next progress requires richer keyframe-aware seek strategy or decoder-pool approach for FFmpeg path.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
