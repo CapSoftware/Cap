@@ -388,6 +388,7 @@ impl ScreenshotEditorInstances {
                                     stride: frame.padded_bytes_per_row,
                                     frame_number: frame.frame_number,
                                     target_time_ns: frame.target_time_ns,
+                                    format: crate::frame_ws::WSFrameFormat::Rgba,
                                     created_at: Instant::now(),
                                 }));
                             }
