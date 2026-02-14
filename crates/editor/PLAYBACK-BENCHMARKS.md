@@ -361,13 +361,14 @@ cargo run -p cap-recording --example playback-test-runner -- full
 
 #### Validation
 - New utility parses scrub benchmark CSV aggregate rows and reports median summaries by run label + video.
+- Empty run labels now automatically fall back to a derived config label (`min_pixels`, `min_requests`, `min_span`, `disabled`) so unlabeled sweeps remain distinguishable.
 - Smoke run against labeled CSV:
   - `cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
   - output summary:
     - all_avg **199.01ms**
     - last_avg **213.93ms**
     - successful **144**, failed **0**
-- Unit tests: **3 passed** (`parses_aggregate_csv_line`, `summarizes_medians`, `groups_rows_by_label_and_video`).
+- Unit tests: **4 passed** (`parses_aggregate_csv_line`, `falls_back_to_config_label_when_run_label_missing`, `summarizes_medians`, `groups_rows_by_label_and_video`).
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 

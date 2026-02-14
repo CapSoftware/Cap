@@ -68,9 +68,42 @@ fn parse_csv_line(line: &str) -> Option<ScrubCsvRow> {
         return None;
     }
 
+    let supersede_disabled = fields[10].trim_matches('"');
+    let supersede_min_pixels = fields[11].trim_matches('"');
+    let supersede_min_requests = fields[12].trim_matches('"');
+    let supersede_min_span_frames = fields[13].trim_matches('"');
+    let run_label = fields[3].trim_matches('"');
+    let config_label = format!(
+        "cfg(disabled={},min_pixels={},min_requests={},min_span={})",
+        if supersede_disabled.is_empty() {
+            "default"
+        } else {
+            supersede_disabled
+        },
+        if supersede_min_pixels.is_empty() {
+            "default"
+        } else {
+            supersede_min_pixels
+        },
+        if supersede_min_requests.is_empty() {
+            "default"
+        } else {
+            supersede_min_requests
+        },
+        if supersede_min_span_frames.is_empty() {
+            "default"
+        } else {
+            supersede_min_span_frames
+        }
+    );
+
     Some(ScrubCsvRow {
         scope: fields[1].to_string(),
-        run_label: fields[3].trim_matches('"').to_string(),
+        run_label: if run_label.is_empty() {
+            config_label
+        } else {
+            run_label.to_string()
+        },
         video: fields[4].trim_matches('"').to_string(),
         all_avg_ms: fields[14].parse::<f64>().ok()?,
         all_p95_ms: fields[15].parse::<f64>().ok()?,
@@ -299,6 +332,16 @@ mod tests {
         assert_eq!(row.run_label, "linux-pass-a");
         assert!((row.last_avg_ms - 213.93).abs() < f64::EPSILON);
         assert_eq!(row.successful_requests, 144);
+    }
+
+    #[test]
+    fn falls_back_to_config_label_when_run_label_missing() {
+        let line = "1771039415444,aggregate,0,\"\",\"/tmp/cap-bench-1080p60.mp4\",60,6,12,2.000,2,\"\",\"2000000\",\"7\",\"20\",199.009,410.343,410.344,410.346,213.930,410.343,410.343,410.343,144,0";
+        let row = parse_csv_line(line).expect("expected row");
+        assert_eq!(
+            row.run_label,
+            "cfg(disabled=default,min_pixels=2000000,min_requests=7,min_span=20)"
+        );
     }
 
     #[test]

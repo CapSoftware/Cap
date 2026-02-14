@@ -982,7 +982,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 1. Added a new CSV report example for scrub benchmarks.
 2. Implemented aggregate-row parsing with run-label and video grouping.
 3. Added baseline/candidate label delta reporting per overlapping video.
-4. Added unit tests for CSV parsing, median summarization, and grouping behavior.
+4. Added derived config-label fallback for rows without explicit run labels.
+5. Added unit tests for CSV parsing, config-label fallback, median summarization, and grouping behavior.
 
 **Changes Made**:
 - `crates/editor/examples/scrub-csv-report.rs`
@@ -992,18 +993,20 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
     - `--baseline-label <run-label>`
     - `--candidate-label <run-label>`
   - reports median summaries per run label from aggregate rows
+  - auto-labels unlabeled rows with config-derived keys
   - computes candidate-minus-baseline deltas for all/last request avg and p95 per video
 - `crates/editor/PLAYBACK-BENCHMARKS.md`
   - added command usage and validation run output for the new utility
 
 **Verification**:
 - `cargo +1.88.0 check -p cap-editor --example scrub-csv-report`
-- `cargo +1.88.0 test -p cap-editor --example scrub-csv-report` (3 tests)
+- `cargo +1.88.0 test -p cap-editor --example scrub-csv-report` (4 tests)
 - `cargo +1.88.0 run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
 
 **Results**:
 - ✅ Cross-machine scrub CSVs can now be summarized and compared without manual spreadsheet work.
-- ✅ Utility test suite passing (3/3).
+- ✅ Unlabeled sweeps now group correctly by supersession config defaults/overrides.
+- ✅ Utility test suite passing (4/4).
 
 **Stopping point**: startup and scrub evidence collection on macOS/Windows now has matching run-label analysis tools on Linux for post-capture evaluation.
 
