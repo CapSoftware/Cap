@@ -158,7 +158,7 @@ function tryPollSharedBuffer(): boolean {
 		if (!borrowed) {
 			return false;
 		}
-		queueFrameFromBytes(borrowed.data, borrowed.release);
+		queueFrameFromBytes(borrowed.data, borrowed.release, false);
 		return true;
 	}
 	return false;
@@ -283,6 +283,7 @@ function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
 function queueFrameFromBytes(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
+	emitQueuedMessage: boolean = true,
 ): void {
 	const meta = parseFrameMetadata(bytes);
 	if (!meta) {
@@ -375,11 +376,13 @@ function queueFrameFromBytes(
 		});
 	}
 
-	self.postMessage({
-		type: "frame-queued",
-		width,
-		height,
-	} satisfies FrameQueuedMessage);
+	if (emitQueuedMessage) {
+		self.postMessage({
+			type: "frame-queued",
+			width,
+			height,
+		} satisfies FrameQueuedMessage);
+	}
 }
 
 function renderLoop() {

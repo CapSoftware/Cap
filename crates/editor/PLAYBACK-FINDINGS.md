@@ -1946,6 +1946,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (shared-buffer queue-message suppression)
+
+**Goal**: Cut worker-to-main-thread message volume during shared-buffer playback by suppressing queue notifications that are not needed for SAB dispatch flow
+
+**What was done**:
+1. Added optional queue-notification emission control in shared frame queue helper.
+2. Disabled `frame-queued` postMessage emission for shared-buffer polling path.
+3. Kept queue notifications enabled for direct worker-posted fallback frames.
+4. Re-ran desktop typecheck and transport utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - `queueFrameFromBytes` now accepts `emitQueuedMessage` flag (default `true`)
+  - `tryPollSharedBuffer` now calls `queueFrameFromBytes(..., false)` for borrowed SAB frames
+  - preserves existing queue notifications for non-SAB worker frame messages
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ SAB polling path no longer emits per-frame `frame-queued` worker messages.
+- ✅ Fallback worker-posted frame path behavior remains unchanged.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for macOS/Windows diagnostics to validate reduced main-thread message churn under sustained shared-buffer playback.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
