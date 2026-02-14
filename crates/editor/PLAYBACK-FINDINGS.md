@@ -1187,6 +1187,38 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Adaptive SharedArrayBuffer sizing for large RGBA frames)
+
+**Goal**: Prevent oversized RGBA frames from repeatedly bypassing SAB transport and falling back to postMessage copies
+
+**What was done**:
+1. Added adaptive SAB buffer reconfiguration in `socket.ts` based on observed frame byte size.
+2. Added slot-size headroom + alignment strategy for dynamic SAB growth.
+3. Added one-time resize failure guard to prevent repeated allocation attempts.
+4. Restored worker transport stats accounting for:
+   - frames sent via worker fallback
+   - dropped queued frames when newer frames supersede pending ones
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added `initializeSharedBuffer`, `nextSharedBufferConfig`, and `ensureSharedBufferCapacity`
+  - dynamic slot-size growth up to 64MB with adaptive slot counts
+  - worker fallback now increments `framesSentToWorker`
+  - queue supersession now increments `framesDropped` when replacing an already pending frame
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+
+**Results**:
+- ✅ Desktop TypeScript checks pass after adaptive SAB logic.
+- ✅ Large RGBA frame paths can now grow SAB capacity instead of permanently falling back to transfer-based worker messaging.
+- ✅ FPS debug telemetry now reflects worker-fallback sends and dropped superseded frames.
+
+**Stopping point**: next step is in-app validation on macOS/Windows to confirm reduced worker-transfer fallback frequency for high-resolution playback.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

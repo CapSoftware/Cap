@@ -23,6 +23,8 @@ const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 	slotCount: 6,
 	slotSize: 16 * 1024 * 1024,
 };
+const FRAME_BUFFER_RESIZE_ALIGNMENT = 2 * 1024 * 1024;
+const FRAME_BUFFER_MAX_SLOT_SIZE = 64 * 1024 * 1024;
 
 export type FpsStats = {
 	fps: number;
@@ -117,20 +119,75 @@ export function createImageDataWS(
 	let nextFrame: ArrayBuffer | null = null;
 
 	let producer: Producer | null = null;
-	if (SAB_SUPPORTED) {
+	let sharedBufferConfig: SharedFrameBufferConfig | null = null;
+	let sharedBufferResizeFailed = false;
+
+	function initializeSharedBuffer(config: SharedFrameBufferConfig): boolean {
 		try {
-			const init = createSharedFrameBuffer(FRAME_BUFFER_CONFIG);
-			producer = createProducer(init);
+			const init = createSharedFrameBuffer(config);
+			const nextProducer = createProducer(init);
+			producer?.signalShutdown();
+			producer = nextProducer;
+			sharedBufferConfig = config;
 			worker.postMessage({
 				type: "init-shared-buffer",
 				buffer: init.buffer,
 			});
+			return true;
 		} catch (e) {
 			console.error(
 				"[socket] SharedArrayBuffer allocation failed, falling back to non-SAB mode:",
 				e instanceof Error ? e.message : e,
 			);
+			return false;
+		}
+	}
+
+	function nextSharedBufferConfig(
+		requiredBytes: number,
+	): SharedFrameBufferConfig {
+		const withHeadroom = Math.ceil(requiredBytes * 1.25);
+		const alignedBytes =
+			Math.ceil(withHeadroom / FRAME_BUFFER_RESIZE_ALIGNMENT) *
+			FRAME_BUFFER_RESIZE_ALIGNMENT;
+		const slotSize = Math.max(
+			FRAME_BUFFER_CONFIG.slotSize,
+			Math.min(FRAME_BUFFER_MAX_SLOT_SIZE, alignedBytes),
+		);
+		const slotCount =
+			slotSize >= 48 * 1024 * 1024
+				? 3
+				: slotSize >= 24 * 1024 * 1024
+					? 4
+					: FRAME_BUFFER_CONFIG.slotCount;
+		return { slotCount, slotSize };
+	}
+
+	function ensureSharedBufferCapacity(requiredBytes: number) {
+		if (
+			!producer ||
+			!sharedBufferConfig ||
+			sharedBufferResizeFailed ||
+			requiredBytes <= sharedBufferConfig.slotSize
+		) {
+			return;
+		}
+
+		const config = nextSharedBufferConfig(requiredBytes);
+		if (config.slotSize <= sharedBufferConfig.slotSize) {
+			return;
+		}
+
+		const initialized = initializeSharedBuffer(config);
+		if (!initialized) {
+			sharedBufferResizeFailed = true;
+		}
+	}
+
+	if (SAB_SUPPORTED) {
+		if (!initializeSharedBuffer(FRAME_BUFFER_CONFIG)) {
 			producer = null;
+			sharedBufferConfig = null;
 		}
 	}
 
@@ -381,11 +438,14 @@ export function createImageDataWS(
 		isProcessing = true;
 
 		if (producer) {
+			ensureSharedBufferCapacity(buffer.byteLength);
 			const written = producer.write(buffer);
 			if (!written) {
+				framesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
 			}
 		} else {
+			framesSentToWorker++;
 			worker.postMessage({ type: "frame", buffer }, [buffer]);
 		}
 	}
@@ -570,6 +630,9 @@ export function createImageDataWS(
 		}
 
 		if (isProcessing) {
+			if (nextFrame) {
+				framesDropped++;
+			}
 			nextFrame = buffer;
 		} else {
 			pendingFrame = buffer;
