@@ -102,7 +102,7 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
             .unwrap_or(8);
         let min_span_frames = parse_u32_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES")
             .filter(|value| *value > 0)
-            .unwrap_or((FRAME_CACHE_SIZE as u32 / 2).max(1));
+            .unwrap_or(25);
         let min_pixels = parse_u64_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS")
             .filter(|value| *value > 0)
             .unwrap_or(3_686_400);

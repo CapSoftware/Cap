@@ -777,6 +777,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Supersession default span tuning)
+
+**Goal**: Promote a better default supersession span without requiring env overrides
+
+**What was done**:
+1. Benchmarked supersession configs with multi-run scrub reports (`--runs 3`) to reduce noise.
+2. Compared default behavior against candidate span thresholds.
+3. Set default `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES` fallback to `25`.
+4. Re-ran scrub/decode/playback benchmarks with the new default.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - changed default supersession span fallback from `FRAME_CACHE_SIZE / 2` to `25`
+  - kept runtime override support intact
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - added benchmark run section for the new default tuning pass
+
+**Results**:
+- ✅ Scrub median improvements vs previous default:
+  - 1080p last-request avg: **~319.76ms -> ~294.07ms**
+  - 4k last-request avg: **~967.21ms -> ~808.71ms**
+  - 4k last-request p95: **~1881ms -> ~1694ms**
+- ✅ Playback remained 60fps-class in regression runs:
+  - 1080p: **60.22 fps**
+  - 4k: **60.18 fps** (best run in pass)
+- ✅ Decode metrics remained in expected variance envelope after default change.
+
+**Stopping point**: supersession now ships with a stronger default profile while remaining fully runtime-tunable for platform-specific calibration.
+
+---
+
 ### Session 2026-02-14 (Scrub benchmark multi-run aggregation)
 
 **Goal**: Improve scrub benchmark repeatability by reducing single-run noise in comparisons
