@@ -908,6 +908,46 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Supersession min-requests threshold retune to 7)
+
+**Goal**: Re-check request-burst threshold using updated defaults (`min_span_frames=20`, `min_pixels=2_000_000`)
+
+**What was done**:
+1. Ran a sequential threshold sweep for `min_requests={6,7,8}` on 1080p and 4k scrub benchmarks (`--runs 3`).
+2. Compared median last-request latency and p95 tails across both resolutions.
+3. Updated FFmpeg supersession default `min_requests` fallback from `8` to `7`.
+4. Re-ran scrub + playback + decode regression benchmarks after promoting the new default.
+
+**Changes Made**:
+- `crates/rendering/src/decoder/ffmpeg.rs`
+  - changed default supersession `min_requests` fallback from `8` to `7`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - updated runtime tuning command examples to use `min_requests=7`
+  - added benchmark history section for threshold sweep and regression checks
+
+**Results**:
+- Sequential sweep medians (last-request avg / p95):
+  - 1080p:
+    - req 6: **209.99ms / 444.08ms**
+    - req 7: **211.36ms / 447.60ms**
+    - req 8: **209.11ms / 441.08ms**
+  - 4k:
+    - req 6: **827.29ms / 1707.63ms**
+    - req 7: **823.15ms / 1699.04ms**
+    - req 8: **884.74ms / 1837.32ms**
+- Post-change default (`min_requests=7`) validation:
+  - 1080p scrub median last-request avg **205.46ms**, p95 **432.90ms**
+  - 4k scrub median last-request avg **825.01ms**, p95 **1712.30ms**
+  - playback remains 60fps-class:
+    - 1080p: **60.24 fps**
+    - 4k: **60.20 fps**
+
+**Decision**: keep defaults at `min_requests=7`, `min_span_frames=20`, `min_pixels=2_000_000`.
+
+**Stopping point**: supersession defaults now balance 1080p and 4k scrub responsiveness better than the previous `min_requests=8` profile while preserving throughput targets.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests

@@ -99,7 +99,7 @@ fn scrub_supersession_config() -> ScrubSupersessionConfig {
     *SCRUB_SUPERSESSION_CONFIG.get_or_init(|| {
         let min_requests = parse_usize_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS")
             .filter(|value| *value > 0)
-            .unwrap_or(8);
+            .unwrap_or(7);
         let min_span_frames = parse_u32_env("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES")
             .filter(|value| *value > 0)
             .unwrap_or(20);

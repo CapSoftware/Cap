@@ -94,7 +94,7 @@ cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 
 
 # Runtime tuning for FFmpeg scrub supersession heuristic
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS=2000000 \
-CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=8 \
+CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS=7 \
 CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES=20 \
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
 
@@ -272,6 +272,41 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Median all-request latency: avg **199.01ms**, p95 **410.34ms**
 - Median last-request latency: avg **213.93ms**, p95 **410.34ms**
 - CSV output now includes `run_label` column across run and aggregate rows, enabling direct cross-machine merge and grouping.
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (supersession min-requests retune to 7)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `scrub-benchmark --runs 3`, `playback-benchmark --seek-iterations 10`, `decode-benchmark --seek-iterations 10`  
+**Change under test:** default `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS` fallback changed from `8` to `7`
+
+#### Min-requests threshold sweep (with span=20, min_pixels=2_000_000)
+- Sequential sweep command family:
+  - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS={6,7,8} scrub-benchmark --runs 3`
+- 1080p median last-request latency:
+  - **6**: avg **209.99ms**, p95 **444.08ms**
+  - **7**: avg **211.36ms**, p95 **447.60ms**
+  - **8**: avg **209.11ms**, p95 **441.08ms**
+- 4k median last-request latency:
+  - **6**: avg **827.29ms**, p95 **1707.63ms**
+  - **7**: avg **823.15ms**, p95 **1699.04ms**
+  - **8**: avg **884.74ms**, p95 **1837.32ms**
+- Decision: promote `min_requests=7` as the best cross-resolution compromise, preserving 1080p performance while significantly improving 4k tails over `8`.
+
+#### Scrub Benchmark — default after retune (`min_requests=7`)
+- 1080p60 (`/tmp/cap-bench-1080p60.mp4`, runs=3):
+  - Median all-request: avg **204.34ms**, p95 **432.90ms**, p99 **432.91ms**, max **432.91ms**
+  - Median last-request: avg **205.46ms**, p95 **432.90ms**, p99 **432.90ms**, max **432.90ms**
+- 4k60 (`/tmp/cap-bench-4k60.mp4`, runs=3):
+  - Median all-request: avg **820.91ms**, p95 **1712.30ms**, p99 **1712.30ms**, max **1712.31ms**
+  - Median last-request: avg **825.01ms**, p95 **1712.30ms**, p99 **1712.30ms**, max **1712.30ms**
+
+#### Regression checks after default retune
+- Playback throughput:
+  - 1080p60: **60.24 fps**, missed deadlines **0**, decode p95 **2.14ms**
+  - 4k60: **60.20 fps**, missed deadlines **0**, decode p95 **8.82ms**
+- Decode benchmark:
+  - 1080p random access avg **115.49ms**, p95 **350.30ms**
+  - 4k random access avg **511.55ms**, p95 **1394.69ms**
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
