@@ -279,6 +279,37 @@ fn metric_brief(values: &[f64]) -> String {
         .unwrap_or_else(|| "samples=0".to_string())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AudioStartupPath {
+    None,
+    Streaming,
+    Prerendered,
+    Mixed,
+}
+
+fn detect_audio_startup_path(stats: &EventStats) -> (AudioStartupPath, usize, usize) {
+    let streaming_samples = stats.audio_stream_startup_ms.len();
+    let prerendered_samples = stats.audio_prerender_startup_ms.len();
+
+    let path = match (streaming_samples > 0, prerendered_samples > 0) {
+        (true, true) => AudioStartupPath::Mixed,
+        (true, false) => AudioStartupPath::Streaming,
+        (false, true) => AudioStartupPath::Prerendered,
+        (false, false) => AudioStartupPath::None,
+    };
+
+    (path, streaming_samples, prerendered_samples)
+}
+
+fn audio_startup_path_label(path: AudioStartupPath) -> &'static str {
+    match path {
+        AudioStartupPath::None => "none",
+        AudioStartupPath::Streaming => "streaming",
+        AudioStartupPath::Prerendered => "prerendered",
+        AudioStartupPath::Mixed => "mixed",
+    }
+}
+
 fn write_csv_header(path: &PathBuf, file: &mut File) -> Result<(), String> {
     if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) > 0 {
         return Ok(());
@@ -616,13 +647,18 @@ fn main() {
                 println!("no run ids found");
             } else {
                 for (run_id_key, stats) in &aggregated {
+                    let (audio_path, stream_samples, prerendered_samples) =
+                        detect_audio_startup_path(stats);
                     println!(
-                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}]",
+                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}] audio_path={} stream_samples={} prerender_samples={}",
                         run_id_key,
                         metric_brief(&stats.decode_startup_ms),
                         metric_brief(&stats.render_startup_ms),
                         metric_brief(&stats.audio_stream_startup_ms),
                         metric_brief(&stats.audio_prerender_startup_ms),
+                        audio_startup_path_label(audio_path),
+                        stream_samples,
+                        prerendered_samples,
                     );
                 }
             }
@@ -694,6 +730,13 @@ fn main() {
         print_metric(
             "audio pre-rendered callback",
             &stats.audio_prerender_startup_ms,
+        );
+        let (audio_path, stream_samples, prerendered_samples) = detect_audio_startup_path(&stats);
+        println!(
+            "audio startup path: {} (stream_samples={} prerender_samples={})",
+            audio_startup_path_label(audio_path),
+            stream_samples,
+            prerendered_samples
         );
 
         if let Some(path) = &output_csv {
@@ -779,6 +822,19 @@ fn main() {
             &baseline_stats.audio_prerender_startup_ms,
             &candidate_stats.audio_prerender_startup_ms,
         );
+        let (baseline_audio_path, baseline_stream_samples, baseline_prerendered_samples) =
+            detect_audio_startup_path(&baseline_stats);
+        let (candidate_audio_path, candidate_stream_samples, candidate_prerendered_samples) =
+            detect_audio_startup_path(&candidate_stats);
+        println!(
+            "audio startup path baseline={} (stream_samples={} prerender_samples={}) candidate={} (stream_samples={} prerender_samples={})",
+            audio_startup_path_label(baseline_audio_path),
+            baseline_stream_samples,
+            baseline_prerendered_samples,
+            audio_startup_path_label(candidate_audio_path),
+            candidate_stream_samples,
+            candidate_prerendered_samples
+        );
 
         if let Some(path) = &output_csv {
             let metrics = [
@@ -815,9 +871,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        EventStats, append_aggregate_csv, append_delta_csv, append_run_counts_csv,
-        append_run_metrics_csv, collect_run_id_metrics, parse_csv_startup_event, parse_log,
-        parse_startup_ms, summarize, summarize_delta,
+        AudioStartupPath, EventStats, append_aggregate_csv, append_delta_csv,
+        append_run_counts_csv, append_run_metrics_csv, collect_run_id_metrics,
+        detect_audio_startup_path, parse_csv_startup_event, parse_log, parse_startup_ms, summarize,
+        summarize_delta,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -876,6 +933,38 @@ mod tests {
         let delta = summarize_delta(&[100.0, 120.0], &[80.0, 90.0]).expect("expected delta");
         assert!((delta.avg_delta + 25.0).abs() < f64::EPSILON);
         assert!((delta.p95_delta + 30.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn detects_audio_startup_path_modes() {
+        let mut none = EventStats::default();
+        let (none_path, none_streaming, none_prerendered) = detect_audio_startup_path(&none);
+        assert_eq!(none_path, AudioStartupPath::None);
+        assert_eq!(none_streaming, 0);
+        assert_eq!(none_prerendered, 0);
+
+        none.audio_stream_startup_ms.push(100.0);
+        let (streaming_path, streaming_count, streaming_prerendered) =
+            detect_audio_startup_path(&none);
+        assert_eq!(streaming_path, AudioStartupPath::Streaming);
+        assert_eq!(streaming_count, 1);
+        assert_eq!(streaming_prerendered, 0);
+
+        let mut prerendered = EventStats::default();
+        prerendered.audio_prerender_startup_ms.push(120.0);
+        let (prerendered_path, prerendered_streaming, prerendered_count) =
+            detect_audio_startup_path(&prerendered);
+        assert_eq!(prerendered_path, AudioStartupPath::Prerendered);
+        assert_eq!(prerendered_streaming, 0);
+        assert_eq!(prerendered_count, 1);
+
+        let mut mixed = EventStats::default();
+        mixed.audio_stream_startup_ms.extend([100.0, 102.0]);
+        mixed.audio_prerender_startup_ms.push(130.0);
+        let (mixed_path, mixed_streaming, mixed_prerendered) = detect_audio_startup_path(&mixed);
+        assert_eq!(mixed_path, AudioStartupPath::Mixed);
+        assert_eq!(mixed_streaming, 2);
+        assert_eq!(mixed_prerendered, 1);
     }
 
     #[test]

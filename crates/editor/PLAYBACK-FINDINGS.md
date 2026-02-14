@@ -3162,6 +3162,45 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (startup report audio-path classification)
+
+**Goal**: Improve startup trace readability by explicitly classifying audio startup mode per run (streaming/prerendered/mixed/none)
+
+**What was done**:
+1. Added audio-path classification helpers to startup report parser.
+2. Extended `--list-run-metrics` output with audio path labels and sample counts.
+3. Extended aggregate and delta modes with explicit audio path summary lines.
+4. Added unit tests covering all audio-path classification modes.
+
+**Changes Made**:
+- `crates/editor/examples/playback-startup-report.rs`
+  - added:
+    - `AudioStartupPath` enum
+    - `detect_audio_startup_path`
+    - `audio_startup_path_label`
+  - `--list-run-metrics` now prints audio path classification per run id
+  - aggregate mode prints:
+    - `audio startup path: <mode> (stream_samples=<n> prerender_samples=<n>)`
+  - delta mode prints:
+    - baseline and candidate audio path classification + counts
+  - tests now include `detects_audio_startup_path_modes`
+- `crates/editor/PLAYBACK-BENCHMARKS.md`
+  - startup report command docs now mention audio-path classification in run-metrics output
+
+**Verification**:
+- `cargo +1.88.0 fmt --all`
+- `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics`
+
+**Results**:
+- ✅ Startup report now surfaces whether runs used streaming, pre-rendered, mixed, or no audio callback samples.
+- ✅ Unit tests pass with new audio-path mode coverage (11/11).
+- ✅ CLI run succeeds with updated run-metrics output path.
+
+**Stopping point**: Ready for macOS/Windows startup traces where audio path classification can quickly verify whether streaming-first startup engaged.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
