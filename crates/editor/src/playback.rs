@@ -657,8 +657,8 @@ impl Playback {
                             friction: cached_project.cursor.friction,
                         });
 
-                    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-                        &segment_media.cursor,
+                    let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
+                        segment_media.cursor.clone(),
                         cursor_smoothing,
                         cached_project.screen_movement_spring,
                         duration,

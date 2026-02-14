@@ -513,8 +513,8 @@ impl EditorInstance {
                                     },
                                 );
 
-                                let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-                                    &segment_medias.cursor,
+                                let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
+                                    segment_medias.cursor.clone(),
                                     cursor_smoothing,
                                     project.screen_movement_spring,
                                     total_duration,
