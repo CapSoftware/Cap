@@ -131,6 +131,9 @@ export function createImageDataWS(
 	let sabFallbackCount = 0;
 	let sabOversizeFallbackCount = 0;
 	let sabRetryLimitFallbackCount = 0;
+	let sabFallbackWindowCount = 0;
+	let sabOversizeFallbackWindowCount = 0;
+	let sabRetryLimitFallbackWindowCount = 0;
 	let sabWriteRetryCount = 0;
 	let sabRetryScheduled = false;
 
@@ -251,6 +254,9 @@ export function createImageDataWS(
 		nextFrame = null;
 		isProcessing = false;
 		sabRetryScheduled = false;
+		sabFallbackWindowCount = 0;
+		sabOversizeFallbackWindowCount = 0;
+		sabRetryLimitFallbackWindowCount = 0;
 
 		if (mainThreadWebGPU) {
 			disposeWebGPU(mainThreadWebGPU);
@@ -441,6 +447,7 @@ export function createImageDataWS(
 			const written = producer.write(buffer);
 			if (!written) {
 				sabFallbackCount += 1;
+				sabFallbackWindowCount += 1;
 				const decision = decideSabWriteFailure(
 					isOversized,
 					sabWriteRetryCount,
@@ -465,8 +472,10 @@ export function createImageDataWS(
 				}
 				if (decision.action === "fallback_oversize") {
 					sabOversizeFallbackCount += 1;
+					sabOversizeFallbackWindowCount += 1;
 				} else {
 					sabRetryLimitFallbackCount += 1;
+					sabRetryLimitFallbackWindowCount += 1;
 				}
 				framesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
@@ -551,7 +560,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks: ${sabFallbackCount}, sab_oversize_fallbacks: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks_window: ${sabFallbackWindowCount}, sab_fallbacks_total: ${sabFallbackCount}, sab_oversize_fallbacks_window: ${sabOversizeFallbackWindowCount}, sab_oversize_fallbacks_total: ${sabOversizeFallbackCount}, sab_retry_limit_fallbacks_window: ${sabRetryLimitFallbackWindowCount}, sab_retry_limit_fallbacks_total: ${sabRetryLimitFallbackCount}, sab_retries: ${sabWriteRetryCount}`,
 				);
 
 				frameCount = 0;
@@ -562,9 +571,9 @@ export function createImageDataWS(
 				framesDropped = 0;
 				framesSentToWorker = 0;
 				actualRendersCount = 0;
-				sabFallbackCount = 0;
-				sabOversizeFallbackCount = 0;
-				sabRetryLimitFallbackCount = 0;
+				sabFallbackWindowCount = 0;
+				sabOversizeFallbackWindowCount = 0;
+				sabRetryLimitFallbackWindowCount = 0;
 				sabWriteRetryCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;

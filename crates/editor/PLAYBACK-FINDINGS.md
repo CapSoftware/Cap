@@ -1489,6 +1489,36 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Cumulative SAB fallback counters for diagnostics stability)
+
+**Goal**: Keep overlay diagnostics stable across sampling windows by preserving cumulative fallback counters
+
+**What was done**:
+1. Split SAB fallback counters into:
+   - cumulative totals (for exported FPS stats / overlay)
+   - window counters (for per-log-frame console snapshots)
+2. Updated websocket frame log output to include both window and total fallback counters.
+3. Stopped resetting cumulative fallback counters in the periodic logging reset path.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added window counter variables for SAB fallback classes
+  - log output now prints `*_window` and `*_total` values
+  - `getFpsStats()` now remains backed by cumulative fallback counters
+
+**Verification**:
+- `pnpm exec biome format --write apps/desktop/src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-retry.test.ts src/utils/frame-transport-config.test.ts src/utils/shared-frame-buffer.test.ts` (13 passed)
+
+**Results**:
+- ✅ Overlay/clipboard transport diagnostics now remain monotonic across log windows.
+- ✅ Console output still includes short-window fallback visibility for burst debugging.
+
+**Stopping point**: ready for target-machine playback sessions where cumulative fallback totals are needed across longer runs.
+
+---
+
 ### Session 2026-02-14 (Rejected superseded-burst cache-window reduction)
 
 **Goal**: Reduce superseded scrub decode work by shrinking decode cache window for superseded requests
