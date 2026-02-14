@@ -3483,6 +3483,45 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (stride-correction queue backpressure coalescing)
+
+**Goal**: Prevent stride-correction worker backlog growth by capping in-flight corrections and coalescing to the latest pending request
+
+**What was done**:
+1. Added in-flight tracking for stride-correction worker requests.
+2. Added single-slot pending request buffer for stride correction.
+3. Dispatch now allows one in-flight request plus one latest pending request.
+4. Pending replacement now drops stale pending corrections instead of unbounded queue growth.
+5. Worker response/error paths now flush pending work when possible.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added:
+    - `strideWorkerInFlight`
+    - `pendingStrideCorrection`
+    - `dispatchStrideCorrection`
+    - `queueStrideCorrection`
+  - stride correction path now calls `queueStrideCorrection(...)` instead of direct `postMessage`
+  - worker message handler now:
+    - handles `error` messages
+    - clears in-flight flag before dispatching pending request
+    - coalesces pending requests to latest frame
+  - teardown now resets in-flight and pending stride state
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Stride-correction flow now bounds worker backlog pressure to one in-flight + one pending correction.
+- ✅ Older pending stride corrections are superseded by newer frames under burst load.
+- ✅ Desktop typecheck and utility suite pass (30/30).
+
+**Stopping point**: Ready for stride-heavy direct-path runs to validate reduced correction backlog and stale response pressure.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

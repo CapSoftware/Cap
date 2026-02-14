@@ -18,7 +18,10 @@ import {
 } from "./frame-transport-inflight";
 import { decideFrameOrder } from "./frame-transport-order";
 import { decideSabWriteFailure } from "./frame-transport-retry";
-import type { StrideCorrectionResponse } from "./stride-correction-worker";
+import type {
+	ErrorResponse,
+	StrideCorrectionResponse,
+} from "./stride-correction-worker";
 import StrideCorrectionWorker from "./stride-correction-worker?worker";
 import {
 	disposeWebGPU,
@@ -218,6 +221,14 @@ export function createImageDataWS(
 	let directCanvas: HTMLCanvasElement | null = null;
 	let directCtx: CanvasRenderingContext2D | null = null;
 	let strideWorker: Worker | null = null;
+	let strideWorkerInFlight = false;
+	let pendingStrideCorrection: {
+		buffer: ArrayBuffer;
+		strideBytes: number;
+		width: number;
+		height: number;
+		frameNumber: number;
+	} | null = null;
 
 	let cachedDirectImageData: ImageData | null = null;
 	let cachedDirectWidth = 0;
@@ -315,13 +326,76 @@ export function createImageDataWS(
 		strideWorker.onmessage = null;
 		strideWorker.terminate();
 		strideWorker = null;
+		strideWorkerInFlight = false;
+		pendingStrideCorrection = null;
+	}
+
+	function dispatchStrideCorrection(request: {
+		buffer: ArrayBuffer;
+		strideBytes: number;
+		width: number;
+		height: number;
+		frameNumber: number;
+	}) {
+		if (!strideWorker) return;
+		strideWorkerInFlight = true;
+		strideWorker.postMessage(
+			{
+				type: "correct-stride",
+				buffer: request.buffer,
+				strideBytes: request.strideBytes,
+				width: request.width,
+				height: request.height,
+				frameNumber: request.frameNumber,
+			},
+			[request.buffer],
+		);
+	}
+
+	function queueStrideCorrection(request: {
+		buffer: ArrayBuffer;
+		strideBytes: number;
+		width: number;
+		height: number;
+		frameNumber: number;
+	}) {
+		if (!strideWorker) return;
+		if (!strideWorkerInFlight) {
+			dispatchStrideCorrection(request);
+			return;
+		}
+		if (pendingStrideCorrection) {
+			framesDropped++;
+		}
+		pendingStrideCorrection = request;
 	}
 
 	function setupStrideWorker() {
 		if (strideWorker) return;
 		const createdWorker = new StrideCorrectionWorker();
-		createdWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
-			if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
+		createdWorker.onmessage = (
+			e: MessageEvent<StrideCorrectionResponse | ErrorResponse>,
+		) => {
+			const flushPending = () => {
+				if (pendingStrideCorrection && strideWorker) {
+					const nextRequest = pendingStrideCorrection;
+					pendingStrideCorrection = null;
+					dispatchStrideCorrection(nextRequest);
+				}
+			};
+
+			if (e.data.type === "error") {
+				strideWorkerInFlight = false;
+				flushPending();
+				return;
+			}
+
+			if (e.data.type !== "corrected" || !directCanvas || !directCtx) {
+				strideWorkerInFlight = false;
+				flushPending();
+				return;
+			}
+			strideWorkerInFlight = false;
 
 			const { buffer, width, height, frameNumber } = e.data;
 			const responseOrderDecision = decideFrameOrder(
@@ -362,6 +436,7 @@ export function createImageDataWS(
 
 			actualRendersCount++;
 			storeRenderedFrame(cachedStrideImageData.data, width, height, width * 4);
+			flushPending();
 			onmessage({ width, height });
 		};
 		strideWorker = createdWorker;
@@ -927,17 +1002,13 @@ export function createImageDataWS(
 				lastDirectRenderedFrameNumber = frameNumber;
 				onmessage({ width, height });
 			} else {
-				strideWorker.postMessage(
-					{
-						type: "correct-stride",
-						buffer,
-						strideBytes,
-						width,
-						height,
-						frameNumber,
-					},
-					[buffer],
-				);
+				queueStrideCorrection({
+					buffer,
+					strideBytes,
+					width,
+					height,
+					frameNumber,
+				});
 			}
 			return;
 		}
