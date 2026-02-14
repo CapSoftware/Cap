@@ -1198,6 +1198,10 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 4. Restored worker transport stats accounting for:
    - frames sent via worker fallback
    - dropped queued frames when newer frames supersede pending ones
+5. Added SAB telemetry counters to frame stats logs:
+   - SAB resize count
+   - SAB fallback count
+   - oversize-triggered SAB fallback count
 
 **Changes Made**:
 - `apps/desktop/src/utils/socket.ts`

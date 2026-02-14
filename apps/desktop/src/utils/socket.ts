@@ -121,6 +121,9 @@ export function createImageDataWS(
 	let producer: Producer | null = null;
 	let sharedBufferConfig: SharedFrameBufferConfig | null = null;
 	let sharedBufferResizeFailed = false;
+	let sharedBufferResizeCount = 0;
+	let sabFallbackCount = 0;
+	let sabOversizeFallbackCount = 0;
 
 	function initializeSharedBuffer(config: SharedFrameBufferConfig): boolean {
 		try {
@@ -129,6 +132,7 @@ export function createImageDataWS(
 			producer?.signalShutdown();
 			producer = nextProducer;
 			sharedBufferConfig = config;
+			sharedBufferResizeCount += 1;
 			worker.postMessage({
 				type: "init-shared-buffer",
 				buffer: init.buffer,
@@ -439,8 +443,14 @@ export function createImageDataWS(
 
 		if (producer) {
 			ensureSharedBufferCapacity(buffer.byteLength);
+			const slotSize = sharedBufferConfig?.slotSize ?? 0;
+			const isOversized = slotSize > 0 && buffer.byteLength > slotSize;
 			const written = producer.write(buffer);
 			if (!written) {
+				sabFallbackCount += 1;
+				if (isOversized) {
+					sabOversizeFallbackCount += 1;
+				}
 				framesSentToWorker++;
 				worker.postMessage({ type: "frame", buffer }, [buffer]);
 			}
@@ -515,7 +525,7 @@ export function createImageDataWS(
 					framesReceived > 0 ? (framesDropped / framesReceived) * 100 : 0;
 
 				console.log(
-					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA`,
+					`[Frame] recv: ${recvFps.toFixed(1)}/s, sent: ${sentFps.toFixed(1)}/s, ACTUAL: ${actualFps.toFixed(1)}/s, dropped: ${dropRate.toFixed(0)}%, delta: ${avgDelta.toFixed(1)}ms, ${mbPerSec.toFixed(1)} MB/s, RGBA, sab_resizes: ${sharedBufferResizeCount}, sab_fallbacks: ${sabFallbackCount}, sab_oversize_fallbacks: ${sabOversizeFallbackCount}`,
 				);
 
 				frameCount = 0;
@@ -526,6 +536,8 @@ export function createImageDataWS(
 				framesDropped = 0;
 				framesSentToWorker = 0;
 				actualRendersCount = 0;
+				sabFallbackCount = 0;
+				sabOversizeFallbackCount = 0;
 				minFrameTime = Number.MAX_VALUE;
 				maxFrameTime = 0;
 			}
