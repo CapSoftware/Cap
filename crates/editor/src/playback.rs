@@ -282,6 +282,7 @@ impl Playback {
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
             let mut prefetched_behind_order: VecDeque<u32> = VecDeque::new();
             let mut scheduled_in_flight_frames: HashSet<u32> = HashSet::new();
+            let mut last_behind_scan_frame: Option<u32> = None;
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
             let dynamic_prefetch_ahead = fps.clamp(30, 90).min(PREFETCH_BUFFER_SIZE as u32);
             let dynamic_prefetch_behind = (fps / 4).clamp(8, 24);
@@ -328,6 +329,7 @@ impl Playback {
                         frames_decoded = 0;
                         prefetched_behind.clear();
                         prefetched_behind_order.clear();
+                        last_behind_scan_frame = None;
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.clear();
@@ -355,6 +357,7 @@ impl Playback {
                             frames_decoded = 0;
                             prefetched_behind.clear();
                             prefetched_behind_order.clear();
+                            last_behind_scan_frame = None;
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                                 in_flight_guard.clear();
                             }
@@ -433,7 +436,10 @@ impl Playback {
                     next_prefetch_frame += 1;
                 }
 
-                if in_flight.len() < effective_parallel {
+                if in_flight.len() < effective_parallel
+                    && last_behind_scan_frame != Some(current_playback_frame)
+                {
+                    last_behind_scan_frame = Some(current_playback_frame);
                     for behind_offset in 1..=dynamic_prefetch_behind {
                         if in_flight.len() >= effective_parallel {
                             break;
