@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     create_editor_instance_impl,
-    frame_ws::{WSFrame, create_watch_frame_ws},
+    frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
 };
 
 pub struct EditorInstance {
@@ -27,17 +27,30 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let inner = create_editor_instance_impl(
         &app,
         path,
-        Box::new(move |frame| {
-            let _ = frame_tx.send(Some(std::sync::Arc::new(
-                WSFrame::from_rendered_frame_nv12(
-                    frame.data,
-                    frame.width,
-                    frame.height,
-                    frame.padded_bytes_per_row,
-                    frame.frame_number,
-                    frame.target_time_ns,
-                ),
-            )));
+        Box::new(move |output| {
+            let ws_frame = match output {
+                cap_editor::editor::EditorFrameOutput::Nv12(frame) => WSFrame {
+                    data: frame.data,
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.y_stride,
+                    frame_number: frame.frame_number,
+                    target_time_ns: frame.target_time_ns,
+                    format: WSFrameFormat::Nv12,
+                    created_at: Instant::now(),
+                },
+                cap_editor::editor::EditorFrameOutput::Rgba(frame) => {
+                    WSFrame::from_rendered_frame_nv12(
+                        frame.data,
+                        frame.width,
+                        frame.height,
+                        frame.padded_bytes_per_row,
+                        frame.frame_number,
+                        frame.target_time_ns,
+                    )
+                }
+            };
+            let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
         }),
     )
     .await?;
@@ -219,17 +232,30 @@ impl EditorInstances {
                 let inner = create_editor_instance_impl(
                     window.app_handle(),
                     path,
-                    Box::new(move |frame| {
-                        let _ = frame_tx.send(Some(std::sync::Arc::new(
-                            WSFrame::from_rendered_frame_nv12(
-                                frame.data,
-                                frame.width,
-                                frame.height,
-                                frame.padded_bytes_per_row,
-                                frame.frame_number,
-                                frame.target_time_ns,
-                            ),
-                        )));
+                    Box::new(move |output| {
+                        let ws_frame = match output {
+                            cap_editor::editor::EditorFrameOutput::Nv12(frame) => WSFrame {
+                                data: frame.data,
+                                width: frame.width,
+                                height: frame.height,
+                                stride: frame.y_stride,
+                                frame_number: frame.frame_number,
+                                target_time_ns: frame.target_time_ns,
+                                format: WSFrameFormat::Nv12,
+                                created_at: Instant::now(),
+                            },
+                            cap_editor::editor::EditorFrameOutput::Rgba(frame) => {
+                                WSFrame::from_rendered_frame_nv12(
+                                    frame.data,
+                                    frame.width,
+                                    frame.height,
+                                    frame.padded_bytes_per_row,
+                                    frame.frame_number,
+                                    frame.target_time_ns,
+                                )
+                            }
+                        };
+                        let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
                     }),
                 )
                 .await?;

@@ -7,7 +7,7 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::{RenderSession, finish_encoder, flush_pending_readback};
+use frame_pipeline::{RenderSession, finish_encoder, finish_encoder_nv12, flush_pending_readback};
 use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
@@ -42,7 +42,7 @@ pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
-pub use frame_pipeline::RenderedFrame;
+pub use frame_pipeline::{Nv12RenderedFrame, RenderedFrame};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
@@ -1799,6 +1799,7 @@ pub struct DecodedSegmentFrames {
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
+    nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -1808,6 +1809,7 @@ impl<'a> FrameRenderer<'a> {
         Self {
             constants,
             session: None,
+            nv12_converter: None,
         }
     }
 
@@ -1891,6 +1893,66 @@ impl<'a> FrameRenderer<'a> {
         } else {
             None
         }
+    }
+
+    pub async fn render_nv12(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        layers: &mut RendererLayers,
+    ) -> Result<frame_pipeline::Nv12RenderedFrame, RenderingError> {
+        let session = self.session.get_or_insert_with(|| {
+            RenderSession::new(
+                &self.constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            )
+        });
+
+        session.update_texture_size(
+            &self.constants.device,
+            uniforms.output_size.0,
+            uniforms.output_size.1,
+        );
+
+        let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
+            frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
+        });
+
+        let mut encoder = self.constants.device.create_command_encoder(
+            &(wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder (NV12)"),
+            }),
+        );
+
+        layers
+            .prepare_with_encoder(
+                self.constants,
+                &uniforms,
+                &segment_frames,
+                cursor,
+                &mut encoder,
+            )
+            .await?;
+
+        layers.render(
+            &self.constants.device,
+            &self.constants.queue,
+            &mut encoder,
+            session,
+            &uniforms,
+        );
+
+        finish_encoder_nv12(
+            session,
+            nv12_converter,
+            &self.constants.device,
+            &self.constants.queue,
+            &uniforms,
+            encoder,
+        )
+        .await
     }
 }
 

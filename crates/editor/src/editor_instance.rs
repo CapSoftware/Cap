@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    RenderedFrame, SegmentVideoPaths, Video, ZoomFocusInterpolator, get_duration,
+    SegmentVideoPaths, Video, ZoomFocusInterpolator, get_duration,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
@@ -94,7 +94,7 @@ impl EditorInstance {
     pub async fn new(
         project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-        frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+        frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
