@@ -974,6 +974,33 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (Rejected fine span retune to 22)
+
+**Goal**: Validate whether a finer span adjustment (`22`) outperforms the current default (`20`)
+
+**What was done**:
+1. Ran fine span sweep (`18`, `20`, `22`) on 1080p and 4k with `--runs 3`.
+2. Ran paired span20/span22 sweeps with explicit run labels and compared via `scrub-csv-report`.
+3. Temporarily switched default span to `22` and executed scrub/playback/decode regression checks.
+
+**Results**:
+- Fine sweep signal:
+  - 1080p favored `20` on tails (span 22 raised p95 vs span 20 in sampled runs).
+  - 4k often favored `22` in paired delta comparisons.
+- Paired labeled deltas (`span22 - span20`):
+  - 1080p: p95 worsened by about **+24ms**
+  - 4k: avg and p95 improved materially in that paired sample
+- Temporary default-22 regressions:
+  - 4k scrub sample still showed heavy tails (**~1797ms p95**)
+  - playback regression sample had higher missed deadlines (**4**)
+  - decode remained in variance envelope but with no clear stability gain
+
+**Decision**: rejected promoting `min_span_frames=22` due inconsistent tail behavior across reruns.
+
+**Stopping point**: keep defaults at `min_requests=7`, `min_span_frames=20`, `min_pixels=2_000_000`.
+
+---
+
 ### Session 2026-02-14 (Scrub CSV report utility)
 
 **Goal**: Provide a lightweight analysis tool for cross-machine scrub CSV comparisons

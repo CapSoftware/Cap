@@ -354,6 +354,39 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - Keep `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES` default at **20**.
 - Candidate spans 15 and 25 were rejected; neither improved both 1080p and 4k tails versus 20 under the new defaults.
 
+### Benchmark Run: 2026-02-14 00:00:00 UTC (fine span sweep 18/20/22, rejected span 22)
+
+**Environment:** Linux runner with synthetic 1080p60 and 4k60 MP4 assets  
+**Commands:** `scrub-benchmark --runs 3`, `scrub-csv-report --baseline-label span20 --candidate-label span22`
+
+#### Fine sweep medians (single-pass)
+- 1080p:
+  - **18**: avg **303.40ms**, p95 **665.16ms**
+  - **20**: avg **214.65ms**, p95 **434.74ms**
+  - **22**: avg **210.83ms**, p95 **442.55ms**
+- 4k:
+  - **18**: avg **897.87ms**, p95 **1891.21ms**
+  - **20**: avg **967.04ms**, p95 **1897.05ms**
+  - **22**: avg **829.73ms**, p95 **1714.74ms**
+
+#### Paired span20 vs span22 labeled sweep
+- Using `/tmp/cap-scrub-span-20-22.csv` with run labels:
+  - 1080p delta (22-20): all_avg **-0.34ms**, all_p95 **+24.13ms**, last_avg **-0.15ms**, last_p95 **+24.13ms**
+  - 4k delta (22-20): all_avg **-64.97ms**, all_p95 **-227.95ms**, last_avg **-78.37ms**, last_p95 **-296.82ms**
+
+#### Validation pass on temporary default-22 branch state
+- Scrub medians:
+  - 1080p last-request avg **203.87ms**, p95 **435.18ms**
+  - 4k last-request avg **847.32ms**, p95 **1797.10ms**
+- Playback regression sample:
+  - 4k effective fps **60.14** with missed deadlines **4**
+- Decode regression sample:
+  - 4k random access avg **511.57ms**, p95 **1456.64ms**
+
+#### Decision
+- Rejected promoting span **22** as default due inconsistent 4k tail behavior across repeated runs and a noisier playback regression sample.
+- Keep default `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES` at **20** for stability.
+
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub CSV report tooling)
 
 **Environment:** Linux runner, CSV analysis utility validation  
