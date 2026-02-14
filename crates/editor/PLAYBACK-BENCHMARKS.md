@@ -138,6 +138,10 @@ cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback
 # List per-run startup metric summaries (avg/p95 by event)
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-run-metrics
 
+# Export run counts or run metrics to CSV
+cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-runs --output-csv /tmp/playback-startup-run-summary.csv
+cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-run-metrics --output-csv /tmp/playback-startup-run-summary.csv
+
 # Aggregate multiple session logs
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/macos.log --log /path/to/windows.log
 
@@ -236,10 +240,14 @@ cargo run -p cap-recording --example playback-test-runner -- full
 
 #### Validation
 - Added `--list-run-metrics` mode to print per-run startup metric summaries (avg/p95/samples per event).
-- Unit tests now include run-metrics aggregation path (**9 passed** total in example target).
+- Added CSV export support for `--list-runs` and `--list-run-metrics` modes.
+- Unit tests now include run-metrics aggregation and run-mode CSV writer paths (**10 passed** total in example target).
 - CLI smoke run:
   - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics`
   - confirms mode execution path and empty-run handling output.
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --list-runs --output-csv /tmp/playback-startup-run-export.csv`
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics --output-csv /tmp/playback-startup-run-export.csv`
+  - verified CSV header/output path is produced in no-run scenarios.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (supersession span retune to 20)
 

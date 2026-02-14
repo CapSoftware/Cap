@@ -1193,7 +1193,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 4. Added strict failures when a requested run-id filter matches zero startup samples.
 5. Added `--output-csv` export for aggregate summaries and baseline/candidate deltas.
 6. Added `--list-run-metrics` mode to print per-run startup metric summaries.
-7. Added parser tests that validate run-id filtering behavior on mixed-run CSV traces.
+7. Added CSV export support for `--list-runs` and `--list-run-metrics` modes.
+8. Added parser tests that validate run-id filtering behavior on mixed-run CSV traces.
 
 **Changes Made**:
 - `crates/editor/examples/playback-startup-report.rs`
@@ -1209,6 +1210,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
   - run-id filtered queries now return explicit non-zero exit on zero matches
   - aggregate and delta modes can append CSV rows for downstream analysis
   - run-metrics mode now reports per-run decoded/rendered/audio startup summaries
+  - list-runs and list-run-metrics modes can export rows via shared CSV output path
   - added unit test coverage for run-id-filtered parsing
 - `crates/editor/PLAYBACK-BENCHMARKS.md`
   - added command examples for run-id filtering, run listing, CSV export, and same-file baseline/candidate comparisons
@@ -1217,6 +1219,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo +1.88.0 test -p cap-editor --example playback-startup-report`
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-runs`
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-runs --output-csv /tmp/playback-startup-run-export.csv`
+- `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics --output-csv /tmp/playback-startup-run-export.csv`
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --run-id missing-run` (expected non-zero exit)
 - `cargo +1.88.0 run -p cap-editor --example playback-startup-report -- --log /workspace/crates/editor/PLAYBACK-BENCHMARKS.md --output-csv /tmp/playback-startup-summary.csv`
 
@@ -1226,7 +1230,8 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - ✅ Run-id inventory can be listed before comparisons to avoid manual CSV inspection.
 - ✅ Run-metrics listing surfaces avg/p95 startup behavior per run id without manual slicing.
 - ✅ CSV summaries/deltas can now be exported to files for external aggregation.
-- ✅ All startup report example tests passing (9/9).
+- ✅ List-run and run-metrics modes can now emit CSV artifacts for CI/report pipelines.
+- ✅ All startup report example tests passing (10/10).
 
 **Stopping point**: macOS/Windows startup captures can remain in a single trace file while still enabling precise per-run before/after reporting.
 

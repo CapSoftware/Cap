@@ -381,6 +381,79 @@ fn append_delta_csv(
     Ok(())
 }
 
+fn append_run_counts_csv(path: &PathBuf, counts: &BTreeMap<String, usize>) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    write_csv_header(path, &mut file)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+
+    for (run_id, count) in counts {
+        writeln!(
+            file,
+            "{timestamp_ms},run_count,\"run_count\",\"{}\",\"\",\"\",{},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+            run_id,
+            count
+        )
+        .map_err(|error| format!("write {} / {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn append_run_metrics_csv(
+    path: &PathBuf,
+    metrics_by_run_id: &BTreeMap<String, EventStats>,
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open {} / {error}", path.display()))?;
+    write_csv_header(path, &mut file)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+
+    for (run_id, stats) in metrics_by_run_id {
+        let metric_rows = [
+            ("first decoded frame", stats.decode_startup_ms.as_slice()),
+            ("first rendered frame", stats.render_startup_ms.as_slice()),
+            (
+                "audio streaming callback",
+                stats.audio_stream_startup_ms.as_slice(),
+            ),
+            (
+                "audio pre-rendered callback",
+                stats.audio_prerender_startup_ms.as_slice(),
+            ),
+        ];
+
+        for (name, values) in metric_rows {
+            if let Some(summary) = summarize(values) {
+                writeln!(
+                    file,
+                    "{timestamp_ms},run_metric,\"{}\",\"{}\",\"\",\"\",{},{:.3},{:.3},\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"",
+                    name,
+                    run_id,
+                    summary.samples,
+                    summary.avg,
+                    summary.p95
+                )
+                .map_err(|error| format!("write {} / {error}", path.display()))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
@@ -542,7 +615,7 @@ fn main() {
             if aggregated.is_empty() {
                 println!("no run ids found");
             } else {
-                for (run_id_key, stats) in aggregated {
+                for (run_id_key, stats) in &aggregated {
                     println!(
                         "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}]",
                         run_id_key,
@@ -552,6 +625,12 @@ fn main() {
                         metric_brief(&stats.audio_prerender_startup_ms),
                     );
                 }
+            }
+            if let Some(path) = &output_csv
+                && let Err(error) = append_run_metrics_csv(path, &aggregated)
+            {
+                eprintln!("{error}");
+                std::process::exit(1);
             }
             return;
         }
@@ -577,9 +656,15 @@ fn main() {
             if aggregated.is_empty() {
                 println!("no run ids found");
             } else {
-                for (run_id_key, count) in aggregated {
+                for (run_id_key, count) in &aggregated {
                     println!("{run_id_key}: {count}");
                 }
+            }
+            if let Some(path) = &output_csv
+                && let Err(error) = append_run_counts_csv(path, &aggregated)
+            {
+                eprintln!("{error}");
+                std::process::exit(1);
             }
             return;
         }
@@ -730,8 +815,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        EventStats, append_aggregate_csv, append_delta_csv, collect_run_id_metrics,
-        parse_csv_startup_event, parse_log, parse_startup_ms, summarize, summarize_delta,
+        EventStats, append_aggregate_csv, append_delta_csv, append_run_counts_csv,
+        append_run_metrics_csv, collect_run_id_metrics, parse_csv_startup_event, parse_log,
+        parse_startup_ms, summarize, summarize_delta,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -883,6 +969,31 @@ mod tests {
                 .map(|stats| stats.decode_startup_ms.clone()),
             Some(vec![80.0])
         );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn writes_run_count_and_run_metric_csv_rows() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("timestamp")
+            .as_nanos();
+        let path = PathBuf::from(format!("/tmp/playback-startup-run-modes-{unique}.csv"));
+
+        let mut counts = std::collections::BTreeMap::new();
+        counts.insert("run-a".to_string(), 4usize);
+        append_run_counts_csv(&path, &counts).expect("write run counts");
+
+        let mut stats_map = std::collections::BTreeMap::new();
+        let mut stats = EventStats::default();
+        stats.decode_startup_ms = vec![100.0, 120.0];
+        stats_map.insert("run-a".to_string(), stats);
+        append_run_metrics_csv(&path, &stats_map).expect("write run metrics");
+
+        let contents = fs::read_to_string(&path).expect("read csv");
+        assert!(contents.contains(",run_count,"));
+        assert!(contents.contains(",run_metric,"));
 
         let _ = fs::remove_file(path);
     }
