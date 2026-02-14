@@ -190,6 +190,17 @@ fn build_clip_offsets_lookup(project: &ProjectConfiguration) -> HashMap<u32, Cli
         .collect()
 }
 
+fn send_watch_u32_if_changed(tx: &watch::Sender<u32>, value: u32) {
+    let _ = tx.send_if_modified(|current| {
+        if *current == value {
+            false
+        } else {
+            *current = value;
+            true
+        }
+    });
+}
+
 impl Playback {
     pub async fn start(
         mut self,
@@ -642,15 +653,8 @@ impl Playback {
                         first_frame_time = None;
                         warmup_start = Instant::now();
                         let _ = seek_generation_tx.send(seek_generation);
-                        let _ = frame_request_tx.send_if_modified(|requested| {
-                            if *requested == frame_number {
-                                false
-                            } else {
-                                *requested = frame_number;
-                                true
-                            }
-                        });
-                        let _ = playback_position_tx.send(frame_number);
+                        send_watch_u32_if_changed(&frame_request_tx, frame_number);
+                        send_watch_u32_if_changed(&playback_position_tx, frame_number);
                         if has_audio
                             && audio_playhead_tx
                                 .send(frame_number as f64 / fps_f64)
@@ -685,15 +689,8 @@ impl Playback {
                     prefetch_buffer.clear();
                     frame_cache.clear();
                     let _ = seek_generation_tx.send(seek_generation);
-                    let _ = frame_request_tx.send_if_modified(|requested| {
-                        if *requested == frame_number {
-                            false
-                        } else {
-                            *requested = frame_number;
-                            true
-                        }
-                    });
-                    let _ = playback_position_tx.send(frame_number);
+                    send_watch_u32_if_changed(&frame_request_tx, frame_number);
+                    send_watch_u32_if_changed(&playback_position_tx, frame_number);
                     if has_audio
                         && audio_playhead_tx
                             .send(frame_number as f64 / fps_f64)
@@ -730,15 +727,8 @@ impl Playback {
                         prefetch_buffer.clear();
                         frame_cache.clear();
                         let _ = seek_generation_tx.send(seek_generation);
-                        let _ = frame_request_tx.send_if_modified(|requested| {
-                            if *requested == frame_number {
-                                false
-                            } else {
-                                *requested = frame_number;
-                                true
-                            }
-                        });
-                        let _ = playback_position_tx.send(frame_number);
+                        send_watch_u32_if_changed(&frame_request_tx, frame_number);
+                        send_watch_u32_if_changed(&playback_position_tx, frame_number);
                         if has_audio
                             && audio_playhead_tx
                                 .send(frame_number as f64 / fps_f64)
@@ -839,14 +829,7 @@ impl Playback {
                                 }
                             }
                         } else if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
-                            let _ = frame_request_tx.send_if_modified(|requested| {
-                                if *requested == frame_number {
-                                    false
-                                } else {
-                                    *requested = frame_number;
-                                    true
-                                }
-                            });
+                            send_watch_u32_if_changed(&frame_request_tx, frame_number);
 
                             let wait_result =
                                 tokio::time::timeout(frame_fetch_timeout, prefetch_rx.recv()).await;
@@ -1039,14 +1022,7 @@ impl Playback {
                         skip_events = skip_events.saturating_add(1);
 
                         prune_prefetch_buffer_before_frame(&mut prefetch_buffer, frame_number);
-                        let _ = frame_request_tx.send_if_modified(|requested| {
-                            if *requested == frame_number {
-                                false
-                            } else {
-                                *requested = frame_number;
-                                true
-                            }
-                        });
+                        send_watch_u32_if_changed(&frame_request_tx, frame_number);
                         let _ = playback_position_tx.send(frame_number);
                         if has_audio
                             && audio_playhead_tx
