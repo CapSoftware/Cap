@@ -269,11 +269,7 @@ export function createImageDataWS(
 		worker.onmessage = null;
 		worker.terminate();
 
-		if (strideWorker) {
-			strideWorker.onmessage = null;
-			strideWorker.terminate();
-			strideWorker = null;
-		}
+		teardownStrideWorker();
 
 		pendingFrame = null;
 		nextFrame = null;
@@ -314,6 +310,61 @@ export function createImageDataWS(
 		setIsConnected(false);
 	}
 
+	function teardownStrideWorker() {
+		if (!strideWorker) return;
+		strideWorker.onmessage = null;
+		strideWorker.terminate();
+		strideWorker = null;
+	}
+
+	function setupStrideWorker() {
+		if (strideWorker) return;
+		const createdWorker = new StrideCorrectionWorker();
+		createdWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
+			if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
+
+			const { buffer, width, height, frameNumber } = e.data;
+			const responseOrderDecision = decideFrameOrder(
+				frameNumber,
+				lastDirectRenderedFrameNumber,
+				FRAME_ORDER_STALE_WINDOW,
+			);
+			if (responseOrderDecision.action === "drop") {
+				directOutOfOrderDropsTotal += responseOrderDecision.dropsIncrement;
+				directOutOfOrderDropsWindow += responseOrderDecision.dropsIncrement;
+				directResponseOutOfOrderDropsTotal +=
+					responseOrderDecision.dropsIncrement;
+				directResponseOutOfOrderDropsWindow +=
+					responseOrderDecision.dropsIncrement;
+				return;
+			}
+			lastDirectRenderedFrameNumber =
+				responseOrderDecision.nextLatestFrameNumber;
+
+			if (directCanvas.width !== width || directCanvas.height !== height) {
+				directCanvas.width = width;
+				directCanvas.height = height;
+			}
+
+			const frameData = new Uint8ClampedArray(buffer);
+			if (
+				!cachedStrideImageData ||
+				cachedStrideWidth !== width ||
+				cachedStrideHeight !== height
+			) {
+				cachedStrideImageData = new ImageData(width, height);
+				cachedStrideWidth = width;
+				cachedStrideHeight = height;
+			}
+			cachedStrideImageData.data.set(frameData);
+			directCtx.putImageData(cachedStrideImageData, 0, 0);
+
+			storeRenderedFrame(cachedStrideImageData.data, width, height, width * 4);
+			onmessage({ width, height });
+		};
+		strideWorker = createdWorker;
+	}
+
 	const canvasControls: CanvasControls = {
 		initCanvas: (canvas: OffscreenCanvas) => {
 			worker.postMessage({ type: "init-canvas", canvas }, [canvas]);
@@ -330,6 +381,7 @@ export function createImageDataWS(
 					disposeWebGPU(mainThreadWebGPU);
 					mainThreadWebGPU = null;
 				}
+				teardownStrideWorker();
 				directCtx = null;
 				mainThreadWebGPUInitializing = false;
 				latestQueuedFrameNumber = null;
@@ -347,6 +399,7 @@ export function createImageDataWS(
 							.then((renderer) => {
 								mainThreadWebGPU = renderer;
 								mainThreadWebGPUInitializing = false;
+								teardownStrideWorker();
 								onRequestFrame?.();
 							})
 							.catch((e) => {
@@ -354,65 +407,22 @@ export function createImageDataWS(
 								console.error("[Socket] Main thread WebGPU init failed:", e);
 								directCtx =
 									directCanvas?.getContext("2d", { alpha: false }) ?? null;
+								if (directCtx) {
+									setupStrideWorker();
+								}
 								onRequestFrame?.();
 							});
 					} else {
 						mainThreadWebGPUInitializing = false;
 						directCtx =
 							directCanvas?.getContext("2d", { alpha: false }) ?? null;
+						if (directCtx) {
+							setupStrideWorker();
+						}
 						onRequestFrame?.();
 					}
 				});
 			}
-
-			strideWorker = new StrideCorrectionWorker();
-			strideWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
-				if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
-
-				const { buffer, width, height, frameNumber } = e.data;
-				const responseOrderDecision = decideFrameOrder(
-					frameNumber,
-					lastDirectRenderedFrameNumber,
-					FRAME_ORDER_STALE_WINDOW,
-				);
-				if (responseOrderDecision.action === "drop") {
-					directOutOfOrderDropsTotal += responseOrderDecision.dropsIncrement;
-					directOutOfOrderDropsWindow += responseOrderDecision.dropsIncrement;
-					directResponseOutOfOrderDropsTotal +=
-						responseOrderDecision.dropsIncrement;
-					directResponseOutOfOrderDropsWindow +=
-						responseOrderDecision.dropsIncrement;
-					return;
-				}
-				lastDirectRenderedFrameNumber =
-					responseOrderDecision.nextLatestFrameNumber;
-
-				if (directCanvas.width !== width || directCanvas.height !== height) {
-					directCanvas.width = width;
-					directCanvas.height = height;
-				}
-
-				const frameData = new Uint8ClampedArray(buffer);
-				if (
-					!cachedStrideImageData ||
-					cachedStrideWidth !== width ||
-					cachedStrideHeight !== height
-				) {
-					cachedStrideImageData = new ImageData(width, height);
-					cachedStrideWidth = width;
-					cachedStrideHeight = height;
-				}
-				cachedStrideImageData.data.set(frameData);
-				directCtx.putImageData(cachedStrideImageData, 0, 0);
-
-				storeRenderedFrame(
-					cachedStrideImageData.data,
-					width,
-					height,
-					width * 4,
-				);
-				onmessage({ width, height });
-			};
 		},
 		resetFrameState: () => {
 			latestQueuedFrameNumber = null;

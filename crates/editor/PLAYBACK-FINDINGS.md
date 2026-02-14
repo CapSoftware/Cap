@@ -3201,6 +3201,43 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (direct stride-worker lifecycle tightening)
+
+**Goal**: Reduce direct-path worker overhead by avoiding unnecessary stride-correction workers and preventing worker leaks across direct canvas re-inits
+
+**What was done**:
+1. Added explicit stride-worker setup/teardown helpers in socket transport.
+2. Removed unconditional stride-worker creation from `initDirectCanvas`.
+3. Created stride worker only when canvas2d direct path is active.
+4. Added teardown when WebGPU direct path initializes successfully and during canvas swaps.
+5. Re-ran desktop typecheck and utility tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - added:
+    - `setupStrideWorker()`
+    - `teardownStrideWorker()`
+  - `cleanup()` now uses shared teardown helper
+  - `initDirectCanvas()` now:
+    - tears down stale worker on canvas switch
+    - initializes stride worker only when `directCtx` exists
+    - tears down stride worker when WebGPU direct init succeeds
+  - removed unconditional worker construction path
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Direct path no longer allocates stride-correction worker when WebGPU direct rendering is active.
+- ✅ Re-init paths now explicitly tear down old stride workers before replacement.
+- ✅ Desktop typecheck and utility suite pass (30/30).
+
+**Stopping point**: Ready for long editor sessions to confirm reduced worker churn and stable direct-path behavior during canvas mode transitions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
