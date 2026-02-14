@@ -1013,17 +1013,20 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 1. Extended `scrub-benchmark` with `--output-csv <path>`.
 2. Added CSV row emission for each run and one aggregate row.
 3. Embedded supersession runtime env values in each CSV row for threshold traceability.
-4. Validated export flow with 2-run 1080p and 4k benchmark passes.
+4. Added optional run labeling (`--run-label` / `CAP_SCRUB_BENCHMARK_RUN_LABEL`) in CSV output.
+5. Validated export flow with labeled and unlabeled benchmark passes.
 
 **Changes Made**:
 - `crates/editor/examples/scrub-benchmark.rs`
   - added `output_csv` config field and CLI parsing
+  - added `run_label` config field and CLI/env wiring
   - writes append-only CSV rows with run and aggregate metrics
   - includes current supersession env vars:
     - `CAP_FFMPEG_SCRUB_SUPERSEDE_DISABLED`
     - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS`
     - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS`
     - `CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES`
+    - `CAP_SCRUB_BENCHMARK_RUN_LABEL`
 - `crates/editor/PLAYBACK-BENCHMARKS.md`
   - documented CSV export usage and recorded validation benchmark sample
 
@@ -1031,10 +1034,12 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo +1.88.0 check -p cap-editor --example scrub-benchmark`
 - `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 8 --burst-size 12 --sweep-seconds 2.0 --runs 2 --output-csv /tmp/cap-scrub-benchmark.csv`
 - `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-4k60.mp4 --fps 60 --bursts 8 --burst-size 12 --sweep-seconds 2.0 --runs 2 --output-csv /tmp/cap-scrub-benchmark.csv`
+- `cargo +1.88.0 run -p cap-editor --example scrub-benchmark -- --video /tmp/cap-bench-1080p60.mp4 --fps 60 --bursts 6 --burst-size 12 --sweep-seconds 2.0 --runs 2 --output-csv /tmp/cap-scrub-labeled.csv --run-label linux-pass-a`
 
 **Results**:
 - ✅ CSV output captured run-level and aggregate metrics for both test clips.
 - ✅ Export includes supersession env values, enabling apples-to-apples threshold sweeps across machines.
+- ✅ Labeled CSV rows now support explicit machine/pass grouping without separate files.
 - ✅ No request failures in validation passes.
 
 **Stopping point**: macOS and Windows scrub passes can now produce directly comparable CSV artifacts without manual copy/paste from terminal output.

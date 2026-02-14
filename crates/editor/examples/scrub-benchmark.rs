@@ -16,6 +16,7 @@ struct Config {
     sweep_seconds: f32,
     runs: usize,
     output_csv: Option<PathBuf>,
+    run_label: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -241,6 +242,15 @@ fn scrub_env_value(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
 }
 
+fn scrub_run_label(config: &Config) -> String {
+    config
+        .run_label
+        .as_ref()
+        .cloned()
+        .or_else(|| std::env::var("CAP_SCRUB_BENCHMARK_RUN_LABEL").ok())
+        .unwrap_or_default()
+}
+
 fn write_csv(
     path: &PathBuf,
     config: &Config,
@@ -259,6 +269,7 @@ fn write_csv(
             "timestamp_ms",
             "scope",
             "run_index",
+            "run_label",
             "video",
             "fps",
             "bursts",
@@ -294,8 +305,10 @@ fn write_csv(
     let supersede_min_pixels = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_PIXELS");
     let supersede_min_requests = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_REQUESTS");
     let supersede_min_span_frames = scrub_env_value("CAP_FFMPEG_SCRUB_SUPERSEDE_MIN_SPAN_FRAMES");
+    let run_label = scrub_run_label(config);
     let common_prefix = format!(
-        "{timestamp_ms},{{scope}},{{run_index}},\"{}\",{},{},{},{:.3},{},\"{}\",\"{}\",\"{}\",\"{}\"",
+        "{timestamp_ms},{{scope}},{{run_index}},\"{}\",\"{}\",{},{},{},{:.3},{},\"{}\",\"{}\",\"{}\",\"{}\"",
+        run_label,
         config.video_path.display(),
         config.fps,
         config.bursts,
@@ -397,6 +410,7 @@ fn parse_args() -> Result<Config, String> {
     let mut sweep_seconds = 2.0f32;
     let mut runs = 1usize;
     let mut output_csv: Option<PathBuf> = None;
+    let mut run_label: Option<String> = None;
 
     let mut index = 1usize;
     while index < args.len() {
@@ -460,9 +474,16 @@ fn parse_args() -> Result<Config, String> {
                 }
                 output_csv = Some(PathBuf::from(&args[index]));
             }
+            "--run-label" => {
+                index += 1;
+                if index >= args.len() {
+                    return Err("missing value for --run-label".to_string());
+                }
+                run_label = Some(args[index].clone());
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: scrub-benchmark --video <path> [--fps <n>] [--bursts <n>] [--burst-size <n>] [--sweep-seconds <n>] [--runs <n>] [--output-csv <path>]"
+                    "Usage: scrub-benchmark --video <path> [--fps <n>] [--bursts <n>] [--burst-size <n>] [--sweep-seconds <n>] [--runs <n>] [--output-csv <path>] [--run-label <label>]"
                 );
                 std::process::exit(0);
             }
@@ -501,6 +522,7 @@ fn parse_args() -> Result<Config, String> {
         sweep_seconds,
         runs,
         output_csv,
+        run_label,
     })
 }
 

@@ -100,6 +100,9 @@ cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4
 
 # Export per-run and aggregate scrub metrics to CSV
 cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --runs 3 --output-csv /tmp/cap-scrub-benchmark.csv
+
+# Add explicit run label for cross-machine comparisons
+cargo run -p cap-editor --example scrub-benchmark -- --video /path/to/video.mp4 --runs 3 --output-csv /tmp/cap-scrub-benchmark.csv --run-label windows-pass-1
 ```
 
 #### Playback Startup Latency Report (log analysis)
@@ -258,6 +261,17 @@ cargo run -p cap-recording --example playback-test-runner -- full
   - 1080p random access avg **116.73ms**, p95 **369.84ms**
   - 4k random access avg **522.27ms**, p95 **1514.02ms**
   - follow-up 4k run: random access avg **537.60ms** and **522.27ms** (variance envelope maintained)
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (scrub CSV run-label tagging)
+
+**Environment:** Linux runner, synthetic 1080p60 MP4  
+**Command:** `scrub-benchmark --runs 2 --output-csv /tmp/cap-scrub-labeled.csv --run-label linux-pass-a`
+
+#### Result
+- Successful requests: **144**, failures: **0**
+- Median all-request latency: avg **199.01ms**, p95 **410.34ms**
+- Median last-request latency: avg **213.93ms**, p95 **410.34ms**
+- CSV output now includes `run_label` column across run and aggregate rows, enabling direct cross-machine merge and grouping.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 
