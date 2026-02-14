@@ -132,6 +132,9 @@ cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback
 # List run-id sample counts discovered in startup CSV logs
 cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-runs
 
+# List per-run startup metric summaries (avg/p95 by event)
+cargo run -p cap-editor --example playback-startup-report -- --log /tmp/playback-startup.csv --list-run-metrics
+
 # Aggregate multiple session logs
 cargo run -p cap-editor --example playback-startup-report -- --log /path/to/macos.log --log /path/to/windows.log
 
@@ -222,6 +225,18 @@ cargo run -p cap-recording --example playback-test-runner -- full
 - CLI smoke run:
   - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --output-csv /tmp/playback-startup-summary.csv`
   - output CSV schema verified with header row.
+
+### Benchmark Run: 2026-02-14 00:00:00 UTC (startup run-metrics listing)
+
+**Environment:** Linux runner, startup report parser validation  
+**Commands:** `playback-startup-report --list-run-metrics`, `cargo test -p cap-editor --example playback-startup-report`
+
+#### Validation
+- Added `--list-run-metrics` mode to print per-run startup metric summaries (avg/p95/samples per event).
+- Unit tests now include run-metrics aggregation path (**9 passed** total in example target).
+- CLI smoke run:
+  - `cargo run -p cap-editor --example playback-startup-report -- --log crates/editor/PLAYBACK-BENCHMARKS.md --list-run-metrics`
+  - confirms mode execution path and empty-run handling output.
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC (supersession span retune to 20)
 

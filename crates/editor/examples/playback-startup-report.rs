@@ -244,6 +244,41 @@ fn collect_run_id_counts(path: &PathBuf) -> Result<BTreeMap<String, usize>, Stri
     Ok(counts)
 }
 
+fn collect_run_id_metrics(path: &PathBuf) -> Result<BTreeMap<String, EventStats>, String> {
+    let file = File::open(path).map_err(|error| format!("open {} / {error}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut metrics = BTreeMap::<String, EventStats>::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("read {} / {error}", path.display()))?;
+        if let Some((event, startup_ms, run_id)) = parse_csv_startup_event(&line)
+            && let Some(run_id) = run_id
+        {
+            let stats = metrics.entry(run_id.to_string()).or_default();
+            match event {
+                "first_decoded_frame" => stats.decode_startup_ms.push(startup_ms),
+                "first_rendered_frame" => stats.render_startup_ms.push(startup_ms),
+                "audio_streaming_callback" => stats.audio_stream_startup_ms.push(startup_ms),
+                "audio_prerender_callback" => stats.audio_prerender_startup_ms.push(startup_ms),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(metrics)
+}
+
+fn metric_brief(values: &[f64]) -> String {
+    summarize(values)
+        .map(|summary| {
+            format!(
+                "samples={} avg={:.2}ms p95={:.2}ms",
+                summary.samples, summary.avg, summary.p95
+            )
+        })
+        .unwrap_or_else(|| "samples=0".to_string())
+}
+
 fn write_csv_header(path: &PathBuf, file: &mut File) -> Result<(), String> {
     if path.exists() && path.metadata().map(|meta| meta.len()).unwrap_or(0) > 0 {
         return Ok(());
@@ -350,7 +385,7 @@ fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "Usage: playback-startup-report [--log <path> ...] [--run-id <id>] [--list-runs] [--output-csv <path>] [--baseline-log <path> ... --candidate-log <path> ...] [--baseline-run-id <id>] [--candidate-run-id <id>]"
+            "Usage: playback-startup-report [--log <path> ...] [--run-id <id>] [--list-runs] [--list-run-metrics] [--output-csv <path>] [--baseline-log <path> ... --candidate-log <path> ...] [--baseline-run-id <id>] [--candidate-run-id <id>]"
         );
         std::process::exit(1);
     }
@@ -362,6 +397,7 @@ fn main() {
     let mut baseline_run_id: Option<String> = None;
     let mut candidate_run_id: Option<String> = None;
     let mut list_runs = false;
+    let mut list_run_metrics = false;
     let mut output_csv: Option<PathBuf> = None;
     let mut index = 0usize;
 
@@ -426,6 +462,11 @@ fn main() {
                 index += 1;
                 continue;
             }
+            "--list-run-metrics" => {
+                list_run_metrics = true;
+                index += 1;
+                continue;
+            }
             "--output-csv" => {
                 if let Some(value) = args.get(index + 1) {
                     output_csv = Some(PathBuf::from(value));
@@ -457,6 +498,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    if list_run_metrics && (!baseline_logs.is_empty() || !candidate_logs.is_empty()) {
+        eprintln!("--list-run-metrics supports only --log inputs");
+        std::process::exit(1);
+    }
+
     if baseline_logs.is_empty() && baseline_run_id.is_some() {
         eprintln!("--baseline-run-id requires --baseline-log");
         std::process::exit(1);
@@ -468,6 +514,48 @@ fn main() {
     }
 
     if !logs.is_empty() {
+        if list_run_metrics {
+            let mut aggregated = BTreeMap::<String, EventStats>::new();
+            for log in &logs {
+                match collect_run_id_metrics(log) {
+                    Ok(metrics) => {
+                        for (run_id_key, stats) in metrics {
+                            let entry = aggregated.entry(run_id_key).or_default();
+                            entry.decode_startup_ms.extend(stats.decode_startup_ms);
+                            entry.render_startup_ms.extend(stats.render_startup_ms);
+                            entry
+                                .audio_stream_startup_ms
+                                .extend(stats.audio_stream_startup_ms);
+                            entry
+                                .audio_prerender_startup_ms
+                                .extend(stats.audio_prerender_startup_ms);
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            println!("Startup trace run-id metrics");
+            if aggregated.is_empty() {
+                println!("no run ids found");
+            } else {
+                for (run_id_key, stats) in aggregated {
+                    println!(
+                        "{}: decoded[{}] rendered[{}] audio_stream[{}] audio_prerender[{}]",
+                        run_id_key,
+                        metric_brief(&stats.decode_startup_ms),
+                        metric_brief(&stats.render_startup_ms),
+                        metric_brief(&stats.audio_stream_startup_ms),
+                        metric_brief(&stats.audio_prerender_startup_ms),
+                    );
+                }
+            }
+            return;
+        }
+
         if list_runs {
             let mut aggregated = BTreeMap::<String, usize>::new();
             for log in &logs {
@@ -642,8 +730,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        EventStats, append_aggregate_csv, append_delta_csv, parse_csv_startup_event, parse_log,
-        parse_startup_ms, summarize, summarize_delta,
+        EventStats, append_aggregate_csv, append_delta_csv, collect_run_id_metrics,
+        parse_csv_startup_event, parse_log, parse_startup_ms, summarize, summarize_delta,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -762,6 +850,39 @@ mod tests {
         assert!(rows[0].contains("timestamp_ms,mode,metric"));
         assert!(rows[1].contains("aggregate"));
         assert!(rows[2].contains("delta"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn collects_run_id_metrics() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("timestamp")
+            .as_nanos();
+        let path = PathBuf::from(format!("/tmp/playback-startup-metrics-{unique}.csv"));
+        let contents = [
+            "1739530000000,first_decoded_frame,100.0,1,run-a",
+            "1739530000001,first_rendered_frame,120.0,1,run-a",
+            "1739530000002,first_decoded_frame,80.0,1,run-b",
+        ]
+        .join("\n");
+        fs::write(&path, contents).expect("write startup csv");
+
+        let metrics = collect_run_id_metrics(&path).expect("collect run metrics");
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(
+            metrics
+                .get("run-a")
+                .map(|stats| stats.decode_startup_ms.clone()),
+            Some(vec![100.0])
+        );
+        assert_eq!(
+            metrics
+                .get("run-b")
+                .map(|stats| stats.decode_startup_ms.clone()),
+            Some(vec![80.0])
+        );
 
         let _ = fs::remove_file(path);
     }
