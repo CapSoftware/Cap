@@ -360,14 +360,14 @@ cargo run -p cap-recording --example playback-test-runner -- full
 **Commands:** `scrub-csv-report`, `cargo test -p cap-editor --example scrub-csv-report`
 
 #### Validation
-- New utility parses scrub benchmark CSV aggregate rows and reports median summaries by run label.
+- New utility parses scrub benchmark CSV aggregate rows and reports median summaries by run label + video.
 - Smoke run against labeled CSV:
   - `cargo run -p cap-editor --example scrub-csv-report -- --csv /tmp/cap-scrub-labeled.csv --label linux-pass-a`
   - output summary:
     - all_avg **199.01ms**
     - last_avg **213.93ms**
     - successful **144**, failed **0**
-- Unit tests: **2 passed** (`parses_aggregate_csv_line`, `summarizes_medians`).
+- Unit tests: **3 passed** (`parses_aggregate_csv_line`, `summarizes_medians`, `groups_rows_by_label_and_video`).
 
 ### Benchmark Run: 2026-02-14 00:00:00 UTC
 

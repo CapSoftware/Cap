@@ -91,9 +91,9 @@ fn parse_csv_file(path: &PathBuf) -> Result<Vec<ScrubCsvRow>, String> {
         .collect())
 }
 
-fn print_summary(label: &str, summary: Summary) {
+fn print_summary(label: &str, video: &str, summary: Summary) {
     println!(
-        "{label}: samples={} all_avg={:.2}ms all_p95={:.2}ms last_avg={:.2}ms last_p95={:.2}ms successful={} failed={}",
+        "{label} video={video}: samples={} all_avg={:.2}ms all_p95={:.2}ms last_avg={:.2}ms last_p95={:.2}ms successful={} failed={}",
         summary.samples,
         summary.all_avg_ms,
         summary.all_p95_ms,
@@ -104,14 +104,34 @@ fn print_summary(label: &str, summary: Summary) {
     );
 }
 
-fn print_delta(baseline_label: &str, baseline: Summary, candidate_label: &str, candidate: Summary) {
+fn print_delta(
+    baseline_label: &str,
+    baseline: Summary,
+    candidate_label: &str,
+    candidate: Summary,
+    video: &str,
+) {
     println!(
-        "delta({candidate_label}-{baseline_label}): all_avg={:+.2}ms all_p95={:+.2}ms last_avg={:+.2}ms last_p95={:+.2}ms",
+        "delta({candidate_label}-{baseline_label}) video={video}: all_avg={:+.2}ms all_p95={:+.2}ms last_avg={:+.2}ms last_p95={:+.2}ms",
         candidate.all_avg_ms - baseline.all_avg_ms,
         candidate.all_p95_ms - baseline.all_p95_ms,
         candidate.last_avg_ms - baseline.last_avg_ms,
         candidate.last_p95_ms - baseline.last_p95_ms
     );
+}
+
+fn group_by_label_and_video(
+    rows: &[ScrubCsvRow],
+) -> std::collections::BTreeMap<(String, String), Vec<ScrubCsvRow>> {
+    rows.iter().fold(
+        std::collections::BTreeMap::<(String, String), Vec<ScrubCsvRow>>::new(),
+        |mut acc, row| {
+            acc.entry((row.run_label.clone(), row.video.clone()))
+                .or_default()
+                .push(row.clone());
+            acc
+        },
+    )
 }
 
 fn main() {
@@ -195,70 +215,81 @@ fn main() {
         std::process::exit(1);
     }
 
+    let grouped_rows = group_by_label_and_video(&all_rows);
+
     if let Some(label) = label {
-        let rows = all_rows
+        let rows = grouped_rows
             .iter()
-            .filter(|row| row.run_label == label)
-            .cloned()
+            .filter(|((group_label, _), _)| group_label == &label)
+            .map(|((_, video), rows)| (video.clone(), rows.clone()))
             .collect::<Vec<_>>();
         if rows.is_empty() {
             eprintln!("No rows found for label: {label}");
             std::process::exit(1);
         }
-        if let Some(video) = rows.first().map(|row| row.video.clone()) {
-            println!("video={video}");
-        }
-        if let Some(summary) = summarize(&rows) {
-            print_summary(&label, summary);
+        for (video, rows) in rows {
+            if let Some(summary) = summarize(&rows) {
+                print_summary(&label, &video, summary);
+            }
         }
     } else {
-        let groups = all_rows.iter().fold(
-            std::collections::BTreeMap::<String, Vec<ScrubCsvRow>>::new(),
-            |mut acc, row| {
-                acc.entry(row.run_label.clone())
-                    .or_default()
-                    .push(row.clone());
-                acc
-            },
-        );
-        for (group_label, rows) in groups {
+        for ((group_label, video), rows) in grouped_rows.clone() {
             if let Some(summary) = summarize(&rows) {
-                print_summary(&group_label, summary);
+                print_summary(&group_label, &video, summary);
             }
         }
     }
 
     if let (Some(baseline_label), Some(candidate_label)) = (baseline_label, candidate_label) {
-        let baseline_rows = all_rows
+        let baseline_groups = grouped_rows
             .iter()
-            .filter(|row| row.run_label == baseline_label)
-            .cloned()
-            .collect::<Vec<_>>();
-        let candidate_rows = all_rows
+            .filter(|((label_key, _), _)| label_key == &baseline_label)
+            .map(|((_, video), rows)| (video.clone(), rows.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let candidate_groups = grouped_rows
             .iter()
-            .filter(|row| row.run_label == candidate_label)
-            .cloned()
-            .collect::<Vec<_>>();
-        let Some(baseline_summary) = summarize(&baseline_rows) else {
+            .filter(|((label_key, _), _)| label_key == &candidate_label)
+            .map(|((_, video), rows)| (video.clone(), rows.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if baseline_groups.is_empty() {
             eprintln!("No rows found for baseline label: {baseline_label}");
             std::process::exit(1);
-        };
-        let Some(candidate_summary) = summarize(&candidate_rows) else {
+        }
+        if candidate_groups.is_empty() {
             eprintln!("No rows found for candidate label: {candidate_label}");
             std::process::exit(1);
-        };
-        print_delta(
-            &baseline_label,
-            baseline_summary,
-            &candidate_label,
-            candidate_summary,
-        );
+        }
+
+        let mut printed = false;
+        for (video, baseline_rows) in baseline_groups {
+            let Some(candidate_rows) = candidate_groups.get(&video) else {
+                continue;
+            };
+            let Some(baseline_summary) = summarize(&baseline_rows) else {
+                continue;
+            };
+            let Some(candidate_summary) = summarize(candidate_rows) else {
+                continue;
+            };
+            print_delta(
+                &baseline_label,
+                baseline_summary,
+                &candidate_label,
+                candidate_summary,
+                &video,
+            );
+            printed = true;
+        }
+        if !printed {
+            eprintln!("No overlapping videos found between baseline and candidate labels");
+            std::process::exit(1);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_csv_line, summarize};
+    use super::{group_by_label_and_video, parse_csv_line, summarize};
 
     #[test]
     fn parses_aggregate_csv_line() {
@@ -313,5 +344,37 @@ mod tests {
         assert!((summary.last_avg_ms - 28.0).abs() < f64::EPSILON);
         assert_eq!(summary.successful_requests, 30);
         assert_eq!(summary.failed_requests, 1);
+    }
+
+    #[test]
+    fn groups_rows_by_label_and_video() {
+        let rows = vec![
+            super::ScrubCsvRow {
+                scope: "aggregate".to_string(),
+                run_label: "label-a".to_string(),
+                video: "video-1".to_string(),
+                all_avg_ms: 10.0,
+                all_p95_ms: 20.0,
+                last_avg_ms: 30.0,
+                last_p95_ms: 40.0,
+                successful_requests: 10,
+                failed_requests: 0,
+            },
+            super::ScrubCsvRow {
+                scope: "aggregate".to_string(),
+                run_label: "label-a".to_string(),
+                video: "video-2".to_string(),
+                all_avg_ms: 12.0,
+                all_p95_ms: 24.0,
+                last_avg_ms: 28.0,
+                last_p95_ms: 42.0,
+                successful_requests: 12,
+                failed_requests: 0,
+            },
+        ];
+        let groups = group_by_label_and_video(&rows);
+        assert_eq!(groups.len(), 2);
+        assert!(groups.contains_key(&("label-a".to_string(), "video-1".to_string())));
+        assert!(groups.contains_key(&("label-a".to_string(), "video-2".to_string())));
     }
 }
