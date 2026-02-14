@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
-    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
+    DecodedSegmentFrames, FrameRenderer, Nv12RenderedFrame, ProjectRecordingsMeta, ProjectUniforms,
     RenderVideoConstants, RenderedFrame, RendererLayers,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -21,9 +21,14 @@ pub enum RendererMessage {
     },
 }
 
+pub enum EditorFrameOutput {
+    Rgba(RenderedFrame),
+    Nv12(Nv12RenderedFrame),
+}
+
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+    frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
     render_constants: Arc<RenderVideoConstants>,
     #[allow(unused)]
     total_frames: u32,
@@ -36,7 +41,7 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+        frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> Result<RendererHandle, String> {
@@ -143,7 +148,7 @@ impl Renderer {
                 }
             }
             match frame_renderer
-                .render(
+                .render_nv12(
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,
@@ -152,7 +157,7 @@ impl Renderer {
                 .await
             {
                 Ok(frame) => {
-                    (self.frame_cb)(frame);
+                    (self.frame_cb)(EditorFrameOutput::Nv12(frame));
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to render frame in editor");

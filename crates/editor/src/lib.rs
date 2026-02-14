@@ -1,5 +1,5 @@
 mod audio;
-mod editor;
+pub mod editor;
 mod editor_instance;
 mod playback;
 mod segments;

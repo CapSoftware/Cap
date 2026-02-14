@@ -231,7 +231,10 @@ pub struct PendingNv12Readback {
 }
 
 impl PendingNv12Readback {
-    pub async fn wait(mut self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+    pub async fn wait(
+        mut self,
+        device: &wgpu::Device,
+    ) -> Result<Nv12RenderedFrame, RenderingError> {
         let mut poll_count = 0u32;
         let start_time = Instant::now();
         let timeout_duration = std::time::Duration::from_secs(GPU_BUFFER_WAIT_TIMEOUT_SECS);
@@ -746,6 +749,48 @@ pub async fn finish_encoder(
         .expect("just submitted a readback");
 
     pending.wait(device).await
+}
+
+pub async fn finish_encoder_nv12(
+    session: &mut RenderSession,
+    nv12_converter: &mut RgbaToNv12Converter,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    uniforms: &ProjectUniforms,
+    mut encoder: wgpu::CommandEncoder,
+) -> Result<Nv12RenderedFrame, RenderingError> {
+    let width = uniforms.output_size.0;
+    let height = uniforms.output_size.1;
+
+    let texture = if session.current_is_left {
+        &session.textures.0
+    } else {
+        &session.textures.1
+    };
+
+    if let Some(pending) = nv12_converter.convert_and_readback(
+        device,
+        queue,
+        &mut encoder,
+        texture,
+        width,
+        height,
+        uniforms.frame_number,
+        uniforms.frame_rate,
+    ) {
+        queue.submit(std::iter::once(encoder.finish()));
+        pending.wait(device).await
+    } else {
+        let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
+        Ok(Nv12RenderedFrame {
+            data: rgba_frame.data,
+            width: rgba_frame.width,
+            height: rgba_frame.height,
+            y_stride: rgba_frame.padded_bytes_per_row,
+            frame_number: rgba_frame.frame_number,
+            target_time_ns: rgba_frame.target_time_ns,
+        })
+    }
 }
 
 pub async fn flush_pending_readback(
