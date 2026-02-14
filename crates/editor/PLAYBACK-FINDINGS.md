@@ -2141,6 +2141,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (single-slot worker queue compaction)
+
+**Goal**: Minimize worker queue churn and stale-frame processing by compacting queued frames to a single latest sample across render modes
+
+**What was done**:
+1. Added shared queue-clearing helper that releases pending borrowed WebGPU frames safely.
+2. Updated frame enqueue path to clear existing queued entries before pushing the new frame in both WebGPU/pending and canvas modes.
+3. Removed unused fixed queue-size constant and migrated reset/cleanup paths to shared queue-clearing helper.
+4. Re-ran desktop typecheck and targeted transport tests.
+
+**Changes Made**:
+- `apps/desktop/src/utils/frame-worker.ts`
+  - added `clearQueuedFrames()` helper
+  - `queueFrameFromBytes` now compacts to a single latest frame by clearing existing queue before push
+  - removed `FRAME_QUEUE_SIZE` constant and old shift-based queue trimming
+  - reset/cleanup paths now call `clearQueuedFrames()`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+- `pnpm --dir apps/desktop exec biome format --write src/utils/frame-worker.ts`
+
+**Results**:
+- ✅ Worker queue now keeps only latest frame payload, reducing stale-frame backlog and queue maintenance overhead.
+- ✅ WebGPU borrowed-frame releases remain correctly handled through centralized queue clear logic.
+- ✅ Desktop typecheck and targeted transport tests pass.
+
+**Stopping point**: Ready for sustained playback validation to confirm queue compaction reduces worker overhead under bursty transport conditions.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

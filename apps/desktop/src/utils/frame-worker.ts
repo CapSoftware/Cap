@@ -142,7 +142,6 @@ let lastRawFrameHeight = 0;
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
 
-const FRAME_QUEUE_SIZE = 5;
 let frameQueue: PendingFrame[] = [];
 let _rafId: number | null = null;
 let rafRunning = false;
@@ -292,6 +291,15 @@ function drainAndQueueLatestSharedFrame(
 	return true;
 }
 
+function clearQueuedFrames() {
+	for (const queued of frameQueue) {
+		if (queued.mode === "webgpu" && queued.releaseCallback) {
+			queued.releaseCallback();
+		}
+	}
+	frameQueue = [];
+}
+
 function queueFrameFromBytes(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
@@ -307,12 +315,7 @@ function queueFrameFromBytes(
 	const timing: FrameTiming = { frameNumber, targetTimeNs };
 
 	if (renderMode === "webgpu" || renderMode === "pending") {
-		for (const queued of frameQueue) {
-			if (queued.mode === "webgpu" && queued.releaseCallback) {
-				queued.releaseCallback();
-			}
-		}
-		frameQueue = frameQueue.filter((f) => f.mode !== "webgpu");
+		clearQueuedFrames();
 
 		const metadataSize = 24;
 		const frameData = new Uint8ClampedArray(
@@ -374,10 +377,7 @@ function queueFrameFromBytes(
 		lastImageData = cachedImageData;
 
 		releaseCallback?.();
-
-		while (frameQueue.length >= FRAME_QUEUE_SIZE) {
-			frameQueue.shift();
-		}
+		clearQueuedFrames();
 
 		frameQueue.push({
 			mode: "canvas2d",
@@ -616,12 +616,7 @@ function stopRenderLoop() {
 
 function cleanup() {
 	stopRenderLoop();
-	for (const frame of frameQueue) {
-		if (frame.mode === "webgpu" && frame.releaseCallback) {
-			frame.releaseCallback();
-		}
-	}
-	frameQueue = [];
+	clearQueuedFrames();
 	if (webgpuRenderer) {
 		disposeWebGPU(webgpuRenderer);
 		webgpuRenderer = null;
@@ -764,12 +759,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 		lastRenderedFrameNumber = -1;
 		playbackStartTime = null;
 		playbackStartTargetTimeNs = null;
-		for (const frame of frameQueue) {
-			if (frame.mode === "webgpu" && frame.releaseCallback) {
-				frame.releaseCallback();
-			}
-		}
-		frameQueue = [];
+		clearQueuedFrames();
 		return;
 	}
 
