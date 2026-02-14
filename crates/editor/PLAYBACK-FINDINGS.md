@@ -3425,6 +3425,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-14 (direct stale-drop accounting + stride render counter fix)
+
+**Goal**: Align transport drop-rate and render FPS diagnostics with direct-path behavior, including stride-corrected direct renders
+
+**What was done**:
+1. Counted direct ingress/response stale drops in overall dropped-frame window counter.
+2. Counted stride-corrected direct renders in actual render FPS counters.
+3. Re-ran desktop typecheck and utility test suite.
+
+**Changes Made**:
+- `apps/desktop/src/utils/socket.ts`
+  - direct ingress stale drops now increment `framesDropped`
+  - direct response stale drops now increment `framesDropped`
+  - stride-correction direct render path now increments:
+    - `actualRendersCount`
+    - `renderFrameCount`
+
+**Verification**:
+- `pnpm --dir apps/desktop exec biome format --write src/utils/socket.ts`
+- `pnpm --dir apps/desktop exec tsc --noEmit`
+- `pnpm --dir apps/desktop exec vitest run src/utils/frame-transport-order.test.ts src/utils/frame-order.test.ts src/utils/frame-transport-inflight.test.ts src/utils/frame-transport-config.test.ts src/utils/frame-transport-retry.test.ts src/utils/shared-frame-buffer.test.ts`
+
+**Results**:
+- ✅ Drop-rate calculations now include direct-path stale drops.
+- ✅ Render FPS counters now include stride-corrected direct frames.
+- ✅ Desktop typecheck and utility tests pass (30/30).
+
+**Stopping point**: Ready for target-machine sessions where drop-rate and render-FPS telemetry should better match direct-path visual behavior.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

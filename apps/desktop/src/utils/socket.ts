@@ -330,6 +330,7 @@ export function createImageDataWS(
 				FRAME_ORDER_STALE_WINDOW,
 			);
 			if (responseOrderDecision.action === "drop") {
+				framesDropped += responseOrderDecision.dropsIncrement;
 				directOutOfOrderDropsTotal += responseOrderDecision.dropsIncrement;
 				directOutOfOrderDropsWindow += responseOrderDecision.dropsIncrement;
 				directResponseOutOfOrderDropsTotal +=
@@ -359,6 +360,8 @@ export function createImageDataWS(
 			cachedStrideImageData.data.set(frameData);
 			directCtx.putImageData(cachedStrideImageData, 0, 0);
 
+			actualRendersCount++;
+			renderFrameCount++;
 			storeRenderedFrame(cachedStrideImageData.data, width, height, width * 4);
 			onmessage({ width, height });
 		};
@@ -858,6 +861,7 @@ export function createImageDataWS(
 			FRAME_ORDER_STALE_WINDOW,
 		);
 		if (directOrderDecision.action === "drop") {
+			framesDropped += directOrderDecision.dropsIncrement;
 			directOutOfOrderDropsTotal += directOrderDecision.dropsIncrement;
 			directOutOfOrderDropsWindow += directOrderDecision.dropsIncrement;
 			directIngressOutOfOrderDropsTotal += directOrderDecision.dropsIncrement;
