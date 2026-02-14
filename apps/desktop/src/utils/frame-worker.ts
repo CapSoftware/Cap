@@ -4,7 +4,6 @@ import {
 	initWebGPU,
 	isWebGPUSupported,
 	renderFrameWebGPU,
-	renderNv12FrameWebGPU,
 	type WebGPURenderer,
 } from "./webgpu-renderer";
 
@@ -107,7 +106,6 @@ interface PendingFrameCanvas2D {
 
 interface PendingFrameWebGPURgba {
 	mode: "webgpu";
-	pixelFormat: "rgba";
 	data: Uint8ClampedArray;
 	width: number;
 	height: number;
@@ -116,19 +114,7 @@ interface PendingFrameWebGPURgba {
 	releaseCallback?: () => void;
 }
 
-interface PendingFrameWebGPUNv12 {
-	mode: "webgpu";
-	pixelFormat: "nv12";
-	data: Uint8ClampedArray;
-	width: number;
-	height: number;
-	yStride: number;
-	timing: FrameTiming;
-	releaseCallback?: () => void;
-}
-
-type PendingFrameWebGPU = PendingFrameWebGPURgba | PendingFrameWebGPUNv12;
-type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPU;
+type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPURgba;
 
 let workerReady = false;
 let isInitializing = false;
@@ -185,8 +171,7 @@ function tryPollSharedBuffer(): boolean {
 	return false;
 }
 
-interface FrameMetadataRgba {
-	format: "rgba";
+interface FrameMetadata {
 	width: number;
 	height: number;
 	strideBytes: number;
@@ -195,62 +180,8 @@ interface FrameMetadataRgba {
 	availableLength: number;
 }
 
-interface FrameMetadataNv12 {
-	format: "nv12";
-	width: number;
-	height: number;
-	yStride: number;
-	frameNumber: number;
-	targetTimeNs: bigint;
-	ySize: number;
-	uvSize: number;
-	totalSize: number;
-}
-
-type FrameMetadata = FrameMetadataRgba | FrameMetadataNv12;
-
-const NV12_MAGIC = 0x4e563132;
-
 function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 	if (bytes.byteLength < 24) return null;
-
-	if (bytes.byteLength >= 28) {
-		const formatOffset = bytes.byteOffset + bytes.byteLength - 4;
-		const formatView = new DataView(bytes.buffer, formatOffset, 4);
-		const formatFlag = formatView.getUint32(0, true);
-
-		if (formatFlag === NV12_MAGIC) {
-			const metadataOffset = bytes.byteOffset + bytes.byteLength - 28;
-			const meta = new DataView(bytes.buffer, metadataOffset, 28);
-			const yStride = meta.getUint32(0, true);
-			const height = meta.getUint32(4, true);
-			const width = meta.getUint32(8, true);
-			const frameNumber = meta.getUint32(12, true);
-			const targetTimeNs = meta.getBigUint64(16, true);
-
-			if (!width || !height) return null;
-
-			const ySize = yStride * height;
-			const uvSize = width * (height / 2);
-			const totalSize = ySize + uvSize;
-
-			if (bytes.byteLength - 28 < totalSize) {
-				return null;
-			}
-
-			return {
-				format: "nv12",
-				width,
-				height,
-				yStride,
-				frameNumber,
-				targetTimeNs,
-				ySize,
-				uvSize,
-				totalSize,
-			};
-		}
-	}
 
 	const metadataOffset = bytes.byteOffset + bytes.byteLength - 24;
 	const meta = new DataView(bytes.buffer, metadataOffset, 24);
@@ -274,7 +205,6 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 	}
 
 	return {
-		format: "rgba",
 		width,
 		height,
 		strideBytes,
@@ -282,62 +212,6 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 		targetTimeNs,
 		availableLength,
 	};
-}
-
-let nv12ConversionBuffer: Uint8ClampedArray | null = null;
-let nv12ConversionBufferSize = 0;
-
-function convertNv12ToRgba(
-	nv12Data: Uint8ClampedArray,
-	width: number,
-	height: number,
-	yStride: number,
-): Uint8ClampedArray {
-	const rgbaSize = width * height * 4;
-	if (!nv12ConversionBuffer || nv12ConversionBufferSize < rgbaSize) {
-		nv12ConversionBuffer = new Uint8ClampedArray(rgbaSize);
-		nv12ConversionBufferSize = rgbaSize;
-	}
-	const rgba = nv12ConversionBuffer;
-
-	const ySize = yStride * height;
-	const yPlane = nv12Data;
-	const uvPlane = nv12Data.subarray(ySize);
-	const uvStride = width;
-
-	for (let row = 0; row < height; row++) {
-		const yRowOffset = row * yStride;
-		const uvRowOffset = Math.floor(row / 2) * uvStride;
-		const rgbaRowOffset = row * width * 4;
-
-		for (let col = 0; col < width; col++) {
-			const y = yPlane[yRowOffset + col] - 16;
-
-			const uvCol = Math.floor(col / 2) * 2;
-			const u = uvPlane[uvRowOffset + uvCol] - 128;
-			const v = uvPlane[uvRowOffset + uvCol + 1] - 128;
-
-			const c = 298 * y;
-			const d = u;
-			const e = v;
-
-			let r = (c + 409 * e + 128) >> 8;
-			let g = (c - 100 * d - 208 * e + 128) >> 8;
-			let b = (c + 516 * d + 128) >> 8;
-
-			r = r < 0 ? 0 : r > 255 ? 255 : r;
-			g = g < 0 ? 0 : g > 255 ? 255 : g;
-			b = b < 0 ? 0 : b > 255 ? 255 : b;
-
-			const rgbaOffset = rgbaRowOffset + col * 4;
-			rgba[rgbaOffset] = r;
-			rgba[rgbaOffset + 1] = g;
-			rgba[rgbaOffset + 2] = b;
-			rgba[rgbaOffset + 3] = 255;
-		}
-	}
-
-	return rgba.subarray(0, rgbaSize);
 }
 
 function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
@@ -373,35 +247,13 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 
 	lastRenderedFrameNumber = frameNumber;
 
-	if (meta.format === "nv12") {
-		const frameData = new Uint8ClampedArray(
-			bytes.buffer,
-			bytes.byteOffset,
-			meta.totalSize,
-		);
-		renderNv12FrameWebGPU(
-			webgpuRenderer,
-			frameData,
-			width,
-			height,
-			meta.yStride,
-		);
-		release();
-	} else {
-		const frameData = new Uint8ClampedArray(
-			bytes.buffer,
-			bytes.byteOffset,
-			bytes.byteLength - 24,
-		).subarray(0, meta.availableLength);
-		renderFrameWebGPU(
-			webgpuRenderer,
-			frameData,
-			width,
-			height,
-			meta.strideBytes,
-		);
-		release();
-	}
+	const frameData = new Uint8ClampedArray(
+		bytes.buffer,
+		bytes.byteOffset,
+		bytes.byteLength - 24,
+	).subarray(0, meta.availableLength);
+	renderFrameWebGPU(webgpuRenderer, frameData, width, height, meta.strideBytes);
+	release();
 
 	self.postMessage({
 		type: "frame-rendered",
@@ -456,41 +308,22 @@ function queueFrameFromBytes(
 		}
 		frameQueue = frameQueue.filter((f) => f.mode !== "webgpu");
 
-		if (meta.format === "nv12") {
-			const frameData = new Uint8ClampedArray(
-				bytes.buffer,
-				bytes.byteOffset,
-				meta.totalSize,
-			);
-			frameQueue.push({
-				mode: "webgpu",
-				pixelFormat: "nv12",
-				data: frameData,
-				width,
-				height,
-				yStride: meta.yStride,
-				timing,
-				releaseCallback,
-			});
-		} else {
-			const metadataSize = 24;
-			const frameData = new Uint8ClampedArray(
-				bytes.buffer,
-				bytes.byteOffset,
-				bytes.byteLength - metadataSize,
-			);
-			frameQueue.push({
-				mode: "webgpu",
-				pixelFormat: "rgba",
-				data: frameData.subarray(0, meta.availableLength),
-				width,
-				height,
-				strideBytes: meta.strideBytes,
-				timing,
-				releaseCallback,
-			});
-		}
-	} else if (meta.format === "rgba") {
+		const metadataSize = 24;
+		const frameData = new Uint8ClampedArray(
+			bytes.buffer,
+			bytes.byteOffset,
+			bytes.byteLength - metadataSize,
+		);
+		frameQueue.push({
+			mode: "webgpu",
+			data: frameData.subarray(0, meta.availableLength),
+			width,
+			height,
+			strideBytes: meta.strideBytes,
+			timing,
+			releaseCallback,
+		});
+	} else {
 		const expectedRowBytes = width * 4;
 		const metadataSize = 24;
 		const frameData = new Uint8ClampedArray(
@@ -637,34 +470,25 @@ function renderLoop() {
 					offscreenCanvas.height = frame.height;
 				}
 
+				const expectedRowBytes = frame.width * 4;
 				let rgbaData: Uint8ClampedArray;
-				if (frame.pixelFormat === "nv12") {
-					rgbaData = convertNv12ToRgba(
-						frame.data,
-						frame.width,
-						frame.height,
-						frame.yStride,
-					);
+				if (frame.strideBytes === expectedRowBytes) {
+					rgbaData = frame.data;
 				} else {
-					const expectedRowBytes = frame.width * 4;
-					if (frame.strideBytes === expectedRowBytes) {
-						rgbaData = frame.data;
-					} else {
-						const expectedLength = expectedRowBytes * frame.height;
-						if (!strideBuffer || strideBufferSize < expectedLength) {
-							strideBuffer = new Uint8ClampedArray(expectedLength);
-							strideBufferSize = expectedLength;
-						}
-						for (let row = 0; row < frame.height; row += 1) {
-							const srcStart = row * frame.strideBytes;
-							const destStart = row * expectedRowBytes;
-							strideBuffer.set(
-								frame.data.subarray(srcStart, srcStart + expectedRowBytes),
-								destStart,
-							);
-						}
-						rgbaData = strideBuffer.subarray(0, expectedLength);
+					const expectedLength = expectedRowBytes * frame.height;
+					if (!strideBuffer || strideBufferSize < expectedLength) {
+						strideBuffer = new Uint8ClampedArray(expectedLength);
+						strideBufferSize = expectedLength;
 					}
+					for (let row = 0; row < frame.height; row += 1) {
+						const srcStart = row * frame.strideBytes;
+						const destStart = row * expectedRowBytes;
+						strideBuffer.set(
+							frame.data.subarray(srcStart, srcStart + expectedRowBytes),
+							destStart,
+						);
+					}
+					rgbaData = strideBuffer.subarray(0, expectedLength);
 				}
 
 				if (
@@ -708,23 +532,13 @@ function renderLoop() {
 		lastRenderedFrameNumber = frame.timing.frameNumber;
 
 		if (frame.mode === "webgpu" && webgpuRenderer) {
-			if (frame.pixelFormat === "nv12") {
-				renderNv12FrameWebGPU(
-					webgpuRenderer,
-					frame.data,
-					frame.width,
-					frame.height,
-					frame.yStride,
-				);
-			} else {
-				renderFrameWebGPU(
-					webgpuRenderer,
-					frame.data,
-					frame.width,
-					frame.height,
-					frame.strideBytes,
-				);
-			}
+			renderFrameWebGPU(
+				webgpuRenderer,
+				frame.data,
+				frame.width,
+				frame.height,
+				frame.strideBytes,
+			);
 			if (frame.releaseCallback) {
 				frame.releaseCallback();
 			}
@@ -963,39 +777,20 @@ function processFrameBytesSync(
 			}
 		}
 
-		if (meta.format === "nv12") {
-			const frameData = new Uint8ClampedArray(
-				bytes.buffer,
-				bytes.byteOffset,
-				meta.totalSize,
-			);
-			frameQueue.push({
-				mode: "webgpu",
-				pixelFormat: "nv12",
-				data: frameData,
-				width,
-				height,
-				yStride: meta.yStride,
-				timing,
-				releaseCallback,
-			});
-		} else {
-			const frameData = new Uint8ClampedArray(
-				bytes.buffer,
-				bytes.byteOffset,
-				bytes.byteLength - 24,
-			);
-			frameQueue.push({
-				mode: "webgpu",
-				pixelFormat: "rgba",
-				data: frameData.subarray(0, meta.availableLength),
-				width,
-				height,
-				strideBytes: meta.strideBytes,
-				timing,
-				releaseCallback,
-			});
-		}
+		const frameData = new Uint8ClampedArray(
+			bytes.buffer,
+			bytes.byteOffset,
+			bytes.byteLength - 24,
+		);
+		frameQueue.push({
+			mode: "webgpu",
+			data: frameData.subarray(0, meta.availableLength),
+			width,
+			height,
+			strideBytes: meta.strideBytes,
+			timing,
+			releaseCallback,
+		});
 		startRenderLoop();
 		return { type: "frame-queued", width, height };
 	}
@@ -1004,42 +799,28 @@ function processFrameBytesSync(
 	const expectedLength = expectedRowBytes * height;
 	let processedFrameData: Uint8ClampedArray;
 
-	if (meta.format === "nv12") {
-		const nv12FrameData = new Uint8ClampedArray(
-			bytes.buffer,
-			bytes.byteOffset,
-			meta.totalSize,
-		);
-		processedFrameData = convertNv12ToRgba(
-			nv12FrameData,
-			width,
-			height,
-			meta.yStride,
-		);
-	} else {
-		const frameData = new Uint8ClampedArray(
-			bytes.buffer,
-			bytes.byteOffset,
-			bytes.byteLength - 24,
-		);
+	const frameData = new Uint8ClampedArray(
+		bytes.buffer,
+		bytes.byteOffset,
+		bytes.byteLength - 24,
+	);
 
-		if (meta.strideBytes === expectedRowBytes) {
-			processedFrameData = frameData.subarray(0, expectedLength);
-		} else {
-			if (!strideBuffer || strideBufferSize < expectedLength) {
-				strideBuffer = new Uint8ClampedArray(expectedLength);
-				strideBufferSize = expectedLength;
-			}
-			for (let row = 0; row < height; row += 1) {
-				const srcStart = row * meta.strideBytes;
-				const destStart = row * expectedRowBytes;
-				strideBuffer.set(
-					frameData.subarray(srcStart, srcStart + expectedRowBytes),
-					destStart,
-				);
-			}
-			processedFrameData = strideBuffer.subarray(0, expectedLength);
+	if (meta.strideBytes === expectedRowBytes) {
+		processedFrameData = frameData.subarray(0, expectedLength);
+	} else {
+		if (!strideBuffer || strideBufferSize < expectedLength) {
+			strideBuffer = new Uint8ClampedArray(expectedLength);
+			strideBufferSize = expectedLength;
 		}
+		for (let row = 0; row < height; row += 1) {
+			const srcStart = row * meta.strideBytes;
+			const destStart = row * expectedRowBytes;
+			strideBuffer.set(
+				frameData.subarray(srcStart, srcStart + expectedRowBytes),
+				destStart,
+			);
+		}
+		processedFrameData = strideBuffer.subarray(0, expectedLength);
 	}
 
 	if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {

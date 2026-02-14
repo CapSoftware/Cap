@@ -1127,8 +1127,9 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 **What was done**:
 1. Simplified desktop websocket frame handling in `socket.ts` to operate on RGBA payloads only.
-2. Removed NV12 detection, conversion, deferred NV12 frame buffering, and NV12 capture conversion branches from the main message loop and capture path.
-3. Kept stride-correction and worker fallback paths for RGBA frames intact.
+2. Simplified worker decode/render path in `frame-worker.ts` to parse and process only RGBA transport metadata.
+3. Removed NV12 detection, conversion, deferred NV12 frame buffering, and NV12 render branches from main-thread and worker hot paths.
+4. Kept stride-correction and worker fallback paths for RGBA frames intact.
 
 **Changes Made**:
 - `apps/desktop/src/utils/socket.ts`
@@ -1136,6 +1137,10 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
   - removed NV12 render paths for main-thread WebGPU and 2D fallback
   - simplified frame metadata parsing to RGBA 24-byte trailer handling
   - simplified stored-frame capture path to direct RGBA image data
+- `apps/desktop/src/utils/frame-worker.ts`
+  - removed NV12 parsing and conversion branches
+  - removed NV12 WebGPU render dispatch paths
+  - simplified queued-frame and metadata types to RGBA-only transport
 
 **Verification**:
 - `pnpm install --filter @cap/desktop...`
