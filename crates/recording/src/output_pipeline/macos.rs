@@ -34,7 +34,7 @@ fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {
     if result != 0 {
         return None;
     }
-    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64) / (1024 * 1024))
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize) / (1024 * 1024))
 }
 
 fn get_mp4_muxer_buffer_size(instant_mode: bool) -> usize {
