@@ -81,9 +81,6 @@
     ```
   - Expected: Multi-pause segments >28fps, mic timing <50ms, dropped frames <1.5%
 
-- [ ] **Instant mode crash recovery** (future)
-  - Use ffmpeg to repair partially-written MP4 files on app restart
-
 ### Completed
 - [x] Fix #1: Non-blocking MP4 muxer (2026-01-28)
 - [x] Fix #2: Display↔Camera A/V sync (2026-01-28)
@@ -101,6 +98,10 @@
 - [x] Fix #14: Synthetic pause/resume test suite (2026-02-15)
 - [x] Fix #15: Instant mode crash recovery via MP4 repair (2026-02-15)
 - [x] Fix #16: App startup instant recording recovery integration (2026-02-15)
+- [x] Fix #17: OutputPipeline::stop() 10s timeout for both modes (2026-02-15)
+- [x] Fix #18: FFmpeg SegmentedVideoMuxer eager start + buffer 30→120 (2026-02-15)
+- [x] Fix #19: Unit tests for monotonicity + gap tracker bounds (2026-02-15)
+- [x] Fix #20: Instant recovery integration tests (2026-02-15)
 
 ---
 
