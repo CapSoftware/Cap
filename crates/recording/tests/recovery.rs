@@ -894,3 +894,205 @@ fn test_instant_recovery_corrupt_data_not_recoverable() {
         "Should not recover when output.mp4 contains only corrupt data"
     );
 }
+
+#[test]
+fn test_find_incomplete_with_in_progress_and_segments() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::InProgress)
+        .unwrap();
+
+    let segment_dir = recording.create_segment_dir(0).unwrap();
+    std::fs::write(segment_dir.join("display.mp4"), create_minimal_mp4_data()).unwrap();
+
+    let result = RecoveryManager::find_incomplete_single(recording.path());
+
+    assert!(
+        result.is_some(),
+        "Should find incomplete recording with InProgress status and display.mp4"
+    );
+
+    let incomplete = result.unwrap();
+    assert!(
+        !incomplete.recoverable_segments.is_empty(),
+        "Should have at least one recoverable segment"
+    );
+    assert_eq!(
+        incomplete.recoverable_segments[0].index, 0,
+        "First recoverable segment should be index 0"
+    );
+}
+
+#[test]
+fn test_find_incomplete_with_manifest_and_m4s_segments() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::InProgress)
+        .unwrap();
+
+    let display_dir = recording.create_display_dir(0).unwrap();
+
+    let init_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("init.mp4"), &init_data).unwrap();
+
+    let segment_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("segment_000.m4s"), &segment_data).unwrap();
+    std::fs::write(display_dir.join("segment_001.m4s"), &segment_data).unwrap();
+
+    recording
+        .write_manifest(
+            0,
+            "display",
+            &[
+                ("segment_000.m4s", true, segment_data.len() as u64),
+                ("segment_001.m4s", true, segment_data.len() as u64),
+            ],
+            Some("init.mp4"),
+        )
+        .unwrap();
+
+    let result = RecoveryManager::find_incomplete_single(recording.path());
+
+    assert!(
+        result.is_some(),
+        "Should find incomplete recording with manifest and M4S segments"
+    );
+
+    let incomplete = result.unwrap();
+    assert!(
+        !incomplete.recoverable_segments.is_empty(),
+        "Should have recoverable segments"
+    );
+    assert!(
+        incomplete.recoverable_segments[0]
+            .display_init_segment
+            .is_some(),
+        "Should detect init segment from manifest"
+    );
+    assert_eq!(
+        incomplete.recoverable_segments[0].display_fragments.len(),
+        2,
+        "Should find 2 display fragments from manifest"
+    );
+}
+
+#[test]
+fn test_find_incomplete_skips_incomplete_fragments_in_manifest() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::InProgress)
+        .unwrap();
+
+    let display_dir = recording.create_display_dir(0).unwrap();
+
+    let init_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("init.mp4"), &init_data).unwrap();
+
+    let segment_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("segment_000.m4s"), &segment_data).unwrap();
+    std::fs::write(display_dir.join("segment_001.m4s"), &segment_data).unwrap();
+    std::fs::write(display_dir.join("segment_002.m4s"), &segment_data).unwrap();
+
+    recording
+        .write_manifest(
+            0,
+            "display",
+            &[
+                ("segment_000.m4s", true, segment_data.len() as u64),
+                ("segment_001.m4s", true, segment_data.len() as u64),
+                ("segment_002.m4s", false, segment_data.len() as u64),
+            ],
+            Some("init.mp4"),
+        )
+        .unwrap();
+
+    let result = RecoveryManager::find_incomplete_single(recording.path());
+
+    assert!(result.is_some(), "Should find incomplete recording");
+
+    let incomplete = result.unwrap();
+    assert_eq!(
+        incomplete.recoverable_segments[0].display_fragments.len(),
+        2,
+        "Should only count complete fragments (2 of 3)"
+    );
+}
+
+#[test]
+fn test_find_incomplete_detects_size_mismatch_in_manifest() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::InProgress)
+        .unwrap();
+
+    let display_dir = recording.create_display_dir(0).unwrap();
+
+    let init_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("init.mp4"), &init_data).unwrap();
+
+    let segment_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("segment_000.m4s"), &segment_data).unwrap();
+
+    recording
+        .write_manifest(
+            0,
+            "display",
+            &[("segment_000.m4s", true, 99999)],
+            Some("init.mp4"),
+        )
+        .unwrap();
+
+    let result = RecoveryManager::find_incomplete_single(recording.path());
+
+    if let Some(incomplete) = &result {
+        assert!(
+            incomplete.recoverable_segments[0]
+                .display_fragments
+                .is_empty()
+                || incomplete.recoverable_segments.is_empty(),
+            "Size mismatch should cause fragment to be skipped"
+        );
+    }
+}
+
+#[test]
+fn test_needs_remux_status() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::NeedsRemux)
+        .unwrap();
+
+    let segment_dir = recording.create_segment_dir(0).unwrap();
+    let display_dir = segment_dir.join("display");
+    std::fs::create_dir_all(&display_dir).unwrap();
+
+    let segment_data = create_minimal_mp4_data();
+    std::fs::write(display_dir.join("init.mp4"), &segment_data).unwrap();
+    std::fs::write(display_dir.join("segment_000.m4s"), &segment_data).unwrap();
+
+    recording
+        .write_manifest(
+            0,
+            "display",
+            &[("segment_000.m4s", true, segment_data.len() as u64)],
+            Some("init.mp4"),
+        )
+        .unwrap();
+
+    let result = RecoveryManager::find_incomplete_single(recording.path());
+
+    assert!(
+        result.is_some(),
+        "Should find NeedsRemux recording as incomplete"
+    );
+}
