@@ -820,4 +820,96 @@ mod tests {
             assert_eq!(sum_samples(sample_rate, fps, frames), expected);
         }
     }
+
+    #[test]
+    fn fill_nv12_frame_preserves_data_layout() {
+        ffmpeg::init().unwrap();
+
+        let width = 8u32;
+        let height = 4u32;
+        let y_size = (width * height) as usize;
+        let uv_size = (width * height / 2) as usize;
+
+        let mut nv12_data = vec![0u8; y_size + uv_size];
+        for i in 0..y_size {
+            nv12_data[i] = (i % 256) as u8;
+        }
+        for i in 0..uv_size {
+            nv12_data[y_size + i] = (128 + i % 128) as u8;
+        }
+
+        let input = Nv12ExportFrame {
+            nv12_data: nv12_data.clone(),
+            width,
+            height,
+            y_stride: width,
+            pts: 42,
+            audio: None,
+        };
+
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
+        fill_nv12_frame(&mut frame, &input);
+
+        assert_eq!(frame.pts(), Some(42));
+
+        for row in 0..height as usize {
+            for col in 0..width as usize {
+                let src_val = nv12_data[row * width as usize + col];
+                let dst_val = frame.data(0)[row * frame.stride(0) + col];
+                assert_eq!(src_val, dst_val, "Y mismatch at ({col}, {row})");
+            }
+        }
+
+        for row in 0..(height / 2) as usize {
+            for col in 0..width as usize {
+                let src_val = nv12_data[y_size + row * width as usize + col];
+                let dst_val = frame.data(1)[row * frame.stride(1) + col];
+                assert_eq!(src_val, dst_val, "UV mismatch at ({col}, {row})");
+            }
+        }
+    }
+
+    #[test]
+    fn ensure_nv12_data_passthrough_for_nv12_format() {
+        use cap_rendering::{GpuOutputFormat, Nv12RenderedFrame};
+
+        let data = vec![1u8, 2, 3, 4, 5, 6];
+        let frame = Nv12RenderedFrame {
+            data: data.clone(),
+            width: 4,
+            height: 2,
+            y_stride: 4,
+            frame_number: 0,
+            target_time_ns: 0,
+            format: GpuOutputFormat::Nv12,
+        };
+
+        let result = ensure_nv12_data(frame);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn nv12_export_frame_dimensions_match() {
+        let width = 1920u32;
+        let height = 1080u32;
+        assert!(
+            width.is_multiple_of(4),
+            "1920 should be NV12-compatible (divisible by 4)"
+        );
+        assert!(
+            height.is_multiple_of(2),
+            "1080 should be NV12-compatible (divisible by 2)"
+        );
+
+        let nv12_size = width as usize * height as usize * 3 / 2;
+        assert_eq!(nv12_size, 3_110_400);
+        let rgba_size = width as usize * height as usize * 4;
+        assert_eq!(rgba_size, 8_294_400);
+
+        let savings_pct = (1.0 - nv12_size as f64 / rgba_size as f64) * 100.0;
+        assert!(
+            savings_pct > 62.0 && savings_pct < 63.0,
+            "NV12 should save ~62.5% vs RGBA, got {savings_pct:.1}%"
+        );
+    }
 }
