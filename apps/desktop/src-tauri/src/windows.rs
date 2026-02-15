@@ -75,10 +75,9 @@ fn is_system_dark_mode() -> bool {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     if let Ok(key) =
         hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+        && let Ok(value) = key.get_value::<u32, _>("AppsUseLightTheme")
     {
-        if let Ok(value) = key.get_value::<u32, _>("AppsUseLightTheme") {
-            return value == 0;
-        }
+        return value == 0;
     }
     false
 }
@@ -858,17 +857,17 @@ impl ShowCapWindow {
         }
 
         #[cfg(not(target_os = "macos"))]
-        if let Self::InProgressRecording { .. } = self {
-            if let Some(window) = self.id(app).get(app) {
-                let width = 320.0;
-                let height = 150.0;
-                let recording_monitor = CursorMonitorInfo::get();
-                let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-                window.show().ok();
-                window.set_focus().ok();
-                return Ok(window);
-            }
+        if let Self::InProgressRecording { .. } = self
+            && let Some(window) = self.id(app).get(app)
+        {
+            let width = 320.0;
+            let height = 150.0;
+            let recording_monitor = CursorMonitorInfo::get();
+            let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
+            let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+            window.show().ok();
+            window.set_focus().ok();
+            return Ok(window);
         }
 
         if !matches!(self, Self::Camera { .. } | Self::InProgressRecording { .. })

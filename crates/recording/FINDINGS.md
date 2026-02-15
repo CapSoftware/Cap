@@ -441,6 +441,49 @@ System Audio ────┘                       ├─► MP4 (macos.rs) ─�
 
 ---
 
+### Session 2026-02-15 (Fix Attempts + System Audio Sync)
+
+**Goal**: Fix known issues: MP4 encoder warmup dropped frames and system audio timing offset
+
+**What was done**:
+1. Ran comprehensive benchmarks (MP4 cold, warm, thermal stress; fragmented)
+2. Attempted encoder warmup patience fix (increasing retry budget from 50ms to 200ms during first 3 frames)
+3. Reverted encoder warmup fix after it degraded performance (longer blocking caused pipeline backpressure)
+4. Implemented system audio start_time sync to match mic/display sync chain
+5. Verified all metrics stable after changes
+
+**Changes Made**:
+- `crates/recording/src/studio_recording.rs`: Added system audio to the start_time sync chain. System audio now syncs to mic start time (preferred) or display start time when drift >30ms, matching the existing sync pattern for camera and display. Improves playback alignment of system audio.
+
+**Encoder Warmup Investigation**:
+- Root cause: VideoToolbox hardware encoder first-frame latency (~160ms) causes `NotReadyForMore` for frames 2-5
+- Current retry budget: 100 × 500μs = 50ms. Frames during warmup are dropped after 50ms retry
+- Attempted fix: 400 × 500μs = 200ms patience for first 3 frames
+- Result: WORSE (71 frames instead of 149). Longer blocking prevented the encoder thread from draining the channel, causing capture-side drops from channel full
+- Conclusion: 50ms retry timeout is the correct safety valve. The ~3% dropped frames during warmup is the optimal tradeoff. Pre-warming the hardware encoder would require architectural changes (dummy frame encoding before recording starts)
+
+**Results (MP4 - warm run, post system audio sync fix)**:
+- ✅ Frame rate: 29.0-29.2fps (target 30±2fps)
+- ✅ Jitter: 10.3-12.4ms (target <15ms)
+- ✅ A/V sync: 0ms across all streams (target <50ms)
+- ✅ Mic timing: 90-94ms (target <100ms)
+- 🟡 Dropped frames: 2.7-3.3% (encoder warmup, not actionable without architectural changes)
+- 🟡 System audio duration: 215-259ms shorter than video (inherent macOS capture latency, cannot be fixed with metadata sync)
+
+**Results (Fragmented)**:
+- ✅ Frame rate: 29.5fps, jitter: 5.7ms, dropped: 1.3%
+- ✅ Mic timing: 13.5ms
+- 🟡 System audio duration: 111.5ms shorter
+
+**Key findings**:
+- MP4 encoder warmup spike is NOT fixable by increasing retry patience (makes it worse)
+- System audio file duration is inherently shorter due to macOS ScreenCaptureKit capture latency
+- System audio start_time metadata sync improves playback alignment but not duration measurement
+
+**Stopping point**: System audio sync metadata fix applied. Encoder warmup spike documented as architectural limitation.
+
+---
+
 ## References
 
 - `BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
