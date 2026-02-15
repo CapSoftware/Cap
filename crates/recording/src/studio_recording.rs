@@ -418,16 +418,16 @@ impl Pipeline {
             futures.push(system_audio.done_fut());
         }
 
-        // Ensure non-video pipelines stop promptly when the video pipeline completes
         {
+            let screen_cancel = self.screen.cancel_token();
             let mic_cancel = self.microphone.as_ref().map(|p| p.cancel_token());
             let cam_cancel = self.camera.as_ref().map(|p| p.cancel_token());
             let sys_cancel = self.system_audio.as_ref().map(|p| p.cancel_token());
 
-            let screen_done = self.screen.done_fut();
-            tokio::spawn(async move {
-                // When screen (video) finishes, cancel the other pipelines
-                let _ = screen_done.await;
+            let cancel_all_others = move |failed_is_screen: bool| {
+                if !failed_is_screen {
+                    screen_cancel.cancel();
+                }
                 if let Some(token) = mic_cancel.as_ref() {
                     token.cancel();
                 }
@@ -437,6 +437,15 @@ impl Pipeline {
                 if let Some(token) = sys_cancel.as_ref() {
                     token.cancel();
                 }
+            };
+
+            let screen_done = self.screen.done_fut();
+            tokio::spawn(async move {
+                let screen_result = screen_done.await;
+                if let Err(ref err) = screen_result {
+                    warn!("Screen pipeline failed, stopping all tracks: {err:#}");
+                }
+                cancel_all_others(true);
             });
         }
 
