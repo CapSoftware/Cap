@@ -271,6 +271,8 @@ pub enum RenderingError {
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
     #[error("Sending frame to channel failed")]
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
+    #[error("Sending NV12 frame to channel failed")]
+    ChannelSendNv12FrameFailed(#[from] mpsc::error::SendError<(Nv12RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
     #[error("Error polling wgpu: {0}")]
@@ -546,6 +548,259 @@ pub async fn render_video_to_channel(
         frames = frame_number,
         elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
         "Render complete"
+    );
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn render_video_to_channel_nv12(
+    constants: &RenderVideoConstants,
+    project: &ProjectConfiguration,
+    sender: mpsc::Sender<(Nv12RenderedFrame, u32)>,
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    render_segments: Vec<RenderSegment>,
+    fps: u32,
+    resolution_base: XY<u32>,
+    recordings: &ProjectRecordingsMeta,
+) -> Result<(), RenderingError> {
+    ffmpeg::init().unwrap();
+
+    let start_time = Instant::now();
+
+    let duration = get_duration(recordings, recording_meta, meta, project);
+
+    let total_frames = (fps as f64 * duration).ceil() as u32;
+
+    let cursor_smoothing =
+        (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        });
+
+    let zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
+        .iter()
+        .map(|segment| {
+            let mut interp = ZoomFocusInterpolator::new(
+                &segment.cursor,
+                cursor_smoothing,
+                project.screen_movement_spring,
+                duration,
+            );
+            interp.precompute();
+            interp
+        })
+        .collect();
+
+    let mut frame_number = 0;
+
+    let mut frame_renderer = FrameRenderer::new(constants);
+
+    let mut layers = RendererLayers::new_with_options(
+        &constants.device,
+        &constants.queue,
+        constants.is_software_adapter,
+    );
+
+    if let Some(first_segment) = render_segments.first() {
+        let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
+        let camera_dims = first_segment.decoders.camera_video_dimensions();
+        layers.prepare_for_video_dimensions(
+            &constants.device,
+            screen_w,
+            screen_h,
+            camera_dims.map(|(w, _)| w),
+            camera_dims.map(|(_, h)| h),
+        );
+    }
+
+    let mut last_successful_frame: Option<Nv12RenderedFrame> = None;
+    let mut consecutive_failures = 0u32;
+    const MAX_CONSECUTIVE_FAILURES: u32 = 200;
+
+    loop {
+        if frame_number >= total_frames {
+            break;
+        }
+
+        let Some((segment_time, segment)) =
+            project.get_segment_time(frame_number as f64 / fps as f64)
+        else {
+            break;
+        };
+
+        let clip_config = project
+            .clips
+            .iter()
+            .find(|v| v.index == segment.recording_clip);
+
+        let current_frame_number = {
+            let prev = frame_number;
+            std::mem::replace(&mut frame_number, prev + 1)
+        };
+
+        let render_segment = &render_segments[segment.recording_clip as usize];
+
+        let mut segment_frames = None;
+        let mut retry_count = 0;
+        const MAX_RETRIES: u32 = 5;
+        let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
+
+        while segment_frames.is_none() && retry_count < MAX_RETRIES {
+            if retry_count > 0 {
+                let delay = if is_initial_frame {
+                    500 * (retry_count as u64 + 1)
+                } else {
+                    50 * retry_count as u64
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+
+            segment_frames = if is_initial_frame {
+                render_segment
+                    .decoders
+                    .get_frames_initial(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    )
+                    .await
+            } else {
+                render_segment
+                    .decoders
+                    .get_frames(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    )
+                    .await
+            };
+
+            if segment_frames.is_none() {
+                retry_count += 1;
+                if retry_count < MAX_RETRIES {
+                    tracing::warn!(
+                        frame_number = current_frame_number,
+                        segment_time = segment_time,
+                        retry_count = retry_count,
+                        is_initial = is_initial_frame,
+                        "Frame decode failed, retrying..."
+                    );
+                }
+            }
+        }
+
+        let frame = if let Some(segment_frames) = segment_frames {
+            consecutive_failures = 0;
+
+            let zoom_focus_interp = &zoom_focus_interpolators[segment.recording_clip as usize];
+
+            let uniforms = ProjectUniforms::new(
+                constants,
+                project,
+                current_frame_number,
+                fps,
+                resolution_base,
+                &render_segment.cursor,
+                &segment_frames,
+                duration,
+                zoom_focus_interp,
+            );
+
+            match frame_renderer
+                .render_nv12(
+                    segment_frames,
+                    uniforms,
+                    &render_segment.cursor,
+                    &mut layers,
+                )
+                .await
+            {
+                Ok(frame) if frame.width > 0 && frame.height > 0 => {
+                    last_successful_frame = Some(frame.clone_metadata_with_data());
+                    frame
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        frame_number = current_frame_number,
+                        "Rendered NV12 frame has zero dimensions"
+                    );
+                    if let Some(ref last_frame) = last_successful_frame {
+                        let mut fallback = last_frame.clone_metadata_with_data();
+                        fallback.frame_number = current_frame_number;
+                        fallback.target_time_ns =
+                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        fallback
+                    } else {
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        frame_number = current_frame_number,
+                        error = %e,
+                        "NV12 frame rendering failed"
+                    );
+                    if let Some(ref last_frame) = last_successful_frame {
+                        let mut fallback = last_frame.clone_metadata_with_data();
+                        fallback.frame_number = current_frame_number;
+                        fallback.target_time_ns =
+                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        fallback
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        } else {
+            consecutive_failures += 1;
+
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                tracing::error!(
+                    frame_number = current_frame_number,
+                    consecutive_failures = consecutive_failures,
+                    "Too many consecutive frame failures - aborting export"
+                );
+                return Err(RenderingError::FrameDecodeFailed {
+                    frame_number: current_frame_number,
+                    consecutive_failures,
+                });
+            }
+
+            if let Some(ref last_frame) = last_successful_frame {
+                tracing::warn!(
+                    frame_number = current_frame_number,
+                    segment_time = segment_time,
+                    consecutive_failures = consecutive_failures,
+                    max_retries = MAX_RETRIES,
+                    "Frame decode failed after retries - using previous NV12 frame"
+                );
+                let mut fallback = last_frame.clone_metadata_with_data();
+                fallback.frame_number = current_frame_number;
+                fallback.target_time_ns =
+                    (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                fallback
+            } else {
+                tracing::error!(
+                    frame_number = current_frame_number,
+                    segment_time = segment_time,
+                    max_retries = MAX_RETRIES,
+                    "First frame decode failed after retries - cannot continue"
+                );
+                continue;
+            }
+        };
+
+        sender.send((frame, current_frame_number)).await?;
+    }
+
+    let total_time = start_time.elapsed();
+    tracing::info!(
+        frames = frame_number,
+        elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
+        "NV12 render complete"
     );
 
     Ok(())

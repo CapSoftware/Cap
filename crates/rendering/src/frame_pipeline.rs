@@ -336,6 +336,34 @@ pub struct Nv12RenderedFrame {
     pub format: GpuOutputFormat,
 }
 
+impl Nv12RenderedFrame {
+    pub fn clone_metadata_with_data(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            width: self.width,
+            height: self.height,
+            y_stride: self.y_stride,
+            frame_number: self.frame_number,
+            target_time_ns: self.target_time_ns,
+            format: self.format,
+        }
+    }
+
+    pub fn y_plane(&self) -> &[u8] {
+        let y_size = (self.y_stride as usize) * (self.height as usize);
+        &self.data[..y_size.min(self.data.len())]
+    }
+
+    pub fn uv_plane(&self) -> &[u8] {
+        let y_size = (self.y_stride as usize) * (self.height as usize);
+        if y_size < self.data.len() {
+            &self.data[y_size..]
+        } else {
+            &[]
+        }
+    }
+}
+
 pub struct PendingReadback {
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
     buffer: Arc<wgpu::Buffer>,
