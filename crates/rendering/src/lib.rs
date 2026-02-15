@@ -796,6 +796,15 @@ pub async fn render_video_to_channel_nv12(
         sender.send((frame, current_frame_number)).await?;
     }
 
+    if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline_nv12().await
+        && final_frame.width > 0
+        && final_frame.height > 0
+    {
+        sender
+            .send((final_frame, frame_number.saturating_sub(1)))
+            .await?;
+    }
+
     let total_time = start_time.elapsed();
     tracing::info!(
         frames = frame_number,
@@ -2149,6 +2158,14 @@ impl<'a> FrameRenderer<'a> {
         } else {
             None
         }
+    }
+
+    pub async fn flush_pipeline_nv12(
+        &mut self,
+    ) -> Option<Result<frame_pipeline::Nv12RenderedFrame, RenderingError>> {
+        let nv12_converter = self.nv12_converter.as_mut()?;
+        let pending = nv12_converter.take_pending()?;
+        Some(pending.wait(&self.constants.device).await)
     }
 
     pub async fn render_nv12(
