@@ -1362,6 +1362,8 @@ impl PreparedAudioSources {
                 let mut frame_count: u64 = 0;
                 let mut gap_tracker = AudioGapTracker::new(has_wireless_source);
 
+                gap_tracker.mark_started();
+
                 let res = stop_token
                     .run_until_cancelled(async {
                         while let Some(frame) = self.audio_rx.next().await {
@@ -1375,8 +1377,6 @@ impl PreparedAudioSources {
                             if let Some(first_tx) = first_tx.take() {
                                 let _ = first_tx.send(frame.timestamp);
                             }
-
-                            gap_tracker.mark_started();
 
                             let sample_based_before = timestamp_generator.next_timestamp(0);
 
