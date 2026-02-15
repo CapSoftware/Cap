@@ -1112,7 +1112,7 @@ impl RecoveryManager {
         match probe_video_can_decode(&output_mp4) {
             Ok(true) => {
                 info!(
-                    "Instant recording at {:?} has decodable frames, attempting repair",
+                    "Instant recording at {:?} has decodable frames, marking as recovered",
                     project_path
                 );
             }
