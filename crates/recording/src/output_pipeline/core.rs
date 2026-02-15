@@ -913,6 +913,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             cancel_token: build_ctx.stop_token,
             video_frame_count,
             health_rx: Some(build_ctx.health_rx),
+            creation_instant: Instant::now(),
         })
     }
 }
@@ -982,6 +983,7 @@ impl OutputPipelineBuilder<NoVideo> {
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
             health_rx: Some(build_ctx.health_rx),
+            creation_instant: Instant::now(),
         })
     }
 }
@@ -1564,6 +1566,7 @@ pub struct OutputPipeline {
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
     health_rx: Option<HealthReceiver>,
+    creation_instant: Instant,
 }
 
 pub struct FinishedOutputPipeline {
@@ -1615,9 +1618,9 @@ impl OutputPipeline {
                 _ => {
                     warn!(
                         path = %self.path.display(),
-                        "Failed to receive first timestamp, using epoch"
+                        "Failed to receive first timestamp, using pipeline creation time"
                     );
-                    Timestamp::Instant(Instant::now())
+                    Timestamp::Instant(self.creation_instant)
                 }
             };
 
