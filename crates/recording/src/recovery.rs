@@ -1075,8 +1075,8 @@ impl RecoveryManager {
     }
 
     pub fn try_recover_instant(project_path: &Path) -> Result<bool, RecoveryError> {
-        let meta = RecordingMeta::load_for_project(project_path)
-            .map_err(|_| RecoveryError::MetaSave)?;
+        let meta =
+            RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
 
         let is_failed_instant = matches!(
             &meta.inner,
@@ -1099,9 +1099,7 @@ impl RecoveryManager {
             return Ok(false);
         }
 
-        let file_size = std::fs::metadata(&output_mp4)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(&output_mp4).map(|m| m.len()).unwrap_or(0);
 
         if file_size < 1024 {
             info!(
@@ -1129,19 +1127,17 @@ impl RecoveryManager {
                     concatenate_video_fragments(&[output_mp4.clone()], &repaired_path);
 
                 match repair_result {
-                    Ok(()) => {
-                        match probe_video_can_decode(&repaired_path) {
-                            Ok(true) => {
-                                info!("Repaired MP4 has decodable frames, replacing original");
-                                std::fs::rename(&repaired_path, &output_mp4)?;
-                            }
-                            _ => {
-                                info!("Repaired MP4 still has no decodable frames, not recoverable");
-                                let _ = std::fs::remove_file(&repaired_path);
-                                return Ok(false);
-                            }
+                    Ok(()) => match probe_video_can_decode(&repaired_path) {
+                        Ok(true) => {
+                            info!("Repaired MP4 has decodable frames, replacing original");
+                            std::fs::rename(&repaired_path, &output_mp4)?;
                         }
-                    }
+                        _ => {
+                            info!("Repaired MP4 still has no decodable frames, not recoverable");
+                            let _ = std::fs::remove_file(&repaired_path);
+                            return Ok(false);
+                        }
+                    },
                     Err(e) => {
                         info!("Failed to repair MP4: {e}");
                         let _ = std::fs::remove_file(&repaired_path);

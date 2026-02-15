@@ -835,10 +835,7 @@ async fn run_pause_resume_tests(cli: &Cli) {
         (
             "Single pause (MP4, 3s+3s)",
             Box::new(|| PauseResumeScenario {
-                record_durations: vec![
-                    Duration::from_secs(3),
-                    Duration::from_secs(3),
-                ],
+                record_durations: vec![Duration::from_secs(3), Duration::from_secs(3)],
                 pause_durations: vec![Duration::from_secs(2)],
             }),
         ),
@@ -866,10 +863,7 @@ async fn run_pause_resume_tests(cli: &Cli) {
                     Duration::from_secs(1),
                     Duration::from_secs(1),
                 ],
-                pause_durations: vec![
-                    Duration::from_millis(500),
-                    Duration::from_millis(500),
-                ],
+                pause_durations: vec![Duration::from_millis(500), Duration::from_millis(500)],
             }),
         ),
     ];
@@ -903,7 +897,8 @@ async fn run_pause_resume_tests(cli: &Cli) {
                     result.frame_count as f64 / result.actual_duration.as_secs_f64().max(0.001)
                 );
 
-                let duration_diff = (result.actual_duration.as_secs_f64() - total_record_secs).abs();
+                let duration_diff =
+                    (result.actual_duration.as_secs_f64() - total_record_secs).abs();
                 if duration_diff < 2.0 {
                     passed += 1;
                     println!("       \u{2713} PASS\n");
