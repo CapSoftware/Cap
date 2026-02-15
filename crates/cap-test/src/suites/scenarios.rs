@@ -132,6 +132,7 @@ impl ScenarioRunner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_recording_scenario(
         &self,
         description: &str,
@@ -492,14 +493,14 @@ fn classify_scenario_result(
         );
     }
 
-    if let Some(sync) = &validation.sync_info {
-        if !sync.in_sync {
-            return (
-                TestStatus::Fail,
-                Some(format!("A/V drift too high: {:.1}ms", sync.drift_ms)),
-                Some(FailureClassification::PerformanceBelowThreshold),
-            );
-        }
+    if let Some(sync) = &validation.sync_info
+        && !sync.in_sync
+    {
+        return (
+            TestStatus::Fail,
+            Some(format!("A/V drift too high: {:.1}ms", sync.drift_ms)),
+            Some(FailureClassification::PerformanceBelowThreshold),
+        );
     }
 
     (TestStatus::Pass, None, None)

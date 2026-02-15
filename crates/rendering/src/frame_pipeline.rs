@@ -17,6 +17,9 @@ pub struct RgbaToNv12Converter {
     pending: Option<PendingNv12Readback>,
     cached_width: u32,
     cached_height: u32,
+    cached_bind_groups: Option<[wgpu::BindGroup; 2]>,
+    cached_texture_view: Option<wgpu::TextureView>,
+    cached_texture_ptr: usize,
 }
 
 #[repr(C)]
@@ -105,6 +108,9 @@ impl RgbaToNv12Converter {
             pending: None,
             cached_width: 0,
             cached_height: 0,
+            cached_bind_groups: None,
+            cached_texture_view: None,
+            cached_texture_ptr: 0,
         }
     }
 
@@ -142,6 +148,9 @@ impl RgbaToNv12Converter {
         self.current_readback = 0;
         self.cached_width = width;
         self.cached_height = height;
+        self.cached_bind_groups = None;
+        self.cached_texture_view = None;
+        self.cached_texture_ptr = 0;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -166,7 +175,8 @@ impl RgbaToNv12Converter {
             return false;
         };
 
-        let readback_buffer = match self.readback_buffers[self.current_readback].as_ref() {
+        let readback_idx = self.current_readback;
+        let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
             Some(b) => b.clone(),
             None => return false,
         };
@@ -183,26 +193,43 @@ impl RgbaToNv12Converter {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        let source_view = source_texture.create_view(&Default::default());
+        let texture_ptr = source_texture as *const wgpu::Texture as usize;
+        let needs_rebind =
+            self.cached_texture_ptr != texture_ptr || self.cached_bind_groups.is_none();
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("RGBA to NV12 Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: nv12_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        if needs_rebind {
+            let source_view = source_texture.create_view(&Default::default());
+
+            let make_bind_group = |view: &wgpu::TextureView| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("RGBA to NV12 Bind Group"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: nv12_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.params_buffer.as_entire_binding(),
+                        },
+                    ],
+                })
+            };
+
+            let bg0 = make_bind_group(&source_view);
+            let bg1 = make_bind_group(&source_view);
+
+            self.cached_texture_view = Some(source_view);
+            self.cached_bind_groups = Some([bg0, bg1]);
+            self.cached_texture_ptr = texture_ptr;
+        }
+
+        let bind_groups = self.cached_bind_groups.as_ref().unwrap();
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -210,7 +237,7 @@ impl RgbaToNv12Converter {
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &bind_groups[readback_idx], &[]);
             pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
         }
 
@@ -300,7 +327,7 @@ impl PendingNv12Readback {
 
         let buffer_slice = self.buffer.slice(..);
         let data = buffer_slice.get_mapped_range();
-        let nv12_data = data.to_vec();
+        let nv12_data = Arc::new(data.to_vec());
 
         drop(data);
         self.buffer.unmap();
@@ -327,13 +354,45 @@ pub enum GpuOutputFormat {
 }
 
 pub struct Nv12RenderedFrame {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub y_stride: u32,
     pub frame_number: u32,
     pub target_time_ns: u64,
     pub format: GpuOutputFormat,
+}
+
+impl Nv12RenderedFrame {
+    pub fn clone_metadata_with_data(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            width: self.width,
+            height: self.height,
+            y_stride: self.y_stride,
+            frame_number: self.frame_number,
+            target_time_ns: self.target_time_ns,
+            format: self.format,
+        }
+    }
+
+    pub fn into_data(self) -> Vec<u8> {
+        Arc::unwrap_or_clone(self.data)
+    }
+
+    pub fn y_plane(&self) -> &[u8] {
+        let y_size = (self.y_stride as usize) * (self.height as usize);
+        &self.data[..y_size.min(self.data.len())]
+    }
+
+    pub fn uv_plane(&self) -> &[u8] {
+        let y_size = (self.y_stride as usize) * (self.height as usize);
+        if y_size < self.data.len() {
+            &self.data[y_size..]
+        } else {
+            &[]
+        }
+    }
 }
 
 pub struct PendingReadback {
@@ -406,7 +465,7 @@ impl PendingReadback {
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
 
         Ok(RenderedFrame {
-            data: data_vec,
+            data: Arc::new(data_vec),
             padded_bytes_per_row: self.padded_bytes_per_row,
             width: self.width,
             height: self.height,
@@ -723,7 +782,7 @@ impl RenderSession {
 
 #[derive(Clone)]
 pub struct RenderedFrame {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub padded_bytes_per_row: u32,
@@ -760,7 +819,7 @@ pub async fn finish_encoder(
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
-) -> Result<RenderedFrame, RenderingError> {
+) -> Result<Option<RenderedFrame>, RenderingError> {
     let previous_frame = if let Some(prev) = session.pipelined_readback.take_pending() {
         Some(prev.wait(device).await?)
     } else {
@@ -779,16 +838,7 @@ pub async fn finish_encoder(
         .pipelined_readback
         .submit_readback(device, queue, texture, uniforms, encoder)?;
 
-    if let Some(prev_frame) = previous_frame {
-        return Ok(prev_frame);
-    }
-
-    let pending = session
-        .pipelined_readback
-        .take_pending()
-        .expect("just submitted a readback");
-
-    pending.wait(device).await
+    Ok(previous_frame)
 }
 
 pub async fn finish_encoder_nv12(
@@ -798,7 +848,7 @@ pub async fn finish_encoder_nv12(
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
     mut encoder: wgpu::CommandEncoder,
-) -> Result<Nv12RenderedFrame, RenderingError> {
+) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
@@ -829,28 +879,21 @@ pub async fn finish_encoder_nv12(
         queue.submit(std::iter::once(encoder.finish()));
         nv12_converter.start_readback();
 
-        if let Some(prev_frame) = previous_frame {
-            return Ok(prev_frame);
-        }
-
-        let pending = nv12_converter
-            .take_pending()
-            .expect("just submitted a conversion");
-        pending.wait(device).await
+        Ok(previous_frame)
     } else if let Some(prev_frame) = previous_frame {
         queue.submit(std::iter::once(encoder.finish()));
-        Ok(prev_frame)
+        Ok(Some(prev_frame))
     } else {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
-        Ok(Nv12RenderedFrame {
-            data: rgba_frame.data,
-            width: rgba_frame.width,
-            height: rgba_frame.height,
-            y_stride: rgba_frame.padded_bytes_per_row,
-            frame_number: rgba_frame.frame_number,
-            target_time_ns: rgba_frame.target_time_ns,
+        Ok(rgba_frame.map(|f| Nv12RenderedFrame {
+            data: f.data,
+            width: f.width,
+            height: f.height,
+            y_stride: f.padded_bytes_per_row,
+            frame_number: f.frame_number,
+            target_time_ns: f.target_time_ns,
             format: GpuOutputFormat::Rgba,
-        })
+        }))
     }
 }
 

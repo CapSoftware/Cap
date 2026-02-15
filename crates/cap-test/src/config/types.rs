@@ -136,19 +136,10 @@ impl Default for CameraConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AudioConfig {
     pub microphones: MicrophoneConfig,
     pub system: SystemAudioConfig,
-}
-
-impl Default for AudioConfig {
-    fn default() -> Self {
-        Self {
-            microphones: MicrophoneConfig::default(),
-            system: SystemAudioConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -73,7 +73,7 @@ pub enum WSFrameFormat {
 
 #[derive(Clone)]
 pub struct WSFrame {
-    pub data: Vec<u8>,
+    pub data: std::sync::Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
@@ -138,11 +138,11 @@ pub async fn create_watch_frame_ws(
                 let borrowed = camera_rx.borrow();
                 borrowed.as_deref().map(pack_ws_frame_ref)
             };
-            if let Some(packed) = packed {
-                if let Err(e) = socket.send(Message::Binary(packed)).await {
-                    tracing::error!("Failed to send initial frame to socket: {:?}", e);
-                    return;
-                }
+            if let Some(packed) = packed
+                && let Err(e) = socket.send(Message::Binary(packed)).await
+            {
+                tracing::error!("Failed to send initial frame to socket: {:?}", e);
+                return;
             }
         }
 
@@ -278,7 +278,7 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                     match incoming_frame {
                         Ok(frame) => {
                             let packed = pack_frame_data(
-                                frame.data,
+                                std::sync::Arc::unwrap_or_clone(frame.data),
                                 frame.stride,
                                 frame.height,
                                 frame.width,

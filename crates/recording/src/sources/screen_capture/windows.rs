@@ -205,9 +205,10 @@ impl WindowsFrameScaler {
         let src_width = frame.width();
         let src_height = frame.height();
 
-        let needs_reinit = self.state.as_ref().map_or(true, |s| {
-            s.source_width != src_width || s.source_height != src_height
-        });
+        let needs_reinit = self
+            .state
+            .as_ref()
+            .is_none_or(|s| s.source_width != src_width || s.source_height != src_height);
 
         if needs_reinit {
             let src_pixel = match self.pixel_format {
@@ -432,33 +433,42 @@ enum VideoControl {
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(1);
 
-fn create_d3d_capturer(
-    display_id: &DisplayId,
-    settings: &scap_direct3d::Settings,
-    d3d_device: &ID3D11Device,
-    video_tx: &mpsc::Sender<VideoFrame>,
-    error_tx: &mpsc::Sender<anyhow::Error>,
-    video_frame_counter: &Arc<AtomicU32>,
-    video_drop_counter: &Arc<AtomicU32>,
+struct CreateCapturerParams<'a> {
+    display_id: &'a DisplayId,
+    settings: &'a scap_direct3d::Settings,
+    d3d_device: &'a ID3D11Device,
+    video_tx: &'a mpsc::Sender<VideoFrame>,
+    video_frame_counter: &'a Arc<AtomicU32>,
+    video_drop_counter: &'a Arc<AtomicU32>,
     expected_width: u32,
     expected_height: u32,
     frame_scaler: Arc<Mutex<WindowsFrameScaler>>,
     scaling_logged: Arc<AtomicBool>,
     scaled_frame_count: Arc<AtomicU32>,
+}
+
+fn create_d3d_capturer(
+    params: &CreateCapturerParams,
+    error_tx: &mpsc::Sender<anyhow::Error>,
 ) -> anyhow::Result<scap_direct3d::Capturer> {
-    let capture_item = Display::from_id(display_id)
-        .ok_or_else(|| anyhow!("Display not found for ID: {:?}", display_id))?
+    let capture_item = Display::from_id(params.display_id)
+        .ok_or_else(|| anyhow!("Display not found for ID: {:?}", params.display_id))?
         .raw_handle()
         .try_as_capture_item()
         .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?;
 
     scap_direct3d::Capturer::new(
         capture_item,
-        settings.clone(),
+        params.settings.clone(),
         {
-            let video_frame_counter = video_frame_counter.clone();
-            let video_drop_counter = video_drop_counter.clone();
-            let mut tx = video_tx.clone();
+            let video_frame_counter = params.video_frame_counter.clone();
+            let video_drop_counter = params.video_drop_counter.clone();
+            let mut tx = params.video_tx.clone();
+            let expected_width = params.expected_width;
+            let expected_height = params.expected_height;
+            let frame_scaler = params.frame_scaler.clone();
+            let scaling_logged = params.scaling_logged.clone();
+            let scaled_frame_count = params.scaled_frame_count.clone();
             move |frame| {
                 let timestamp = frame.inner().SystemRelativeTime()?;
                 let timestamp = Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
@@ -535,7 +545,7 @@ fn create_d3d_capturer(
                 Ok(())
             }
         },
-        Some(d3d_device.clone()),
+        Some(params.d3d_device.clone()),
     )
     .map_err(|e| anyhow!("{e}"))
 }
@@ -590,20 +600,21 @@ impl output_pipeline::VideoSource for VideoSource {
                 let cancel_token = CancellationToken::new();
                 let mut error_tx = error_tx;
 
-                let mut capturer = match create_d3d_capturer(
-                    &display_id,
-                    &settings,
-                    &d3d_device,
-                    &video_tx,
-                    &error_tx,
-                    &video_frame_counter,
-                    &video_drop_counter,
+                let capturer_params = CreateCapturerParams {
+                    display_id: &display_id,
+                    settings: &settings,
+                    d3d_device: &d3d_device,
+                    video_tx: &video_tx,
+                    video_frame_counter: &video_frame_counter,
+                    video_drop_counter: &video_drop_counter,
                     expected_width,
                     expected_height,
-                    frame_scaler.clone(),
-                    scaling_logged.clone(),
-                    scaled_frame_count.clone(),
-                ) {
+                    frame_scaler: frame_scaler.clone(),
+                    scaling_logged: scaling_logged.clone(),
+                    scaled_frame_count: scaled_frame_count.clone(),
+                };
+
+                let mut capturer = match create_d3d_capturer(&capturer_params, &error_tx) {
                     Ok(c) => {
                         trace!("D3D capturer created successfully");
                         Some(c)
@@ -701,20 +712,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                 drop(old);
                             }
 
-                            match create_d3d_capturer(
-                                &display_id,
-                                &settings,
-                                &d3d_device,
-                                &video_tx,
-                                &error_tx,
-                                &video_frame_counter,
-                                &video_drop_counter,
-                                expected_width,
-                                expected_height,
-                                frame_scaler.clone(),
-                                scaling_logged.clone(),
-                                scaled_frame_count.clone(),
-                            ) {
+                            match create_d3d_capturer(&capturer_params, &error_tx) {
                                 Ok(mut new_cap) => match new_cap.start() {
                                     Ok(()) => {
                                         let count = restart_counter
@@ -1223,12 +1221,11 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> {
         self.cancel_token.cancel();
-        if let Ok(guard) = self.state.lock() {
-            if let Some(ref capturer) = guard.capturer {
-                if let Err(err) = capturer.pause() {
-                    warn!("system audio capturer pause failed: {err}");
-                }
-            }
+        if let Ok(guard) = self.state.lock()
+            && let Some(ref capturer) = guard.capturer
+            && let Err(err) = capturer.pause()
+        {
+            warn!("system audio capturer pause failed: {err}");
         }
         async { Ok(()) }
     }
