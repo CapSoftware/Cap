@@ -1005,6 +1005,22 @@ async fn create_segment_pipeline(
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
+    if let Some(available_mb) = get_available_disk_space_mb(segments_dir) {
+        if available_mb < DISK_SPACE_CRITICAL_MB {
+            return Err(anyhow!(
+                "Disk space critically low ({}MB available, {}MB minimum), cannot create new segment",
+                available_mb,
+                DISK_SPACE_CRITICAL_MB
+            ));
+        }
+        if available_mb < DISK_SPACE_WARNING_MB {
+            warn!(
+                available_mb,
+                "Disk space low, recording may be stopped soon"
+            );
+        }
+    }
+
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()
         .context("D3D11 device creation failed - this may happen in VMs, RDP sessions, or systems without GPU drivers")?;
@@ -1279,6 +1295,52 @@ async fn create_segment_pipeline(
         cursor,
         system_audio,
     })
+}
+
+const DISK_SPACE_CRITICAL_MB: u64 = 200;
+const DISK_SPACE_WARNING_MB: u64 = 500;
+
+#[cfg(target_os = "macos")]
+fn get_available_disk_space_mb(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    let c_path = CString::new(path.parent().unwrap_or(path).to_str()?).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+    if result != 0 {
+        return None;
+    }
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize) / (1024 * 1024))
+}
+
+#[cfg(windows)]
+fn get_available_disk_space_mb(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide_path: Vec<u16> = path
+        .parent()
+        .unwrap_or(path)
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut free_bytes_available: u64 = 0;
+    let result = unsafe {
+        windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            windows::core::PCWSTR(wide_path.as_ptr()),
+            Some(&mut free_bytes_available as *mut u64 as *mut _),
+            None,
+            None,
+        )
+    };
+    if result.is_ok() {
+        Some(free_bytes_available / (1024 * 1024))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn get_available_disk_space_mb(_path: &Path) -> Option<u64> {
+    None
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
