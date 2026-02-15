@@ -42,14 +42,14 @@ cap-desktop://action?value=%22stop_recording%22
 ```
 
 Actions with parameters (URL-encode the JSON):
-```json
-{"start_recording":{"capture_mode":{"screen":"Main Display"},"camera":null,"mic_label":null,"capture_system_audio":false,"mode":"studio"}}
+```
+cap-desktop://action?value=%7B%22start_recording%22%3A%7B%22capture_mode%22%3A%7B%22screen%22%3A%22Main%20Display%22%7D%2C%22camera%22%3Anull%2C%22mic_label%22%3Anull%2C%22capture_system_audio%22%3Afalse%2C%22mode%22%3A%22studio%22%7D%7D
 ```
 
 ## Development
 
 ```bash
 cd apps/raycast-extension
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```

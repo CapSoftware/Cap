@@ -36,11 +36,11 @@ export async function openDeeplink(
     if (successMessage) {
       await showToast({ style: Toast.Style.Success, title: successMessage });
     }
-  } catch {
+  } catch (error) {
     await showToast({
       style: Toast.Style.Failure,
       title: "Failed to communicate with Cap",
-      message: "Make sure Cap is running",
+      message: error instanceof Error ? error.message : String(error),
     });
   }
 }
