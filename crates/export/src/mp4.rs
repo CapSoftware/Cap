@@ -58,29 +58,30 @@ impl Mp4ExportSettings {
 
         let fps = self.fps;
 
-        let output_size = ProjectUniforms::get_output_size(
+        let raw_output_size = ProjectUniforms::get_output_size(
             &base.render_constants.options,
             &base.project_config,
             self.resolution_base,
         );
 
-        let nv12_compatible = output_size.0.is_multiple_of(4) && output_size.1.is_multiple_of(2);
+        let output_size = ((raw_output_size.0 + 3) & !3, (raw_output_size.1 + 1) & !1);
 
-        if nv12_compatible {
+        if output_size != raw_output_size {
             info!(
-                width = output_size.0,
-                height = output_size.1,
-                "Using GPU NV12 export path (reduced readback + no CPU swscale)"
+                raw_width = raw_output_size.0,
+                raw_height = raw_output_size.1,
+                aligned_width = output_size.0,
+                aligned_height = output_size.1,
+                "Aligned output dimensions for NV12 GPU path"
             );
-            self.export_nv12(base, output_size, fps, on_progress).await
-        } else {
-            info!(
-                width = output_size.0,
-                height = output_size.1,
-                "Falling back to RGBA export path (dimensions not NV12-compatible)"
-            );
-            self.export_rgba(base, output_size, fps, on_progress).await
         }
+
+        info!(
+            width = output_size.0,
+            height = output_size.1,
+            "Using GPU NV12 export path (reduced readback + no CPU swscale)"
+        );
+        self.export_nv12(base, output_size, fps, on_progress).await
     }
 
     async fn export_nv12(
