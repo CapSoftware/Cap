@@ -303,7 +303,7 @@ fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(30)
+        .unwrap_or(120)
 }
 
 struct FrameDropTracker {
@@ -459,7 +459,7 @@ impl Muxer for SegmentedVideoMuxer {
             .shared_pause_state
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
-        Ok(Self {
+        let mut muxer = Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -469,7 +469,11 @@ impl Muxer for SegmentedVideoMuxer {
             pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
-        })
+        };
+
+        muxer.start_encoder()?;
+
+        Ok(muxer)
     }
 
     fn stop(&mut self) {
@@ -685,10 +689,6 @@ impl VideoMuxer for SegmentedVideoMuxer {
         let Some(adjusted_timestamp) = self.pause.adjust(timestamp)? else {
             return Ok(());
         };
-
-        if !self.started {
-            self.start_encoder()?;
-        }
 
         if let Some(state) = &self.state {
             match state
