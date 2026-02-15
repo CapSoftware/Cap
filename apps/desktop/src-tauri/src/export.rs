@@ -111,7 +111,6 @@ pub async fn export_video(
     let _guard = if let Some(ref ed) = *editor {
         ed.export_active.store(true, Ordering::Release);
         tracing::info!("Pausing editor preview during export");
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         Some(ExportActiveGuard(&ed.export_active))
     } else {
         None
