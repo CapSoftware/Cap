@@ -144,30 +144,34 @@ pub fn get_hw_decoder_capabilities() -> &'static HwDecoderCapabilities {
 
 fn configure_software_threading(decoder: &mut avcodec::decoder::Video, width: u32, height: u32) {
     let pixel_count = (width as u64) * (height as u64);
+    let cpu_count = num_cpus::get();
 
     let thread_count = if pixel_count > 8294400 {
         0
     } else if pixel_count > 2073600 {
-        (num_cpus::get() / 2).max(2) as i32
+        cpu_count.min(8).max(2) as i32
     } else {
-        2
+        cpu_count.min(6).max(2) as i32
     };
+
+    let thread_type = ffmpeg::sys::FF_THREAD_FRAME | ffmpeg::sys::FF_THREAD_SLICE;
 
     unsafe {
         let codec_ctx = decoder.as_mut_ptr();
         if !codec_ctx.is_null() {
             (*codec_ctx).thread_count = thread_count;
-            (*codec_ctx).thread_type = ffmpeg::sys::FF_THREAD_FRAME;
+            (*codec_ctx).thread_type = thread_type;
         }
     }
 
     info!(
-        "Software decode configured: {width}x{height}, thread_count={}, thread_type=frame",
+        "Software decode configured: {width}x{height}, thread_count={}, thread_type=frame+slice, cpus={}",
         if thread_count == 0 {
             "auto".to_string()
         } else {
             thread_count.to_string()
-        }
+        },
+        cpu_count
     );
 }
 
