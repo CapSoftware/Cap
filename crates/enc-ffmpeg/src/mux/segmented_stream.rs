@@ -25,6 +25,23 @@ pub struct DiskSpaceWarning {
 
 pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
 
+#[cfg(unix)]
+fn get_available_disk_space_mb(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    let c_path = CString::new(path.parent().unwrap_or(path).to_str().unwrap_or_default()).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+    if result != 0 {
+        return None;
+    }
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize) / (1024 * 1024))
+}
+
+#[cfg(not(unix))]
+fn get_available_disk_space_mb(_path: &Path) -> Option<u64> {
+    None
+}
+
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data)
@@ -57,6 +74,10 @@ fn sync_file(path: &Path) {
     }
 }
 
+const DISK_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+const DISK_SPACE_WARNING_MB: u64 = 500;
+const DISK_SPACE_CRITICAL_MB: u64 = 200;
+
 pub struct SegmentedVideoEncoder {
     base_path: PathBuf,
 
@@ -74,6 +95,7 @@ pub struct SegmentedVideoEncoder {
     codec_info: CodecInfo,
 
     disk_space_callback: Option<DiskSpaceCallback>,
+    last_disk_check: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -262,6 +284,7 @@ impl SegmentedVideoEncoder {
             completed_segments: Vec::new(),
             codec_info,
             disk_space_callback: None,
+            last_disk_check: None,
         };
 
         instance.write_in_progress_manifest();
@@ -325,6 +348,53 @@ impl SegmentedVideoEncoder {
         self.current_index = completed_index + 1;
         self.segment_start_time = Some(timestamp);
         self.frames_in_segment = 0;
+
+        self.check_disk_space();
+    }
+
+    fn check_disk_space(&mut self) {
+        let should_check = self
+            .last_disk_check
+            .map(|t| t.elapsed() >= DISK_SPACE_CHECK_INTERVAL)
+            .unwrap_or(true);
+
+        if !should_check {
+            return;
+        }
+
+        self.last_disk_check = Some(std::time::Instant::now());
+
+        if let Some(available_mb) = get_available_disk_space_mb(&self.base_path) {
+            if available_mb < DISK_SPACE_CRITICAL_MB {
+                tracing::error!(
+                    available_mb,
+                    path = %self.base_path.display(),
+                    "Disk space critically low during fragmented recording"
+                );
+                if let Some(ref callback) = self.disk_space_callback {
+                    callback(DiskSpaceWarning {
+                        available_mb,
+                        threshold_mb: DISK_SPACE_CRITICAL_MB,
+                        path: self.base_path.display().to_string(),
+                        is_critical: true,
+                    });
+                }
+            } else if available_mb < DISK_SPACE_WARNING_MB {
+                tracing::warn!(
+                    available_mb,
+                    path = %self.base_path.display(),
+                    "Disk space low during fragmented recording"
+                );
+                if let Some(ref callback) = self.disk_space_callback {
+                    callback(DiskSpaceWarning {
+                        available_mb,
+                        threshold_mb: DISK_SPACE_WARNING_MB,
+                        path: self.base_path.display().to_string(),
+                        is_critical: false,
+                    });
+                }
+            }
+        }
     }
 
     fn current_segment_path(&self) -> PathBuf {
