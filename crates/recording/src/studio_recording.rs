@@ -176,8 +176,14 @@ impl Message<Pause> for Actor {
                 pipeline,
                 segment_start_time,
                 index,
-                ..
+                segment_start_instant,
             }) => {
+                let min_segment_duration = Duration::from_millis(500);
+                let elapsed = segment_start_instant.elapsed();
+                if elapsed < min_segment_duration {
+                    tokio::time::sleep(min_segment_duration.saturating_sub(elapsed)).await;
+                }
+
                 let (cursors, next_cursor_id) = self
                     .stop_pipeline(pipeline, segment_start_time)
                     .await
