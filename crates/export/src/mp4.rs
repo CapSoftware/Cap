@@ -8,7 +8,7 @@ use futures::FutureExt;
 use image::ImageBuffer;
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tracing::{info, trace, warn};
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]
@@ -58,28 +58,16 @@ impl Mp4ExportSettings {
 
         let fps = self.fps;
 
-        let raw_output_size = ProjectUniforms::get_output_size(
+        let output_size = ProjectUniforms::get_output_size(
             &base.render_constants.options,
             &base.project_config,
             self.resolution_base,
         );
 
-        let output_size = ((raw_output_size.0 + 3) & !3, (raw_output_size.1 + 1) & !1);
-
-        if output_size != raw_output_size {
-            info!(
-                raw_width = raw_output_size.0,
-                raw_height = raw_output_size.1,
-                aligned_width = output_size.0,
-                aligned_height = output_size.1,
-                "Aligned output dimensions for NV12 GPU path"
-            );
-        }
-
         info!(
             width = output_size.0,
             height = output_size.1,
-            "Using GPU NV12 export path (reduced readback + no CPU swscale)"
+            "Exporting with NV12 pipeline (GPU when possible, CPU fallback otherwise)"
         );
         self.export_nv12(base, output_size, fps, on_progress).await
     }
@@ -247,14 +235,16 @@ impl Mp4ExportSettings {
                         return Err("Export cancelled".to_string());
                     }
 
+                    let frame_width = frame.width;
+                    let frame_height = frame.height;
                     let nv12_data = ensure_nv12_data(frame);
 
                     if frame_count == 0 {
                         first_frame_data = Some(FirstFrameNv12 {
                             data: nv12_data.clone(),
-                            width: output_size.0,
-                            height: output_size.1,
-                            y_stride: output_size.0,
+                            width: frame_width,
+                            height: frame_height,
+                            y_stride: frame_width,
                         });
                         if let Some(audio) = &mut audio_renderer {
                             audio.set_playhead(0.0, &project);
@@ -280,9 +270,9 @@ impl Mp4ExportSettings {
                         .send(Nv12ExportFrame {
                             audio: audio_frame,
                             nv12_data,
-                            width: output_size.0,
-                            height: output_size.1,
-                            y_stride: output_size.0,
+                            width: frame_width,
+                            height: frame_height,
+                            y_stride: frame_width,
                             pts: frame_number as i64,
                         })
                         .is_err()
@@ -349,14 +339,14 @@ impl Mp4ExportSettings {
 }
 
 struct FirstFrameNv12 {
-    data: Vec<u8>,
+    data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
     y_stride: u32,
 }
 
 struct Nv12ExportFrame {
-    nv12_data: Vec<u8>,
+    nv12_data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
     y_stride: u32,
@@ -364,11 +354,11 @@ struct Nv12ExportFrame {
     audio: Option<ffmpeg::frame::Audio>,
 }
 
-fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Vec<u8> {
+fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Arc<Vec<u8>> {
     use cap_rendering::GpuOutputFormat;
 
     if frame.format != GpuOutputFormat::Rgba {
-        return frame.into_data();
+        return frame.data;
     }
 
     tracing::warn!(
@@ -429,7 +419,7 @@ fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Vec<u8> {
                 }
             }
 
-            return result;
+            return Arc::new(result);
         }
     }
 
@@ -437,7 +427,7 @@ fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Vec<u8> {
         frame_number = frame.frame_number,
         "swscale RGBA to NV12 conversion failed, using zeroed NV12"
     );
-    vec![0u8; width as usize * height as usize * 3 / 2]
+    Arc::new(vec![0u8; width as usize * height as usize * 3 / 2])
 }
 
 fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
@@ -577,7 +567,7 @@ mod tests {
         }
 
         let input = Nv12ExportFrame {
-            nv12_data: nv12_data.clone(),
+            nv12_data: Arc::new(nv12_data.clone()),
             width,
             height,
             y_stride: width,
@@ -613,7 +603,7 @@ mod tests {
 
         let data = vec![1u8, 2, 3, 4, 5, 6];
         let frame = Nv12RenderedFrame {
-            data: data.clone(),
+            data: std::sync::Arc::new(data.clone()),
             width: 4,
             height: 2,
             y_stride: 4,
@@ -623,7 +613,7 @@ mod tests {
         };
 
         let result = ensure_nv12_data(frame);
-        assert_eq!(result, data);
+        assert_eq!(*result, data);
     }
 
     #[test]

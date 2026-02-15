@@ -278,7 +278,7 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                     match incoming_frame {
                         Ok(frame) => {
                             let packed = pack_frame_data(
-                                std::sync::Arc::try_unwrap(frame.data).unwrap_or_else(|arc| (*arc).clone()),
+                                std::sync::Arc::unwrap_or_clone(frame.data),
                                 frame.stride,
                                 frame.height,
                                 frame.width,

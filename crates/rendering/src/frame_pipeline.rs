@@ -377,7 +377,7 @@ impl Nv12RenderedFrame {
     }
 
     pub fn into_data(self) -> Vec<u8> {
-        Arc::try_unwrap(self.data).unwrap_or_else(|arc| (*arc).clone())
+        Arc::unwrap_or_clone(self.data)
     }
 
     pub fn y_plane(&self) -> &[u8] {
