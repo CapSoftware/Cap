@@ -1340,6 +1340,7 @@ dependencies = [
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
  "sysinfo 0.32.1",
