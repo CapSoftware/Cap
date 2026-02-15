@@ -1594,13 +1594,36 @@ impl OutputPipeline {
     }
 
     pub async fn stop(mut self) -> anyhow::Result<FinishedOutputPipeline> {
+        const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
         drop(self.stop_token.take());
 
-        self.done_fut.await?;
+        match tokio::time::timeout(STOP_TIMEOUT, self.done_fut.clone()).await {
+            Ok(result) => result?,
+            Err(_) => {
+                warn!(
+                    path = %self.path.display(),
+                    timeout_secs = STOP_TIMEOUT.as_secs(),
+                    "OutputPipeline stop timed out, proceeding with best-effort finalization"
+                );
+            }
+        }
+
+        let first_timestamp =
+            match tokio::time::timeout(Duration::from_secs(2), self.first_timestamp_rx).await {
+                Ok(Ok(ts)) => ts,
+                _ => {
+                    warn!(
+                        path = %self.path.display(),
+                        "Failed to receive first timestamp, using epoch"
+                    );
+                    Timestamp::Instant(Instant::now())
+                }
+            };
 
         Ok(FinishedOutputPipeline {
             path: self.path,
-            first_timestamp: self.first_timestamp_rx.await?,
+            first_timestamp,
             video_info: self.video_info,
             video_frame_count: self.video_frame_count.load(Ordering::Acquire),
         })
