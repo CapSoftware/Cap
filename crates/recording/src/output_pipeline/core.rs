@@ -2325,5 +2325,141 @@ mod tests {
             assert_eq!(tracker.anomaly_count, 0);
             assert!(tracker.total_forward_skew_secs > 2.0);
         }
+
+        #[test]
+        fn enforce_monotonicity_clamps_backward_result() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            tracker.last_valid_duration = Some(Duration::from_millis(100));
+
+            let result = tracker.enforce_monotonicity(Duration::from_millis(50));
+            assert!(
+                result >= Duration::from_millis(100),
+                "Monotonicity should clamp backward timestamps: got {:?}",
+                result
+            );
+        }
+
+        #[test]
+        fn enforce_monotonicity_allows_forward_timestamps() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            tracker.last_valid_duration = Some(Duration::from_millis(100));
+
+            let forward = Duration::from_millis(200);
+            let result = tracker.enforce_monotonicity(forward);
+            assert_eq!(
+                result, forward,
+                "Forward timestamps should pass through unchanged"
+            );
+        }
+
+        #[test]
+        fn enforce_monotonicity_works_with_no_previous() {
+            let tracker = TimestampAnomalyTracker::new("test");
+            let ts = Duration::from_millis(50);
+            let result = tracker.enforce_monotonicity(ts);
+            assert_eq!(result, ts, "First timestamp should pass through unchanged");
+        }
+
+        #[test]
+        fn enforce_monotonicity_exact_equal_passes() {
+            let mut tracker = TimestampAnomalyTracker::new("test");
+            let ts = Duration::from_millis(100);
+            tracker.last_valid_duration = Some(ts);
+
+            let result = tracker.enforce_monotonicity(ts);
+            assert_eq!(result, ts, "Equal timestamp should pass through unchanged");
+        }
+    }
+
+    mod audio_gap_tracker {
+        use super::*;
+
+        #[test]
+        fn silence_budget_stops_insertions() {
+            let mut tracker = AudioGapTracker::new(false);
+            tracker.wall_clock_start = Some(Instant::now());
+            tracker.total_silence_inserted = MAX_TOTAL_SILENCE;
+
+            let result = tracker.detect_gap(Duration::ZERO, Duration::ZERO);
+            assert!(
+                result.is_none(),
+                "Should not detect gaps when silence budget is exhausted"
+            );
+        }
+
+        #[test]
+        fn silence_budget_limits_insertion_size() {
+            let mut tracker = AudioGapTracker::new(false);
+            tracker.wall_clock_start =
+                Some(Instant::now().checked_sub(Duration::from_secs(35)).unwrap());
+            tracker.total_silence_inserted = MAX_TOTAL_SILENCE - Duration::from_millis(100);
+
+            let result = tracker.detect_gap(Duration::ZERO, Duration::ZERO);
+            if let Some(gap) = result {
+                assert!(
+                    gap <= Duration::from_millis(100),
+                    "Gap should be capped to remaining budget (100ms), got {:?}",
+                    gap
+                );
+            }
+        }
+
+        #[test]
+        fn no_gap_when_wall_clock_behind_samples() {
+            let mut tracker = AudioGapTracker::new(false);
+            tracker.wall_clock_start = Some(Instant::now());
+
+            let result = tracker.detect_gap(Duration::from_secs(10), Duration::ZERO);
+            assert!(
+                result.is_none(),
+                "No gap when sample-based time exceeds wall-clock time"
+            );
+        }
+
+        #[test]
+        fn no_gap_below_threshold() {
+            let mut tracker = AudioGapTracker::new(false);
+            tracker.wall_clock_start = Some(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(50))
+                    .unwrap(),
+            );
+
+            let result = tracker.detect_gap(Duration::ZERO, Duration::ZERO);
+            assert!(
+                result.is_none(),
+                "Gap below threshold (70ms wired) should not be detected"
+            );
+        }
+
+        #[test]
+        fn wireless_has_higher_threshold() {
+            let wired = AudioGapTracker::new(false);
+            let wireless = AudioGapTracker::new(true);
+
+            assert!(
+                wireless.gap_threshold > wired.gap_threshold,
+                "Wireless threshold ({:?}) should be higher than wired ({:?})",
+                wireless.gap_threshold,
+                wired.gap_threshold
+            );
+        }
+
+        #[test]
+        fn max_silence_insertion_caps_individual_gap() {
+            let mut tracker = AudioGapTracker::new(false);
+            tracker.wall_clock_start =
+                Some(Instant::now().checked_sub(Duration::from_secs(5)).unwrap());
+
+            let result = tracker.detect_gap(Duration::ZERO, Duration::ZERO);
+            if let Some(gap) = result {
+                assert!(
+                    gap <= MAX_SILENCE_INSERTION,
+                    "Individual gap should be capped to MAX_SILENCE_INSERTION ({:?}), got {:?}",
+                    MAX_SILENCE_INSERTION,
+                    gap
+                );
+            }
+        }
     }
 }
