@@ -115,14 +115,14 @@ fn validate_dash_display_dirs(
         }
 
         let m3u8_path = dir.join("media_0.m3u8");
-        if m3u8_path.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&m3u8_path) {
-                for line in contents.lines() {
-                    if let Some(duration_str) = line.strip_prefix("#EXTINF:") {
-                        let dur_str = duration_str.split(',').next().unwrap_or("");
-                        if let Ok(dur) = dur_str.parse::<f64>() {
-                            total_duration += dur;
-                        }
+        if m3u8_path.exists()
+            && let Ok(contents) = std::fs::read_to_string(&m3u8_path)
+        {
+            for line in contents.lines() {
+                if let Some(duration_str) = line.strip_prefix("#EXTINF:") {
+                    let dur_str = duration_str.split(',').next().unwrap_or("");
+                    if let Ok(dur) = dur_str.parse::<f64>() {
+                        total_duration += dur;
                     }
                 }
             }

@@ -27,6 +27,7 @@ pub struct H264EncoderBuilder {
     output_size: Option<(u32, u32)>,
     external_conversion: bool,
     encoder_priority_override: Option<&'static [&'static str]>,
+    is_export: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,6 +61,7 @@ impl H264EncoderBuilder {
             output_size: None,
             external_conversion: false,
             encoder_priority_override: None,
+            is_export: false,
         }
     }
 
@@ -94,6 +96,11 @@ impl H264EncoderBuilder {
         self
     }
 
+    pub fn with_export_settings(mut self) -> Self {
+        self.is_export = true;
+        self
+    }
+
     pub fn build(
         self,
         output: &mut format::context::Output,
@@ -116,8 +123,12 @@ impl H264EncoderBuilder {
             );
         }
 
-        let candidates =
-            get_codec_and_options(&input_config, self.preset, self.encoder_priority_override);
+        let candidates = get_codec_and_options(
+            &input_config,
+            self.preset,
+            self.encoder_priority_override,
+            self.is_export,
+        );
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
         }
@@ -671,6 +682,7 @@ fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
     encoder_priority_override: Option<&'static [&'static str]>,
+    is_export: bool,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
     let denominator = config.frame_rate.denominator();
@@ -695,45 +707,87 @@ fn get_codec_and_options(
 
         match *encoder_name {
             "h264_videotoolbox" => {
-                options.set("realtime", "true");
-                options.set("prio_speed", "true");
-                options.set("profile", "baseline");
+                if is_export {
+                    options.set("realtime", "false");
+                    options.set("profile", "main");
+                    options.set("allow_sw", "0");
+                } else {
+                    options.set("realtime", "true");
+                    options.set("prio_speed", "true");
+                    options.set("profile", "baseline");
+                }
             }
             "h264_nvenc" => {
-                options.set("preset", "p4");
-                options.set("tune", "ll");
-                options.set("rc", "vbr");
-                options.set("spatial-aq", "1");
-                options.set("temporal-aq", "1");
+                if is_export {
+                    options.set("preset", "p5");
+                    options.set("tune", "hq");
+                    options.set("rc", "vbr");
+                    options.set("spatial-aq", "1");
+                    options.set("temporal-aq", "1");
+                    options.set("b_ref_mode", "middle");
+                } else {
+                    options.set("preset", "p4");
+                    options.set("tune", "ll");
+                    options.set("rc", "vbr");
+                    options.set("spatial-aq", "1");
+                    options.set("temporal-aq", "1");
+                }
                 options.set("g", &keyframe_interval_str);
             }
             "h264_qsv" => {
-                options.set("preset", "faster");
-                options.set("look_ahead", "1");
+                if is_export {
+                    options.set("preset", "medium");
+                    options.set("look_ahead", "1");
+                    options.set("look_ahead_depth", "20");
+                } else {
+                    options.set("preset", "faster");
+                    options.set("look_ahead", "1");
+                }
                 options.set("g", &keyframe_interval_str);
             }
             "h264_amf" => {
-                options.set("quality", "balanced");
-                options.set("rc", "vbr_latency");
+                if is_export {
+                    options.set("quality", "quality");
+                    options.set("rc", "vbr_peak");
+                } else {
+                    options.set("quality", "balanced");
+                    options.set("rc", "vbr_latency");
+                }
                 options.set("g", &keyframe_interval_str);
             }
             "h264_mf" => {
                 options.set("hw_encoding", "true");
-                options.set("scenario", "4");
-                options.set("quality", "1");
+                if is_export {
+                    options.set("scenario", "0");
+                    options.set("quality", "0");
+                } else {
+                    options.set("scenario", "4");
+                    options.set("quality", "1");
+                }
                 options.set("g", &keyframe_interval_str);
             }
             "libx264" => {
-                options.set(
-                    "preset",
-                    match preset {
-                        H264Preset::Slow => "slow",
-                        H264Preset::Medium => "medium",
-                        H264Preset::Ultrafast | H264Preset::HighThroughput => "ultrafast",
-                    },
-                );
-                if matches!(preset, H264Preset::Ultrafast | H264Preset::HighThroughput) {
-                    options.set("tune", "zerolatency");
+                if is_export {
+                    options.set(
+                        "preset",
+                        match preset {
+                            H264Preset::Slow => "slow",
+                            H264Preset::Medium => "medium",
+                            _ => "veryfast",
+                        },
+                    );
+                } else {
+                    options.set(
+                        "preset",
+                        match preset {
+                            H264Preset::Slow => "slow",
+                            H264Preset::Medium => "medium",
+                            H264Preset::Ultrafast | H264Preset::HighThroughput => "ultrafast",
+                        },
+                    );
+                    if matches!(preset, H264Preset::Ultrafast | H264Preset::HighThroughput) {
+                        options.set("tune", "zerolatency");
+                    }
                 }
                 options.set("vsync", "1");
                 options.set("g", &keyframe_interval_str);

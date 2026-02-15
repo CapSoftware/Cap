@@ -371,7 +371,7 @@ impl ScreenshotEditorInstances {
                         );
 
                         let rendered_frame = frame_renderer
-                            .render(
+                            .render_immediate(
                                 segment_frames,
                                 uniforms,
                                 &cap_project::CursorEvents::default(),

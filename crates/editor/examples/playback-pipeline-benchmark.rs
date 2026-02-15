@@ -374,7 +374,7 @@ async fn run_full_pipeline_benchmark(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+            .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
             .await
         {
             Ok(_frame) => {
@@ -536,7 +536,7 @@ async fn run_scrubbing_benchmark(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+            .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
             .await
         {
             Ok(_frame) => {

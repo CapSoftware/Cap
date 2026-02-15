@@ -812,10 +812,28 @@ async fn stop_recording(
                     start_time: mic_start_time,
                     device_id: s.mic_device_id.clone(),
                 }),
-                system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
-                    path: make_relative(&audio.path),
-                    start_time: Some(to_start_time(audio.first_timestamp)),
-                    device_id: None,
+                system_audio: s.pipeline.system_audio.map(|audio| {
+                    let raw_sys_start = to_start_time(audio.first_timestamp);
+                    let sys_start_time = if let Some(mic_start) = mic_start_time {
+                        let sync_offset = raw_sys_start - mic_start;
+                        if sync_offset.abs() > 0.030 {
+                            mic_start
+                        } else {
+                            raw_sys_start
+                        }
+                    } else {
+                        let sync_offset = raw_sys_start - display_start_time;
+                        if sync_offset.abs() > 0.030 {
+                            display_start_time
+                        } else {
+                            raw_sys_start
+                        }
+                    };
+                    AudioMeta {
+                        path: make_relative(&audio.path),
+                        start_time: Some(sys_start_time),
+                        device_id: None,
+                    }
                 }),
                 cursor: s
                     .pipeline

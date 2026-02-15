@@ -237,13 +237,13 @@ impl AVAssetReaderDecoder {
         keyframe_index: Option<Arc<KeyframeIndex>>,
     ) -> Result<Self, String> {
         let (pixel_format, width, height) = {
-            let input = ffmpeg::format::input(&path).unwrap();
+            let input = ffmpeg::format::input(&path)
+                .map_err(|e| format!("Failed to open video input '{}': {e}", path.display()))?;
 
             let input_stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Video)
-                .ok_or("Could not find a video stream")
-                .unwrap();
+                .ok_or_else(|| format!("No video stream in '{}'", path.display()))?;
 
             let decoder = avcodec::Context::from_parameters(input_stream.parameters())
                 .map_err(|e| format!("decoder context / {e}"))?
@@ -338,7 +338,11 @@ impl AVAssetReaderDecoder {
         height: u32,
     ) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
         let asset = av::UrlAsset::with_url(
-            &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
+            &ns::Url::with_fs_path_str(
+                path.to_str()
+                    .ok_or_else(|| format!("Invalid UTF-8 in path: {path:?}"))?,
+                false,
+            ),
             None,
         )
         .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;

@@ -444,6 +444,75 @@ System Audio ────┘                       ├─► MP4 (macos.rs) ─�
 
 ---
 
+### Session 2026-02-15 (Performance Check + AVAssetReader Fix)
+
+**Goal**: Run recording and playback benchmarks, fix any issues
+
+**What was done**:
+1. Ran MP4 baseline benchmarks (cold + warm runs)
+2. Ran fragmented baseline benchmark
+3. Ran playback benchmark on resulting recordings
+4. Fixed AVAssetReader panic on directory paths (fragmented recordings)
+
+**Changes Made**:
+- `crates/video-decode/src/avassetreader.rs`: Replaced two `unwrap()` calls with proper error propagation via `?` and `map_err`. Previously panicked when given a directory path (fragmented recordings); now returns clean error that triggers graceful FFmpeg fallback.
+
+**Results**:
+- ✅ MP4: 29.2fps, 10.4-10.7ms jitter, 2.7% dropped, 0ms A/V sync, 81-94ms mic timing
+- ✅ Fragmented: 29.5-29.6fps, 4.6-5.9ms jitter, 1.3% dropped, 0ms A/V sync, 1-4ms mic timing
+- ✅ Playback MP4: 637fps effective, 1.6ms avg, 5.0ms p95, 0ms camera drift
+- ✅ Playback Fragmented: 153fps effective, 6.5ms avg, 12.4ms p95, 0ms camera drift
+- ✅ AVAssetReader no longer panics on directory paths
+- 🟡 System audio: 120-246ms (known lower-priority issue)
+- 🟡 MP4 dropped frames at 2.7% (single 160ms spike from encoder warmup, not actionable)
+
+**Stopping point**: All major metrics pass. AVAssetReader panic fixed. System audio timing remains as documented known issue.
+
+---
+
+### Session 2026-02-15 (Fix Attempts + System Audio Sync)
+
+**Goal**: Fix known issues: MP4 encoder warmup dropped frames and system audio timing offset
+
+**What was done**:
+1. Ran comprehensive benchmarks (MP4 cold, warm, thermal stress; fragmented)
+2. Attempted encoder warmup patience fix (increasing retry budget from 50ms to 200ms during first 3 frames)
+3. Reverted encoder warmup fix after it degraded performance (longer blocking caused pipeline backpressure)
+4. Implemented system audio start_time sync to match mic/display sync chain
+5. Verified all metrics stable after changes
+
+**Changes Made**:
+- `crates/recording/src/studio_recording.rs`: Added system audio to the start_time sync chain. System audio now syncs to mic start time (preferred) or display start time when drift >30ms, matching the existing sync pattern for camera and display. Improves playback alignment of system audio.
+
+**Encoder Warmup Investigation**:
+- Root cause: VideoToolbox hardware encoder first-frame latency (~160ms) causes `NotReadyForMore` for frames 2-5
+- Current retry budget: 100 × 500μs = 50ms. Frames during warmup are dropped after 50ms retry
+- Attempted fix: 400 × 500μs = 200ms patience for first 3 frames
+- Result: WORSE (71 frames instead of 149). Longer blocking prevented the encoder thread from draining the channel, causing capture-side drops from channel full
+- Conclusion: 50ms retry timeout is the correct safety valve. The ~3% dropped frames during warmup is the optimal tradeoff. Pre-warming the hardware encoder would require architectural changes (dummy frame encoding before recording starts)
+
+**Results (MP4 - warm run, post system audio sync fix)**:
+- ✅ Frame rate: 29.0-29.2fps (target 30±2fps)
+- ✅ Jitter: 10.3-12.4ms (target <15ms)
+- ✅ A/V sync: 0ms across all streams (target <50ms)
+- ✅ Mic timing: 90-94ms (target <100ms)
+- 🟡 Dropped frames: 2.7-3.3% (encoder warmup, not actionable without architectural changes)
+- 🟡 System audio duration: 215-259ms shorter than video (inherent macOS capture latency, cannot be fixed with metadata sync)
+
+**Results (Fragmented)**:
+- ✅ Frame rate: 29.5fps, jitter: 5.7ms, dropped: 1.3%
+- ✅ Mic timing: 13.5ms
+- 🟡 System audio duration: 111.5ms shorter
+
+**Key findings**:
+- MP4 encoder warmup spike is NOT fixable by increasing retry patience (makes it worse)
+- System audio file duration is inherently shorter due to macOS ScreenCaptureKit capture latency
+- System audio start_time metadata sync improves playback alignment but not duration measurement
+
+**Stopping point**: System audio sync metadata fix applied. Encoder warmup spike documented as architectural limitation.
+
+---
+
 ### Session 2026-02-15 (Comprehensive Robustness Overhaul)
 
 **Goal**: Make recording pipeline bulletproof - fix multi-pause catastrophe, reduce dropped frames, fix mic timing, add safety nets
