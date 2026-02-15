@@ -380,55 +380,17 @@ pub async fn render_video_to_channel(
         };
 
         let render_segment = &render_segments[segment.recording_clip as usize];
-
-        let mut segment_frames = None;
-        let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 5;
         let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
 
-        while segment_frames.is_none() && retry_count < MAX_RETRIES {
-            if retry_count > 0 {
-                let delay = if is_initial_frame {
-                    500 * (retry_count as u64 + 1)
-                } else {
-                    50 * retry_count as u64
-                };
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            }
-
-            segment_frames = if is_initial_frame {
-                render_segment
-                    .decoders
-                    .get_frames_initial(
-                        segment_time as f32,
-                        !project.camera.hide,
-                        clip_config.map(|v| v.offsets).unwrap_or_default(),
-                    )
-                    .await
-            } else {
-                render_segment
-                    .decoders
-                    .get_frames(
-                        segment_time as f32,
-                        !project.camera.hide,
-                        clip_config.map(|v| v.offsets).unwrap_or_default(),
-                    )
-                    .await
-            };
-
-            if segment_frames.is_none() {
-                retry_count += 1;
-                if retry_count < MAX_RETRIES {
-                    tracing::warn!(
-                        frame_number = current_frame_number,
-                        segment_time = segment_time,
-                        retry_count = retry_count,
-                        is_initial = is_initial_frame,
-                        "Frame decode failed, retrying..."
-                    );
-                }
-            }
-        }
+        let segment_frames = decode_segment_frames_with_retry(
+            &render_segment.decoders,
+            segment_time,
+            !project.camera.hide,
+            clip_config.map(|v| v.offsets).unwrap_or_default(),
+            current_frame_number,
+            is_initial_frame,
+        )
+        .await;
 
         let frame = if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
@@ -512,7 +474,7 @@ pub async fn render_video_to_channel(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    max_retries = MAX_RETRIES,
+                    max_retries = DECODE_MAX_RETRIES,
                     "Frame decode failed after retries - using previous frame"
                 );
                 let mut fallback = last_frame.clone();
@@ -524,7 +486,7 @@ pub async fn render_video_to_channel(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    max_retries = MAX_RETRIES,
+                    max_retries = DECODE_MAX_RETRIES,
                     "First frame decode failed after retries - cannot continue"
                 );
                 continue;
@@ -642,55 +604,17 @@ pub async fn render_video_to_channel_nv12(
         };
 
         let render_segment = &render_segments[segment.recording_clip as usize];
-
-        let mut segment_frames = None;
-        let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 5;
         let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
 
-        while segment_frames.is_none() && retry_count < MAX_RETRIES {
-            if retry_count > 0 {
-                let delay = if is_initial_frame {
-                    500 * (retry_count as u64 + 1)
-                } else {
-                    50 * retry_count as u64
-                };
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            }
-
-            segment_frames = if is_initial_frame {
-                render_segment
-                    .decoders
-                    .get_frames_initial(
-                        segment_time as f32,
-                        !project.camera.hide,
-                        clip_config.map(|v| v.offsets).unwrap_or_default(),
-                    )
-                    .await
-            } else {
-                render_segment
-                    .decoders
-                    .get_frames(
-                        segment_time as f32,
-                        !project.camera.hide,
-                        clip_config.map(|v| v.offsets).unwrap_or_default(),
-                    )
-                    .await
-            };
-
-            if segment_frames.is_none() {
-                retry_count += 1;
-                if retry_count < MAX_RETRIES {
-                    tracing::warn!(
-                        frame_number = current_frame_number,
-                        segment_time = segment_time,
-                        retry_count = retry_count,
-                        is_initial = is_initial_frame,
-                        "Frame decode failed, retrying..."
-                    );
-                }
-            }
-        }
+        let segment_frames = decode_segment_frames_with_retry(
+            &render_segment.decoders,
+            segment_time,
+            !project.camera.hide,
+            clip_config.map(|v| v.offsets).unwrap_or_default(),
+            current_frame_number,
+            is_initial_frame,
+        )
+        .await;
 
         let frame = if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
@@ -774,7 +698,7 @@ pub async fn render_video_to_channel_nv12(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    max_retries = MAX_RETRIES,
+                    max_retries = DECODE_MAX_RETRIES,
                     "Frame decode failed after retries - using previous NV12 frame"
                 );
                 let mut fallback = last_frame.clone_metadata_with_data();
@@ -786,7 +710,7 @@ pub async fn render_video_to_channel_nv12(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    max_retries = MAX_RETRIES,
+                    max_retries = DECODE_MAX_RETRIES,
                     "First frame decode failed after retries - cannot continue"
                 );
                 continue;
@@ -813,6 +737,56 @@ pub async fn render_video_to_channel_nv12(
     );
 
     Ok(())
+}
+
+const DECODE_MAX_RETRIES: u32 = 5;
+
+async fn decode_segment_frames_with_retry(
+    decoders: &RecordingSegmentDecoders,
+    segment_time: f64,
+    needs_camera: bool,
+    offsets: cap_project::ClipOffsets,
+    current_frame_number: u32,
+    is_initial_frame: bool,
+) -> Option<DecodedSegmentFrames> {
+    let mut result = None;
+    let mut retry_count = 0u32;
+
+    while result.is_none() && retry_count < DECODE_MAX_RETRIES {
+        if retry_count > 0 {
+            let delay = if is_initial_frame {
+                500 * (retry_count as u64 + 1)
+            } else {
+                50 * retry_count as u64
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        }
+
+        result = if is_initial_frame {
+            decoders
+                .get_frames_initial(segment_time as f32, needs_camera, offsets)
+                .await
+        } else {
+            decoders
+                .get_frames(segment_time as f32, needs_camera, offsets)
+                .await
+        };
+
+        if result.is_none() {
+            retry_count += 1;
+            if retry_count < DECODE_MAX_RETRIES {
+                tracing::warn!(
+                    frame_number = current_frame_number,
+                    segment_time = segment_time,
+                    retry_count = retry_count,
+                    is_initial = is_initial_frame,
+                    "Frame decode failed, retrying..."
+                );
+            }
+        }
+    }
+
+    result
 }
 
 pub fn get_duration(
