@@ -101,6 +101,10 @@ impl Mp4ExportSettings {
             VideoInfo::from_raw(RawVideoFormat::Nv12, output_size.0, output_size.1, fps);
         video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
 
+        let mut rgba_video_info =
+            VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
+        rgba_video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
+
         let audio_segments = get_audio_segments(&base.segments);
 
         let mut audio_renderer = audio_segments
@@ -248,7 +252,8 @@ impl Mp4ExportSettings {
                         })
                     });
 
-                    let video_frame = nv12_to_ffmpeg_frame(&frame, frame_number as i64);
+                    let video_frame =
+                        nv12_to_ffmpeg_frame(&frame, frame_number as i64, &rgba_video_info);
 
                     if frame_tx
                         .send(MP4Input {
@@ -573,7 +578,17 @@ struct FirstFrameNv12 {
     y_stride: u32,
 }
 
-fn nv12_to_ffmpeg_frame(frame: &Nv12RenderedFrame, pts: i64) -> ffmpeg::frame::Video {
+fn nv12_to_ffmpeg_frame(
+    frame: &Nv12RenderedFrame,
+    pts: i64,
+    video_info: &VideoInfo,
+) -> ffmpeg::frame::Video {
+    use cap_rendering::GpuOutputFormat;
+
+    if frame.format == GpuOutputFormat::Rgba {
+        return video_info.wrap_frame(&frame.data, pts, frame.y_stride as usize);
+    }
+
     let width = frame.width;
     let height = frame.height;
     let y_stride = frame.y_stride;
