@@ -19,7 +19,7 @@ use std::{
 };
 use tracing::*;
 
-const DEFAULT_MP4_MUXER_BUFFER_SIZE: usize = 60;
+const DEFAULT_MP4_MUXER_BUFFER_SIZE: usize = 120;
 const DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT: usize = 240;
 
 const DISK_SPACE_MIN_START_MB: u64 = 500;
@@ -673,15 +673,15 @@ impl VideoMuxer for AVFoundationMp4Muxer {
             return Err(anyhow!(message));
         }
 
-        let is_paused = self.pause_flag.load(std::sync::atomic::Ordering::Relaxed);
+        let is_paused = self.pause_flag.load(std::sync::atomic::Ordering::Acquire);
 
         if let Some(state) = &self.state {
             if is_paused && !self.was_paused {
-                let _ = state.video_tx.try_send(Some(VideoFrameMessage::Pause));
+                let _ = state.video_tx.send(Some(VideoFrameMessage::Pause));
                 self.was_paused = true;
                 return Ok(());
             } else if !is_paused && self.was_paused {
-                let _ = state.video_tx.try_send(Some(VideoFrameMessage::Resume));
+                let _ = state.video_tx.send(Some(VideoFrameMessage::Resume));
                 self.was_paused = false;
             }
 
@@ -1009,15 +1009,15 @@ impl VideoMuxer for AVFoundationCameraMuxer {
             return Err(anyhow!(message));
         }
 
-        let is_paused = self.pause_flag.load(std::sync::atomic::Ordering::Relaxed);
+        let is_paused = self.pause_flag.load(std::sync::atomic::Ordering::Acquire);
 
         if let Some(state) = &self.state {
             if is_paused && !self.was_paused {
-                let _ = state.video_tx.try_send(Some(CameraFrameMessage::Pause));
+                let _ = state.video_tx.send(Some(CameraFrameMessage::Pause));
                 self.was_paused = true;
                 return Ok(());
             } else if !is_paused && self.was_paused {
-                let _ = state.video_tx.try_send(Some(CameraFrameMessage::Resume));
+                let _ = state.video_tx.send(Some(CameraFrameMessage::Resume));
                 self.was_paused = false;
             }
 
@@ -1074,8 +1074,8 @@ mod tests {
         }
 
         #[test]
-        fn normal_mode_default_is_60() {
-            assert_eq!(DEFAULT_MP4_MUXER_BUFFER_SIZE, 60);
+        fn normal_mode_default_is_120() {
+            assert_eq!(DEFAULT_MP4_MUXER_BUFFER_SIZE, 120);
         }
 
         #[test]
