@@ -98,6 +98,9 @@
 - [x] Fix #11: Audio silence budget (30s max) for long recordings (2026-02-15)
 - [x] Fix #12: Increased buffer sizes (120 frames studio, 240 instant) (2026-02-15)
 - [x] Fix #13: Improved encoder retry with exponential backoff (2026-02-15)
+- [x] Fix #14: Synthetic pause/resume test suite (2026-02-15)
+- [x] Fix #15: Instant mode crash recovery via MP4 repair (2026-02-15)
+- [x] Fix #16: App startup instant recording recovery integration (2026-02-15)
 
 ---
 
@@ -487,10 +490,26 @@ System Audio ────┘                       ├─► MP4 (macos.rs) ─�
   - MP4 dropped frames: 2.0-2.7% → <1.5% (larger buffers, better retry)
   - Pause/Resume reliability: 100% (blocking sends, Acquire ordering)
 
-**Stopping point**: All 11 of 13 planned fixes implemented. Remaining:
-- Synthetic test coverage for multi-pause (needs test infrastructure work)
-- Instant mode crash recovery (large effort, lower priority)
-- All fixes need verification on macOS hardware
+**Additional changes (continued session)**:
+- `crates/recording/examples/synthetic-test-runner.rs`:
+  - Added `PauseResume` subcommand with 3 test scenarios
+  - Single pause, triple pause, rapid pause tests
+  - Each test creates MP4 pipeline, exercises pause/resume, validates output duration
+
+- `crates/recording/src/recovery.rs`:
+  - Added `try_recover_instant()` for instant mode crash recovery
+  - Detects failed/in-progress instant recordings
+  - Probes MP4 for decodable frames, attempts repair via ffmpeg remux
+  - Updates meta to Complete on successful recovery
+
+- `apps/desktop/src-tauri/src/lib.rs`:
+  - Integrated instant recovery on app startup
+  - Before marking instant recordings as Failed, attempts recovery
+  - If recovery succeeds, loads recovered meta instead of marking Failed
+
+**Stopping point**: All 16 planned fixes implemented and pushed. Remaining:
+- All fixes need verification on macOS hardware with real-device benchmarks
+- Run: `cargo run -p cap-recording --example real-device-test-runner -- full --keep-outputs --benchmark-output`
 
 ---
 
