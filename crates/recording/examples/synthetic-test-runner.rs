@@ -41,6 +41,7 @@ enum Commands {
     Quick,
     Full,
     StudioMode,
+    PauseResume,
     Resolution {
         #[arg(long)]
         width: u32,
@@ -90,6 +91,11 @@ async fn main() {
         Some(Commands::StudioMode) => {
             println!("Running Studio Mode simulation (screen + camera + mic)...\n");
             vec![create_studio_mode_config(duration)]
+        }
+        Some(Commands::PauseResume) => {
+            println!("Running pause/resume tests...\n");
+            run_pause_resume_tests(&cli).await;
+            return;
         }
         Some(Commands::Resolution { width, height, fps }) => {
             println!("Testing resolution {width}x{height} @ {fps}fps...\n");
@@ -814,6 +820,200 @@ fn list_test_configurations() {
     println!("  source       - Test specific source type (screen/camera/microphone)");
     println!("  sync         - A/V sync verification tests");
     println!("  list         - Show this help");
+}
+
+async fn run_pause_resume_tests(cli: &Cli) {
+    let output_dir = &cli.output_dir;
+
+    if output_dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(output_dir)
+    {
+        tracing::warn!("Failed to clean output directory: {}", e);
+    }
+
+    let tests: Vec<(&str, Box<dyn Fn() -> PauseResumeScenario>)> = vec![
+        (
+            "Single pause (MP4, 3s+3s)",
+            Box::new(|| PauseResumeScenario {
+                record_durations: vec![
+                    Duration::from_secs(3),
+                    Duration::from_secs(3),
+                ],
+                pause_durations: vec![Duration::from_secs(2)],
+            }),
+        ),
+        (
+            "Triple pause (MP4, 2s+2s+2s+2s)",
+            Box::new(|| PauseResumeScenario {
+                record_durations: vec![
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                ],
+                pause_durations: vec![
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ],
+            }),
+        ),
+        (
+            "Rapid pause (MP4, 1s+1s+1s)",
+            Box::new(|| PauseResumeScenario {
+                record_durations: vec![
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                ],
+                pause_durations: vec![
+                    Duration::from_millis(500),
+                    Duration::from_millis(500),
+                ],
+            }),
+        ),
+    ];
+
+    let total = tests.len();
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for (idx, (name, make_scenario)) in tests.iter().enumerate() {
+        println!("[{}/{}] {}", idx + 1, total, name);
+        let scenario = make_scenario();
+        let test_dir = output_dir.join(format!("pause_test_{idx}"));
+        let _ = std::fs::create_dir_all(&test_dir);
+        let output_path = test_dir.join("output.mp4");
+
+        match run_mp4_with_pause(&output_path, &scenario).await {
+            Ok(result) => {
+                let total_record_secs: f64 = scenario
+                    .record_durations
+                    .iter()
+                    .map(|d| d.as_secs_f64())
+                    .sum();
+                println!(
+                    "       Duration: {:.2}s (expected ~{:.1}s)",
+                    result.actual_duration.as_secs_f64(),
+                    total_record_secs
+                );
+                println!(
+                    "       Frames: {} ({:.1}fps)",
+                    result.frame_count,
+                    result.frame_count as f64 / result.actual_duration.as_secs_f64().max(0.001)
+                );
+
+                let duration_diff = (result.actual_duration.as_secs_f64() - total_record_secs).abs();
+                if duration_diff < 2.0 {
+                    passed += 1;
+                    println!("       \u{2713} PASS\n");
+                } else {
+                    failed += 1;
+                    println!(
+                        "       \u{2717} FAIL (duration diff {:.2}s exceeds 2s tolerance)\n",
+                        duration_diff
+                    );
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                println!("       \u{2717} FAIL: {e}\n");
+            }
+        }
+    }
+
+    println!("{}", "=".repeat(60));
+    println!("Pause/Resume: {passed}/{total} passed, {failed} failed");
+
+    if !cli.keep_outputs
+        && let Err(e) = std::fs::remove_dir_all(output_dir)
+    {
+        tracing::warn!("Failed to clean output directory: {}", e);
+    }
+
+    std::process::exit(if failed > 0 { 1 } else { 0 });
+}
+
+struct PauseResumeScenario {
+    record_durations: Vec<Duration>,
+    pause_durations: Vec<Duration>,
+}
+
+struct PauseResumeResult {
+    actual_duration: Duration,
+    frame_count: u64,
+}
+
+async fn run_mp4_with_pause(
+    output_path: &Path,
+    scenario: &PauseResumeScenario,
+) -> anyhow::Result<PauseResumeResult> {
+    let timestamps = Timestamps::now();
+    let cancel_token = CancellationToken::new();
+    let video_config = VideoTestConfig::fhd_1080p().with_frame_rate(30);
+    let audio_config = AudioTestConfig::broadcast_stereo();
+
+    let total_record: Duration = scenario.record_durations.iter().sum();
+    let total_pause: Duration = scenario.pause_durations.iter().sum();
+    let total_wall = total_record + total_pause;
+
+    let video_source_config = TestPatternVideoSourceConfig {
+        video_config: video_config.clone(),
+        duration: total_wall + Duration::from_secs(2),
+        timestamps,
+        cancel_token: cancel_token.clone(),
+    };
+
+    let audio_source_config = SyntheticAudioSourceConfig {
+        audio_config: audio_config.clone(),
+        duration: total_wall + Duration::from_secs(2),
+        timestamps,
+        cancel_token: cancel_token.clone(),
+    };
+
+    let pipeline = OutputPipeline::builder(output_path.to_path_buf())
+        .with_timestamps(timestamps)
+        .with_video::<TestPatternVideoSource>(video_source_config)
+        .with_audio_source::<SyntheticAudioSource>(audio_source_config)
+        .build::<Mp4Muxer>(())
+        .await?;
+
+    for (i, record_dur) in scenario.record_durations.iter().enumerate() {
+        tokio::time::sleep(*record_dur).await;
+
+        if i < scenario.pause_durations.len() {
+            pipeline.pause();
+            tokio::time::sleep(scenario.pause_durations[i]).await;
+            pipeline.resume();
+        }
+    }
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let finished = pipeline.stop().await?;
+
+    let actual_duration = if output_path.exists() {
+        get_video_duration(output_path).unwrap_or(Duration::ZERO)
+    } else {
+        Duration::ZERO
+    };
+
+    Ok(PauseResumeResult {
+        actual_duration,
+        frame_count: finished.video_frame_count,
+    })
+}
+
+fn get_video_duration(path: &Path) -> Option<Duration> {
+    let input = ffmpeg::format::input(path).ok()?;
+    let duration_ts = input.duration();
+    if duration_ts > 0 {
+        Some(Duration::from_secs_f64(
+            duration_ts as f64 / ffmpeg::ffi::AV_TIME_BASE as f64,
+        ))
+    } else {
+        None
+    }
 }
 
 fn save_report(path: &PathBuf, results: &[(String, TestResult)]) {
