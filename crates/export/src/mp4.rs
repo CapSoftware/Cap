@@ -581,12 +581,33 @@ struct FirstFrameNv12 {
 fn nv12_to_ffmpeg_frame(
     frame: &Nv12RenderedFrame,
     pts: i64,
-    video_info: &VideoInfo,
+    rgba_video_info: &VideoInfo,
 ) -> ffmpeg::frame::Video {
     use cap_rendering::GpuOutputFormat;
 
     if frame.format == GpuOutputFormat::Rgba {
-        return video_info.wrap_frame(&frame.data, pts, frame.y_stride as usize);
+        tracing::warn!(
+            frame_number = frame.frame_number,
+            "NV12 conversion fell back to RGBA - converting on CPU"
+        );
+        let rgba_frame = rgba_video_info.wrap_frame(&frame.data, pts, frame.y_stride as usize);
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            ffmpeg::format::Pixel::RGBA,
+            frame.width,
+            frame.height,
+            ffmpeg::format::Pixel::NV12,
+            frame.width,
+            frame.height,
+            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+        )
+        .expect("failed to create RGBA→NV12 scaler");
+        let mut nv12_frame =
+            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, frame.width, frame.height);
+        converter
+            .run(&rgba_frame, &mut nv12_frame)
+            .expect("RGBA→NV12 conversion failed");
+        nv12_frame.set_pts(Some(pts));
+        return nv12_frame;
     }
 
     let width = frame.width;
