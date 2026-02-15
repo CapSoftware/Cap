@@ -17,6 +17,9 @@ pub struct RgbaToNv12Converter {
     pending: Option<PendingNv12Readback>,
     cached_width: u32,
     cached_height: u32,
+    cached_bind_groups: Option<[wgpu::BindGroup; 2]>,
+    cached_texture_view: Option<wgpu::TextureView>,
+    cached_texture_ptr: usize,
 }
 
 #[repr(C)]
@@ -105,6 +108,9 @@ impl RgbaToNv12Converter {
             pending: None,
             cached_width: 0,
             cached_height: 0,
+            cached_bind_groups: None,
+            cached_texture_view: None,
+            cached_texture_ptr: 0,
         }
     }
 
@@ -142,6 +148,9 @@ impl RgbaToNv12Converter {
         self.current_readback = 0;
         self.cached_width = width;
         self.cached_height = height;
+        self.cached_bind_groups = None;
+        self.cached_texture_view = None;
+        self.cached_texture_ptr = 0;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -166,7 +175,8 @@ impl RgbaToNv12Converter {
             return false;
         };
 
-        let readback_buffer = match self.readback_buffers[self.current_readback].as_ref() {
+        let readback_idx = self.current_readback;
+        let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
             Some(b) => b.clone(),
             None => return false,
         };
@@ -183,26 +193,43 @@ impl RgbaToNv12Converter {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        let source_view = source_texture.create_view(&Default::default());
+        let texture_ptr = source_texture as *const wgpu::Texture as usize;
+        let needs_rebind =
+            self.cached_texture_ptr != texture_ptr || self.cached_bind_groups.is_none();
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("RGBA to NV12 Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: nv12_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        if needs_rebind {
+            let source_view = source_texture.create_view(&Default::default());
+
+            let make_bind_group = |view: &wgpu::TextureView| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("RGBA to NV12 Bind Group"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: nv12_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.params_buffer.as_entire_binding(),
+                        },
+                    ],
+                })
+            };
+
+            let bg0 = make_bind_group(&source_view);
+            let bg1 = make_bind_group(&source_view);
+
+            self.cached_texture_view = Some(source_view);
+            self.cached_bind_groups = Some([bg0, bg1]);
+            self.cached_texture_ptr = texture_ptr;
+        }
+
+        let bind_groups = self.cached_bind_groups.as_ref().unwrap();
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -210,7 +237,7 @@ impl RgbaToNv12Converter {
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &bind_groups[readback_idx], &[]);
             pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
         }
 
