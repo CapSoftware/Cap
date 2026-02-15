@@ -246,12 +246,14 @@ impl Mp4ExportSettings {
                         return Err("Export cancelled".to_string());
                     }
 
+                    let nv12_data = ensure_nv12_data(frame);
+
                     if frame_count == 0 {
                         first_frame_data = Some(FirstFrameNv12 {
-                            data: frame.data.clone(),
-                            width: frame.width,
-                            height: frame.height,
-                            y_stride: frame.y_stride,
+                            data: nv12_data.clone(),
+                            width: output_size.0,
+                            height: output_size.1,
+                            y_stride: output_size.0,
                         });
                         if let Some(audio) = &mut audio_renderer {
                             audio.set_playhead(0.0, &project);
@@ -272,8 +274,6 @@ impl Mp4ExportSettings {
                             frame
                         })
                     });
-
-                    let nv12_data = ensure_nv12_data(frame);
 
                     if frame_tx
                         .send(Nv12ExportFrame {
