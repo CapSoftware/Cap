@@ -95,8 +95,8 @@ impl Mp4ExportSettings {
         let meta = &base.studio_meta;
 
         let (tx_image_data, mut video_rx) =
-            tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(16);
-        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Nv12ExportFrame>(16);
+            tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(32);
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Nv12ExportFrame>(32);
 
         let mut video_info =
             VideoInfo::from_raw(RawVideoFormat::Nv12, output_size.0, output_size.1, fps);
@@ -358,8 +358,8 @@ impl Mp4ExportSettings {
         let meta = &base.studio_meta;
 
         let (tx_image_data, mut video_rx) =
-            tokio::sync::mpsc::channel::<(cap_rendering::RenderedFrame, u32)>(16);
-        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(16);
+            tokio::sync::mpsc::channel::<(cap_rendering::RenderedFrame, u32)>(32);
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(32);
 
         let mut video_info =
             VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
