@@ -8,9 +8,9 @@ use cap_enc_ffmpeg::remux::{
     get_media_duration, get_video_fps, probe_media_valid, probe_video_can_decode,
 };
 use cap_project::{
-    AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
-    RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration,
-    TimelineSegment, VideoMeta,
+    AudioMeta, Cursors, InstantRecordingMeta, MultipleSegment, MultipleSegments,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+    StudioRecordingStatus, TimelineConfiguration, TimelineSegment, VideoMeta,
 };
 use relative_path::RelativePathBuf;
 use tracing::{debug, info, warn};
@@ -1072,5 +1072,109 @@ impl RecoveryManager {
                 );
             }
         }
+    }
+
+    pub fn try_recover_instant(project_path: &Path) -> Result<bool, RecoveryError> {
+        let meta = RecordingMeta::load_for_project(project_path)
+            .map_err(|_| RecoveryError::MetaSave)?;
+
+        let is_failed_instant = matches!(
+            &meta.inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. })
+                | RecordingMetaInner::Instant(InstantRecordingMeta::Failed { .. })
+        );
+
+        if !is_failed_instant {
+            return Ok(false);
+        }
+
+        let content_dir = project_path.join("content");
+        let output_mp4 = content_dir.join("output.mp4");
+
+        if !output_mp4.exists() {
+            info!(
+                "No output.mp4 found for instant recording at {:?}",
+                project_path
+            );
+            return Ok(false);
+        }
+
+        let file_size = std::fs::metadata(&output_mp4)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        if file_size < 1024 {
+            info!(
+                "Instant recording output.mp4 too small ({}B), not recoverable",
+                file_size
+            );
+            return Ok(false);
+        }
+
+        match probe_video_can_decode(&output_mp4) {
+            Ok(true) => {
+                info!(
+                    "Instant recording at {:?} has decodable frames, attempting repair",
+                    project_path
+                );
+            }
+            Ok(false) => {
+                info!(
+                    "Instant recording at {:?} has no decodable frames",
+                    project_path
+                );
+
+                let repaired_path = content_dir.join("output_repaired.mp4");
+                let repair_result =
+                    concatenate_video_fragments(&[output_mp4.clone()], &repaired_path);
+
+                match repair_result {
+                    Ok(()) => {
+                        match probe_video_can_decode(&repaired_path) {
+                            Ok(true) => {
+                                info!("Repaired MP4 has decodable frames, replacing original");
+                                std::fs::rename(&repaired_path, &output_mp4)?;
+                            }
+                            _ => {
+                                info!("Repaired MP4 still has no decodable frames, not recoverable");
+                                let _ = std::fs::remove_file(&repaired_path);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        info!("Failed to repair MP4: {e}");
+                        let _ = std::fs::remove_file(&repaired_path);
+                        return Ok(false);
+                    }
+                }
+            }
+            Err(e) => {
+                info!(
+                    "Failed to probe instant recording at {:?}: {e}",
+                    project_path
+                );
+                return Ok(false);
+            }
+        }
+
+        let fps = get_video_fps(&output_mp4).unwrap_or(30);
+
+        let mut updated_meta = meta;
+        updated_meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+            fps,
+            sample_rate: None,
+        });
+
+        updated_meta
+            .save_for_project()
+            .map_err(|_| RecoveryError::MetaSave)?;
+
+        info!(
+            "Successfully recovered instant recording at {:?} ({}fps)",
+            project_path, fps
+        );
+
+        Ok(true)
     }
 }
