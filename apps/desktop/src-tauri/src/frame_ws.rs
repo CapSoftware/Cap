@@ -265,11 +265,11 @@ pub async fn create_watch_frame_ws(
         let now = std::time::Instant::now();
 
         {
-            let borrowed = camera_rx.borrow();
-            if let Some(frame) = borrowed.as_deref() {
-                let packed = pack_ws_frame_ref(frame);
-
-                drop(borrowed);
+            let packed = {
+                let borrowed = camera_rx.borrow();
+                borrowed.as_deref().map(pack_ws_frame_ref)
+            };
+            if let Some(packed) = packed {
                 if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
                     return;
