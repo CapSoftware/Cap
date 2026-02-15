@@ -415,6 +415,32 @@ System Audio ────┘                       ├─► MP4 (macos.rs) ─�
 
 ---
 
+### Session 2026-02-15 (Performance Check + AVAssetReader Fix)
+
+**Goal**: Run recording and playback benchmarks, fix any issues
+
+**What was done**:
+1. Ran MP4 baseline benchmarks (cold + warm runs)
+2. Ran fragmented baseline benchmark
+3. Ran playback benchmark on resulting recordings
+4. Fixed AVAssetReader panic on directory paths (fragmented recordings)
+
+**Changes Made**:
+- `crates/video-decode/src/avassetreader.rs`: Replaced two `unwrap()` calls with proper error propagation via `?` and `map_err`. Previously panicked when given a directory path (fragmented recordings); now returns clean error that triggers graceful FFmpeg fallback.
+
+**Results**:
+- ✅ MP4: 29.2fps, 10.4-10.7ms jitter, 2.7% dropped, 0ms A/V sync, 81-94ms mic timing
+- ✅ Fragmented: 29.5-29.6fps, 4.6-5.9ms jitter, 1.3% dropped, 0ms A/V sync, 1-4ms mic timing
+- ✅ Playback MP4: 637fps effective, 1.6ms avg, 5.0ms p95, 0ms camera drift
+- ✅ Playback Fragmented: 153fps effective, 6.5ms avg, 12.4ms p95, 0ms camera drift
+- ✅ AVAssetReader no longer panics on directory paths
+- 🟡 System audio: 120-246ms (known lower-priority issue)
+- 🟡 MP4 dropped frames at 2.7% (single 160ms spike from encoder warmup, not actionable)
+
+**Stopping point**: All major metrics pass. AVAssetReader panic fixed. System audio timing remains as documented known issue.
+
+---
+
 ## References
 
 - `BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

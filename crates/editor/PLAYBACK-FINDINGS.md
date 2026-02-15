@@ -324,6 +324,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-02-15 (Performance Check + AVAssetReader Fix)
+
+**Goal**: Run playback benchmarks, fix panics in decoder fallback path
+
+**What was done**:
+1. Ran full playback validation on MP4 and fragmented recordings
+2. Identified AVAssetReader panicking with `unwrap()` on directory paths (fragmented recordings)
+3. Fixed by replacing `unwrap()` with proper error propagation
+
+**Changes Made**:
+- `crates/video-decode/src/avassetreader.rs`: Replaced `ffmpeg::format::input(&path).unwrap()` and `.ok_or(...).unwrap()` with `map_err()?` and `ok_or_else()?` for clean error propagation instead of panics
+
+**Results** (MP4 Mode):
+- ✅ Decoder: AVAssetReader (hardware), display init=114-123ms, camera init=25-33ms
+- ✅ Playback: 637-640 fps effective, avg=1.6ms, p95=5.0ms, p99=6.3ms
+- ✅ Camera sync: 0ms drift (perfect)
+- ✅ Mic sync: 88-100ms (borderline on this run, normally 77-88ms)
+- 🟡 System audio: 193-205ms (known issue, inherited from recording)
+
+**Results** (Fragmented Mode):
+- ✅ Decoder: FFmpeg (hardware) with VideoToolbox, display init=100-110ms, camera init=7ms
+- ✅ Playback: 153-173 fps effective, avg=5.8-6.5ms, p95=9.0-12.4ms
+- ✅ Camera sync: 0ms drift (perfect)
+- ✅ Mic sync: 10-23ms (excellent)
+- ✅ AVAssetReader now cleanly falls back to FFmpeg without panicking
+- 🟡 System audio: 85-116ms (borderline, known issue)
+
+**Stopping point**: All playback metrics healthy. AVAssetReader panic fixed. No further action needed.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)
