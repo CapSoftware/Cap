@@ -24,7 +24,7 @@ fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(60)
+        .unwrap_or(120)
 }
 
 struct FrameDropTracker {
@@ -151,7 +151,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             .shared_pause_state
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
-        Ok(Self {
+        let mut muxer = Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -162,7 +162,11 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
-        })
+        };
+
+        muxer.start_encoder()?;
+
+        Ok(muxer)
     }
 
     fn stop(&mut self) {
@@ -387,10 +391,6 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
         let Some(adjusted_timestamp) = self.pause.adjust(timestamp)? else {
             return Ok(());
         };
-
-        if !self.started {
-            self.start_encoder()?;
-        }
 
         if let Some(state) = &self.state {
             match state
@@ -645,7 +645,7 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             .shared_pause_state
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
-        Ok(Self {
+        let mut muxer = Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -656,7 +656,11 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
-        })
+        };
+
+        muxer.start_encoder()?;
+
+        Ok(muxer)
     }
 
     fn stop(&mut self) {
@@ -885,10 +889,6 @@ impl VideoMuxer for MacOSFragmentedM4SCameraMuxer {
         let Some(adjusted_timestamp) = self.pause.adjust(timestamp)? else {
             return Ok(());
         };
-
-        if !self.started {
-            self.start_encoder()?;
-        }
 
         if let Some(state) = &self.state {
             match state
