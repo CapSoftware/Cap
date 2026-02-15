@@ -381,15 +381,16 @@ impl ScreenshotEditorInstances {
 
                         match rendered_frame {
                             Ok(frame) => {
-                                let _ = frame_tx.send(Some(WSFrame {
+                                let _ = frame_tx.send(Some(std::sync::Arc::new(WSFrame {
                                     data: frame.data,
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
                                     frame_number: frame.frame_number,
                                     target_time_ns: frame.target_time_ns,
+                                    format: crate::frame_ws::WSFrameFormat::Rgba,
                                     created_at: Instant::now(),
-                                }));
+                                })));
                             }
                             Err(e) => {
                                 tracing::error!("Failed to render screenshot frame: {e}");

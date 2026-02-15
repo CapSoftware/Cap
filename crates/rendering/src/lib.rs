@@ -7,7 +7,7 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::{RenderSession, finish_encoder};
+use frame_pipeline::{RenderSession, finish_encoder, finish_encoder_nv12, flush_pending_readback};
 use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
@@ -42,7 +42,7 @@ pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
-pub use frame_pipeline::RenderedFrame;
+pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
@@ -532,10 +532,20 @@ pub async fn render_video_to_channel(
         sender.send((frame, current_frame_number)).await?;
     }
 
+    if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline().await
+        && final_frame.width > 0
+        && final_frame.height > 0
+    {
+        sender
+            .send((final_frame, frame_number.saturating_sub(1)))
+            .await?;
+    }
+
     let total_time = start_time.elapsed();
-    println!(
-        "Render complete. Processed {frame_number} frames in {:?} seconds",
-        total_time.as_secs_f32()
+    tracing::info!(
+        frames = frame_number,
+        elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
+        "Render complete"
     );
 
     Ok(())
@@ -1790,6 +1800,7 @@ pub struct DecodedSegmentFrames {
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
+    nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -1799,6 +1810,7 @@ impl<'a> FrameRenderer<'a> {
         Self {
             constants,
             session: None,
+            nv12_converter: None,
         }
     }
 
@@ -1867,6 +1879,106 @@ impl<'a> FrameRenderer<'a> {
                         error = %e,
                         "GPU buffer async error, will retry"
                     );
+                    last_error = Some(RenderingError::BufferMapFailed(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
+    pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
+        if let Some(session) = &mut self.session {
+            flush_pending_readback(session, &self.constants.device).await
+        } else {
+            None
+        }
+    }
+
+    pub async fn render_nv12(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        layers: &mut RendererLayers,
+    ) -> Result<frame_pipeline::Nv12RenderedFrame, RenderingError> {
+        let mut last_error = None;
+
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying NV12 frame render after GPU error"
+                );
+                self.reset_session();
+                self.nv12_converter = None;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                )
+            });
+
+            session.update_texture_size(
+                &self.constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            );
+
+            let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
+                frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
+            });
+
+            let mut encoder = self.constants.device.create_command_encoder(
+                &(wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder (NV12)"),
+                }),
+            );
+
+            if let Err(e) = layers
+                .prepare_with_encoder(
+                    self.constants,
+                    &uniforms,
+                    &segment_frames,
+                    cursor,
+                    &mut encoder,
+                )
+                .await
+            {
+                last_error = Some(e);
+                continue;
+            }
+
+            layers.render(
+                &self.constants.device,
+                &self.constants.queue,
+                &mut encoder,
+                session,
+                &uniforms,
+            );
+
+            match finish_encoder_nv12(
+                session,
+                nv12_converter,
+                &self.constants.device,
+                &self.constants.queue,
+                &uniforms,
+                encoder,
+            )
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(RenderingError::BufferMapFailed(e)) => {
                     last_error = Some(RenderingError::BufferMapFailed(e));
                 }
                 Err(e) => return Err(e),
@@ -2013,6 +2125,87 @@ impl RendererLayers {
         Ok(())
     }
 
+    pub async fn prepare_with_encoder(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+        segment_frames: &DecodedSegmentFrames,
+        cursor: &CursorEvents,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), RenderingError> {
+        self.background
+            .prepare(
+                constants,
+                uniforms,
+                Background::from(uniforms.project.background.source.clone()),
+            )
+            .await?;
+
+        if uniforms.project.background.blur > 0.0 {
+            self.background_blur.prepare(&constants.queue, uniforms);
+        }
+
+        self.display.prepare_with_encoder(
+            &constants.device,
+            &constants.queue,
+            segment_frames,
+            constants.options.screen_size,
+            uniforms.display,
+            encoder,
+        );
+
+        self.cursor.prepare(
+            segment_frames,
+            uniforms.resolution_base,
+            cursor,
+            &uniforms.zoom,
+            uniforms,
+            constants,
+        );
+
+        self.camera.prepare_with_encoder(
+            &constants.device,
+            &constants.queue,
+            uniforms.camera,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
+            encoder,
+        );
+
+        self.camera_only.prepare_with_encoder(
+            &constants.device,
+            &constants.queue,
+            uniforms.camera_only,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
+            encoder,
+        );
+
+        self.text.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.output_size,
+            &uniforms.texts,
+        );
+
+        self.captions.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
+        Ok(())
+    }
+
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -2112,15 +2305,15 @@ async fn produce_frame(
     layers: &mut RendererLayers,
     session: &mut RenderSession,
 ) -> Result<RenderedFrame, RenderingError> {
-    layers
-        .prepare(constants, &uniforms, &segment_frames, cursor)
-        .await?;
-
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
     );
+
+    layers
+        .prepare_with_encoder(constants, &uniforms, &segment_frames, cursor, &mut encoder)
+        .await?;
 
     layers.render(
         &constants.device,

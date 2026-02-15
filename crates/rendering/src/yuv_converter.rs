@@ -753,6 +753,81 @@ impl YuvToRgbaConverter {
         Ok(self.current_output_view())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_nv12_to_encoder(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        y_data: &[u8],
+        uv_data: &[u8],
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        self.swap_output_buffer();
+
+        upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
+
+        let half_height = height / 2;
+        let expected_uv_size = (uv_stride * half_height) as usize;
+        if uv_data.len() < expected_uv_size {
+            return Err(YuvConversionError::PlaneSizeMismatch {
+                plane: "UV",
+                expected: expected_uv_size,
+                actual: uv_data.len(),
+            });
+        }
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.uv_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            uv_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(uv_stride),
+                rows_per_image: Some(half_height),
+            },
+            wgpu::Extent3d {
+                width: width / 2,
+                height: half_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_nv12(
+            device,
+            &self.pipelines.nv12_bind_group_layout,
+            &self.y_view,
+            &self.uv_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 Conversion Pass (Batched)"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
+
+        Ok(self.current_output_view())
+    }
+
     #[cfg(target_os = "macos")]
     pub fn convert_nv12_from_iosurface(
         &mut self,
@@ -909,6 +984,75 @@ impl YuvToRgbaConverter {
         }
 
         queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.current_output_view())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_yuv420p_to_encoder(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        y_data: &[u8],
+        u_data: &[u8],
+        v_data: &[u8],
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        self.swap_output_buffer();
+
+        upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
+
+        let half_width = width / 2;
+        let half_height = height / 2;
+
+        upload_plane_with_stride(
+            queue,
+            &self.u_texture,
+            u_data,
+            half_width,
+            half_height,
+            uv_stride,
+            "U",
+        )?;
+        upload_plane_with_stride(
+            queue,
+            &self.v_texture,
+            v_data,
+            half_width,
+            half_height,
+            uv_stride,
+            "V",
+        )?;
+
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_yuv420p(
+            device,
+            &self.pipelines.yuv420p_bind_group_layout,
+            &self.y_view,
+            &self.u_view,
+            &self.v_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("YUV420P Conversion Pass (Batched)"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
 
         Ok(self.current_output_view())
     }

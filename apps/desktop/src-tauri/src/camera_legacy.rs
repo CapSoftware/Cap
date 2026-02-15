@@ -66,6 +66,7 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
                     stride: frame.stride(0) as u32,
                     frame_number: 0,
                     target_time_ns: 0,
+                    format: crate::frame_ws::WSFrameFormat::Rgba,
                     created_at: Instant::now(),
                 })
                 .ok();

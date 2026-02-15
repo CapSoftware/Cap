@@ -54,7 +54,7 @@ use cap_recording::{
     },
     sources::screen_capture::ScreenCaptureTarget,
 };
-use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
+use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
@@ -3853,7 +3853,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
-    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+    frame_cb: Box<dyn FnMut(cap_editor::EditorFrameOutput) + Send>,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 

@@ -34,11 +34,13 @@ use crate::{
     audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 60;
-const PARALLEL_DECODE_TASKS: usize = 4;
-const MAX_PREFETCH_AHEAD: u32 = 60;
-const PREFETCH_BEHIND: u32 = 15;
-const FRAME_CACHE_SIZE: usize = 60;
+const PREFETCH_BUFFER_SIZE: usize = 90;
+const PARALLEL_DECODE_TASKS: usize = 6;
+const INITIAL_PARALLEL_DECODE_TASKS: usize = 8;
+const MAX_PREFETCH_AHEAD: u32 = 90;
+const PREFETCH_BEHIND: u32 = 10;
+const FRAME_CACHE_SIZE: usize = 90;
+const RAMP_UP_FRAME_COUNT: u32 = 15;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -97,6 +99,24 @@ impl FrameCache {
     ) {
         self.cache
             .put(frame_number, (segment_frames, segment_index));
+    }
+
+    fn evict_far_from(&mut self, current_frame: u32, max_distance: u32) {
+        let keys_to_remove: Vec<u32> = self
+            .cache
+            .iter()
+            .filter_map(|(k, _)| {
+                if (*k).abs_diff(current_frame) > max_distance {
+                    Some(*k)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            self.cache.pop(&key);
+        }
     }
 }
 
@@ -161,8 +181,6 @@ impl Playback {
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut prefetched_behind: HashSet<u32> = HashSet::new();
-            const INITIAL_PARALLEL_TASKS: usize = 4;
-            const RAMP_UP_AFTER_FRAMES: u32 = 5;
 
             let mut cached_project = prefetch_project.borrow().clone();
 
@@ -203,8 +221,8 @@ impl Playback {
                 let current_playback_frame = *playback_position_rx.borrow();
                 let max_prefetch_frame = current_playback_frame + MAX_PREFETCH_AHEAD;
 
-                let effective_parallel = if frames_decoded < RAMP_UP_AFTER_FRAMES {
-                    INITIAL_PARALLEL_TASKS
+                let effective_parallel = if frames_decoded < RAMP_UP_FRAME_COUNT {
+                    INITIAL_PARALLEL_DECODE_TASKS
                 } else {
                     PARALLEL_DECODE_TASKS
                 };
@@ -382,13 +400,18 @@ impl Playback {
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
-            let aggressive_skip_threshold = 10u32;
+            let aggressive_skip_threshold = 6u32;
 
             let mut total_frames_rendered = 0u64;
-            let mut _total_frames_skipped = 0u64;
+            let mut total_frames_skipped = 0u64;
+            let mut cache_hits = 0u64;
+            let mut prefetch_hits = 0u64;
+            let mut sync_decodes = 0u64;
+            let mut last_stats_time = Instant::now();
+            let stats_interval = Duration::from_secs(2);
 
-            let warmup_target_frames = 20usize;
-            let warmup_after_first_timeout = Duration::from_millis(1000);
+            let warmup_target_frames = 10usize;
+            let warmup_after_first_timeout = Duration::from_millis(500);
             let warmup_no_frames_timeout = Duration::from_secs(5);
             let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
@@ -486,6 +509,7 @@ impl Playback {
 
                 let segment_frames_opt = if let Some(cached) = frame_cache.get(frame_number) {
                     was_cached = true;
+                    cache_hits += 1;
                     Some(cached)
                 } else {
                     let prefetched_idx = prefetch_buffer
@@ -494,6 +518,7 @@ impl Playback {
 
                     if let Some(idx) = prefetched_idx {
                         let prefetched = prefetch_buffer.remove(idx).unwrap();
+                        prefetch_hits += 1;
                         Some((
                             Arc::new(prefetched.segment_frames),
                             prefetched.segment_index,
@@ -506,7 +531,7 @@ impl Playback {
 
                         if is_in_flight {
                             let wait_start = Instant::now();
-                            let max_wait = Duration::from_millis(200);
+                            let max_wait = Duration::from_millis(100);
                             let mut found_frame = None;
 
                             while wait_start.elapsed() < max_wait {
@@ -549,7 +574,7 @@ impl Playback {
                                     ))
                                 } else {
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 }
                             }
@@ -557,7 +582,7 @@ impl Playback {
                             let _ = frame_request_tx.send(frame_number);
 
                             let wait_result = tokio::time::timeout(
-                                Duration::from_millis(200),
+                                Duration::from_millis(100),
                                 prefetch_rx.recv(),
                             )
                             .await;
@@ -571,12 +596,12 @@ impl Playback {
                                 } else {
                                     prefetch_buffer.push_back(prefetched);
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 }
                             } else {
                                 frame_number = frame_number.saturating_add(1);
-                                _total_frames_skipped += 1;
+                                total_frames_skipped += 1;
                                 continue;
                             }
                         } else {
@@ -604,7 +629,7 @@ impl Playback {
                                 guard.insert(frame_number);
                             }
 
-                            let max_wait = Duration::from_millis(200);
+                            let max_wait = Duration::from_millis(100);
                             let data = tokio::select! {
                                 _ = stop_rx.changed() => {
                                     if let Ok(mut guard) = main_in_flight.write() {
@@ -617,7 +642,7 @@ impl Playback {
                                         guard.remove(&frame_number);
                                     }
                                     frame_number = frame_number.saturating_add(1);
-                                    _total_frames_skipped += 1;
+                                    total_frames_skipped += 1;
                                     continue;
                                 },
                                 data = segment_media
@@ -630,6 +655,7 @@ impl Playback {
                                 },
                             };
 
+                            sync_decodes += 1;
                             data.map(|frames| (Arc::new(frames), segment.recording_clip))
                         }
                     }
@@ -657,8 +683,8 @@ impl Playback {
                             friction: cached_project.cursor.friction,
                         });
 
-                    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-                        &segment_media.cursor,
+                    let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
+                        segment_media.cursor.clone(),
                         cursor_smoothing,
                         cached_project.screen_movement_spring,
                         duration,
@@ -687,6 +713,23 @@ impl Playback {
                     total_frames_rendered += 1;
                 }
 
+                if last_stats_time.elapsed() >= stats_interval {
+                    let effective_fps =
+                        total_frames_rendered as f64 / start.elapsed().as_secs_f64().max(0.001);
+                    let buffer_len = prefetch_buffer.len();
+                    info!(
+                        effective_fps = format!("{:.1}", effective_fps),
+                        total_rendered = total_frames_rendered,
+                        total_skipped = total_frames_skipped,
+                        cache_hits = cache_hits,
+                        prefetch_hits = prefetch_hits,
+                        sync_decodes = sync_decodes,
+                        prefetch_buffer = buffer_len,
+                        "Playback stats"
+                    );
+                    last_stats_time = Instant::now();
+                }
+
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
                 frame_number = frame_number.saturating_add(1);
@@ -712,9 +755,10 @@ impl Playback {
                     let skipped = frames_behind.saturating_sub(1);
                     if skipped > 0 {
                         frame_number += skipped;
-                        _total_frames_skipped += skipped as u64;
+                        total_frames_skipped += skipped as u64;
 
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        frame_cache.evict_far_from(frame_number, MAX_PREFETCH_AHEAD);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                         if has_audio
@@ -1040,14 +1084,14 @@ impl AudioPlayback {
             #[cfg(target_os = "windows")]
             const FIXED_LATENCY_SECS: f64 = 0.08;
             #[cfg(target_os = "windows")]
-            const SYNC_THRESHOLD_SECS: f64 = 0.20;
+            const SYNC_THRESHOLD_SECS: f64 = 0.10;
             #[cfg(target_os = "windows")]
-            const HARD_SEEK_THRESHOLD_SECS: f64 = 0.5;
+            const HARD_SEEK_THRESHOLD_SECS: f64 = 0.3;
             #[cfg(target_os = "windows")]
-            const MIN_SYNC_INTERVAL_CALLBACKS: u32 = 50;
+            const MIN_SYNC_INTERVAL_CALLBACKS: u32 = 30;
 
             #[cfg(not(target_os = "windows"))]
-            const SYNC_THRESHOLD_SECS: f64 = 0.12;
+            const SYNC_THRESHOLD_SECS: f64 = 0.08;
 
             #[cfg(target_os = "windows")]
             let mut callbacks_since_last_sync: u32 = MIN_SYNC_INTERVAL_CALLBACKS;
@@ -1205,7 +1249,7 @@ impl AudioPlayback {
                         let video_playhead = *playhead_rx_for_stream.borrow_and_update();
                         let jump = (video_playhead - last_video_playhead).abs();
 
-                        if jump > 0.1 {
+                        if jump > 0.05 {
                             audio_buffer.set_playhead(video_playhead);
                         }
 

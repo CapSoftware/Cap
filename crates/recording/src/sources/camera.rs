@@ -133,7 +133,7 @@ impl VideoSource for Camera {
                                 if frame_width != original_width || frame_height != original_height {
                                     let needs_new_scaler = scaler
                                         .as_ref()
-                                        .map_or(true, |s| !s.matches_source(frame_width, frame_height));
+                                        .is_none_or(|s| !s.matches_source(frame_width, frame_height));
 
                                     if needs_new_scaler {
                                         let frame_format = frame.inner.format();

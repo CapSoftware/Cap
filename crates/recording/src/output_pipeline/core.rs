@@ -419,7 +419,7 @@ impl TimestampAnomalyTracker {
         jump_secs: f64,
         now: Instant,
     ) -> Result<Duration, TimestampAnomalyError> {
-        let wall_clock_confirmed = self.last_valid_wall_clock.map_or(false, |last_wc| {
+        let wall_clock_confirmed = self.last_valid_wall_clock.is_some_and(|last_wc| {
             let wall_clock_gap_secs = now.duration_since(last_wc).as_secs_f64();
             wall_clock_gap_secs >= jump_secs * 0.5
         });
