@@ -82,6 +82,7 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Performance",
+    "Win32_Storage_FileSystem",
     "Win32_Storage_Xps",
 ] }
 
