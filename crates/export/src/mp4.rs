@@ -631,7 +631,7 @@ fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Vec<u8> {
     use cap_rendering::GpuOutputFormat;
 
     if frame.format != GpuOutputFormat::Rgba {
-        return frame.data;
+        return frame.into_data();
     }
 
     tracing::warn!(
