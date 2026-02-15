@@ -3755,10 +3755,21 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                         }
                     }
                     RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
-                        meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
-                            error: "Recording crashed".to_string(),
-                        });
-                        needs_save = true;
+                        match cap_recording::recovery::RecoveryManager::try_recover_instant(&path) {
+                            Ok(true) => {
+                                info!("Successfully recovered crashed instant recording at {path:?}");
+                                if let Ok(recovered_meta) = RecordingMeta::load_for_project(&path) {
+                                    meta = recovered_meta;
+                                    needs_save = false;
+                                }
+                            }
+                            Ok(false) | Err(_) => {
+                                meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+                                    error: "Recording crashed".to_string(),
+                                });
+                                needs_save = true;
+                            }
+                        }
                     }
                     _ => {}
                 }
