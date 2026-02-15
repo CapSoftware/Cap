@@ -95,15 +95,11 @@ impl Mp4ExportSettings {
 
         let (tx_image_data, mut video_rx) =
             tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(16);
-        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(16);
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Nv12ExportFrame>(16);
 
         let mut video_info =
             VideoInfo::from_raw(RawVideoFormat::Nv12, output_size.0, output_size.1, fps);
         video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
-
-        let mut rgba_video_info =
-            VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
-        rgba_video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
 
         let audio_segments = get_audio_segments(&base.segments);
 
@@ -139,14 +135,25 @@ impl Mp4ExportSettings {
 
             info!("Created MP4File encoder (NV12, external conversion, export settings)");
 
+            let mut reusable_frame = ffmpeg::frame::Video::new(
+                ffmpeg::format::Pixel::NV12,
+                output_size.0,
+                output_size.1,
+            );
+            let mut converted_frame: Option<ffmpeg::frame::Video> = None;
             let mut encoded_frames = 0u32;
             let encode_start = std::time::Instant::now();
 
-            while let Ok(frame) = frame_rx.recv() {
+            while let Ok(input) = frame_rx.recv() {
+                fill_nv12_frame(&mut reusable_frame, &input);
                 encoder
-                    .queue_video_frame(frame.video, Duration::MAX)
+                    .queue_video_frame_reusable(
+                        &mut reusable_frame,
+                        &mut converted_frame,
+                        Duration::MAX,
+                    )
                     .map_err(|err| err.to_string())?;
-                if let Some(audio) = frame.audio {
+                if let Some(audio) = input.audio {
                     encoder.queue_audio_frame(audio);
                 }
                 encoded_frames += 1;
@@ -266,13 +273,16 @@ impl Mp4ExportSettings {
                         })
                     });
 
-                    let video_frame =
-                        nv12_to_ffmpeg_frame(&frame, frame_number as i64, &rgba_video_info);
+                    let nv12_data = ensure_nv12_data(frame);
 
                     if frame_tx
-                        .send(MP4Input {
+                        .send(Nv12ExportFrame {
                             audio: audio_frame,
-                            video: video_frame,
+                            nv12_data,
+                            width: output_size.0,
+                            height: output_size.1,
+                            y_stride: output_size.0,
+                            pts: frame_number as i64,
                         })
                         .is_err()
                     {
@@ -607,99 +617,131 @@ struct FirstFrameNv12 {
     y_stride: u32,
 }
 
-fn nv12_to_ffmpeg_frame(
-    frame: &Nv12RenderedFrame,
+struct Nv12ExportFrame {
+    nv12_data: Vec<u8>,
+    width: u32,
+    height: u32,
+    y_stride: u32,
     pts: i64,
-    rgba_video_info: &VideoInfo,
-) -> ffmpeg::frame::Video {
+    audio: Option<ffmpeg::frame::Audio>,
+}
+
+fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Vec<u8> {
     use cap_rendering::GpuOutputFormat;
 
-    if frame.format == GpuOutputFormat::Rgba {
-        tracing::warn!(
-            frame_number = frame.frame_number,
-            "NV12 conversion fell back to RGBA - converting on CPU"
-        );
-        let rgba_frame = rgba_video_info.wrap_frame(&frame.data, pts, frame.y_stride as usize);
-
-        if let Ok(mut converter) = ffmpeg::software::scaling::Context::get(
-            ffmpeg::format::Pixel::RGBA,
-            frame.width,
-            frame.height,
-            ffmpeg::format::Pixel::NV12,
-            frame.width,
-            frame.height,
-            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-        ) {
-            let mut nv12_frame =
-                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, frame.width, frame.height);
-            if converter.run(&rgba_frame, &mut nv12_frame).is_ok() {
-                nv12_frame.set_pts(Some(pts));
-                return nv12_frame;
-            }
-        }
-
-        tracing::error!(
-            frame_number = frame.frame_number,
-            "RGBA to NV12 CPU conversion failed, sending RGBA frame directly"
-        );
-        return rgba_frame;
+    if frame.format != GpuOutputFormat::Rgba {
+        return frame.data;
     }
+
+    tracing::warn!(
+        frame_number = frame.frame_number,
+        "GPU NV12 converter returned RGBA - converting to NV12 on CPU"
+    );
 
     let width = frame.width;
     let height = frame.height;
-    let y_stride = frame.y_stride;
+    let y_size = (width * height) as usize;
+    let uv_size = (width * height / 2) as usize;
+    let mut nv12 = vec![0u8; y_size + uv_size];
 
-    let mut video_frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
-    video_frame.set_pts(Some(pts));
+    let mut rgba_buf = vec![0u8; (width * height * 4) as usize];
+    let copy_len = frame.data.len().min(rgba_buf.len());
+    rgba_buf[..copy_len].copy_from_slice(&frame.data[..copy_len]);
 
-    let y_plane_size = (y_stride as usize) * (height as usize);
-    let y_src = &frame.data[..y_plane_size.min(frame.data.len())];
-    let uv_src = if y_plane_size < frame.data.len() {
-        &frame.data[y_plane_size..]
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let rgba_off = (y * width as usize + x) * 4;
+            let r = rgba_buf[rgba_off] as f32;
+            let g = rgba_buf[rgba_off + 1] as f32;
+            let b = rgba_buf[rgba_off + 2] as f32;
+            nv12[y * width as usize + x] =
+                (16.0 + 65.481 * r / 255.0 + 128.553 * g / 255.0 + 24.966 * b / 255.0)
+                    .clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    for y in (0..height as usize).step_by(2) {
+        for x in (0..width as usize).step_by(2) {
+            let mut r_sum = 0.0f32;
+            let mut g_sum = 0.0f32;
+            let mut b_sum = 0.0f32;
+            for dy in 0..2usize {
+                for dx in 0..2usize {
+                    let py = (y + dy).min(height as usize - 1);
+                    let px = (x + dx).min(width as usize - 1);
+                    let off = (py * width as usize + px) * 4;
+                    r_sum += rgba_buf[off] as f32;
+                    g_sum += rgba_buf[off + 1] as f32;
+                    b_sum += rgba_buf[off + 2] as f32;
+                }
+            }
+            let r = r_sum / (4.0 * 255.0);
+            let g = g_sum / (4.0 * 255.0);
+            let b = b_sum / (4.0 * 255.0);
+            let u = (128.0 - 37.797 * r - 74.203 * g + 112.0 * b).clamp(0.0, 255.0) as u8;
+            let v = (128.0 + 112.0 * r - 93.786 * g - 18.214 * b).clamp(0.0, 255.0) as u8;
+            let uv_row = y / 2;
+            let uv_col = x;
+            let uv_off = y_size + uv_row * width as usize + uv_col;
+            nv12[uv_off] = u;
+            nv12[uv_off + 1] = v;
+        }
+    }
+
+    nv12
+}
+
+fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
+    frame.set_pts(Some(input.pts));
+
+    let width = input.width as usize;
+    let height = input.height as usize;
+    let y_stride = input.y_stride as usize;
+
+    let y_plane_size = y_stride * height;
+    let y_src = &input.nv12_data[..y_plane_size.min(input.nv12_data.len())];
+    let uv_src = if y_plane_size < input.nv12_data.len() {
+        &input.nv12_data[y_plane_size..]
     } else {
         &[]
     };
 
-    let dst_y_stride = video_frame.stride(0);
-    let dst_uv_stride = video_frame.stride(1);
-
-    if dst_y_stride == y_stride as usize {
-        let copy_len = y_src.len().min(video_frame.data_mut(0).len());
-        video_frame.data_mut(0)[..copy_len].copy_from_slice(&y_src[..copy_len]);
+    let dst_y_stride = frame.stride(0);
+    if dst_y_stride == y_stride {
+        let copy_len = y_src.len().min(frame.data_mut(0).len());
+        frame.data_mut(0)[..copy_len].copy_from_slice(&y_src[..copy_len]);
     } else {
-        for row in 0..height as usize {
-            let src_start = row * y_stride as usize;
+        for row in 0..height {
+            let src_start = row * y_stride;
             let dst_start = row * dst_y_stride;
-            let copy_width = (width as usize).min(y_stride as usize).min(dst_y_stride);
+            let copy_width = width.min(y_stride).min(dst_y_stride);
             if src_start + copy_width <= y_src.len()
-                && dst_start + copy_width <= video_frame.data_mut(0).len()
+                && dst_start + copy_width <= frame.data_mut(0).len()
             {
-                video_frame.data_mut(0)[dst_start..dst_start + copy_width]
+                frame.data_mut(0)[dst_start..dst_start + copy_width]
                     .copy_from_slice(&y_src[src_start..src_start + copy_width]);
             }
         }
     }
 
-    let uv_height = height as usize / 2;
-    let uv_width = width as usize;
-    if dst_uv_stride == uv_width {
-        let copy_len = uv_src.len().min(video_frame.data_mut(1).len());
-        video_frame.data_mut(1)[..copy_len].copy_from_slice(&uv_src[..copy_len]);
+    let uv_height = height / 2;
+    let dst_uv_stride = frame.stride(1);
+    if dst_uv_stride == width {
+        let copy_len = uv_src.len().min(frame.data_mut(1).len());
+        frame.data_mut(1)[..copy_len].copy_from_slice(&uv_src[..copy_len]);
     } else {
         for row in 0..uv_height {
-            let src_start = row * uv_width;
+            let src_start = row * width;
             let dst_start = row * dst_uv_stride;
-            let copy_width = uv_width.min(dst_uv_stride);
+            let copy_width = width.min(dst_uv_stride);
             if src_start + copy_width <= uv_src.len()
-                && dst_start + copy_width <= video_frame.data_mut(1).len()
+                && dst_start + copy_width <= frame.data_mut(1).len()
             {
-                video_frame.data_mut(1)[dst_start..dst_start + copy_width]
+                frame.data_mut(1)[dst_start..dst_start + copy_width]
                     .copy_from_slice(&uv_src[src_start..src_start + copy_width]);
             }
         }
     }
-
-    video_frame
 }
 
 fn save_screenshot_from_nv12(
