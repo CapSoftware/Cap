@@ -886,11 +886,6 @@ impl ShowCapWindow {
                 None
             };
 
-            match self {
-                Self::Main { .. } => {}
-                _ => {}
-            }
-
             if let Self::Main {
                 init_target_mode: Some(target_mode),
             } = self

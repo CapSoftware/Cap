@@ -6,8 +6,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
 #[cfg(target_os = "macos")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PanelState {
+    #[default]
     None,
     Creating,
     Ready,
@@ -15,19 +16,9 @@ pub enum PanelState {
 }
 
 #[cfg(target_os = "macos")]
-impl Default for PanelState {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelWindowType {
     Camera,
-    Main,
-    TargetSelectOverlay,
-    InProgressRecording,
 }
 
 #[cfg(target_os = "macos")]
@@ -35,9 +26,6 @@ impl std::fmt::Display for PanelWindowType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Camera => write!(f, "Camera"),
-            Self::Main => write!(f, "Main"),
-            Self::TargetSelectOverlay => write!(f, "TargetSelectOverlay"),
-            Self::InProgressRecording => write!(f, "InProgressRecording"),
         }
     }
 }
@@ -107,7 +95,6 @@ impl PanelManager {
                     window_type, op_id
                 );
                 Some(PanelOperationGuard {
-                    window_type,
                     operation_id: op_id,
                     completed: false,
                 })
@@ -136,87 +123,6 @@ impl PanelManager {
         }
     }
 
-    pub async fn try_begin_show(
-        &self,
-        window_type: PanelWindowType,
-    ) -> Option<PanelOperationGuard> {
-        let mut panels = self.panels.write().await;
-        let entry = panels.entry(window_type).or_default();
-
-        match entry.state {
-            PanelState::Ready => {
-                let op_id = self
-                    .operation_counter
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                debug!(
-                    "Panel {}: beginning show operation (op_id={})",
-                    window_type, op_id
-                );
-                Some(PanelOperationGuard {
-                    window_type,
-                    operation_id: op_id,
-                    completed: true,
-                })
-            }
-            PanelState::None => {
-                debug!("Panel {}: show blocked - window doesn't exist", window_type);
-                None
-            }
-            PanelState::Creating => {
-                debug!(
-                    "Panel {}: show blocked - currently creating (op_id={})",
-                    window_type, entry.operation_id
-                );
-                None
-            }
-            PanelState::Destroying => {
-                debug!(
-                    "Panel {}: show blocked - currently destroying (op_id={})",
-                    window_type, entry.operation_id
-                );
-                None
-            }
-        }
-    }
-
-    pub async fn try_begin_destroy(
-        &self,
-        window_type: PanelWindowType,
-    ) -> Option<PanelOperationGuard> {
-        let mut panels = self.panels.write().await;
-        let entry = panels.entry(window_type).or_default();
-
-        match entry.state {
-            PanelState::Ready | PanelState::Creating => {
-                let op_id = self
-                    .operation_counter
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                entry.state = PanelState::Destroying;
-                entry.operation_id = op_id;
-                debug!(
-                    "Panel {}: beginning destroy operation (op_id={})",
-                    window_type, op_id
-                );
-                Some(PanelOperationGuard {
-                    window_type,
-                    operation_id: op_id,
-                    completed: false,
-                })
-            }
-            PanelState::None => {
-                debug!("Panel {}: destroy skipped - already destroyed", window_type);
-                None
-            }
-            PanelState::Destroying => {
-                debug!(
-                    "Panel {}: destroy blocked - already destroying (op_id={})",
-                    window_type, entry.operation_id
-                );
-                None
-            }
-        }
-    }
-
     pub async fn mark_ready(&self, window_type: PanelWindowType, operation_id: u64) {
         let mut panels = self.panels.write().await;
         if let Some(entry) = panels.get_mut(&window_type) {
@@ -229,24 +135,6 @@ impl PanelManager {
             } else {
                 warn!(
                     "Panel {}: mark_ready ignored - state mismatch (current state={:?}, current op={}, requested op={})",
-                    window_type, entry.state, entry.operation_id, operation_id
-                );
-            }
-        }
-    }
-
-    pub async fn mark_destroyed(&self, window_type: PanelWindowType, operation_id: u64) {
-        let mut panels = self.panels.write().await;
-        if let Some(entry) = panels.get_mut(&window_type) {
-            if entry.operation_id == operation_id && entry.state == PanelState::Destroying {
-                entry.state = PanelState::None;
-                info!(
-                    "Panel {}: marked destroyed (op_id={})",
-                    window_type, operation_id
-                );
-            } else {
-                warn!(
-                    "Panel {}: mark_destroyed ignored - state mismatch (current state={:?}, current op={}, requested op={})",
                     window_type, entry.state, entry.operation_id, operation_id
                 );
             }
@@ -293,7 +181,6 @@ impl PanelManager {
 
 #[cfg(target_os = "macos")]
 pub struct PanelOperationGuard {
-    pub window_type: PanelWindowType,
     pub operation_id: u64,
     completed: bool,
 }
@@ -302,10 +189,6 @@ pub struct PanelOperationGuard {
 impl PanelOperationGuard {
     pub fn mark_completed(&mut self) {
         self.completed = true;
-    }
-
-    pub fn is_completed(&self) -> bool {
-        self.completed
     }
 }
 

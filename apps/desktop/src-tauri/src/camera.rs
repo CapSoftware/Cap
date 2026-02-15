@@ -151,50 +151,6 @@ impl CameraPreviewManager {
         }
     }
 
-    // Resumes a paused camera preview. Uses window.show() which is safe, unlike
-    // panel.order_front_regardless() which causes crashes after repeated use.
-    pub fn resume(&mut self, window: &WebviewWindow) {
-        if let Some(preview) = &mut self.preview
-            && preview.is_paused
-        {
-            preview.is_paused = false;
-            preview
-                .reconfigure
-                .send(ReconfigureEvent::Resume)
-                .map_err(|err| error!("Error sending camera preview resume event: {err}"))
-                .ok();
-            window
-                .run_on_main_thread({
-                    let window = window.clone();
-                    move || {
-                        let _ = window.show();
-                    }
-                })
-                .ok();
-        }
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.preview.as_ref().is_some_and(|p| p.is_paused)
-    }
-
-    pub fn begin_shutdown_for_session(
-        &mut self,
-        expected_session_id: u64,
-    ) -> Option<oneshot::Receiver<()>> {
-        if let Some(preview) = &self.preview
-            && preview.session_id != expected_session_id
-        {
-            info!(
-                "Skipping camera preview close: session mismatch (expected {}, current {})",
-                expected_session_id, preview.session_id
-            );
-            return None;
-        }
-
-        self.begin_shutdown()
-    }
-
     pub fn begin_shutdown(&mut self) -> Option<oneshot::Receiver<()>> {
         let preview = self.preview.take()?;
         info!(
@@ -303,14 +259,6 @@ impl CameraPreviewManager {
         });
 
         Ok(())
-    }
-
-    pub fn on_window_close_for_session(&mut self, expected_session_id: u64) {
-        let _ = self.begin_shutdown_for_session(expected_session_id);
-    }
-
-    pub fn on_window_close(&mut self) {
-        let _ = self.begin_shutdown();
     }
 }
 
@@ -874,7 +822,7 @@ impl Renderer {
         let _ = self.device.poll(wgpu::PollType::Wait);
 
         drop(std::mem::take(&mut self.texture));
-        drop(std::mem::take(&mut self.aspect_ratio));
+        self.aspect_ratio = Cached::default();
 
         let surface = self.surface.take();
         let (drop_tx, drop_rx) = oneshot::channel();
