@@ -29,7 +29,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         path,
         Box::new(move |output| {
             let ws_frame = match output {
-                cap_editor::editor::EditorFrameOutput::Nv12(frame) => WSFrame {
+                cap_editor::EditorFrameOutput::Nv12(frame) => WSFrame {
                     data: frame.data,
                     width: frame.width,
                     height: frame.height,
@@ -39,7 +39,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
                     format: WSFrameFormat::Nv12,
                     created_at: Instant::now(),
                 },
-                cap_editor::editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
                     data: frame.data,
                     width: frame.width,
                     height: frame.height,
@@ -234,7 +234,7 @@ impl EditorInstances {
                     path,
                     Box::new(move |output| {
                         let ws_frame = match output {
-                            cap_editor::editor::EditorFrameOutput::Nv12(frame) => WSFrame {
+                            cap_editor::EditorFrameOutput::Nv12(frame) => WSFrame {
                                 data: frame.data,
                                 width: frame.width,
                                 height: frame.height,
@@ -244,7 +244,7 @@ impl EditorInstances {
                                 format: WSFrameFormat::Nv12,
                                 created_at: Instant::now(),
                             },
-                            cap_editor::editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                            cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
                                 data: frame.data,
                                 width: frame.width,
                                 height: frame.height,

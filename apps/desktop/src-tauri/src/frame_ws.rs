@@ -9,94 +9,6 @@ static LAST_LOG_TIME: AtomicU64 = AtomicU64::new(0);
 
 const NV12_FORMAT_MAGIC: u32 = 0x4e563132;
 
-fn convert_to_nv12(data: &[u8], width: u32, height: u32, stride: u32) -> Vec<u8> {
-    let width = (width & !1) as usize;
-    let height = (height & !1) as usize;
-
-    if width == 0 || height == 0 {
-        return Vec::new();
-    }
-
-    let y_size = width * height;
-    let uv_size = width * (height / 2);
-    let stride = stride as usize;
-
-    let mut output = vec![0u8; y_size + uv_size];
-    let (y_plane, uv_plane) = output.split_at_mut(y_size);
-
-    for row in 0..height {
-        let src_offset = row * stride;
-        let y_offset = row * width;
-
-        if src_offset + width * 4 > data.len() {
-            continue;
-        }
-
-        let src_row = &data[src_offset..];
-        let y_row = &mut y_plane[y_offset..y_offset + width];
-
-        for x in 0..width {
-            let px = x * 4;
-            let r = src_row[px] as i32;
-            let g = src_row[px + 1] as i32;
-            let b = src_row[px + 2] as i32;
-            y_row[x] = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16).min(255) as u8;
-        }
-
-        if row % 2 == 0 {
-            let uv_offset = (row / 2) * width;
-            let uv_row = &mut uv_plane[uv_offset..uv_offset + width];
-
-            let mut x = 0;
-            while x < width {
-                let px0 = x * 4;
-                let px1 = (x + 1) * 4;
-
-                let r0 = src_row[px0] as i32;
-                let g0 = src_row[px0 + 1] as i32;
-                let b0 = src_row[px0 + 2] as i32;
-                let r1 = src_row[px1] as i32;
-                let g1 = src_row[px1 + 1] as i32;
-                let b1 = src_row[px1 + 2] as i32;
-
-                let avg_r = (r0 + r1) >> 1;
-                let avg_g = (g0 + g1) >> 1;
-                let avg_b = (b0 + b1) >> 1;
-
-                uv_row[x] = (((-38 * avg_r - 74 * avg_g + 112 * avg_b + 128) >> 8) + 128)
-                    .clamp(0, 255) as u8;
-                uv_row[x + 1] = (((112 * avg_r - 94 * avg_g - 18 * avg_b + 128) >> 8) + 128)
-                    .clamp(0, 255) as u8;
-
-                x += 2;
-            }
-        }
-    }
-
-    output
-}
-
-fn pack_nv12_frame(
-    data: Vec<u8>,
-    width: u32,
-    height: u32,
-    frame_number: u32,
-    target_time_ns: u64,
-) -> Vec<u8> {
-    let y_stride = width;
-    let metadata_size = 28;
-    let mut output = Vec::with_capacity(data.len() + metadata_size);
-    output.extend_from_slice(&data);
-    output.extend_from_slice(&y_stride.to_le_bytes());
-    output.extend_from_slice(&height.to_le_bytes());
-    output.extend_from_slice(&width.to_le_bytes());
-    output.extend_from_slice(&frame_number.to_le_bytes());
-    output.extend_from_slice(&target_time_ns.to_le_bytes());
-    output.extend_from_slice(&NV12_FORMAT_MAGIC.to_le_bytes());
-
-    output
-}
-
 fn pack_frame_data(
     mut data: Vec<u8>,
     stride: u32,
@@ -170,49 +82,6 @@ pub struct WSFrame {
     pub format: WSFrameFormat,
     #[allow(dead_code)]
     pub created_at: Instant,
-}
-
-impl WSFrame {
-    pub fn from_rendered_frame_nv12(
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-        stride: u32,
-        frame_number: u32,
-        target_time_ns: u64,
-    ) -> Self {
-        let nv12_data = convert_to_nv12(&data, width, height, stride);
-        Self {
-            data: nv12_data,
-            width: width & !1,
-            height: height & !1,
-            stride: width & !1,
-            frame_number,
-            target_time_ns,
-            format: WSFrameFormat::Nv12,
-            created_at: Instant::now(),
-        }
-    }
-}
-
-fn pack_ws_frame(frame: WSFrame) -> Vec<u8> {
-    match frame.format {
-        WSFrameFormat::Nv12 => pack_nv12_frame(
-            frame.data,
-            frame.width,
-            frame.height,
-            frame.frame_number,
-            frame.target_time_ns,
-        ),
-        WSFrameFormat::Rgba => pack_frame_data(
-            frame.data,
-            frame.stride,
-            frame.height,
-            frame.width,
-            frame.frame_number,
-            frame.target_time_ns,
-        ),
-    }
 }
 
 fn pack_ws_frame_ref(frame: &WSFrame) -> Vec<u8> {
@@ -355,7 +224,7 @@ pub async fn create_watch_frame_ws(
         tokio::select! {
             _ = server => {},
             _ = cancel_token.cancelled() => {
-                println!("WebSocket server shutting down");
+                tracing::info!("WebSocket server shutting down");
             }
         }
     });
@@ -385,7 +254,6 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
     }
 
     async fn handle_socket(mut socket: WebSocket, mut camera_rx: broadcast::Receiver<WSFrame>) {
-        println!("socket connection established");
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
 
@@ -438,7 +306,6 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         }
 
         let elapsed = now.elapsed();
-        println!("Websocket closing after {elapsed:.2?}");
         tracing::info!("Websocket closing after {elapsed:.2?}");
     }
 
@@ -457,7 +324,7 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         tokio::select! {
             _ = server => {},
             _ = cancel_token.cancelled() => {
-                println!("WebSocket server shutting down");
+                tracing::info!("WebSocket server shutting down");
             }
         }
     });
