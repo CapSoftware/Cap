@@ -318,6 +318,8 @@ impl Muxer for AVFoundationMp4Muxer {
                 }
 
                 let mut encoder_busy_count = 0u64;
+                let mut transient_error_count = 0u64;
+                const MAX_TRANSIENT_ERRORS: u64 = 10;
                 let mut last_disk_check = std::time::Instant::now();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
@@ -386,9 +388,21 @@ impl Muxer for AVFoundationMp4Muxer {
                                         return Err(anyhow!(message));
                                     }
                                     Err(QueueFrameError::Failed) => {
-                                        let message = "Failed to encode video frame: Failed".to_string();
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
+                                        transient_error_count += 1;
+                                        if transient_error_count >= MAX_TRANSIENT_ERRORS {
+                                            let message = format!(
+                                                "Failed to encode video frame: {} consecutive failures",
+                                                transient_error_count
+                                            );
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                        warn!(
+                                            transient_error_count,
+                                            max = MAX_TRANSIENT_ERRORS,
+                                            "Transient video encode failure, skipping frame"
+                                        );
+                                        break;
                                     }
                                     Err(e) => {
                                         warn!("Failed to encode video frame: {e}");
@@ -825,6 +839,8 @@ impl Muxer for AVFoundationCameraMuxer {
 
                 let mut total_frames = 0u64;
                 let mut encoder_busy_count = 0u64;
+                let mut transient_error_count = 0u64;
+                const MAX_TRANSIENT_ERRORS: u64 = 10;
 
                 while let Ok(Some(msg)) = video_rx.recv() {
                     if fatal_error_message(&video_fatal_error).is_some() {
@@ -877,9 +893,21 @@ impl Muxer for AVFoundationCameraMuxer {
                                         return Err(anyhow!(message));
                                     }
                                     Err(QueueFrameError::Failed) => {
-                                        let message = "Failed to encode camera frame: Failed".to_string();
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
+                                        transient_error_count += 1;
+                                        if transient_error_count >= MAX_TRANSIENT_ERRORS {
+                                            let message = format!(
+                                                "Failed to encode camera frame: {} consecutive failures",
+                                                transient_error_count
+                                            );
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return Err(anyhow!(message));
+                                        }
+                                        warn!(
+                                            transient_error_count,
+                                            max = MAX_TRANSIENT_ERRORS,
+                                            "Transient camera encode failure, skipping frame"
+                                        );
+                                        break;
                                     }
                                     Err(e) => {
                                         warn!("Failed to encode camera frame: {e}");
