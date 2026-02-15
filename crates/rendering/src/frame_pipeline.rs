@@ -819,7 +819,7 @@ pub async fn finish_encoder(
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
-) -> Result<RenderedFrame, RenderingError> {
+) -> Result<Option<RenderedFrame>, RenderingError> {
     let previous_frame = if let Some(prev) = session.pipelined_readback.take_pending() {
         Some(prev.wait(device).await?)
     } else {
@@ -838,16 +838,7 @@ pub async fn finish_encoder(
         .pipelined_readback
         .submit_readback(device, queue, texture, uniforms, encoder)?;
 
-    if let Some(prev_frame) = previous_frame {
-        return Ok(prev_frame);
-    }
-
-    let pending = session
-        .pipelined_readback
-        .take_pending()
-        .expect("just submitted a readback");
-
-    pending.wait(device).await
+    Ok(previous_frame)
 }
 
 pub async fn finish_encoder_nv12(
@@ -857,7 +848,7 @@ pub async fn finish_encoder_nv12(
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
     mut encoder: wgpu::CommandEncoder,
-) -> Result<Nv12RenderedFrame, RenderingError> {
+) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
@@ -888,28 +879,21 @@ pub async fn finish_encoder_nv12(
         queue.submit(std::iter::once(encoder.finish()));
         nv12_converter.start_readback();
 
-        if let Some(prev_frame) = previous_frame {
-            return Ok(prev_frame);
-        }
-
-        let pending = nv12_converter
-            .take_pending()
-            .expect("just submitted a conversion");
-        pending.wait(device).await
+        Ok(previous_frame)
     } else if let Some(prev_frame) = previous_frame {
         queue.submit(std::iter::once(encoder.finish()));
-        Ok(prev_frame)
+        Ok(Some(prev_frame))
     } else {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
-        Ok(Nv12RenderedFrame {
-            data: rgba_frame.data,
-            width: rgba_frame.width,
-            height: rgba_frame.height,
-            y_stride: rgba_frame.padded_bytes_per_row,
-            frame_number: rgba_frame.frame_number,
-            target_time_ns: rgba_frame.target_time_ns,
+        Ok(rgba_frame.map(|f| Nv12RenderedFrame {
+            data: f.data,
+            width: f.width,
+            height: f.height,
+            y_stride: f.padded_bytes_per_row,
+            frame_number: f.frame_number,
+            target_time_ns: f.target_time_ns,
             format: GpuOutputFormat::Rgba,
-        })
+        }))
     }
 }
 

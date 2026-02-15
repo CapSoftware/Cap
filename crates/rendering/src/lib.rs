@@ -354,9 +354,12 @@ pub async fn render_video_to_channel(
         );
     }
 
+    let needs_camera = !project.camera.hide;
     let mut last_successful_frame: Option<RenderedFrame> = None;
     let mut consecutive_failures = 0u32;
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
+
+    let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
 
     loop {
         if frame_number >= total_frames {
@@ -381,21 +384,39 @@ pub async fn render_video_to_channel(
 
         let render_segment = &render_segments[segment.recording_clip as usize];
         let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
+        let segment_clip_index = segment.recording_clip as usize;
 
-        let segment_frames = decode_segment_frames_with_retry(
-            &render_segment.decoders,
-            segment_time,
-            !project.camera.hide,
-            clip_config.map(|v| v.offsets).unwrap_or_default(),
-            current_frame_number,
-            is_initial_frame,
-        )
-        .await;
+        let segment_frames =
+            if let Some((pf_num, _pf_time, pf_clip, pf_result)) = prefetched_decode.take() {
+                if pf_num == current_frame_number && pf_clip == segment_clip_index {
+                    pf_result
+                } else {
+                    decode_segment_frames_with_retry(
+                        &render_segment.decoders,
+                        segment_time,
+                        needs_camera,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        current_frame_number,
+                        is_initial_frame,
+                    )
+                    .await
+                }
+            } else {
+                decode_segment_frames_with_retry(
+                    &render_segment.decoders,
+                    segment_time,
+                    needs_camera,
+                    clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    current_frame_number,
+                    is_initial_frame,
+                )
+                .await
+            };
 
-        let frame = if let Some(segment_frames) = segment_frames {
+        if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
 
-            let zoom_focus_interp = &zoom_focus_interpolators[segment.recording_clip as usize];
+            let zoom_focus_interp = &zoom_focus_interpolators[segment_clip_index];
 
             let uniforms = ProjectUniforms::new(
                 constants,
@@ -409,20 +430,70 @@ pub async fn render_video_to_channel(
                 zoom_focus_interp,
             );
 
-            match frame_renderer
-                .render(
-                    segment_frames,
-                    uniforms,
-                    &render_segment.cursor,
-                    &mut layers,
-                )
-                .await
-            {
-                Ok(frame) if frame.width > 0 && frame.height > 0 => {
-                    last_successful_frame = Some(frame.clone());
-                    frame
+            let next_frame_number = frame_number;
+            let mut next_prefetch_meta: Option<(f64, usize)> = None;
+            let prefetch_future = if next_frame_number < total_frames {
+                if let Some((next_seg_time, next_segment)) =
+                    project.get_segment_time(next_frame_number as f64 / fps as f64)
+                {
+                    let next_clip_index = next_segment.recording_clip as usize;
+                    next_prefetch_meta = Some((next_seg_time, next_clip_index));
+                    let next_render_segment = &render_segments[next_clip_index];
+                    let next_clip_config = project
+                        .clips
+                        .iter()
+                        .find(|v| v.index == next_segment.recording_clip);
+                    let next_is_initial = last_successful_frame.is_none();
+
+                    Some(decode_segment_frames_with_retry(
+                        &next_render_segment.decoders,
+                        next_seg_time,
+                        needs_camera,
+                        next_clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        next_frame_number,
+                        next_is_initial,
+                    ))
+                } else {
+                    None
                 }
-                Ok(_) => {
+            } else {
+                None
+            };
+
+            let render_result = if let Some(prefetch) = prefetch_future {
+                let (render, decoded) = tokio::join!(
+                    frame_renderer.render(
+                        segment_frames,
+                        uniforms,
+                        &render_segment.cursor,
+                        &mut layers,
+                    ),
+                    prefetch
+                );
+
+                if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                    prefetched_decode =
+                        Some((next_frame_number, next_seg_time, next_clip_index, decoded));
+                }
+
+                render
+            } else {
+                frame_renderer
+                    .render(
+                        segment_frames,
+                        uniforms,
+                        &render_segment.cursor,
+                        &mut layers,
+                    )
+                    .await
+            };
+
+            match render_result {
+                Ok(Some(frame)) if frame.width > 0 && frame.height > 0 => {
+                    last_successful_frame = Some(frame.clone());
+                    sender.send((frame, current_frame_number)).await?;
+                }
+                Ok(Some(_)) => {
                     tracing::warn!(
                         frame_number = current_frame_number,
                         "Rendered frame has zero dimensions"
@@ -432,11 +503,10 @@ pub async fn render_video_to_channel(
                         fallback.frame_number = current_frame_number;
                         fallback.target_time_ns =
                             (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        fallback
-                    } else {
-                        continue;
+                        sender.send((fallback, current_frame_number)).await?;
                     }
                 }
+                Ok(None) => {}
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
@@ -448,7 +518,7 @@ pub async fn render_video_to_channel(
                         fallback.frame_number = current_frame_number;
                         fallback.target_time_ns =
                             (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        fallback
+                        sender.send((fallback, current_frame_number)).await?;
                     } else {
                         return Err(e);
                     }
@@ -481,7 +551,7 @@ pub async fn render_video_to_channel(
                 fallback.frame_number = current_frame_number;
                 fallback.target_time_ns =
                     (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                fallback
+                sender.send((fallback, current_frame_number)).await?;
             } else {
                 tracing::error!(
                     frame_number = current_frame_number,
@@ -491,9 +561,7 @@ pub async fn render_video_to_channel(
                 );
                 continue;
             }
-        };
-
-        sender.send((frame, current_frame_number)).await?;
+        }
     }
 
     if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline().await
@@ -578,9 +646,13 @@ pub async fn render_video_to_channel_nv12(
         );
     }
 
+    let needs_camera = !project.camera.hide;
+
     let mut last_successful_frame: Option<Nv12RenderedFrame> = None;
     let mut consecutive_failures = 0u32;
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
+
+    let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
 
     loop {
         if frame_number >= total_frames {
@@ -605,21 +677,39 @@ pub async fn render_video_to_channel_nv12(
 
         let render_segment = &render_segments[segment.recording_clip as usize];
         let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
+        let segment_clip_index = segment.recording_clip as usize;
 
-        let segment_frames = decode_segment_frames_with_retry(
-            &render_segment.decoders,
-            segment_time,
-            !project.camera.hide,
-            clip_config.map(|v| v.offsets).unwrap_or_default(),
-            current_frame_number,
-            is_initial_frame,
-        )
-        .await;
+        let segment_frames =
+            if let Some((pf_num, _pf_time, pf_clip, pf_result)) = prefetched_decode.take() {
+                if pf_num == current_frame_number && pf_clip == segment_clip_index {
+                    pf_result
+                } else {
+                    decode_segment_frames_with_retry(
+                        &render_segment.decoders,
+                        segment_time,
+                        needs_camera,
+                        clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        current_frame_number,
+                        is_initial_frame,
+                    )
+                    .await
+                }
+            } else {
+                decode_segment_frames_with_retry(
+                    &render_segment.decoders,
+                    segment_time,
+                    needs_camera,
+                    clip_config.map(|v| v.offsets).unwrap_or_default(),
+                    current_frame_number,
+                    is_initial_frame,
+                )
+                .await
+            };
 
-        let frame = if let Some(segment_frames) = segment_frames {
+        if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
 
-            let zoom_focus_interp = &zoom_focus_interpolators[segment.recording_clip as usize];
+            let zoom_focus_interp = &zoom_focus_interpolators[segment_clip_index];
 
             let uniforms = ProjectUniforms::new(
                 constants,
@@ -633,20 +723,70 @@ pub async fn render_video_to_channel_nv12(
                 zoom_focus_interp,
             );
 
-            match frame_renderer
-                .render_nv12(
-                    segment_frames,
-                    uniforms,
-                    &render_segment.cursor,
-                    &mut layers,
-                )
-                .await
-            {
-                Ok(frame) if frame.width > 0 && frame.height > 0 => {
-                    last_successful_frame = Some(frame.clone_metadata_with_data());
-                    frame
+            let next_frame_number = frame_number;
+            let mut next_prefetch_meta: Option<(f64, usize)> = None;
+            let prefetch_future = if next_frame_number < total_frames {
+                if let Some((next_seg_time, next_segment)) =
+                    project.get_segment_time(next_frame_number as f64 / fps as f64)
+                {
+                    let next_clip_index = next_segment.recording_clip as usize;
+                    next_prefetch_meta = Some((next_seg_time, next_clip_index));
+                    let next_render_segment = &render_segments[next_clip_index];
+                    let next_clip_config = project
+                        .clips
+                        .iter()
+                        .find(|v| v.index == next_segment.recording_clip);
+                    let next_is_initial = last_successful_frame.is_none();
+
+                    Some(decode_segment_frames_with_retry(
+                        &next_render_segment.decoders,
+                        next_seg_time,
+                        needs_camera,
+                        next_clip_config.map(|v| v.offsets).unwrap_or_default(),
+                        next_frame_number,
+                        next_is_initial,
+                    ))
+                } else {
+                    None
                 }
-                Ok(_) => {
+            } else {
+                None
+            };
+
+            let render_result = if let Some(prefetch) = prefetch_future {
+                let (render, decoded) = tokio::join!(
+                    frame_renderer.render_nv12(
+                        segment_frames,
+                        uniforms,
+                        &render_segment.cursor,
+                        &mut layers,
+                    ),
+                    prefetch
+                );
+
+                if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                    prefetched_decode =
+                        Some((next_frame_number, next_seg_time, next_clip_index, decoded));
+                }
+
+                render
+            } else {
+                frame_renderer
+                    .render_nv12(
+                        segment_frames,
+                        uniforms,
+                        &render_segment.cursor,
+                        &mut layers,
+                    )
+                    .await
+            };
+
+            match render_result {
+                Ok(Some(frame)) if frame.width > 0 && frame.height > 0 => {
+                    last_successful_frame = Some(frame.clone_metadata_with_data());
+                    sender.send((frame, current_frame_number)).await?;
+                }
+                Ok(Some(_)) => {
                     tracing::warn!(
                         frame_number = current_frame_number,
                         "Rendered NV12 frame has zero dimensions"
@@ -656,11 +796,10 @@ pub async fn render_video_to_channel_nv12(
                         fallback.frame_number = current_frame_number;
                         fallback.target_time_ns =
                             (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        fallback
-                    } else {
-                        continue;
+                        sender.send((fallback, current_frame_number)).await?;
                     }
                 }
+                Ok(None) => {}
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
@@ -672,7 +811,7 @@ pub async fn render_video_to_channel_nv12(
                         fallback.frame_number = current_frame_number;
                         fallback.target_time_ns =
                             (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        fallback
+                        sender.send((fallback, current_frame_number)).await?;
                     } else {
                         return Err(e);
                     }
@@ -705,7 +844,7 @@ pub async fn render_video_to_channel_nv12(
                 fallback.frame_number = current_frame_number;
                 fallback.target_time_ns =
                     (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                fallback
+                sender.send((fallback, current_frame_number)).await?;
             } else {
                 tracing::error!(
                     frame_number = current_frame_number,
@@ -715,9 +854,7 @@ pub async fn render_video_to_channel_nv12(
                 );
                 continue;
             }
-        };
-
-        sender.send((frame, current_frame_number)).await?;
+        }
     }
 
     if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline_nv12().await
@@ -1211,7 +1348,7 @@ impl MotionBlurDescriptor {
 }
 
 impl ProjectUniforms {
-    fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
+    pub fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
         project.background.crop.as_ref().cloned().unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
             size: XY {
@@ -2062,7 +2199,7 @@ impl<'a> FrameRenderer<'a> {
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
         layers: &mut RendererLayers,
-    ) -> Result<RenderedFrame, RenderingError> {
+    ) -> Result<Option<RenderedFrame>, RenderingError> {
         let mut last_error = None;
 
         for attempt in 0..Self::MAX_RENDER_RETRIES {
@@ -2101,7 +2238,7 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(frame) => return Ok(frame),
+                Ok(opt_frame) => return Ok(opt_frame),
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     tracing::warn!(
                         frame_number = uniforms.frame_number,
@@ -2126,6 +2263,24 @@ impl<'a> FrameRenderer<'a> {
         Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
     }
 
+    pub async fn render_immediate(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        layers: &mut RendererLayers,
+    ) -> Result<RenderedFrame, RenderingError> {
+        if let Some(frame) = self
+            .render(segment_frames, uniforms, cursor, layers)
+            .await?
+        {
+            return Ok(frame);
+        }
+        self.flush_pipeline()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
+    }
+
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
         if let Some(session) = &mut self.session {
             flush_pending_readback(session, &self.constants.device).await
@@ -2148,7 +2303,7 @@ impl<'a> FrameRenderer<'a> {
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
         layers: &mut RendererLayers,
-    ) -> Result<frame_pipeline::Nv12RenderedFrame, RenderingError> {
+    ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
         let mut last_error = None;
 
         for attempt in 0..Self::MAX_RENDER_RETRIES {
@@ -2220,7 +2375,7 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(frame) => return Ok(frame),
+                Ok(opt_frame) => return Ok(opt_frame),
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     last_error = Some(RenderingError::BufferMapWaitingFailed);
                 }
@@ -2550,7 +2705,7 @@ async fn produce_frame(
     cursor: &CursorEvents,
     layers: &mut RendererLayers,
     session: &mut RenderSession,
-) -> Result<RenderedFrame, RenderingError> {
+) -> Result<Option<RenderedFrame>, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
