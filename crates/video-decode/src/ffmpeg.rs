@@ -149,9 +149,9 @@ fn configure_software_threading(decoder: &mut avcodec::decoder::Video, width: u3
     let thread_count = if pixel_count > 8294400 {
         0
     } else if pixel_count > 2073600 {
-        cpu_count.min(8).max(2) as i32
+        cpu_count.clamp(2, 8) as i32
     } else {
-        cpu_count.min(6).max(2) as i32
+        cpu_count.clamp(2, 6) as i32
     };
 
     let thread_type = ffmpeg::sys::FF_THREAD_FRAME | ffmpeg::sys::FF_THREAD_SLICE;
