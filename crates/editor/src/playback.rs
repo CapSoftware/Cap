@@ -716,12 +716,11 @@ impl Playback {
                 if last_stats_time.elapsed() >= stats_interval {
                     let effective_fps =
                         total_frames_rendered as f64 / start.elapsed().as_secs_f64().max(0.001);
-                    let recent_rendered = total_frames_rendered;
                     let buffer_len = prefetch_buffer.len();
                     info!(
                         effective_fps = format!("{:.1}", effective_fps),
-                        rendered = recent_rendered,
-                        skipped = total_frames_skipped,
+                        total_rendered = total_frames_rendered,
+                        total_skipped = total_frames_skipped,
                         cache_hits = cache_hits,
                         prefetch_hits = prefetch_hits,
                         sync_decodes = sync_decodes,

@@ -542,9 +542,10 @@ pub async fn render_video_to_channel(
     }
 
     let total_time = start_time.elapsed();
-    println!(
-        "Render complete. Processed {frame_number} frames in {:?} seconds",
-        total_time.as_secs_f32()
+    tracing::info!(
+        frames = frame_number,
+        elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
+        "Render complete"
     );
 
     Ok(())
