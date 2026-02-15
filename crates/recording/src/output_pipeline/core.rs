@@ -85,6 +85,7 @@ impl AudioTimestampGenerator {
 const WIRED_GAP_THRESHOLD: Duration = Duration::from_millis(70);
 const WIRELESS_GAP_THRESHOLD: Duration = Duration::from_millis(160);
 const MAX_SILENCE_INSERTION: Duration = Duration::from_secs(1);
+const MAX_TOTAL_SILENCE: Duration = Duration::from_secs(30);
 
 struct AudioGapTracker {
     wall_clock_start: Option<Instant>,
@@ -120,6 +121,10 @@ impl AudioGapTracker {
         sample_based_elapsed: Duration,
         total_pause_duration: Duration,
     ) -> Option<Duration> {
+        if self.total_silence_inserted >= MAX_TOTAL_SILENCE {
+            return None;
+        }
+
         let wall_start = self.wall_clock_start?;
         let wall_elapsed = wall_start.elapsed().saturating_sub(total_pause_duration);
 
@@ -129,7 +134,8 @@ impl AudioGapTracker {
 
         let gap = wall_elapsed.saturating_sub(sample_based_elapsed);
         if gap > self.gap_threshold {
-            Some(gap.min(MAX_SILENCE_INSERTION))
+            let remaining_budget = MAX_TOTAL_SILENCE.saturating_sub(self.total_silence_inserted);
+            Some(gap.min(MAX_SILENCE_INSERTION).min(remaining_budget))
         } else {
             None
         }
@@ -139,19 +145,34 @@ impl AudioGapTracker {
         self.silence_insertion_count += 1;
         self.total_silence_inserted += duration;
 
+        let log_interval = if self.silence_insertion_count > 100 {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(5)
+        };
+
         let should_log = self
             .last_silence_log
-            .map(|t| t.elapsed() >= Duration::from_secs(5))
+            .map(|t| t.elapsed() >= log_interval)
             .unwrap_or(true);
 
         if should_log {
-            warn!(
-                gap_ms = duration.as_millis(),
-                total_silence_ms = self.total_silence_inserted.as_millis(),
-                insertion_count = self.silence_insertion_count,
-                threshold_ms = self.gap_threshold.as_millis(),
-                "Audio gap detected, inserting silence"
-            );
+            if self.total_silence_inserted >= MAX_TOTAL_SILENCE {
+                error!(
+                    total_silence_ms = self.total_silence_inserted.as_millis(),
+                    insertion_count = self.silence_insertion_count,
+                    "Audio silence budget exhausted ({:.0}s), no more silence will be inserted",
+                    MAX_TOTAL_SILENCE.as_secs_f64()
+                );
+            } else {
+                warn!(
+                    gap_ms = duration.as_millis(),
+                    total_silence_ms = self.total_silence_inserted.as_millis(),
+                    insertion_count = self.silence_insertion_count,
+                    threshold_ms = self.gap_threshold.as_millis(),
+                    "Audio gap detected, inserting silence"
+                );
+            }
             self.last_silence_log = Some(Instant::now());
         }
     }
@@ -351,9 +372,21 @@ impl TimestampAnomalyTracker {
             );
             self.consecutive_anomalies = 0;
         }
-        self.last_valid_duration = Some(adjusted);
+
+        let monotonic = self.enforce_monotonicity(adjusted);
+        self.last_valid_duration = Some(monotonic);
         self.last_valid_wall_clock = Some(now);
-        Ok(adjusted)
+        Ok(monotonic)
+    }
+
+    fn enforce_monotonicity(&self, timestamp: Duration) -> Duration {
+        if let Some(last) = self.last_valid_duration {
+            if timestamp < last {
+                let epsilon = Duration::from_micros(1);
+                return last.saturating_add(epsilon);
+            }
+        }
+        timestamp
     }
 
     fn handle_backward_timestamp(
