@@ -1,6 +1,6 @@
 use cap_project::{
-    Cursors, MultipleSegment, MultipleSegments, RecordingMeta, RecordingMetaInner,
-    StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
+    Cursors, InstantRecordingMeta, MultipleSegment, MultipleSegments, RecordingMeta,
+    RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
 };
 use cap_recording::recovery::{RecoveryError, RecoveryManager};
 use relative_path::RelativePathBuf;
@@ -779,5 +779,118 @@ fn test_orphaned_segment_minimum_size() {
     assert!(
         valid_meta.len() >= min_valid_size,
         "Valid segment should be at or above threshold"
+    );
+}
+
+fn write_instant_recording_meta(
+    project_path: &Path,
+    inner: InstantRecordingMeta,
+) -> std::io::Result<()> {
+    let meta = RecordingMeta {
+        platform: None,
+        project_path: project_path.to_path_buf(),
+        pretty_name: "Test Instant Recording".to_string(),
+        sharing: None,
+        upload: None,
+        inner: RecordingMetaInner::Instant(inner),
+    };
+
+    let meta_path = project_path.join("recording-meta.json");
+    std::fs::write(meta_path, serde_json::to_string_pretty(&meta)?)?;
+    Ok(())
+}
+
+#[test]
+fn test_instant_recovery_no_output_file() {
+    test_utils::init_tracing();
+
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().to_path_buf();
+    std::fs::create_dir_all(project_path.join("content")).unwrap();
+
+    write_instant_recording_meta(
+        &project_path,
+        InstantRecordingMeta::InProgress { recording: true },
+    )
+    .unwrap();
+
+    let result = RecoveryManager::try_recover_instant(&project_path).unwrap();
+    assert!(!result, "Should not recover when no output.mp4 exists");
+}
+
+#[test]
+fn test_instant_recovery_tiny_file() {
+    test_utils::init_tracing();
+
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().to_path_buf();
+    let content_dir = project_path.join("content");
+    std::fs::create_dir_all(&content_dir).unwrap();
+
+    write_instant_recording_meta(
+        &project_path,
+        InstantRecordingMeta::InProgress { recording: true },
+    )
+    .unwrap();
+
+    std::fs::write(content_dir.join("output.mp4"), vec![0u8; 100]).unwrap();
+
+    let result = RecoveryManager::try_recover_instant(&project_path).unwrap();
+    assert!(
+        !result,
+        "Should not recover when output.mp4 is too small (<1KB)"
+    );
+}
+
+#[test]
+fn test_instant_recovery_skips_complete_recording() {
+    test_utils::init_tracing();
+
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().to_path_buf();
+    let content_dir = project_path.join("content");
+    std::fs::create_dir_all(&content_dir).unwrap();
+
+    write_instant_recording_meta(
+        &project_path,
+        InstantRecordingMeta::Complete {
+            fps: 30,
+            sample_rate: None,
+        },
+    )
+    .unwrap();
+
+    std::fs::write(content_dir.join("output.mp4"), vec![0u8; 5000]).unwrap();
+
+    let result = RecoveryManager::try_recover_instant(&project_path).unwrap();
+    assert!(
+        !result,
+        "Should not attempt recovery on already-complete recordings"
+    );
+}
+
+#[test]
+fn test_instant_recovery_corrupt_data_not_recoverable() {
+    test_utils::init_tracing();
+
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().to_path_buf();
+    let content_dir = project_path.join("content");
+    std::fs::create_dir_all(&content_dir).unwrap();
+
+    write_instant_recording_meta(
+        &project_path,
+        InstantRecordingMeta::Failed {
+            error: "Recording crashed".to_string(),
+        },
+    )
+    .unwrap();
+
+    std::fs::write(content_dir.join("output.mp4"), vec![0xFFu8; 5000]).unwrap();
+
+    let result = RecoveryManager::try_recover_instant(&project_path).unwrap();
+    assert!(
+        !result,
+        "Should not recover when output.mp4 contains only corrupt data"
     );
 }
