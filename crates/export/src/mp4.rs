@@ -139,6 +139,9 @@ impl Mp4ExportSettings {
 
             info!("Created MP4File encoder (NV12, external conversion, export settings)");
 
+            let mut encoded_frames = 0u32;
+            let encode_start = std::time::Instant::now();
+
             while let Ok(frame) = frame_rx.recv() {
                 encoder
                     .queue_video_frame(frame.video, Duration::MAX)
@@ -146,6 +149,18 @@ impl Mp4ExportSettings {
                 if let Some(audio) = frame.audio {
                     encoder.queue_audio_frame(audio);
                 }
+                encoded_frames += 1;
+            }
+
+            let encode_elapsed = encode_start.elapsed();
+            if encoded_frames > 0 {
+                let encode_fps = encoded_frames as f64 / encode_elapsed.as_secs_f64().max(0.001);
+                info!(
+                    encoded_frames = encoded_frames,
+                    elapsed_secs = format!("{:.2}", encode_elapsed.as_secs_f64()),
+                    encode_fps = format!("{:.1}", encode_fps),
+                    "Encoder thread finished"
+                );
             }
 
             let res = encoder
@@ -172,7 +187,6 @@ impl Mp4ExportSettings {
                 let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
                 let fps_u64 = u64::from(fps);
                 let mut audio_sample_cursor = 0u64;
-
                 let mut consecutive_timeouts = 0u32;
                 const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
 
@@ -373,6 +387,9 @@ impl Mp4ExportSettings {
 
             info!("Created MP4File encoder (RGBA fallback, export settings)");
 
+            let mut encoded_frames = 0u32;
+            let encode_start = std::time::Instant::now();
+
             while let Ok(frame) = frame_rx.recv() {
                 encoder
                     .queue_video_frame(frame.video, Duration::MAX)
@@ -380,6 +397,18 @@ impl Mp4ExportSettings {
                 if let Some(audio) = frame.audio {
                     encoder.queue_audio_frame(audio);
                 }
+                encoded_frames += 1;
+            }
+
+            let encode_elapsed = encode_start.elapsed();
+            if encoded_frames > 0 {
+                let encode_fps = encoded_frames as f64 / encode_elapsed.as_secs_f64().max(0.001);
+                info!(
+                    encoded_frames = encoded_frames,
+                    elapsed_secs = format!("{:.2}", encode_elapsed.as_secs_f64()),
+                    encode_fps = format!("{:.1}", encode_fps),
+                    "Encoder thread finished (RGBA)"
+                );
             }
 
             let res = encoder
@@ -591,7 +620,8 @@ fn nv12_to_ffmpeg_frame(
             "NV12 conversion fell back to RGBA - converting on CPU"
         );
         let rgba_frame = rgba_video_info.wrap_frame(&frame.data, pts, frame.y_stride as usize);
-        let mut converter = ffmpeg::software::scaling::Context::get(
+
+        if let Ok(mut converter) = ffmpeg::software::scaling::Context::get(
             ffmpeg::format::Pixel::RGBA,
             frame.width,
             frame.height,
@@ -599,15 +629,20 @@ fn nv12_to_ffmpeg_frame(
             frame.width,
             frame.height,
             ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-        )
-        .expect("failed to create RGBA→NV12 scaler");
-        let mut nv12_frame =
-            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, frame.width, frame.height);
-        converter
-            .run(&rgba_frame, &mut nv12_frame)
-            .expect("RGBA→NV12 conversion failed");
-        nv12_frame.set_pts(Some(pts));
-        return nv12_frame;
+        ) {
+            let mut nv12_frame =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, frame.width, frame.height);
+            if converter.run(&rgba_frame, &mut nv12_frame).is_ok() {
+                nv12_frame.set_pts(Some(pts));
+                return nv12_frame;
+            }
+        }
+
+        tracing::error!(
+            frame_number = frame.frame_number,
+            "RGBA to NV12 CPU conversion failed, sending RGBA frame directly"
+        );
+        return rgba_frame;
     }
 
     let width = frame.width;
