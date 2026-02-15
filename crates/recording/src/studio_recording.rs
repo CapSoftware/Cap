@@ -338,12 +338,31 @@ struct FinishedPipeline {
 
 impl Pipeline {
     pub async fn stop(mut self) -> anyhow::Result<FinishedPipeline> {
-        let (screen, microphone, camera, system_audio) = futures::join!(
-            self.screen.stop(),
-            OptionFuture::from(self.microphone.map(|s| s.stop())),
-            OptionFuture::from(self.camera.map(|s| s.stop())),
-            OptionFuture::from(self.system_audio.map(|s| s.stop()))
-        );
+        const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(8);
+
+        let stop_all = async {
+            futures::join!(
+                self.screen.stop(),
+                OptionFuture::from(self.microphone.map(|s| s.stop())),
+                OptionFuture::from(self.camera.map(|s| s.stop())),
+                OptionFuture::from(self.system_audio.map(|s| s.stop()))
+            )
+        };
+
+        let (screen, microphone, camera, system_audio) =
+            match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, stop_all).await {
+                Ok(results) => results,
+                Err(_) => {
+                    warn!(
+                        timeout_secs = PIPELINE_STOP_TIMEOUT.as_secs(),
+                        "Pipeline stop timed out, some tracks may not have finalized cleanly"
+                    );
+                    return Err(anyhow!(
+                        "Pipeline stop timed out after {}s",
+                        PIPELINE_STOP_TIMEOUT.as_secs()
+                    ));
+                }
+            };
 
         if let Some(cursor) = self.cursor.as_mut() {
             cursor.actor.stop();
@@ -357,11 +376,27 @@ impl Pipeline {
             }
         };
 
+        let camera = match camera.transpose() {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("camera pipeline failed during stop: {err:#}");
+                None
+            }
+        };
+
+        let microphone = match microphone.transpose() {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("microphone pipeline failed during stop: {err:#}");
+                None
+            }
+        };
+
         Ok(FinishedPipeline {
             start_time: self.start_time,
-            screen: screen.context("screen")?,
-            microphone: microphone.transpose().context("microphone")?,
-            camera: camera.transpose().context("camera")?,
+            screen: screen.context("screen pipeline stop failed")?,
+            microphone,
+            camera,
             system_audio,
             cursor: self.cursor,
         })
