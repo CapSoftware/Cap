@@ -300,7 +300,7 @@ impl PendingNv12Readback {
 
         let buffer_slice = self.buffer.slice(..);
         let data = buffer_slice.get_mapped_range();
-        let nv12_data = data.to_vec();
+        let nv12_data = Arc::new(data.to_vec());
 
         drop(data);
         self.buffer.unmap();
@@ -327,7 +327,7 @@ pub enum GpuOutputFormat {
 }
 
 pub struct Nv12RenderedFrame {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub y_stride: u32,
@@ -347,6 +347,10 @@ impl Nv12RenderedFrame {
             target_time_ns: self.target_time_ns,
             format: self.format,
         }
+    }
+
+    pub fn into_data(self) -> Vec<u8> {
+        Arc::try_unwrap(self.data).unwrap_or_else(|arc| (*arc).clone())
     }
 
     pub fn y_plane(&self) -> &[u8] {
@@ -434,7 +438,7 @@ impl PendingReadback {
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
 
         Ok(RenderedFrame {
-            data: data_vec,
+            data: Arc::new(data_vec),
             padded_bytes_per_row: self.padded_bytes_per_row,
             width: self.width,
             height: self.height,
@@ -751,7 +755,7 @@ impl RenderSession {
 
 #[derive(Clone)]
 pub struct RenderedFrame {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub padded_bytes_per_row: u32,

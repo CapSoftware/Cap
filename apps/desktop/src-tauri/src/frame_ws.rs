@@ -73,7 +73,7 @@ pub enum WSFrameFormat {
 
 #[derive(Clone)]
 pub struct WSFrame {
-    pub data: Vec<u8>,
+    pub data: std::sync::Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
@@ -278,7 +278,7 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                     match incoming_frame {
                         Ok(frame) => {
                             let packed = pack_frame_data(
-                                frame.data,
+                                std::sync::Arc::try_unwrap(frame.data).unwrap_or_else(|arc| (*arc).clone()),
                                 frame.stride,
                                 frame.height,
                                 frame.width,
