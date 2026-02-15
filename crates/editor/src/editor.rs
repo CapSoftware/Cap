@@ -148,7 +148,7 @@ impl Renderer {
                 }
             }
             match frame_renderer
-                .render(
+                .render_immediate(
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,

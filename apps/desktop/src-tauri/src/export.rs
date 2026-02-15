@@ -366,7 +366,7 @@ pub async fn generate_export_preview(
     );
 
     let frame = frame_renderer
-        .render(
+        .render_immediate(
             segment_frames,
             uniforms,
             &render_segment.cursor,
@@ -509,7 +509,7 @@ pub async fn generate_export_preview_fast(
     );
 
     let frame = frame_renderer
-        .render(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+        .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
         .await
         .map_err(|e| format!("Failed to render frame: {e}"))?;
 
