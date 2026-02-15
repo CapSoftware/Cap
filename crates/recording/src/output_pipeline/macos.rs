@@ -344,8 +344,10 @@ impl Muxer for AVFoundationMp4Muxer {
 
                     match msg {
                         VideoFrameMessage::Frame(sample_buf, timestamp) => {
-                            let mut retry_count = 0;
-                            const MAX_RETRIES: u32 = 100;
+                            let mut retry_count = 0u32;
+                            const MAX_RETRIES: u32 = 150;
+                            const BASE_BACKOFF_MICROS: u64 = 200;
+                            const MAX_BACKOFF_MICROS: u64 = 3000;
 
                             loop {
                                 let queue_result = {
@@ -374,7 +376,8 @@ impl Muxer for AVFoundationMp4Muxer {
                                             }
                                             break;
                                         }
-                                        std::thread::sleep(Duration::from_micros(500));
+                                        let backoff = (BASE_BACKOFF_MICROS << (retry_count / 20).min(4)).min(MAX_BACKOFF_MICROS);
+                                        std::thread::sleep(Duration::from_micros(backoff));
                                     }
                                     Err(QueueFrameError::WriterFailed(err)) => {
                                         let message =
@@ -459,8 +462,10 @@ impl Muxer for AVFoundationMp4Muxer {
 
                         match msg {
                             AudioFrameMessage::Frame(frame, timestamp) => {
-                                let mut retry_count = 0;
-                                const MAX_RETRIES: u32 = 50;
+                                let mut retry_count = 0u32;
+                                const MAX_RETRIES: u32 = 200;
+                                const BASE_BACKOFF_MICROS: u64 = 100;
+                                const MAX_BACKOFF_MICROS: u64 = 2000;
 
                                 loop {
                                     let queue_result = {
@@ -485,9 +490,16 @@ impl Muxer for AVFoundationMp4Muxer {
                                             retry_count += 1;
                                             if retry_count >= MAX_RETRIES {
                                                 encoder_busy_count += 1;
+                                                if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
+                                                    warn!(
+                                                        encoder_busy_count,
+                                                        "MP4 audio encoder busy, frame dropped after max retries"
+                                                    );
+                                                }
                                                 break;
                                             }
-                                            std::thread::sleep(Duration::from_micros(500));
+                                            let backoff = (BASE_BACKOFF_MICROS << (retry_count / 25).min(4)).min(MAX_BACKOFF_MICROS);
+                                            std::thread::sleep(Duration::from_micros(backoff));
                                         }
                                         Err(QueueFrameError::WriterFailed(err)) => {
                                             let message = format!(
@@ -821,8 +833,10 @@ impl Muxer for AVFoundationCameraMuxer {
 
                     match msg {
                         CameraFrameMessage::Frame(sample_buf, timestamp) => {
-                            let mut retry_count = 0;
-                            const MAX_RETRIES: u32 = 100;
+                            let mut retry_count = 0u32;
+                            const MAX_RETRIES: u32 = 150;
+                            const BASE_BACKOFF_MICROS: u64 = 200;
+                            const MAX_BACKOFF_MICROS: u64 = 3000;
 
                             loop {
                                 let queue_result = {
@@ -852,7 +866,8 @@ impl Muxer for AVFoundationCameraMuxer {
                                             }
                                             break;
                                         }
-                                        std::thread::sleep(Duration::from_micros(500));
+                                        let backoff = (BASE_BACKOFF_MICROS << (retry_count / 20).min(4)).min(MAX_BACKOFF_MICROS);
+                                        std::thread::sleep(Duration::from_micros(backoff));
                                     }
                                     Err(QueueFrameError::WriterFailed(err)) => {
                                         let message = format!(
