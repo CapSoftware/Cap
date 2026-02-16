@@ -12,6 +12,13 @@ interface ToolCategory {
 
 const toolCategories: ToolCategory[] = [
 	{
+		title: "Loom Video Importer",
+		description:
+			"Import your existing Loom recordings directly into Cap — seamless migration",
+		href: "/loom-alternative",
+		icon: "M9 8.25H7.5a2.25 2.25 0 00-2.25 2.25v9a2.25 2.25 0 002.25 2.25h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25H15m0-3l-3-3m0 0l-3 3m3-3V15",
+	},
+	{
 		title: "Loom Video Downloader",
 		description:
 			"Download any public Loom video as an MP4 file — free and instant",
@@ -106,7 +113,8 @@ export function PageContent() {
 							</h2>
 							<p className="text-base sm:text-lg md:text-xl mb-5 md:mb-6 text-gray-10">
 								Cap is lightweight, powerful, and cross-platform. Record and
-								share securely in seconds with custom S3 bucket support.
+								share securely in seconds. Import your Loom videos and get
+								started instantly.
 							</p>
 						</div>
 						<div className="flex flex-col sm:flex-row items-center justify-center space-y-3 sm:space-y-0 sm:space-x-4">

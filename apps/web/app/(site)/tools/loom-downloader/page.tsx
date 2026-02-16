@@ -18,6 +18,9 @@ export const metadata: Metadata = {
 		"loom video saver",
 		"free loom downloader",
 		"loom download tool",
+		"import loom videos",
+		"loom video importer",
+		"migrate from loom",
 	],
 	openGraph: {
 		title: "Loom Video Downloader — Download Loom Videos Free | Cap",
@@ -123,6 +126,12 @@ const pageContent: ToolPageContent = {
 				"No. We never store, cache, or process your videos. Our server simply fetches the direct download URL from Loom and passes it to your browser. The video downloads directly from Loom's servers to your device.",
 		},
 		{
+			question:
+				"Can I import my Loom videos into Cap instead of downloading them?",
+			answer:
+				'Yes! Cap Pro includes a built-in <a href="/loom-alternative">Loom video importer</a> that lets you transfer your Loom recordings directly into your Cap library. It\'s the easiest way to migrate from Loom without manually downloading and re-uploading each video.',
+		},
+		{
 			question: "What is Cap?",
 			answer:
 				'Cap is the <a href="/">open source alternative to Loom</a>. It\'s a lightweight, privacy-focused screen recorder that lets you record, edit, and share videos instantly. If you\'re looking for a Loom replacement, <a href="/download">download Cap for free</a>.',
@@ -131,7 +140,7 @@ const pageContent: ToolPageContent = {
 	cta: {
 		title: "Looking for a Loom alternative?",
 		description:
-			"Cap is the open source screen recorder that gives you full control. Record, edit, and share — all for free.",
+			"Cap is the open source screen recorder that gives you full control. Record, edit, and share — all for free. Plus, import your existing Loom videos directly into Cap with our built-in Loom video importer.",
 		buttonText: "Download Cap Free",
 	},
 };

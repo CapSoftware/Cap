@@ -30,7 +30,12 @@ const faqContent: FaqItem[] = [
 	{
 		title: "What makes Cap different from Loom?",
 		answer:
-			"Cap is open source, privacy-focused, and lets you own your data. You can connect custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do.",
+			"Cap is open source, privacy-focused, and lets you own your data. You can connect custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do. Plus, our built-in Loom video importer makes switching effortless.",
+	},
+	{
+		title: "Can I import my Loom videos to Cap?",
+		answer:
+			"Yes! Cap Pro includes a built-in Loom video importer that lets you seamlessly transfer your existing Loom recordings into Cap. Just paste your Loom video links and Cap handles the rest — keeping all your content organized in one place.",
 	},
 	{
 		title: "Can I self-host Cap?",

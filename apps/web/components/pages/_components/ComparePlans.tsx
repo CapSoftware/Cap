@@ -178,6 +178,12 @@ export const ComparePlans = () => {
 			},
 			{ label: "Team workspaces", free: true, desktop: true, pro: true },
 			{
+				label: "Loom video importer",
+				free: false,
+				desktop: false,
+				pro: true,
+			},
+			{
 				label: "Custom S3 bucket support",
 				free: false,
 				desktop: false,
