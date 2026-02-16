@@ -593,6 +593,21 @@ fn get_cursor_data() -> Option<CursorData> {
         let hotspot_x = (*cursor_image).xhot as f64 / width as f64;
         let hotspot_y = (*cursor_image).yhot as f64 / height as f64;
 
+        let cursor_name = if !(*cursor_image).name.is_null() {
+            Some(
+                std::ffi::CStr::from_ptr((*cursor_image).name)
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        let shape = cursor_name
+            .as_deref()
+            .and_then(xcursor_name_to_shape)
+            .map(Into::into);
+
         let pixels_ptr = (*cursor_image).pixels;
         let pixel_count = (width * height) as usize;
         let pixels = std::slice::from_raw_parts(pixels_ptr, pixel_count);
@@ -624,7 +639,51 @@ fn get_cursor_data() -> Option<CursorData> {
         Some(CursorData {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
-            shape: Some(cap_cursor_info::CursorShapeLinux::Default.into()),
+            shape,
         })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn xcursor_name_to_shape(name: &str) -> Option<cap_cursor_info::CursorShapeLinux> {
+    use cap_cursor_info::CursorShapeLinux;
+
+    match name {
+        "left_ptr" | "arrow" | "default" | "top_left_arrow" => Some(CursorShapeLinux::Arrow),
+        "xterm" | "ibeam" | "text" => Some(CursorShapeLinux::Text),
+        "hand" | "hand1" | "hand2" | "pointer" | "pointing_hand" => Some(CursorShapeLinux::Pointer),
+        "watch" | "wait" => Some(CursorShapeLinux::Wait),
+        "crosshair" | "cross" | "tcross" => Some(CursorShapeLinux::Crosshair),
+        "not-allowed" | "circle" | "forbidden" | "crossed_circle" => {
+            Some(CursorShapeLinux::NotAllowed)
+        }
+        "grab" | "openhand" | "fleur" => Some(CursorShapeLinux::Grab),
+        "grabbing" | "closedhand" | "dnd-move" => Some(CursorShapeLinux::Grabbing),
+        "right_side" | "e-resize" | "w-resize" | "left_side" => Some(CursorShapeLinux::EwResize),
+        "top_side" | "n-resize" | "s-resize" | "bottom_side" => Some(CursorShapeLinux::NsResize),
+        "top_right_corner" | "ne-resize" | "sw-resize" | "bottom_left_corner" => {
+            Some(CursorShapeLinux::NeswResize)
+        }
+        "top_left_corner" | "nw-resize" | "se-resize" | "bottom_right_corner" => {
+            Some(CursorShapeLinux::NwseResize)
+        }
+        "sb_h_double_arrow" | "ew-resize" | "col-resize" | "split_h" => {
+            Some(CursorShapeLinux::EwResize)
+        }
+        "sb_v_double_arrow" | "ns-resize" | "row-resize" | "split_v" => {
+            Some(CursorShapeLinux::NsResize)
+        }
+        "move" | "all-scroll" | "size_all" => Some(CursorShapeLinux::Move),
+        "help" | "question_arrow" | "whats_this" => Some(CursorShapeLinux::Help),
+        "progress" | "left_ptr_watch" | "half-busy" => Some(CursorShapeLinux::Progress),
+        "context-menu" => Some(CursorShapeLinux::ContextMenu),
+        "zoom-in" => Some(CursorShapeLinux::ZoomIn),
+        "zoom-out" => Some(CursorShapeLinux::ZoomOut),
+        "copy" | "dnd-copy" => Some(CursorShapeLinux::Copy),
+        "alias" | "dnd-link" => Some(CursorShapeLinux::Alias),
+        "vertical-text" => Some(CursorShapeLinux::VerticalText),
+        "cell" | "plus" => Some(CursorShapeLinux::Cell),
+        "no-drop" | "dnd-no-drop" => Some(CursorShapeLinux::NoDrop),
+        _ => Some(CursorShapeLinux::Default),
     }
 }
