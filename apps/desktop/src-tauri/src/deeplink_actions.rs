@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    recording::StartRecordingInputs, recording_settings::RecordingSettingsStore,
+    windows::ShowCapWindow, App, ArcLock,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,7 +28,12 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: RecordingMode,
     },
+    Record,
     StopRecording,
+    Pause,
+    Resume,
+    ToggleMic,
+    ToggleCam,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -88,9 +96,15 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
-        }?;
+            Some("record") => return Ok(Self::Record),
+            Some("stop") => return Ok(Self::StopRecording),
+            Some("pause") => return Ok(Self::Pause),
+            Some("resume") => return Ok(Self::Resume),
+            Some("toggle-mic") => return Ok(Self::ToggleMic),
+            Some("toggle-cam") => return Ok(Self::ToggleCam),
+            Some(v) if v != "action" => return Err(ActionParseFromUrlError::NotAction),
+            _ => {}
+        }
 
         let params = url
             .query_pairs()
@@ -143,8 +157,63 @@ impl DeepLinkAction {
                     .await
                     .map(|_| ())
             }
+            DeepLinkAction::Record => {
+                let settings = RecordingSettingsStore::get(app)?.unwrap_or_default();
+                let capture_target = settings.target.ok_or("No capture target set in settings")?;
+                let mode = settings.mode.unwrap_or(RecordingMode::Instant);
+
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
+                    .await?;
+                crate::set_mic_input(state.clone(), settings.mic_name).await?;
+
+                let inputs = StartRecordingInputs {
+                    mode,
+                    capture_target,
+                    capture_system_audio: settings.system_audio,
+                    organization_id: settings.organization_id,
+                };
+
+                crate::recording::start_recording(app.clone(), state, inputs)
+                    .await
+                    .map(|_| ())
+            }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::Pause => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::Resume => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ToggleMic => {
+                let state = app.state::<ArcLock<App>>();
+                let current_mic = {
+                    let app_state = state.read().await;
+                    app_state.selected_mic_label.clone()
+                };
+
+                if current_mic.is_some() {
+                    crate::set_mic_input(state, None).await
+                } else {
+                    let settings = RecordingSettingsStore::get(app)?.unwrap_or_default();
+                    crate::set_mic_input(state, settings.mic_name).await
+                }
+            }
+            DeepLinkAction::ToggleCam => {
+                let state = app.state::<ArcLock<App>>();
+                let camera_in_use = {
+                    let app_state = state.read().await;
+                    app_state.camera_in_use
+                };
+
+                if camera_in_use {
+                    crate::set_camera_input(app.clone(), state, None, None).await
+                } else {
+                    let settings = RecordingSettingsStore::get(app)?.unwrap_or_default();
+                    crate::set_camera_input(app.clone(), state, settings.camera_id, None).await
+                }
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
