@@ -1,27 +1,18 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { showToast, Toast } from "@raycast/api";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
-export interface DeepLinkAction {
-  [key: string]: any;
-}
+export type DeepLinkAction = Record<string, unknown>;
 
-/**
- * Execute a Cap deeplink action
- * @param action The action object to serialize and pass to Cap
- * @param successMessage Message to show on success
- * @param errorMessage Message to show on error
- */
 export async function executeDeepLink(
   action: DeepLinkAction,
   successMessage: string,
   errorMessage: string
 ): Promise<void> {
   try {
-    const actionJson = JSON.stringify(action);
-    const encodedAction = encodeURIComponent(actionJson);
+    const encodedAction = encodeURIComponent(JSON.stringify(action));
     const deeplinkUrl = `cap-desktop://action?value=${encodedAction}`;
 
     await showToast({
@@ -29,7 +20,7 @@ export async function executeDeepLink(
       title: "Executing...",
     });
 
-    await execAsync(`open "${deeplinkUrl}"`);
+    await execFileAsync("open", [deeplinkUrl]);
 
     await showToast({
       style: Toast.Style.Success,

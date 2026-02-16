@@ -1,21 +1,30 @@
 import { closeMainWindow, showToast, Toast } from "@raycast/api";
-import { executeDeepLink } from "./utils";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 export default async function Command() {
   await closeMainWindow();
 
   await showToast({
     style: Toast.Style.Animated,
-    title: "Starting recording...",
-    message: "This will use your default Cap settings",
+    title: "Opening Cap...",
   });
 
-  // Note: This is a simplified version that would need the user to configure
-  // their default recording settings in Cap itself. A more advanced version
-  // could present a form to select screen/window and recording mode.
-  await showToast({
-    style: Toast.Style.Failure,
-    title: "Start Recording",
-    message: "Please use Cap app to start recording with specific settings. Use other commands to control active recordings.",
-  });
+  try {
+    await execFileAsync("open", ["cap-desktop://"]);
+
+    await showToast({
+      style: Toast.Style.Success,
+      title: "Cap opened",
+      message: "Start a recording in Cap, then use the other commands to control it.",
+    });
+  } catch (error) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Failed to open Cap",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
