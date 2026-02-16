@@ -81,8 +81,10 @@ pub fn spawn_cursor_recorder(
 
     let stop_token_child = stop_token.child_token();
     spawn_actor(async move {
-        let device_state = DeviceState::new();
-        let mut last_mouse_state = device_state.get_mouse();
+        let mut last_mouse_state = {
+            let ds = DeviceState::new();
+            ds.get_mouse()
+        };
 
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
@@ -108,7 +110,10 @@ pub fn spawn_cursor_recorder(
             };
 
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
-            let mouse_state = device_state.get_mouse();
+            let mouse_state = {
+                let ds = DeviceState::new();
+                ds.get_mouse()
+            };
 
             let position = cap_cursor_capture::RawCursorPosition::get();
             let position_changed = position != last_position;
@@ -565,6 +570,61 @@ fn get_cursor_data() -> Option<CursorData> {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_cursor_data() -> Option<CursorData> {
+    unsafe {
+        let display = x11::xlib::XOpenDisplay(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+
+        let cursor_image = x11::xfixes::XFixesGetCursorImage(display);
+        if cursor_image.is_null() {
+            x11::xlib::XCloseDisplay(display);
+            return None;
+        }
+
+        let width = (*cursor_image).width as u32;
+        let height = (*cursor_image).height as u32;
+        let hotspot_x = (*cursor_image).xhot as f64 / width as f64;
+        let hotspot_y = (*cursor_image).yhot as f64 / height as f64;
+
+        let pixels_ptr = (*cursor_image).pixels;
+        let pixel_count = (width * height) as usize;
+        let pixels = std::slice::from_raw_parts(pixels_ptr, pixel_count);
+
+        let mut rgba_data = Vec::with_capacity(pixel_count * 4);
+        for &pixel in pixels {
+            let a = ((pixel >> 24) & 0xFF) as u8;
+            let r = ((pixel >> 16) & 0xFF) as u8;
+            let g = ((pixel >> 8) & 0xFF) as u8;
+            let b = (pixel & 0xFF) as u8;
+            rgba_data.push(r);
+            rgba_data.push(g);
+            rgba_data.push(b);
+            rgba_data.push(a);
+        }
+
+        x11::xlib::XFree(cursor_image as *mut _);
+        x11::xlib::XCloseDisplay(display);
+
+        let img = image::RgbaImage::from_raw(width, height, rgba_data)?;
+
+        let mut png_data = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_data),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+
+        Some(CursorData {
+            image: png_data,
+            hotspot: XY::new(hotspot_x, hotspot_y),
+            shape: Some(cap_cursor_info::CursorShapeLinux::Default.into()),
         })
     }
 }

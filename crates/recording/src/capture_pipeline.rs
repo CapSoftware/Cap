@@ -240,6 +240,69 @@ pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 #[cfg(windows)]
 pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
 
+#[cfg(target_os = "linux")]
+pub type ScreenCaptureMethod = screen_capture::FFmpegX11Capture;
+
+#[cfg(target_os = "linux")]
+impl MakeCapturePipeline for screen_capture::FFmpegX11Capture {
+    async fn make_studio_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        output_path: PathBuf,
+        start_time: Timestamps,
+        fragmented: bool,
+        shared_pause_state: Option<SharedPauseState>,
+        output_size: Option<(u32, u32)>,
+    ) -> anyhow::Result<OutputPipeline> {
+        if fragmented {
+            let fragments_dir = output_path
+                .parent()
+                .map(|p| p.join("display"))
+                .unwrap_or_else(|| output_path.with_file_name("display"));
+
+            OutputPipeline::builder(fragments_dir)
+                .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_timestamps(start_time)
+                .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig {
+                    output_size,
+                    shared_pause_state,
+                    ..Default::default()
+                })
+                .await
+        } else {
+            OutputPipeline::builder(output_path)
+                .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_timestamps(start_time)
+                .build::<Mp4Muxer>(())
+                .await
+        }
+    }
+
+    async fn make_instant_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
+        output_path: PathBuf,
+        _output_resolution: (u32, u32),
+        start_time: Timestamps,
+    ) -> anyhow::Result<OutputPipeline> {
+        let mut output = OutputPipeline::builder(output_path)
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time);
+
+        if let Some(system_audio) = system_audio {
+            output = output.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
+        }
+
+        if let Some(mic_feed) = mic_feed {
+            output = output.with_audio_source::<sources::Microphone>(mic_feed);
+        }
+
+        output
+            .build::<Mp4Muxer>(())
+            .await
+    }
+}
+
 pub fn target_to_display_and_crop(
     target: &ScreenCaptureTarget,
 ) -> anyhow::Result<(scap_targets::Display, Option<CropBounds>)> {
@@ -255,6 +318,26 @@ pub fn target_to_display_and_crop(
             let window = Window::from_id(id).ok_or_else(|| anyhow!("Window not found"))?;
 
             #[cfg(target_os = "macos")]
+            {
+                let raw_display_bounds = display
+                    .raw_handle()
+                    .logical_bounds()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .logical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(LogicalBounds::new(
+                    LogicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_bounds.position().x(),
+                        raw_window_bounds.position().y() - raw_display_bounds.position().y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
+
+            #[cfg(target_os = "linux")]
             {
                 let raw_display_bounds = display
                     .raw_handle()
@@ -299,6 +382,11 @@ pub fn target_to_display_and_crop(
             ..
         } => {
             #[cfg(target_os = "macos")]
+            {
+                Some(*relative_bounds)
+            }
+
+            #[cfg(target_os = "linux")]
             {
                 Some(*relative_bounds)
             }

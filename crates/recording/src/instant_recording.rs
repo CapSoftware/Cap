@@ -408,6 +408,30 @@ pub async fn spawn_instant_recording_actor(
                 .await
                 .context("camera-only pipeline setup")?;
 
+            #[cfg(target_os = "linux")]
+            let pipeline = {
+                let (video_tx, video_rx) = flume::bounded(8);
+                camera_feed
+                    .ask(crate::feeds::camera::AddSender(video_tx))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to add camera sender: {e}"))?;
+
+                let video_info = *camera_feed.video_info();
+                let mut b = output_pipeline::OutputPipeline::builder(output_path.clone())
+                    .with_video::<output_pipeline::ChannelVideoSource<output_pipeline::FFmpegVideoFrame>>(
+                        output_pipeline::ChannelVideoSourceConfig::new(video_info, video_rx),
+                    )
+                    .with_timestamps(timestamps);
+
+                if let Some(mic_feed) = inputs.mic_feed.clone() {
+                    b = b.with_audio_source::<crate::sources::Microphone>(mic_feed);
+                }
+
+                b.build::<output_pipeline::Mp4Muxer>(())
+                    .await
+                    .context("camera-only pipeline setup")?
+            };
+
             let video_info = *camera_feed.video_info();
             (
                 Pipeline {

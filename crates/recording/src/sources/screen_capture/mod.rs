@@ -20,6 +20,11 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
 pub struct StopCapturing;
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -97,6 +102,16 @@ impl ScreenCaptureTarget {
                     )));
                 }
 
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display = self.display()?;
+                    return Some(CursorCropBounds::new_linux(LogicalBounds::new(
+                        LogicalPosition::new(0.0, 0.0),
+                        display.raw_handle().logical_size()?,
+                    )));
+                }
+
                 #[cfg(windows)]
                 #[allow(clippy::needless_return)]
                 {
@@ -126,6 +141,22 @@ impl ScreenCaptureTarget {
                     )));
                 }
 
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display = self.display()?;
+                    let display_bounds = display.raw_handle().logical_bounds()?;
+                    let window_bounds = window.raw_handle().logical_bounds()?;
+
+                    return Some(CursorCropBounds::new_linux(LogicalBounds::new(
+                        LogicalPosition::new(
+                            window_bounds.position().x() - display_bounds.position().x(),
+                            window_bounds.position().y() - display_bounds.position().y(),
+                        ),
+                        window_bounds.size(),
+                    )));
+                }
+
                 #[cfg(windows)]
                 #[allow(clippy::needless_return)]
                 {
@@ -149,6 +180,12 @@ impl ScreenCaptureTarget {
                 #[allow(clippy::needless_return)]
                 {
                     return Some(CursorCropBounds::new_macos(*bounds));
+                }
+
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    return Some(CursorCropBounds::new_linux(*bounds));
                 }
 
                 #[cfg(windows)]
@@ -278,6 +315,9 @@ pub struct Config {
 #[cfg(target_os = "macos")]
 pub type CropBounds = LogicalBounds;
 
+#[cfg(target_os = "linux")]
+pub type CropBounds = LogicalBounds;
+
 #[cfg(windows)]
 pub type CropBounds = PhysicalBounds;
 
@@ -324,6 +364,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                     let width = ensure_even((logical_size.width() * scale) as u32) as f64;
                     let height = ensure_even((logical_size.height() * scale) as u32) as f64;
                     Some(PhysicalSize::new(width, height))
+                })
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                crop_bounds.map(|b| {
+                    let size = b.size();
+                    let width = (size.width() as u32 / 2 * 2) as f64;
+                    let height = (size.height() as u32 / 2 * 2) as f64;
+                    PhysicalSize::new(width, height)
                 })
             }
 

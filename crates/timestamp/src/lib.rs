@@ -70,15 +70,23 @@ impl Timestamp {
         }
     }
 
-    pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
+    pub fn from_cpal(_instant: cpal::StreamInstant) -> Self {
         #[cfg(windows)]
         {
-            Self::PerformanceCounter(PerformanceCounterTimestamp::from_cpal(instant))
+            Self::PerformanceCounter(PerformanceCounterTimestamp::from_cpal(_instant))
         }
         #[cfg(target_os = "macos")]
         {
-            Self::MachAbsoluteTime(MachAbsoluteTimestamp::from_cpal(instant))
+            Self::MachAbsoluteTime(MachAbsoluteTimestamp::from_cpal(_instant))
         }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Self::Instant(Instant::now())
+        }
+    }
+
+    pub fn from_duration(duration: Duration) -> Self {
+        Self::SystemTime(SystemTime::UNIX_EPOCH + duration)
     }
 }
 
