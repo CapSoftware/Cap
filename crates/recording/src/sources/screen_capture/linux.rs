@@ -264,11 +264,7 @@ fn create_system_audio_source() -> anyhow::Result<SystemAudioSourceConfig> {
                 move |data: &cpal::Data, _info: &cpal::InputCallbackInfo| {
                     use scap_ffmpeg::DataExt;
                     let frame = data.as_ffmpeg(&config);
-                    let timestamp = Timestamp::from_duration(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default(),
-                    );
+                    let timestamp = Timestamp::SystemTime(std::time::SystemTime::now());
                     let _ = tx.try_send(output_pipeline::AudioFrame {
                         inner: frame,
                         timestamp,

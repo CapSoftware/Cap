@@ -84,10 +84,6 @@ impl Timestamp {
             Self::Instant(Instant::now())
         }
     }
-
-    pub fn from_duration(duration: Duration) -> Self {
-        Self::SystemTime(SystemTime::UNIX_EPOCH + duration)
-    }
 }
 
 impl std::ops::Add<Duration> for &Timestamp {

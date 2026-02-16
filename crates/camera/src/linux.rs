@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, time::Duration};
 
 use crate::{CameraInfo, CapturedFrame, Format, FormatInfo, StartCapturingError};
 
@@ -50,20 +50,46 @@ impl Drop for LinuxCaptureHandle {
     }
 }
 
+fn read_v4l2_device_name(device_path: &str) -> Option<String> {
+    let device_num: &str = device_path.strip_prefix("/dev/video")?;
+    let name_path = format!("/sys/class/video4linux/video{device_num}/name");
+    fs::read_to_string(name_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn is_v4l2_capture_device(device_path: &str) -> bool {
+    let device_num = match device_path.strip_prefix("/dev/video") {
+        Some(n) => n,
+        None => return false,
+    };
+
+    let caps_path = format!("/sys/class/video4linux/video{device_num}/device/");
+    PathBuf::from(&caps_path).exists()
+}
+
 pub fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
     let mut cameras = Vec::new();
 
-    for i in 0..16 {
-        let path = PathBuf::from(format!("/dev/video{i}"));
-        if path.exists() {
-            let device_id = format!("/dev/video{i}");
-            let display_name = format!("Camera {i} (/dev/video{i})");
-            cameras.push(CameraInfo {
-                device_id,
-                model_id: None,
-                display_name,
-            });
+    for i in 0..64 {
+        let device_path = format!("/dev/video{i}");
+        if !PathBuf::from(&device_path).exists() {
+            continue;
         }
+
+        if !is_v4l2_capture_device(&device_path) {
+            continue;
+        }
+
+        let display_name = read_v4l2_device_name(&device_path)
+            .unwrap_or_else(|| format!("Camera (/dev/video{i})"));
+
+        cameras.push(CameraInfo {
+            device_id: device_path,
+            model_id: None,
+            display_name,
+        });
     }
 
     cameras.into_iter()
@@ -125,6 +151,10 @@ pub fn start_capturing_impl(
     let height = format.info.height;
     let fps = format.info.frame_rate;
 
+    if !PathBuf::from(&device_path).exists() {
+        return Err(StartCapturingError::DeviceNotFound);
+    }
+
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
 
     let thread = std::thread::spawn(move || {
@@ -136,7 +166,7 @@ pub fn start_capturing_impl(
                 break;
             }
 
-            let data = vec![0u8; (width * height * 3) as usize];
+            let data = vec![128u8; (width * height * 3) as usize];
             let timestamp = Duration::from_secs_f64(frame_count as f64 / fps as f64);
             frame_count += 1;
 
