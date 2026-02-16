@@ -1390,6 +1390,7 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
+ "chrono",
  "clap",
  "directories 6.0.0",
  "ffmpeg-next",
@@ -1407,6 +1408,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 
