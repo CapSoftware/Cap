@@ -13,14 +13,9 @@ mod mac;
 pub use mac::*;
 
 #[cfg(target_os = "linux")]
-async fn capture_display_thumbnail(_display: &scap_targets::Display) -> Option<String> {
-    None
-}
-
+mod linux;
 #[cfg(target_os = "linux")]
-async fn capture_window_thumbnail(_window: &scap_targets::Window) -> Option<String> {
-    None
-}
+pub use linux::*;
 
 const THUMBNAIL_WIDTH: u32 = 320;
 const THUMBNAIL_HEIGHT: u32 = 180;

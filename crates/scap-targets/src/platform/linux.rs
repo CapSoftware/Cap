@@ -173,6 +173,10 @@ impl WindowImpl {
         WindowIdImpl(self.id)
     }
 
+    pub fn x11_window_id(&self) -> u64 {
+        self.id
+    }
+
     pub fn name(&self) -> Option<String> {
         if self.name_len > 0 {
             Some(String::from_utf8_lossy(&self.name_buf[..self.name_len]).to_string())

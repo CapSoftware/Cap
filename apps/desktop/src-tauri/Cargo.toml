@@ -146,5 +146,8 @@ windows = { workspace = true, features = [
 windows-sys = { workspace = true }
 winreg = "0.55"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "2.21", features = ["xlib", "xrandr", "xfixes"] }
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
