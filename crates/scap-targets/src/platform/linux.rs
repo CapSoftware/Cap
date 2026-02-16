@@ -11,7 +11,9 @@ pub struct DisplayImpl {
     y: i32,
     width: u32,
     height: u32,
+    #[allow(dead_code)]
     width_mm: u32,
+    #[allow(dead_code)]
     height_mm: u32,
     refresh_rate: f64,
     is_primary: bool,
@@ -136,6 +138,7 @@ pub struct WindowImpl {
     name_len: usize,
     owner_buf: [u8; 256],
     owner_len: usize,
+    #[allow(dead_code)]
     pid: u32,
     is_visible: bool,
 }
@@ -628,9 +631,10 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
             };
 
             let mut child_return = 0u64;
-            let mut root_return = 0u64;
+            let mut root_return: u64 = 0;
             let mut abs_x = 0i32;
             let mut abs_y = 0i32;
+            let _ = root_return;
             x11::xlib::XTranslateCoordinates(
                 display,
                 wid,

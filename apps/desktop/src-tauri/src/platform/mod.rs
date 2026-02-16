@@ -8,6 +8,12 @@ pub mod macos;
 
 #[cfg(target_os = "macos")]
 pub use macos::*;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::*;
 use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
