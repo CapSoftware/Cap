@@ -3419,16 +3419,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 });
                             }
                             CapWindowId::Main => {
-                                let app = app.clone();
-                                tokio::spawn(async move {
-                                    let state = app.state::<ArcLock<App>>();
-                                    let app_state = state.read().await;
-                                    if !app_state.is_recording_active_or_pending()
-                                        && let Some(camera_window) = CapWindowId::Camera.get(&app)
-                                    {
-                                        let _ = camera_window.hide();
-                                    }
-                                });
+                                let state = app.state::<ArcLock<App>>();
+                                let is_recording = state
+                                    .try_read()
+                                    .map(|s| s.is_recording_active_or_pending())
+                                    .unwrap_or(true);
+
+                                if !is_recording
+                                    && let Some(camera_window) = CapWindowId::Camera.get(app)
+                                {
+                                    let _ = camera_window.hide();
+                                }
                             }
                             _ => {}
                         }
@@ -3451,17 +3452,15 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     }
                                 }
 
+                                if let Some(camera) = CapWindowId::Camera.get(&app) {
+                                    let _ = camera.hide();
+                                }
+
                                 tokio::spawn(async move {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
-                                    let camera_window_open =
-                                        CapWindowId::Camera.get(&app).is_some();
-
-                                    if !app_state.is_recording_active_or_pending()
-                                        && !camera_window_open
-                                        && !app_state.camera_in_use
-                                    {
+                                    if !app_state.is_recording_active_or_pending() {
                                         let _ =
                                             app_state.mic_feed.ask(microphone::RemoveInput).await;
                                         let _ = app_state
@@ -3471,6 +3470,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
+                                        app_state.camera_in_use = false;
                                     }
                                 });
                             }
@@ -3679,6 +3679,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 if code.is_none() {
                     api.prevent_exit();
                 }
+            }
+            tauri::RunEvent::Exit => {
+                let state = _handle.state::<ArcLock<App>>();
+                let _ = tauri::async_runtime::block_on(async {
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        let app_state = &mut *state.write().await;
+                        let _ = app_state.mic_feed.ask(microphone::RemoveInput).await;
+                        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+                        app_state.camera_in_use = false;
+                    })
+                    .await
+                });
             }
             _ => {}
         });
