@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
@@ -14,6 +15,52 @@ interface ImportLoomPayload {
 	rawFileKey: string;
 	bucketId: string | null;
 	loomDownloadUrl: string;
+	loomVideoId: string;
+}
+
+const MINIMUM_VIDEO_SIZE = 1024;
+
+async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
+	const endpoints = ["transcoded-url", "raw-url"] as const;
+
+	for (const endpoint of endpoints) {
+		try {
+			const response = await fetch(
+				`https://www.loom.com/api/campaigns/sessions/${loomVideoId}/${endpoint}`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Accept: "application/json",
+					},
+					body: JSON.stringify({
+						anonID: randomUUID(),
+						deviceID: null,
+						force_original: false,
+						password: null,
+					}),
+				},
+			);
+
+			if (!response.ok || response.status === 204) continue;
+
+			const text = await response.text();
+			if (!text.trim()) continue;
+
+			const data = JSON.parse(text) as { url?: string };
+			const url = data.url;
+			if (!url) continue;
+
+			const path = (url.split("?")[0] ?? "").toLowerCase();
+			if (path.endsWith(".m3u8") || path.endsWith(".mpd")) continue;
+
+			return url;
+		} catch {}
+	}
+
+	throw new FatalError(
+		"Could not retrieve a direct download URL from Loom. The video may only be available as a stream.",
+	);
 }
 
 interface VideoProcessingResult {
@@ -48,7 +95,7 @@ export async function importLoomVideoWorkflow(
 async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 	"use step";
 
-	const { videoId, loomDownloadUrl, rawFileKey, bucketId } = payload;
+	const { videoId, loomVideoId, rawFileKey, bucketId } = payload;
 
 	await db()
 		.update(videoUploads)
@@ -61,6 +108,8 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
+	const freshDownloadUrl = await fetchFreshLoomDownloadUrl(loomVideoId);
+
 	const bucketIdOption = Option.fromNullable(bucketId).pipe(
 		Option.map((id) => S3Bucket.S3BucketId.make(id)),
 	);
@@ -72,14 +121,30 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 		});
 	}).pipe(runPromise);
 
-	const loomResponse = await fetch(loomDownloadUrl);
+	const loomResponse = await fetch(freshDownloadUrl);
 	if (!loomResponse.ok) {
 		throw new FatalError(
 			`Failed to download from Loom: ${loomResponse.status} ${loomResponse.statusText}`,
 		);
 	}
 
+	const contentType = loomResponse.headers.get("content-type") ?? "";
+	if (
+		contentType.includes("text/html") ||
+		contentType.includes("application/json")
+	) {
+		throw new FatalError(
+			`Loom returned non-video content (${contentType}). The download URL may have expired.`,
+		);
+	}
+
 	const videoBuffer = Buffer.from(await loomResponse.arrayBuffer());
+
+	if (videoBuffer.length < MINIMUM_VIDEO_SIZE) {
+		throw new FatalError(
+			`Downloaded file is too small (${videoBuffer.length} bytes). The video may not be available for download.`,
+		);
+	}
 
 	const uploadResponse = await fetch(presignedPutUrl, {
 		method: "PUT",

@@ -133,18 +133,14 @@ function isStreamingUrl(url: string): boolean {
 async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
 	const endpoints = ["transcoded-url", "raw-url"] as const;
 
-	let fallbackStreamingUrl: string | null = null;
-
 	for (const endpoint of endpoints) {
 		const url = await fetchLoomEndpoint(loomVideoId, endpoint);
 		if (!url) continue;
 
 		if (!isStreamingUrl(url)) return url;
-
-		if (!fallbackStreamingUrl) fallbackStreamingUrl = url;
 	}
 
-	return fallbackStreamingUrl;
+	return null;
 }
 
 async function fetchLoomOEmbed(
@@ -328,6 +324,7 @@ export async function importFromLoom({
 			rawFileKey,
 			bucketId: customBucket?.id ?? null,
 			loomDownloadUrl: downloadUrl,
+			loomVideoId,
 		},
 	]);
 
