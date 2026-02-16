@@ -7,7 +7,6 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use futures::channel::mpsc;
 use std::time::Instant;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::{ScreenCaptureConfig, ScreenCaptureFormat};
@@ -55,9 +54,6 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
 
         let (video_tx, video_rx) = flume::bounded(4);
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
-
-        let cancel = CancellationToken::new();
-        let cancel_child = cancel.child_token();
 
         let width = video_info.width;
         let height = video_info.height;
@@ -126,10 +122,6 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
             let mut scaler: Option<ffmpeg::software::scaling::Context> = None;
 
             for (stream, packet) in ictx.packets() {
-                if cancel_child.is_cancelled() {
-                    break;
-                }
-
                 if stream.index() != video_stream_index {
                     continue;
                 }
@@ -137,10 +129,6 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
                 decoder.send_packet(&packet).ok();
 
                 while decoder.receive_frame(&mut frame).is_ok() {
-                    if cancel_child.is_cancelled() {
-                        break;
-                    }
-
                     let output_frame = if frame.format() != ffmpeg::format::Pixel::BGRA
                         || frame.width() != width
                         || frame.height() != height
@@ -166,7 +154,7 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
                     };
 
                     let elapsed = start_time.elapsed();
-                    let timestamp = Timestamp::from_duration(elapsed);
+                    let timestamp = Timestamp::Instant(std::time::Instant::now());
 
                     let video_frame = FFmpegVideoFrame {
                         inner: output_frame,
@@ -185,8 +173,6 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(anyhow::anyhow!("x11grab capture thread died")),
         }
-
-        let _cancel_guard = cancel.drop_guard();
 
         let video_source = ChannelVideoSourceConfig::new(video_info, video_rx);
 
