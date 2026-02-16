@@ -59,23 +59,26 @@ function extractLoomVideoId(url: string): string | null {
 async function fetchLoomEndpoint(
 	videoId: string,
 	endpoint: string,
+	includeBody = true,
 ): Promise<string | null> {
 	try {
+		const options: RequestInit = { method: "POST" };
+		if (includeBody) {
+			options.headers = {
+				"Content-Type": "application/json",
+				Accept: "application/json",
+			};
+			options.body = JSON.stringify({
+				anonID: randomUUID(),
+				deviceID: null,
+				force_original: false,
+				password: null,
+			});
+		}
+
 		const response = await fetch(
 			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Accept: "application/json",
-				},
-				body: JSON.stringify({
-					anonID: randomUUID(),
-					deviceID: null,
-					force_original: false,
-					password: null,
-				}),
-			},
+			options,
 		);
 
 		if (!response.ok || response.status === 204) {
@@ -131,16 +134,25 @@ function isStreamingUrl(url: string): boolean {
 }
 
 async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
-	const endpoints = ["transcoded-url", "raw-url"] as const;
+	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
+		{ endpoint: "transcoded-url", includeBody: true },
+		{ endpoint: "raw-url", includeBody: true },
+		{ endpoint: "transcoded-url", includeBody: false },
+		{ endpoint: "raw-url", includeBody: false },
+	];
 
-	for (const endpoint of endpoints) {
-		const url = await fetchLoomEndpoint(loomVideoId, endpoint);
+	let fallbackStreamingUrl: string | null = null;
+
+	for (const { endpoint, includeBody } of requestVariants) {
+		const url = await fetchLoomEndpoint(loomVideoId, endpoint, includeBody);
 		if (!url) continue;
 
 		if (!isStreamingUrl(url)) return url;
+
+		if (!fallbackStreamingUrl) fallbackStreamingUrl = url;
 	}
 
-	return null;
+	return fallbackStreamingUrl;
 }
 
 async function fetchLoomOEmbed(
@@ -181,10 +193,9 @@ export async function downloadLoomVideo(
 	}
 
 	try {
-		const transcodedUrl = await fetchLoomEndpoint(videoId, "transcoded-url");
-		const rawUrl = await fetchLoomEndpoint(videoId, "raw-url");
+		const downloadUrl = await getLoomDownloadUrl(videoId);
 
-		if (!transcodedUrl && !rawUrl) {
+		if (!downloadUrl) {
 			return {
 				success: false,
 				error:
