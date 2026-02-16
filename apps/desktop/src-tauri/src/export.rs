@@ -186,46 +186,40 @@ pub async fn get_export_estimates(
     let fps_f64 = fps as f64;
     let total_frames = (duration_seconds * fps_f64).ceil();
 
-    let (estimated_size_mb, time_factor) = match &settings {
+    let (estimated_size_mb, estimated_time_seconds) = match &settings {
         ExportSettings::Mp4(mp4_settings) => {
             let bits_per_pixel = mp4_settings.compression.bits_per_pixel() as f64;
-            let video_bitrate = total_pixels * bits_per_pixel * fps_f64;
+            let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
+            let video_bitrate = total_pixels * bits_per_pixel * effective_fps;
             let audio_bitrate = 192_000.0;
             let total_bitrate = video_bitrate + audio_bitrate;
-            let size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+            let encoder_efficiency = 0.5;
+            let size_mb =
+                (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0);
 
-            let base_time_factor = match (width, height) {
-                (w, h) if w <= 1280 && h <= 720 => 0.35,
-                (w, h) if w <= 1920 && h <= 1080 => 0.50,
-                (w, h) if w <= 2560 && h <= 1440 => 0.65,
-                _ => 0.80,
+            let effective_render_fps = match (width, height) {
+                (w, _) if w >= 3840 => 175.0,
+                _ => 290.0,
             };
+            let time_estimate = total_frames / effective_render_fps;
 
-            let compression_factor = match mp4_settings.compression {
-                cap_export::mp4::ExportCompression::Maximum => 1.0,
-                cap_export::mp4::ExportCompression::Social => 1.1,
-                cap_export::mp4::ExportCompression::Web => 1.15,
-                cap_export::mp4::ExportCompression::Potato => 1.2,
-            };
-
-            (size_mb, base_time_factor * compression_factor)
+            (size_mb, time_estimate)
         }
         ExportSettings::Gif(_) => {
             let bytes_per_frame = total_pixels * 0.5;
-            let size_mb = (bytes_per_frame * total_frames) / (1024.0 * 1024.0);
+            let gif_efficiency = 0.07;
+            let size_mb = (bytes_per_frame * gif_efficiency * total_frames) / (1024.0 * 1024.0);
 
-            let base_time_factor = match (width, height) {
-                (w, h) if w <= 1280 && h <= 720 => 0.8,
-                (w, h) if w <= 1920 && h <= 1080 => 1.2,
-                _ => 1.5,
+            let frames_per_sec = match (width, height) {
+                (w, h) if w <= 1280 && h <= 720 => 10.0,
+                (w, h) if w <= 1920 && h <= 1080 => 5.0,
+                _ => 2.0,
             };
+            let time_estimate = total_frames / frames_per_sec;
 
-            (size_mb, base_time_factor)
+            (size_mb, time_estimate)
         }
     };
-
-    let fps_factor = fps_f64 / 30.0;
-    let estimated_time_seconds = duration_seconds * time_factor * fps_factor;
 
     Ok(ExportEstimates {
         duration_seconds,
@@ -412,10 +406,13 @@ pub async fn generate_export_preview(
     };
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
-    let video_bitrate = total_pixels * settings.compression_bpp as f64 * fps_f64;
+    let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
+    let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
     let audio_bitrate = 192_000.0;
     let total_bitrate = video_bitrate + audio_bitrate;
-    let estimated_size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+    let encoder_efficiency = 0.5;
+    let estimated_size_mb =
+        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0);
 
     Ok(ExportPreviewResult {
         jpeg_base64,
@@ -545,10 +542,13 @@ pub async fn generate_export_preview_fast(
     let duration_seconds = editor.recordings.duration();
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
-    let video_bitrate = total_pixels * settings.compression_bpp as f64 * fps_f64;
+    let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
+    let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
     let audio_bitrate = 192_000.0;
     let total_bitrate = video_bitrate + audio_bitrate;
-    let estimated_size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+    let encoder_efficiency = 0.5;
+    let estimated_size_mb =
+        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0);
 
     Ok(ExportPreviewResult {
         jpeg_base64,
