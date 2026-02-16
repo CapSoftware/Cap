@@ -7926,6 +7926,7 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+ "x11",
 ]
 
 [[package]]

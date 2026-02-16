@@ -1,37 +1,34 @@
-//! Cap Cursor Info: A crate for getting cursor information, assets and hotspot information.
-
+mod linux;
 mod macos;
 mod windows;
 
 use std::{fmt, str::FromStr};
 
+pub use linux::CursorShapeLinux;
 pub use macos::CursorShapeMacOS;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 pub use windows::CursorShapeWindows;
 
-/// Information about a resolved cursor shape
 #[derive(Debug, Clone)]
 pub struct ResolvedCursor {
-    /// Raw svg definition of the cursor asset
     pub raw: &'static str,
-    /// The location of the hotspot within the cursor asset
     pub hotspot: (f64, f64),
 }
 
-/// Defines the shape of the cursor
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CursorShape {
     MacOS(CursorShapeMacOS),
     Windows(CursorShapeWindows),
+    Linux(CursorShapeLinux),
 }
 
 impl CursorShape {
-    /// Resolve a cursor identifier to an asset and hotspot information
     pub fn resolve(&self) -> Option<ResolvedCursor> {
         match self {
             CursorShape::MacOS(cursor) => cursor.resolve(),
             CursorShape::Windows(cursor) => cursor.resolve(),
+            CursorShape::Linux(cursor) => cursor.resolve(),
         }
     }
 }
@@ -41,11 +38,13 @@ impl fmt::Display for CursorShape {
         let kind = match self {
             CursorShape::MacOS(_) => "MacOS",
             CursorShape::Windows(_) => "Windows",
+            CursorShape::Linux(_) => "Linux",
         };
 
         let variant: &'static str = match self {
             CursorShape::MacOS(cursor) => cursor.into(),
             CursorShape::Windows(cursor) => cursor.into(),
+            CursorShape::Linux(cursor) => cursor.into(),
         };
 
         write!(f, "{kind}|{variant}")
@@ -86,6 +85,13 @@ impl<'de> Deserialize<'de> for CursorShape {
                 CursorShapeWindows::from_str(variant).map_err(|err| {
                     serde::de::Error::custom(format!(
                         "Failed to parse Windows cursor variant: {err}",
+                    ))
+                })?,
+            )),
+            "Linux" => Ok(CursorShape::Linux(
+                CursorShapeLinux::from_str(variant).map_err(|err| {
+                    serde::de::Error::custom(format!(
+                        "Failed to parse Linux cursor variant: {err}",
                     ))
                 })?,
             )),
