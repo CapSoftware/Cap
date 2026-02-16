@@ -117,10 +117,8 @@ export const ToolsPageTemplate = ({
 
 	return (
 		<>
-			{/* Compact Hero Section */}
-			<div className="overflow-hidden relative py-32 md:py-40">
-				{/* Breadcrumbs */}
-				<div className="relative z-20 px-5 pt-4 text-center wrapper">
+			<div className="overflow-hidden relative pt-24 pb-8 md:py-40">
+				<div className="relative z-20 px-4 pt-4 text-center wrapper sm:px-5">
 					<div className="flex justify-center items-center text-sm">
 						<Link
 							className="text-sm font-semibold text-gray-500 hover:underline"
@@ -133,36 +131,34 @@ export const ToolsPageTemplate = ({
 					</div>
 				</div>
 
-				<div className="relative z-10 px-5 pt-8 pb-6 w-full md:pt-12 md:pb-8">
+				<div className="relative z-10 px-4 pt-6 pb-4 w-full sm:px-5 md:pt-12 md:pb-8">
 					<div className="mx-auto max-w-3xl text-center wrapper wrapper-sm">
-						<h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] relative z-10 text-black mb-4">
+						<h1 className="fade-in-down text-[1.75rem] leading-[2.25rem] sm:text-[2rem] sm:leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] relative z-10 text-black mb-3 md:mb-4">
 							{content.title}
 						</h1>
-						<p className="mx-auto mb-6 max-w-2xl text-md sm:text-lg text-zinc-600 fade-in-down animate-delay-1">
+						<p className="mx-auto mb-4 max-w-2xl text-sm sm:text-md md:text-lg text-zinc-600 fade-in-down animate-delay-1 md:mb-6">
 							{content.description}
 						</p>
 					</div>
 				</div>
-				<div className="relative z-10 py-10 wrapper">
-					<div className="p-6 mx-auto max-w-4xl bg-white rounded-2xl border border-gray-100 shadow-lg md:p-8">
+				<div className="relative z-10 py-4 wrapper md:py-10">
+					<div className="p-4 mx-auto max-w-4xl bg-white rounded-2xl border border-gray-100 shadow-lg sm:p-6 md:p-8">
 						{toolComponent}
 					</div>
 				</div>
 
-				{/* Main Content - Features & FAQ */}
-				<div className="relative z-10 py-16 wrapper">
-					{/* Features Section */}
-					<div className="mb-20">
-						<div className="text-center max-w-[800px] mx-auto mb-12">
-							<h2 className="inline-block relative mb-5 text-3xl font-medium text-gray-800">
+				<div className="relative z-10 py-10 wrapper md:py-16">
+					<div className="mb-12 md:mb-20">
+						<div className="text-center max-w-[800px] mx-auto mb-8 px-2 md:mb-12">
+							<h2 className="inline-block relative mb-5 text-2xl font-medium text-gray-800 sm:text-3xl">
 								{content.featuresTitle}
 								<span className="absolute -bottom-2 left-1/2 w-16 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
-							<p className="text-lg leading-relaxed text-gray-600">
+							<p className="text-base leading-relaxed text-gray-600 sm:text-lg">
 								{renderHTML(content.featuresDescription)}
 							</p>
 						</div>
-						<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 md:grid-cols-3">
 							{content.features.map(
 								(
 									feature: { title: string; description: string },
@@ -170,14 +166,14 @@ export const ToolsPageTemplate = ({
 								) => (
 									<div
 										key={index}
-										className="p-6 bg-white rounded-xl border border-gray-100 shadow-sm transition-all duration-300 hover:shadow-md hover:border-blue-100"
+										className="p-5 bg-white rounded-xl border border-gray-100 shadow-sm transition-all duration-300 sm:p-6 hover:shadow-md hover:border-blue-100"
 									>
 										<div className="flex justify-center items-center mb-4 w-10 h-10 bg-blue-50 rounded-full">
 											<span className="text-lg font-medium text-blue-500">
 												{index + 1}
 											</span>
 										</div>
-										<h3 className="mb-3 text-lg font-semibold text-gray-800">
+										<h3 className="mb-2 text-base font-semibold text-gray-800 sm:mb-3 sm:text-lg">
 											{feature.title}
 										</h3>
 										<p className="text-sm leading-relaxed text-gray-600 md:text-base">
@@ -189,11 +185,10 @@ export const ToolsPageTemplate = ({
 						</div>
 					</div>
 
-					{/* FAQ Section */}
 					{content.faqs && (
-						<div className="mb-20">
-							<div className="text-center max-w-[800px] mx-auto mb-12">
-								<h2 className="inline-block relative mb-5 text-3xl font-medium text-gray-800">
+						<div className="mb-12 md:mb-20">
+							<div className="text-center max-w-[800px] mx-auto mb-8 px-2 md:mb-12">
+								<h2 className="inline-block relative mb-5 text-2xl font-medium text-gray-800 sm:text-3xl">
 									Frequently Asked Questions
 									<span className="absolute -bottom-2 left-1/2 w-16 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 								</h2>
@@ -206,9 +201,9 @@ export const ToolsPageTemplate = ({
 									) => (
 										<div
 											key={index}
-											className="p-5 my-4 bg-white rounded-xl border border-gray-100 shadow-sm transition-all duration-300 hover:shadow-md"
+											className="p-4 my-3 bg-white rounded-xl border border-gray-100 shadow-sm transition-all duration-300 sm:p-5 sm:my-4 hover:shadow-md"
 										>
-											<h2 className="mb-2 text-lg font-semibold text-gray-800">
+											<h2 className="mb-2 text-base font-semibold text-gray-800 sm:text-lg">
 												{faq.question}
 											</h2>
 											<div className="text-sm leading-relaxed text-gray-600 md:text-base">
@@ -221,9 +216,8 @@ export const ToolsPageTemplate = ({
 						</div>
 					)}
 
-					{/* Clean CTA Section */}
 					<div
-						className="max-w-[900px] mx-auto rounded-2xl bg-white overflow-hidden relative flex flex-col justify-center p-8 md:p-10"
+						className="max-w-[900px] mx-auto rounded-2xl bg-white overflow-hidden relative flex flex-col justify-center p-5 sm:p-8 md:p-10"
 						style={{
 							backgroundImage: "url('/illustrations/ctabg.svg')",
 							backgroundSize: "cover",
@@ -231,11 +225,11 @@ export const ToolsPageTemplate = ({
 						}}
 					>
 						<div className="flex relative z-10 flex-col justify-center items-center mx-auto h-full wrapper">
-							<div className="text-center max-w-[700px] mx-auto mb-6">
-								<h2 className="mb-3 text-2xl font-medium md:text-3xl text-gray-12">
+							<div className="text-center max-w-[700px] mx-auto mb-5 md:mb-6">
+								<h2 className="mb-3 text-xl font-medium sm:text-2xl md:text-3xl text-gray-12">
 									{content.cta.title}
 								</h2>
-								<p className="mb-5 text-lg text-gray-10">
+								<p className="mb-4 text-base text-gray-10 sm:text-lg md:mb-5">
 									{content.cta.description}
 								</p>
 							</div>
@@ -253,8 +247,6 @@ export const ToolsPageTemplate = ({
 					</div>
 				</div>
 			</div>
-
-			{/* Tool Container - Now positioned for visibility above the fold */}
 
 			<style jsx global>{`
         @keyframes fade-in-down {

@@ -95,6 +95,7 @@ const footerLinks = {
 		},
 	] as FooterLink[],
 	additional: [
+		{ label: "Loom Video Downloader", href: "/tools/loom-downloader" },
 		{ label: "Screen Recorder", href: "/screen-recorder" },
 		{ label: "Free Screen Recorder", href: "/free-screen-recorder" },
 		{ label: "Screen Recorder for Mac", href: "/screen-recorder-mac" },
