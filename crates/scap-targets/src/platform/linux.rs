@@ -631,10 +631,8 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
             };
 
             let mut child_return = 0u64;
-            let mut root_return: u64 = 0;
             let mut abs_x = 0i32;
             let mut abs_y = 0i32;
-            let _ = root_return;
             x11::xlib::XTranslateCoordinates(
                 display,
                 wid,
