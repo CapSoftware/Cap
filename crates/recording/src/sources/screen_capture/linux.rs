@@ -65,16 +65,21 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
 
         std::thread::spawn(move || {
             let display_env = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+            let display_str = if display_env.contains('.') {
+                display_env.clone()
+            } else {
+                format!("{display_env}.0")
+            };
 
             let input_url = if let Some(crop) = config.crop_bounds {
                 format!(
                     "{}+{},{}",
-                    display_env,
+                    display_str,
                     crop.position().x() as i32,
                     crop.position().y() as i32,
                 )
             } else {
-                format!("{display_env}+0,0")
+                display_str
             };
 
             let mut input_opts = ffmpeg::Dictionary::new();
@@ -206,6 +211,8 @@ fn open_x11grab_input(
     options: ffmpeg::Dictionary,
 ) -> anyhow::Result<ffmpeg::format::context::Input> {
     unsafe {
+        ffmpeg::ffi::avdevice_register_all();
+
         let format_cstr = std::ffi::CString::new("x11grab")
             .map_err(|_| anyhow::anyhow!("Invalid format name"))?;
         let input_format = ffmpeg::ffi::av_find_input_format(format_cstr.as_ptr());
