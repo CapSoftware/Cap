@@ -604,6 +604,18 @@ export const useWebRecorder = ({
 					? (videoStream?.getAudioTracks() ?? [])
 					: [];
 
+			if (
+				systemAudioEnabled &&
+				recordingMode !== "camera" &&
+				systemAudioTracks.length === 0
+			) {
+				toast.warning(
+					recordingMode === "tab"
+						? 'System audio wasn\'t captured. Make sure "Share tab audio" is checked in the browser picker.'
+						: "System audio wasn't captured. Your browser or OS may not support it for screen sharing. Try sharing a browser tab instead.",
+				);
+			}
+
 			let micStream: MediaStream | null = null;
 			if (micEnabled && selectedMicId) {
 				try {
@@ -641,17 +653,27 @@ export const useWebRecorder = ({
 				const systemSource = audioCtx.createMediaStreamSource(
 					new MediaStream(systemAudioTracks),
 				);
-				const micSource = audioCtx.createMediaStreamSource(micStream);
+				const micSource = micStream
+					? audioCtx.createMediaStreamSource(micStream)
+					: null;
 				const destination = audioCtx.createMediaStreamDestination();
 
-				systemSource.connect(destination);
-				micSource.connect(destination);
+				const limiter = audioCtx.createDynamicsCompressor();
+				limiter.threshold.value = -3;
+				limiter.knee.value = 2;
+				limiter.ratio.value = 20;
+				limiter.attack.value = 0.002;
+				limiter.release.value = 0.05;
+
+				systemSource.connect(limiter);
+				micSource?.connect(limiter);
+				limiter.connect(destination);
 
 				audioTracks = destination.stream.getAudioTracks();
 			} else if (hasSystemAudio) {
 				audioTracks = systemAudioTracks;
 			} else if (hasMicAudio) {
-				audioTracks = micStream.getAudioTracks();
+				audioTracks = micStream?.getAudioTracks() ?? [];
 			}
 
 			const mixedStream = new MediaStream([
