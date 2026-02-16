@@ -5,6 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use tracing::*;
 
 const AAC_MAX_SAMPLE_RATE: u32 = 48000;
+const MAX_AV_DRIFT_SECS: f64 = 2.0;
 
 // before pausing at all, subtract 0.
 // on pause, record last frame time.
@@ -508,6 +509,18 @@ impl MP4Encoder {
             self.is_writing = true;
             self.asset_writer
                 .start_session_at_src_time(cm::Time::zero());
+        }
+
+        if let (Some(audio_end_pts), Some(audio_ts), Some(video_pts)) = (
+            self.last_audio_end_pts,
+            self.last_audio_timescale,
+            self.last_video_pts,
+        ) {
+            let audio_secs = audio_end_pts as f64 / audio_ts as f64;
+            let video_secs = video_pts.as_secs_f64();
+            if audio_secs > video_secs + MAX_AV_DRIFT_SECS {
+                return Err(QueueFrameError::NotReadyForMore);
+            }
         }
 
         if !audio_input.is_ready_for_more_media_data() {
