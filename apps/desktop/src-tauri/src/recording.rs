@@ -1584,17 +1584,17 @@ async fn handle_recording_end(
         let _ = window.hide();
     }
 
+    if let Some(camera) = CapWindowId::Camera.get(&handle) {
+        let _ = camera.hide();
+    }
+
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.hide();
-        }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
-        app.camera_in_use = false;
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
