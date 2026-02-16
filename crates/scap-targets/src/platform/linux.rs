@@ -643,7 +643,6 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
                 &mut abs_y,
                 &mut child_return,
             );
-            let _ = root_return;
 
             windows.push(WindowImpl {
                 id: wid,
