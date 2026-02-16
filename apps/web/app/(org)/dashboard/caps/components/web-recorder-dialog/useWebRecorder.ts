@@ -45,6 +45,7 @@ import type {
 } from "./web-recorder-types";
 import {
 	detectCapabilities,
+	isUserCancellationError,
 	pickSupportedMimeType,
 	type RecorderCapabilities,
 	shouldRetryDisplayMediaWithoutPreferences,
@@ -500,6 +501,9 @@ export const useWebRecorder = ({
 							preferredDisplayRequest as DisplayMediaStreamOptions,
 						);
 					} catch (displayError) {
+						if (isUserCancellationError(displayError)) {
+							throw displayError;
+						}
 						if (shouldRetryDisplayMediaWithoutPreferences(displayError)) {
 							console.warn(
 								"Display media preferences not supported, retrying without them",
@@ -629,6 +633,10 @@ export const useWebRecorder = ({
 			if (hasSystemAudio && hasMicAudio) {
 				const audioCtx = new AudioContext();
 				audioContextRef.current = audioCtx;
+
+				if (audioCtx.state !== "running") {
+					await audioCtx.resume();
+				}
 
 				const systemSource = audioCtx.createMediaStreamSource(
 					new MediaStream(systemAudioTracks),
