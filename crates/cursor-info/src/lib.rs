@@ -90,9 +90,9 @@ impl<'de> Deserialize<'de> for CursorShape {
             )),
             "Linux" => Ok(CursorShape::Linux(
                 CursorShapeLinux::from_str(variant).map_err(|err| {
-                    serde::de::Error::custom(format!(
-                        "Failed to parse Linux cursor variant: {err}",
-                    ))
+                    serde::de::Error::custom(
+                        format!("Failed to parse Linux cursor variant: {err}",),
+                    )
                 })?,
             )),
             _ => Err(serde::de::Error::custom("Failed to parse CursorShape kind")),

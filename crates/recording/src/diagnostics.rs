@@ -562,11 +562,7 @@ mod linux_impl {
         let display_server = std::env::var("WAYLAND_DISPLAY")
             .ok()
             .map(|_| "Wayland".to_string())
-            .or_else(|| {
-                std::env::var("DISPLAY")
-                    .ok()
-                    .map(|_| "X11".to_string())
-            });
+            .or_else(|| std::env::var("DISPLAY").ok().map(|_| "X11".to_string()));
 
         let available_encoders = vec!["libx264".to_string(), "aac".to_string()];
 

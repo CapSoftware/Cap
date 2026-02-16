@@ -55,9 +55,7 @@ impl DisplayImpl {
 
     pub fn name(&self) -> Option<String> {
         if self.name_len > 0 {
-            Some(
-                String::from_utf8_lossy(&self.name[..self.name_len]).to_string(),
-            )
+            Some(String::from_utf8_lossy(&self.name[..self.name_len]).to_string())
         } else {
             Some(format!("Display {}", self.id))
         }
@@ -214,12 +212,15 @@ impl WindowImpl {
         let center_x = self.x + self.width as i32 / 2;
         let center_y = self.y + self.height as i32 / 2;
 
-        DisplayImpl::list().into_iter().find(|d| {
-            center_x >= d.x
-                && center_x < d.x + d.width as i32
-                && center_y >= d.y
-                && center_y < d.y + d.height as i32
-        }).or_else(|| DisplayImpl::list().into_iter().next())
+        DisplayImpl::list()
+            .into_iter()
+            .find(|d| {
+                center_x >= d.x
+                    && center_x < d.x + d.width as i32
+                    && center_y >= d.y
+                    && center_y < d.y + d.height as i32
+            })
+            .or_else(|| DisplayImpl::list().into_iter().next())
     }
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
@@ -286,8 +287,7 @@ fn list_displays_x11() -> Option<Vec<DisplayImpl>> {
 
                 for i in 0..(*resources).noutput {
                     let output_id = *(*resources).outputs.add(i as usize);
-                    let output_info =
-                        x11::xrandr::XRRGetOutputInfo(display, resources, output_id);
+                    let output_info = x11::xrandr::XRRGetOutputInfo(display, resources, output_id);
                     if output_info.is_null() {
                         continue;
                     }
@@ -461,11 +461,8 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
         );
 
         if status != 0 || prop.is_null() || nitems == 0 {
-            let net_client_list_fallback = x11::xlib::XInternAtom(
-                display,
-                b"_NET_CLIENT_LIST\0".as_ptr() as *const _,
-                0,
-            );
+            let net_client_list_fallback =
+                x11::xlib::XInternAtom(display, b"_NET_CLIENT_LIST\0".as_ptr() as *const _, 0);
             let status2 = x11::xlib::XGetWindowProperty(
                 display,
                 root,
@@ -486,24 +483,13 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
             }
         }
 
-        let window_ids =
-            std::slice::from_raw_parts(prop as *const u64, nitems as usize);
+        let window_ids = std::slice::from_raw_parts(prop as *const u64, nitems as usize);
 
-        let wm_state_atom = x11::xlib::XInternAtom(
-            display,
-            b"_NET_WM_STATE\0".as_ptr() as *const _,
-            0,
-        );
-        let wm_hidden_atom = x11::xlib::XInternAtom(
-            display,
-            b"_NET_WM_STATE_HIDDEN\0".as_ptr() as *const _,
-            0,
-        );
-        let wm_pid_atom = x11::xlib::XInternAtom(
-            display,
-            b"_NET_WM_PID\0".as_ptr() as *const _,
-            0,
-        );
+        let wm_state_atom =
+            x11::xlib::XInternAtom(display, b"_NET_WM_STATE\0".as_ptr() as *const _, 0);
+        let wm_hidden_atom =
+            x11::xlib::XInternAtom(display, b"_NET_WM_STATE_HIDDEN\0".as_ptr() as *const _, 0);
+        let wm_pid_atom = x11::xlib::XInternAtom(display, b"_NET_WM_PID\0".as_ptr() as *const _, 0);
 
         let mut windows = Vec::new();
 
@@ -574,11 +560,8 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
             let mut owner_buf = [0u8; 256];
             let owner_len;
             {
-                let wm_class_atom = x11::xlib::XInternAtom(
-                    display,
-                    b"WM_CLASS\0".as_ptr() as *const _,
-                    0,
-                );
+                let wm_class_atom =
+                    x11::xlib::XInternAtom(display, b"WM_CLASS\0".as_ptr() as *const _, 0);
                 let mut at = 0u64;
                 let mut af = 0i32;
                 let mut ni = 0u64;

@@ -11,11 +11,7 @@ impl super::CapturedFrameExt for CapturedFrame {
         let width = native.width;
         let height = native.height;
 
-        let mut frame = ffmpeg::frame::Video::new(
-            ffmpeg::format::Pixel::RGB24,
-            width,
-            height,
-        );
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGB24, width, height);
 
         let data = &native.data;
         let dst = frame.data_mut(0);

@@ -215,18 +215,13 @@ fn open_x11grab_input(
             ));
         }
 
-        let url_cstr = std::ffi::CString::new(url)
-            .map_err(|_| anyhow::anyhow!("Invalid URL"))?;
+        let url_cstr = std::ffi::CString::new(url).map_err(|_| anyhow::anyhow!("Invalid URL"))?;
 
         let mut ps = std::ptr::null_mut();
         let mut opts = options.disown();
 
-        let ret = ffmpeg::ffi::avformat_open_input(
-            &mut ps,
-            url_cstr.as_ptr(),
-            input_format,
-            &mut opts,
-        );
+        let ret =
+            ffmpeg::ffi::avformat_open_input(&mut ps, url_cstr.as_ptr(), input_format, &mut opts);
 
         if !opts.is_null() {
             ffmpeg::ffi::av_dict_free(&mut opts);
@@ -296,7 +291,9 @@ fn create_system_audio_source() -> anyhow::Result<SystemAudioSourceConfig> {
         .context("Failed to build system audio capture stream")?;
 
     use cpal::traits::StreamTrait;
-    stream.play().context("Failed to start system audio capture")?;
+    stream
+        .play()
+        .context("Failed to start system audio capture")?;
 
     Ok(ChannelAudioSourceConfig::new(audio_info, rx))
 }

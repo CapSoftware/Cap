@@ -297,9 +297,7 @@ impl MakeCapturePipeline for screen_capture::FFmpegX11Capture {
             output = output.with_audio_source::<sources::Microphone>(mic_feed);
         }
 
-        output
-            .build::<Mp4Muxer>(())
-            .await
+        output.build::<Mp4Muxer>(()).await
     }
 }
 

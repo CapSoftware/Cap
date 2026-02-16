@@ -18,11 +18,7 @@ impl super::AsFFmpeg for VideoFrame {
             return Err(AsFFmpegError::EmptyFrame);
         }
 
-        let mut frame = ffmpeg::frame::Video::new(
-            self.pixel_format,
-            self.width,
-            self.height,
-        );
+        let mut frame = ffmpeg::frame::Video::new(self.pixel_format, self.width, self.height);
 
         let dst = frame.data_mut(0);
         let copy_len = dst.len().min(self.data.len());

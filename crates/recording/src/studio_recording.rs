@@ -19,14 +19,14 @@ use crate::{
     sources::{self, screen_capture},
 };
 
+#[cfg(target_os = "linux")]
+use crate::output_pipeline::{
+    FFmpegVideoFrame, Mp4Muxer, SegmentedVideoMuxer, SegmentedVideoMuxerConfig,
+};
 #[cfg(windows)]
 use crate::output_pipeline::{
     WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsFragmentedM4SCameraMuxer,
     WindowsFragmentedM4SCameraMuxerConfig,
-};
-#[cfg(target_os = "linux")]
-use crate::output_pipeline::{
-    FFmpegVideoFrame, Mp4Muxer, SegmentedVideoMuxer, SegmentedVideoMuxerConfig,
 };
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
