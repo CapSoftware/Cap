@@ -103,6 +103,7 @@ impl TryFrom<&Url> for DeepLinkAction {
             Some("toggle-mic") => return Ok(Self::ToggleMic),
             Some("toggle-cam") => return Ok(Self::ToggleCam),
             Some(v) if v != "action" => return Err(ActionParseFromUrlError::NotAction),
+            None => return Err(ActionParseFromUrlError::NotAction),
             _ => {}
         }
 
@@ -213,7 +214,10 @@ impl DeepLinkAction {
                     crate::set_mic_input(state, None).await
                 } else {
                     let settings = RecordingSettingsStore::get(app)?.unwrap_or_default();
-                    crate::set_mic_input(state, settings.mic_name).await
+                    let mic_name = settings
+                        .mic_name
+                        .ok_or("No mic configured in settings; cannot toggle mic on")?;
+                    crate::set_mic_input(state, Some(mic_name)).await
                 }
             }
             DeepLinkAction::ToggleCam => {
@@ -227,7 +231,10 @@ impl DeepLinkAction {
                     crate::set_camera_input(app.clone(), state, None, None).await
                 } else {
                     let settings = RecordingSettingsStore::get(app)?.unwrap_or_default();
-                    crate::set_camera_input(app.clone(), state, settings.camera_id, None).await
+                    let camera_id = settings
+                        .camera_id
+                        .ok_or("No camera configured in settings; cannot toggle camera on")?;
+                    crate::set_camera_input(app.clone(), state, Some(camera_id), None).await
                 }
             }
             DeepLinkAction::OpenEditor { project_path } => {
