@@ -35,7 +35,13 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon, ChartLineIcon, CogIcon, RecordIcon } from "../AnimatedIcons";
+import {
+	CapIcon,
+	ChartLineIcon,
+	CogIcon,
+	ImportIcon,
+	RecordIcon,
+} from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import SpacesList from "./SpacesList";
 import { updateActiveOrganization } from "./server";
@@ -68,6 +74,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			name: "Record a Cap",
 			href: `/dashboard/caps/record`,
 			icon: <RecordIcon />,
+			subNav: [],
+		},
+		{
+			name: "Import Video",
+			href: `/dashboard/import`,
+			matchChildren: true,
+			icon: <ImportIcon />,
 			subNav: [],
 		},
 		{
