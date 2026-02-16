@@ -18,6 +18,7 @@ import {
 export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
 		async createUser(userData: any) {
+			const normalizedEmail = (userData.email as string)?.toLowerCase() ?? "";
 			const userId = User.UserId.make(nanoId());
 			await db.transaction(async (tx) => {
 				const [pendingInvite] = await tx
@@ -25,7 +26,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					.from(organizationInvites)
 					.where(
 						and(
-							eq(organizationInvites.invitedEmail, userData.email),
+							eq(organizationInvites.invitedEmail, normalizedEmail),
 							eq(organizationInvites.status, "pending"),
 						),
 					)
@@ -33,7 +34,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 
 				await tx.insert(users).values({
 					id: userId,
-					email: userData.email,
+					email: normalizedEmail,
 					emailVerified: userData.emailVerified,
 					name: userData.name,
 					image: userData.image,
@@ -78,7 +79,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 
 			if (STRIPE_AVAILABLE()) {
 				const existingCustomers = await stripe().customers.list({
-					email: userData.email,
+					email: normalizedEmail,
 					limit: 1,
 				});
 
@@ -94,7 +95,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					});
 				} else {
 					customer = await stripe().customers.create({
-						email: userData.email,
+						email: normalizedEmail,
 						metadata: {
 							userId: row.id,
 						},
@@ -153,10 +154,11 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 			return row ?? null;
 		},
 		async getUserByEmail(email) {
+			const normalizedEmail = email?.toLowerCase() ?? "";
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.email, email))
+				.where(eq(users.email, normalizedEmail))
 				.limit(1)
 				.catch((e) => {
 					throw e;
@@ -288,10 +290,12 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 			await db.delete(sessions).where(eq(sessions.sessionToken, sessionToken));
 		},
 		async createVerificationToken(verificationToken) {
+			const normalizedIdentifier =
+				verificationToken.identifier?.toLowerCase() ?? "";
 			const existingTokens = await db
 				.select()
 				.from(verificationTokens)
-				.where(eq(verificationTokens.identifier, verificationToken.identifier))
+				.where(eq(verificationTokens.identifier, normalizedIdentifier))
 				.limit(1);
 
 			if (existingTokens.length > 0) {
@@ -301,23 +305,19 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 						token: verificationToken.token,
 						expires: verificationToken.expires,
 					})
-					.where(
-						eq(verificationTokens.identifier, verificationToken.identifier),
-					);
+					.where(eq(verificationTokens.identifier, normalizedIdentifier));
 
 				return await db
 					.select()
 					.from(verificationTokens)
-					.where(
-						eq(verificationTokens.identifier, verificationToken.identifier),
-					)
+					.where(eq(verificationTokens.identifier, normalizedIdentifier))
 					.limit(1)
 					.then((rows) => rows[0]);
 			}
 
 			await db.insert(verificationTokens).values({
 				expires: verificationToken.expires,
-				identifier: verificationToken.identifier,
+				identifier: normalizedIdentifier,
 				token: verificationToken.token,
 			});
 
@@ -338,15 +338,18 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 				.limit(1);
 			const row = rows[0];
 			if (!row) return null;
+			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
+			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
+			if (normalizedIdentifier !== storedIdentifier) return null;
 			await db
 				.delete(verificationTokens)
 				.where(
 					and(
 						eq(verificationTokens.token, token),
-						eq(verificationTokens.identifier, identifier),
+						eq(verificationTokens.identifier, row.identifier),
 					),
 				);
-			return row;
+			return { ...row, identifier: storedIdentifier };
 		},
 	};
 }

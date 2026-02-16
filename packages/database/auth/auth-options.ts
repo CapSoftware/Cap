@@ -122,15 +122,15 @@ export const authOptions = (): NextAuthOptions => {
 				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
 				if (!allowedDomains) return true;
 
-				// Get email from either user object (OAuth) or email parameter (email provider)
-				const userEmail =
+				const rawEmail =
 					user?.email ||
 					(typeof email === "string"
 						? email
 						: typeof credentials?.email === "string"
 							? credentials.email
 							: null);
-				if (!userEmail || typeof userEmail !== "string") return true;
+				if (!rawEmail || typeof rawEmail !== "string") return true;
+				const userEmail = rawEmail.toLowerCase();
 
 				const [existingUser] = await db()
 					.select()
@@ -172,7 +172,7 @@ export const authOptions = (): NextAuthOptions => {
 							image: users.image,
 						})
 						.from(users)
-						.where(eq(users.email, token.email || ""))
+						.where(eq(users.email, (token.email || "").toLowerCase()))
 						.limit(1);
 
 					if (!dbUser) {

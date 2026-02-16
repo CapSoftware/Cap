@@ -154,7 +154,7 @@ const StepOne = ({
 
 				setLoading(true);
 				signIn("email", {
-					email,
+					email: email.trim().toLowerCase(),
 					redirect: false,
 				})
 					.then((res) => {
@@ -189,7 +189,7 @@ const StepOne = ({
 					value={email}
 					disabled={emailSent || loading}
 					onChange={(e) => {
-						setEmail(e.target.value);
+						setEmail(e.target.value.toLowerCase());
 					}}
 				/>
 			</div>
