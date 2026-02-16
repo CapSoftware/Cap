@@ -25,6 +25,7 @@ import {
 } from "./RecordingModeSelector";
 import { SettingsButton } from "./SettingsButton";
 import { SettingsPanel } from "./SettingsPanel";
+import { SystemAudioToggle } from "./SystemAudioToggle";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
@@ -98,9 +99,11 @@ export const WebRecorderDialog = () => {
 		rememberDevices,
 		selectedCameraId,
 		selectedMicId,
+		systemAudioEnabled,
 		setSelectedCameraId,
 		handleCameraChange,
 		handleMicChange,
+		handleSystemAudioChange,
 		handleRememberDevicesChange,
 	} = useDevicePreferences({
 		open,
@@ -145,6 +148,7 @@ export const WebRecorderDialog = () => {
 		organisationId,
 		selectedMicId,
 		micEnabled,
+		systemAudioEnabled,
 		recordingMode,
 		selectedCameraId,
 		isProUser: user.isPro,
@@ -311,6 +315,14 @@ export const WebRecorderDialog = () => {
 									onMicChange={handleMicChange}
 									onRefreshDevices={refreshMics}
 								/>
+								{recordingMode !== "camera" && (
+									<SystemAudioToggle
+										enabled={systemAudioEnabled}
+										disabled={isBusy}
+										recordingMode={recordingMode}
+										onToggle={handleSystemAudioChange}
+									/>
+								)}
 								<RecordingButton
 									isRecording={isRecording}
 									disabled={!canStartRecording || (isBusy && !isRecording)}

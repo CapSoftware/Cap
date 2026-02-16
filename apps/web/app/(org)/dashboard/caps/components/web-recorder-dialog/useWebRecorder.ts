@@ -54,6 +54,7 @@ interface UseWebRecorderOptions {
 	organisationId: string | undefined;
 	selectedMicId: string | null;
 	micEnabled: boolean;
+	systemAudioEnabled: boolean;
 	recordingMode: RecordingMode;
 	selectedCameraId: string | null;
 	isProUser: boolean;
@@ -91,6 +92,7 @@ export const useWebRecorder = ({
 	organisationId,
 	selectedMicId,
 	micEnabled,
+	systemAudioEnabled,
 	recordingMode,
 	selectedCameraId,
 	isProUser,
@@ -116,6 +118,7 @@ export const useWebRecorder = ({
 		cameraStreamRef,
 		micStreamRef,
 		mixedStreamRef,
+		audioContextRef,
 		detectionTimeoutsRef,
 		detectionCleanupRef,
 		cleanupStreams,
@@ -459,7 +462,23 @@ export const useWebRecorder = ({
 					displaySurface: desiredSurface,
 				};
 
+				const displayAudioConfig: boolean | MediaTrackConstraints =
+					systemAudioEnabled
+						? {
+								echoCancellation: false,
+								autoGainControl: false,
+								noiseSuppression: false,
+							}
+						: false;
+
 				const baseDisplayRequest: ExtendedDisplayMediaStreamOptions = {
+					video: videoConstraints,
+					audio: displayAudioConfig,
+					preferCurrentTab: recordingMode === "tab",
+					...(systemAudioEnabled ? { systemAudio: "include" } : {}),
+				};
+
+				const noAudioDisplayRequest: ExtendedDisplayMediaStreamOptions = {
 					video: videoConstraints,
 					audio: false,
 					preferCurrentTab: recordingMode === "tab",
@@ -468,15 +487,17 @@ export const useWebRecorder = ({
 				const preferredOptions = DISPLAY_MODE_PREFERENCES[recordingMode];
 
 				if (preferredOptions) {
-					const preferredDisplayRequest: DisplayMediaStreamOptions = {
+					const preferredDisplayRequest: ExtendedDisplayMediaStreamOptions = {
 						...baseDisplayRequest,
 						...preferredOptions,
 						video: videoConstraints,
+						audio: displayAudioConfig,
+						...(systemAudioEnabled ? { systemAudio: "include" } : {}),
 					};
 
 					try {
 						videoStream = await navigator.mediaDevices.getDisplayMedia(
-							preferredDisplayRequest,
+							preferredDisplayRequest as DisplayMediaStreamOptions,
 						);
 					} catch (displayError) {
 						if (shouldRetryDisplayMediaWithoutPreferences(displayError)) {
@@ -484,10 +505,50 @@ export const useWebRecorder = ({
 								"Display media preferences not supported, retrying without them",
 								displayError,
 							);
-							videoStream =
-								await navigator.mediaDevices.getDisplayMedia(
-									baseDisplayRequest,
+							try {
+								videoStream = await navigator.mediaDevices.getDisplayMedia(
+									baseDisplayRequest as DisplayMediaStreamOptions,
 								);
+							} catch (audioRetryError) {
+								if (
+									systemAudioEnabled &&
+									shouldRetryDisplayMediaWithoutPreferences(audioRetryError)
+								) {
+									console.warn(
+										"System audio not supported, retrying without audio",
+										audioRetryError,
+									);
+									toast.warning(
+										"System audio isn't supported in this browser. Recording without it.",
+									);
+									videoStream = await navigator.mediaDevices.getDisplayMedia(
+										noAudioDisplayRequest as DisplayMediaStreamOptions,
+									);
+								} else {
+									throw audioRetryError;
+								}
+							}
+						} else if (systemAudioEnabled) {
+							console.warn(
+								"Display media with audio failed, retrying without system audio",
+								displayError,
+							);
+							toast.warning(
+								"System audio isn't supported in this browser. Recording without it.",
+							);
+							const noAudioPreferred: ExtendedDisplayMediaStreamOptions = {
+								...noAudioDisplayRequest,
+								...preferredOptions,
+								video: videoConstraints,
+								audio: false,
+							};
+							try {
+								videoStream = await navigator.mediaDevices.getDisplayMedia(
+									noAudioPreferred as DisplayMediaStreamOptions,
+								);
+							} catch {
+								throw displayError;
+							}
 						} else {
 							throw displayError;
 						}
@@ -495,8 +556,29 @@ export const useWebRecorder = ({
 				}
 
 				if (!videoStream) {
-					videoStream =
-						await navigator.mediaDevices.getDisplayMedia(baseDisplayRequest);
+					try {
+						videoStream = await navigator.mediaDevices.getDisplayMedia(
+							baseDisplayRequest as DisplayMediaStreamOptions,
+						);
+					} catch (fallbackError) {
+						if (
+							systemAudioEnabled &&
+							shouldRetryDisplayMediaWithoutPreferences(fallbackError)
+						) {
+							console.warn(
+								"System audio not supported, retrying without audio",
+								fallbackError,
+							);
+							toast.warning(
+								"System audio isn't supported in this browser. Recording without it.",
+							);
+							videoStream = await navigator.mediaDevices.getDisplayMedia(
+								noAudioDisplayRequest as DisplayMediaStreamOptions,
+							);
+						} else {
+							throw fallbackError;
+						}
+					}
 				}
 				displayStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
@@ -512,6 +594,11 @@ export const useWebRecorder = ({
 				width: settings?.width || undefined,
 				height: settings?.height || undefined,
 			};
+
+			const systemAudioTracks =
+				recordingMode !== "camera" && systemAudioEnabled
+					? (videoStream?.getAudioTracks() ?? [])
+					: [];
 
 			let micStream: MediaStream | null = null;
 			if (micEnabled && selectedMicId) {
@@ -535,9 +622,33 @@ export const useWebRecorder = ({
 				micStreamRef.current = micStream;
 			}
 
+			let audioTracks: MediaStreamTrack[] = [];
+			const hasSystemAudio = systemAudioTracks.length > 0;
+			const hasMicAudio = micStream !== null;
+
+			if (hasSystemAudio && hasMicAudio) {
+				const audioCtx = new AudioContext();
+				audioContextRef.current = audioCtx;
+
+				const systemSource = audioCtx.createMediaStreamSource(
+					new MediaStream(systemAudioTracks),
+				);
+				const micSource = audioCtx.createMediaStreamSource(micStream);
+				const destination = audioCtx.createMediaStreamDestination();
+
+				systemSource.connect(destination);
+				micSource.connect(destination);
+
+				audioTracks = destination.stream.getAudioTracks();
+			} else if (hasSystemAudio) {
+				audioTracks = systemAudioTracks;
+			} else if (hasMicAudio) {
+				audioTracks = micStream.getAudioTracks();
+			}
+
 			const mixedStream = new MediaStream([
 				...videoStream.getVideoTracks(),
-				...(micStream ? micStream.getAudioTracks() : []),
+				...audioTracks,
 			]);
 
 			mixedStreamRef.current = mixedStream;
