@@ -27,6 +27,9 @@ pub enum Action {
     },
     StopRecording,
     PauseRecording,
+    ResumeRecording,
+    ToggleMicrophone,
+    ToggleCamera,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -106,55 +109,23 @@ impl TryFrom<&Url> for Action {
 
 impl Action {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        let state = app.state::<ArcLock<App>>();
         match self {
-            Action::StartRecording {
-                capture_mode,
-                camera,
-                mic_label,
-                capture_system_audio,
-                mode,
-            } => {
-                let state = app.state::<ArcLock<App>>();
-
-                crate::set_camera_input(app.clone(), state.clone(), camera).await?;
-                crate::set_mic_input(state.clone(), mic_label).await?;
-
+            Action::StartRecording { capture_mode, camera, mic_label, capture_system_audio, mode } => {
                 let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays().into_iter().find(|(s, _)| s.name == name).map(|(s, _)| ScreenCaptureTarget::Display { id: s.id }).ok_or(format!("No screen \"{}\"", &name))?,
+                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows().into_iter().find(|(w, _)| w.name == name).map(|(w, _)| ScreenCaptureTarget::Window { id: w.id }).ok_or(format!("No window \"{}\"", &name))?,
                 };
-
-                let inputs = StartRecordingInputs {
-                    mode,
-                    capture_target,
-                    capture_system_audio,
-                    organization_id: None,
-                };
-
-                crate::recording::start_recording(app.clone(), state, inputs)
-                    .await
-                    .map(|_| ())
+                let inputs = StartRecordingInputs { mode, capture_target, capture_system_audio, organization_id: None };
+                crate::recording::start_recording(app.clone(), state, inputs).await.map(|_| ())
             }
-            Action::StopRecording => {
-                crate::recording::stop_recording(app.clone(), app.state()).await
-            }
-            Action::PauseRecording => {
-                crate::recording::pause_recording(app.clone(), app.state()).await
-            }
-            Action::OpenEditor { project_path } => {
-                crate::open_project_from_path(Path::new(&project_path), app.clone())
-            }
-            Action::OpenSettings { page } => {
-                crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
-            }
+            Action::StopRecording => crate::recording::stop_recording(app.clone(), state).await,
+            Action::PauseRecording => crate::recording::pause_recording(app.clone(), state).await,
+            Action::ResumeRecording => crate::recording::resume_recording(app.clone(), state).await,
+            Action::ToggleMicrophone => crate::set_mic_input(state.clone(), None).await.map_err(|e| e.to_string()),
+            Action::ToggleCamera => crate::set_camera_input(app.clone(), state.clone(), None).await.map_err(|e| e.to_string()),
+            Action::OpenEditor { project_path } => crate::open_project_from_path(Path::new(&project_path), app.clone()),
+            Action::OpenSettings { page } => crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await,
         }
     }
 }

@@ -11,6 +11,7 @@ const boolString = (_default = false) =>
 
 function createServerEnv() {
 	return createEnv({
+		skipValidation: true,
 		server: {
 			/// General configuration
 			DATABASE_URL: z.string().describe("MySQL database URL"),

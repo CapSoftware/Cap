@@ -1,6 +1,19 @@
 packages:
-  - "apps/*"
-  - "packages/*"
-  - "crates/tauri-plugin-*"
-  - "infra"
-  - "scripts/orgIdBackfill"
+  - apps/*
+  - packages/*
+  - crates/tauri-plugin-*
+  - infra
+  - scripts/orgIdBackfill
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - '@swc/core'
+  - aws-sdk
+  - contentlayer2
+  - core-js
+  - esbuild
+  - ffmpeg-static
+  - msgpackr-extract
+  - protobufjs
+  - sharp
+  - unrs-resolver
+  - workerd

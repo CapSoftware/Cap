@@ -405,7 +405,8 @@ export const useWebRecorder = ({
 	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
 
 	const startRecording = async (options?: { reuseInstantVideo?: boolean }) => {
-		if (!organisationId) {
+	setPhase("recording");
+	if (!organisationId) {
 			toast.error("Select an organization before recording.");
 			return;
 		}

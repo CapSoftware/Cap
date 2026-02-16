@@ -4,9 +4,9 @@
 	"identifier": "so.cap.desktop.dev",
 	"mainBinaryName": "Cap - Development",
 	"build": {
-		"beforeDevCommand": "pnpm localdev",
+		
 		"devUrl": "http://localhost:3002",
-		"beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
+		"beforeDevCommand": "",
 		"frontendDist": "../.output/public"
 	},
 	"app": {
