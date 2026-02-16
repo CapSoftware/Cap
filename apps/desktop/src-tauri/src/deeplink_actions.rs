@@ -119,6 +119,32 @@ impl TryFrom<&Url> for DeepLinkAction {
 }
 
 impl DeepLinkAction {
+    async fn execute_start_recording(
+        app: &AppHandle,
+        camera: Option<DeviceOrModelID>,
+        mic_label: Option<String>,
+        mode: RecordingMode,
+        capture_target: ScreenCaptureTarget,
+        capture_system_audio: bool,
+        organization_id: Option<String>,
+    ) -> Result<(), String> {
+        let state = app.state::<ArcLock<App>>();
+
+        crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
+        crate::set_mic_input(state.clone(), mic_label).await?;
+
+        let inputs = StartRecordingInputs {
+            mode,
+            capture_target,
+            capture_system_audio,
+            organization_id,
+        };
+
+        crate::recording::start_recording(app.clone(), state, inputs)
+            .await
+            .map(|_| ())
+    }
+
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
             DeepLinkAction::StartRecording {
@@ -128,11 +154,6 @@ impl DeepLinkAction {
                 capture_system_audio,
                 mode,
             } => {
-                let state = app.state::<ArcLock<App>>();
-
-                crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
-                crate::set_mic_input(state.clone(), mic_label).await?;
-
                 let capture_target: ScreenCaptureTarget = match capture_mode {
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
@@ -146,37 +167,31 @@ impl DeepLinkAction {
                         .ok_or(format!("No window with name \"{}\"", &name))?,
                 };
 
-                let inputs = StartRecordingInputs {
+                Self::execute_start_recording(
+                    app,
+                    camera,
+                    mic_label,
                     mode,
                     capture_target,
                     capture_system_audio,
-                    organization_id: None,
-                };
-
-                crate::recording::start_recording(app.clone(), state, inputs)
-                    .await
-                    .map(|_| ())
+                    None,
+                )
+                .await
             }
             DeepLinkAction::Record => {
                 let settings = RecordingSettingsStore::get(app)?.unwrap_or_default();
                 let capture_target = settings.target.ok_or("No capture target set in settings")?;
-                let mode = settings.mode.unwrap_or(RecordingMode::Instant);
 
-                let state = app.state::<ArcLock<App>>();
-                crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
-                    .await?;
-                crate::set_mic_input(state.clone(), settings.mic_name).await?;
-
-                let inputs = StartRecordingInputs {
-                    mode,
+                Self::execute_start_recording(
+                    app,
+                    settings.camera_id,
+                    settings.mic_name,
+                    settings.mode.unwrap_or(RecordingMode::Instant),
                     capture_target,
-                    capture_system_audio: settings.system_audio,
-                    organization_id: settings.organization_id,
-                };
-
-                crate::recording::start_recording(app.clone(), state, inputs)
-                    .await
-                    .map(|_| ())
+                    settings.system_audio,
+                    settings.organization_id,
+                )
+                .await
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
