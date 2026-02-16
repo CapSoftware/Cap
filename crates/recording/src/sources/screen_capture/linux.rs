@@ -1,12 +1,12 @@
 use crate::output_pipeline::{
-    self, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
-    ChannelVideoSourceConfig, FFmpegVideoFrame,
+    self, AudioFrame, AudioMuxer, AudioSource, ChannelVideoSource, ChannelVideoSourceConfig,
+    FFmpegVideoFrame, SetupCtx,
 };
 use anyhow::Context;
 use cap_media_info::AudioInfo;
 use cap_timestamp::Timestamp;
-use futures::channel::mpsc;
-use std::time::Instant;
+use futures::{Future, SinkExt, StreamExt, channel::mpsc};
+use std::{sync::Arc, time::Instant};
 use tracing::warn;
 
 use super::{ScreenCaptureConfig, ScreenCaptureFormat};
@@ -22,6 +22,15 @@ impl ScreenCaptureFormat for FFmpegX11Capture {
     }
 
     fn audio_info() -> AudioInfo {
+        use cpal::traits::{DeviceTrait, HostTrait};
+
+        let host = cpal::default_host();
+        if let Some(output_device) = host.default_output_device() {
+            if let Ok(supported_config) = output_device.default_output_config() {
+                return AudioInfo::from_stream_config(&supported_config);
+            }
+        }
+
         AudioInfo::new(
             ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
             48_000,
@@ -41,8 +50,42 @@ pub enum SourceError {
 
 pub type VideoSourceConfig = ChannelVideoSourceConfig<FFmpegVideoFrame>;
 pub type VideoSource = ChannelVideoSource<FFmpegVideoFrame>;
-pub type SystemAudioSourceConfig = ChannelAudioSourceConfig;
-pub type SystemAudioSource = ChannelAudioSource;
+
+pub struct SystemAudioSourceConfig {
+    audio_info: AudioInfo,
+    rx: mpsc::Receiver<AudioFrame>,
+    _stream: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+pub struct SystemAudioSource {
+    audio_info: AudioInfo,
+}
+
+impl AudioSource for SystemAudioSource {
+    type Config = SystemAudioSourceConfig;
+
+    fn setup(
+        mut config: Self::Config,
+        mut tx: mpsc::Sender<AudioFrame>,
+        _: &mut SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static {
+        let audio_info = config.audio_info;
+        let _stream_handle = config._stream.clone();
+
+        tokio::spawn(async move {
+            let _keep_alive = _stream_handle;
+            while let Some(frame) = config.rx.next().await {
+                let _ = tx.send(frame).await;
+            }
+        });
+
+        async move { Ok(SystemAudioSource { audio_info }) }
+    }
+
+    fn audio_info(&self) -> AudioInfo {
+        self.audio_info
+    }
+}
 
 impl ScreenCaptureConfig<FFmpegX11Capture> {
     pub async fn to_sources(
@@ -162,7 +205,7 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
                     };
 
                     if video_tx.send(video_frame).is_err() {
-                        break;
+                        return;
                     }
                 }
             }
@@ -238,8 +281,13 @@ fn open_x11grab_input(
     }
 }
 
+struct StreamHandle(cpal::Stream);
+
+unsafe impl Send for StreamHandle {}
+unsafe impl Sync for StreamHandle {}
+
 fn create_system_audio_source() -> anyhow::Result<SystemAudioSourceConfig> {
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let host = cpal::default_host();
     let output_device = host
@@ -265,7 +313,7 @@ fn create_system_audio_source() -> anyhow::Result<SystemAudioSourceConfig> {
                     use scap_ffmpeg::DataExt;
                     let frame = data.as_ffmpeg(&config);
                     let timestamp = Timestamp::SystemTime(std::time::SystemTime::now());
-                    let _ = tx.try_send(output_pipeline::AudioFrame {
+                    let _ = tx.try_send(AudioFrame {
                         inner: frame,
                         timestamp,
                     });
@@ -278,10 +326,15 @@ fn create_system_audio_source() -> anyhow::Result<SystemAudioSourceConfig> {
         )
         .context("Failed to build system audio capture stream")?;
 
-    use cpal::traits::StreamTrait;
     stream
         .play()
         .context("Failed to start system audio capture")?;
 
-    Ok(ChannelAudioSourceConfig::new(audio_info, rx))
+    let stream_handle: Arc<dyn std::any::Any + Send + Sync> = Arc::new(StreamHandle(stream));
+
+    Ok(SystemAudioSourceConfig {
+        audio_info,
+        rx,
+        _stream: stream_handle,
+    })
 }
