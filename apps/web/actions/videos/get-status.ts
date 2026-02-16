@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
-import { users, videos } from "@cap/database/schema";
+import { users, videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
@@ -57,6 +57,23 @@ export async function getVideoStatus(
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
 	if (!video.transcriptionStatus && serverEnv().DEEPGRAM_API_KEY) {
+		const activeUpload = await db()
+			.select({ videoId: videoUploads.videoId })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId))
+			.limit(1);
+
+		if (activeUpload.length > 0) {
+			return {
+				transcriptionStatus: null,
+				aiGenerationStatus:
+					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+				aiTitle: metadata.aiTitle || null,
+				summary: metadata.summary || null,
+				chapters: metadata.chapters || null,
+			};
+		}
+
 		console.log(
 			`[Get Status] Transcription not started for video ${videoId}, triggering transcription`,
 		);
