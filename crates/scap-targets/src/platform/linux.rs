@@ -231,7 +231,7 @@ impl WindowImpl {
     }
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
-        None
+        read_net_wm_icon(self.id)
     }
 
     pub fn is_valid(&self) -> bool {
@@ -667,5 +667,115 @@ fn list_windows_x11() -> Option<Vec<WindowImpl>> {
         x11::xlib::XCloseDisplay(display);
 
         Some(windows)
+    }
+}
+
+fn read_net_wm_icon(window_id: u64) -> Option<Vec<u8>> {
+    unsafe {
+        let display = x11::xlib::XOpenDisplay(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+
+        let net_wm_icon =
+            x11::xlib::XInternAtom(display, b"_NET_WM_ICON\0".as_ptr() as *const _, 0);
+
+        let mut actual_type = 0u64;
+        let mut actual_format = 0i32;
+        let mut nitems = 0u64;
+        let mut bytes_after = 0u64;
+        let mut prop: *mut u8 = std::ptr::null_mut();
+
+        let status = x11::xlib::XGetWindowProperty(
+            display,
+            window_id,
+            net_wm_icon,
+            0,
+            i64::MAX,
+            0,
+            x11::xlib::XA_CARDINAL,
+            &mut actual_type,
+            &mut actual_format,
+            &mut nitems,
+            &mut bytes_after,
+            &mut prop,
+        );
+
+        if status != 0 || prop.is_null() || nitems < 3 {
+            if !prop.is_null() {
+                x11::xlib::XFree(prop as *mut _);
+            }
+            x11::xlib::XCloseDisplay(display);
+            return None;
+        }
+
+        let data = if actual_format == 32 {
+            std::slice::from_raw_parts(prop as *const u64, nitems as usize)
+        } else {
+            x11::xlib::XFree(prop as *mut _);
+            x11::xlib::XCloseDisplay(display);
+            return None;
+        };
+
+        let mut best_width = 0u32;
+        let mut best_height = 0u32;
+        let mut best_offset = 0usize;
+        let mut best_size = 0u64;
+
+        let mut offset = 0usize;
+        while offset + 2 <= data.len() {
+            let w = data[offset] as u32;
+            let h = data[offset + 1] as u32;
+            let pixel_count = (w as u64) * (h as u64);
+
+            if offset + 2 + pixel_count as usize > data.len() {
+                break;
+            }
+
+            let size = (w as u64) * (h as u64);
+            if size > best_size && w <= 256 && h <= 256 {
+                best_width = w;
+                best_height = h;
+                best_offset = offset + 2;
+                best_size = size;
+            }
+
+            offset += 2 + pixel_count as usize;
+        }
+
+        if best_width == 0 || best_height == 0 {
+            x11::xlib::XFree(prop as *mut _);
+            x11::xlib::XCloseDisplay(display);
+            return None;
+        }
+
+        let pixel_count = (best_width as usize) * (best_height as usize);
+        let pixels = &data[best_offset..best_offset + pixel_count];
+
+        let mut rgba = Vec::with_capacity(pixel_count * 4);
+        for &pixel in pixels {
+            let a = ((pixel >> 24) & 0xFF) as u8;
+            let r = ((pixel >> 16) & 0xFF) as u8;
+            let g = ((pixel >> 8) & 0xFF) as u8;
+            let b = (pixel & 0xFF) as u8;
+            rgba.push(r);
+            rgba.push(g);
+            rgba.push(b);
+            rgba.push(a);
+        }
+
+        x11::xlib::XFree(prop as *mut _);
+        x11::xlib::XCloseDisplay(display);
+
+        let img = image::RgbaImage::from_raw(best_width, best_height, rgba)?;
+
+        let mut png_data = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_data),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+
+        Some(png_data)
     }
 }
