@@ -144,6 +144,8 @@ pub async fn upload_video(
     let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
 
+    emit_upload_complete(app, &video_id);
+
     async_capture_event(match &video_result {
         Ok(meta) => PostHogEvent::MultipartUploadComplete {
             duration: start.elapsed(),
@@ -314,6 +316,40 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     })
 }
 
+pub fn try_repair_corrupt_mp4(path: &Path) -> Result<(), String> {
+    let repaired_path = path.with_extension("repaired.mp4");
+
+    info!(
+        original = %path.display(),
+        repaired = %repaired_path.display(),
+        "Attempting to repair corrupt MP4 via FFmpeg remux"
+    );
+
+    cap_enc_ffmpeg::remux::remux_file(path, &repaired_path)
+        .map_err(|e| format!("FFmpeg remux repair failed for {}: {e}", path.display()))?;
+
+    let repaired_size = std::fs::metadata(&repaired_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    if repaired_size == 0 {
+        let _ = std::fs::remove_file(&repaired_path);
+        return Err("Repaired file is empty — no recoverable data".to_string());
+    }
+
+    std::fs::rename(&repaired_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&repaired_path);
+        format!("Failed to replace original file with repaired version: {e}")
+    })?;
+
+    info!(
+        repaired_size_mb = repaired_size as f64 / 1_000_000.0,
+        "Successfully replaced corrupt file with repaired version"
+    );
+
+    Ok(())
+}
+
 #[instrument]
 pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     task::spawn_blocking(move || {
@@ -454,13 +490,46 @@ impl InstantMultipartUpload {
         parts = deduplicated_parts.into_values().collect::<Vec<_>>();
         parts.sort_by_key(|part| part.part_number);
 
-        let metadata = build_video_meta(&file_path)
-            .map_err(|e| error!("Failed to get video metadata: {e}"))
-            .ok();
+        let metadata = match build_video_meta(&file_path) {
+            Ok(meta) => Some(meta),
+            Err(e) => {
+                error!("Failed to get video metadata: {e}");
+                warn!("Output file may be corrupt, attempting FFmpeg remux repair for {video_id}");
+
+                match try_repair_corrupt_mp4(&file_path) {
+                    Ok(()) => {
+                        info!("Successfully repaired corrupt recording for {video_id}");
+                        match build_video_meta(&file_path) {
+                            Ok(meta) => Some(meta),
+                            Err(repair_meta_err) => {
+                                error!(
+                                    "File still unreadable after repair attempt: {repair_meta_err}"
+                                );
+                                return Err(format!(
+                                    "Recording file could not be salvaged after encoder failure. \
+                                     Original error: {e}, Post-repair error: {repair_meta_err}"
+                                )
+                                .into());
+                            }
+                        }
+                    }
+                    Err(repair_err) => {
+                        error!("FFmpeg repair also failed: {repair_err}");
+                        return Err(format!(
+                            "Recording file could not be salvaged after encoder failure. \
+                             Original error: {e}, Repair error: {repair_err}"
+                        )
+                        .into());
+                    }
+                }
+            }
+        };
 
         api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
             .await?;
         info!("Multipart upload complete for {video_id}.");
+
+        emit_upload_complete(&app, &video_id);
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
             format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
@@ -542,19 +611,25 @@ pub fn from_pending_file_to_chunks(
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
+        let mut recording_completed_cleanly = false;
         let mut first_chunk_size: Option<u64> = None;
         let mut chunk_buffer = vec![0u8; MAX_CHUNK_SIZE as usize];
 
         loop {
-            // Check if realtime recording is done
             if !realtime_is_done.unwrap_or(true) && let Some(ref realtime_receiver) = realtime_upload_done {
                     match realtime_receiver.try_recv() {
-                        Ok(_) => realtime_is_done = Some(true),
+                        Ok(_) => {
+                            realtime_is_done = Some(true);
+                            recording_completed_cleanly = true;
+                        },
                         Err(flume::TryRecvError::Empty) => {},
-                        // This means all senders where dropped.
-                        // This can assume this means realtime is done.
-                        // It possibly means something has gone wrong but that's not the uploader's problem.
-                        Err(_) => realtime_is_done = Some(true),
+                        Err(flume::TryRecvError::Disconnected) => {
+                            warn!(
+                                "Recording channel disconnected without completion signal — \
+                                 recording may have failed, finishing upload without header correction"
+                            );
+                            realtime_is_done = Some(true);
+                        },
                     }
 
             }
@@ -606,8 +681,7 @@ pub fn from_pending_file_to_chunks(
                     last_read_position += total_read as u64;
                 }
             } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
-                // Recording is done and no new data - re-emit first chunk with corrected MP4 header
-                if let Some(first_size) = first_chunk_size && realtime_upload_done.is_some() {
+                if let Some(first_size) = first_chunk_size && realtime_upload_done.is_some() && recording_completed_cleanly {
                     file.seek(std::io::SeekFrom::Start(0)).await?;
 
                     let chunk_size = first_size as usize;
@@ -1192,7 +1266,6 @@ fn progress<T: UploadedChunk, E>(
     let mut uploaded = 0u64;
     let mut pending_task: Option<JoinHandle<()>> = None;
     let mut reemit_task: Option<JoinHandle<()>> = None;
-    let (video_id2, app_handle) = (video_id.clone(), app.clone());
 
     stream! {
         let mut stream = pin!(stream);
@@ -1202,12 +1275,10 @@ fn progress<T: UploadedChunk, E>(
                 uploaded += chunk.size();
                 let total = chunk.total();
 
-                // Cancel any pending task
                 if let Some(handle) = pending_task.take() {
                     handle.abort();
                 }
 
-                // Cancel any existing reemit task
                 if let Some(handle) = reemit_task.take() {
                     handle.abort();
                 }
@@ -1215,14 +1286,12 @@ fn progress<T: UploadedChunk, E>(
                 let should_send_immediately = uploaded >= total;
 
                 if should_send_immediately {
-                    // Send immediately if upload is complete
                     let app_clone = app.clone();
                     let video_id_clone = video_id.clone();
                     tokio::spawn(async move {
                         api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
                     });
                 } else {
-                    // Schedule delayed update
                     let app_clone = app.clone();
                     let video_id_clone = video_id.clone();
                     pending_task = Some(tokio::spawn(async move {
@@ -1230,14 +1299,13 @@ fn progress<T: UploadedChunk, E>(
                         api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
                     }));
 
-                    // Start reemit task for continuous progress updates every 700ms
                     let app_reemit = app.clone();
                     let video_id_reemit = video_id.clone();
                     let uploaded_reemit = uploaded;
                     let total_reemit = total;
                     reemit_task = Some(tokio::spawn(async move {
                         let mut interval = time::interval(Duration::from_millis(700));
-                        interval.tick().await; // Skip first immediate tick
+                        interval.tick().await;
 
                         loop {
                             interval.tick().await;
@@ -1252,7 +1320,6 @@ fn progress<T: UploadedChunk, E>(
                     }));
                 }
 
-                // Emit progress event for the app frontend
                 UploadProgressEvent {
                     video_id: video_id.clone(),
                     uploaded: uploaded.to_string(),
@@ -1265,25 +1332,20 @@ fn progress<T: UploadedChunk, E>(
             yield chunk;
         }
 
-        // Clean up reemit task when stream ends
         if let Some(handle) = reemit_task.take() {
             handle.abort();
         }
     }
-    .map(Some)
-    .chain(stream::once(async move {
-        // This will trigger the frontend to remove the event from the SolidJS store.
-        UploadProgressEvent {
-            video_id: video_id2,
-            uploaded: "0".into(),
-            total: "0".into(),
-        }
-        .emit(&app_handle)
-        .ok();
+}
 
-        None
-    }))
-    .filter_map(|item| async move { item })
+pub fn emit_upload_complete(app: &AppHandle, video_id: &str) {
+    UploadProgressEvent {
+        video_id: video_id.to_string(),
+        uploaded: "0".into(),
+        total: "0".into(),
+    }
+    .emit(app)
+    .ok();
 }
 
 /// Track the upload progress into a Tauri channel

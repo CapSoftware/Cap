@@ -446,8 +446,6 @@ impl MP4Encoder {
             pts_duration = adjusted_pts;
         }
 
-        self.last_video_pts = Some(pts_duration);
-
         let frame_duration_us = self.video_frame_duration().as_micros() as i64;
         let timing = SampleTimingInfo {
             duration: cm::Time::new(frame_duration_us.max(1), 1_000_000),
@@ -475,6 +473,7 @@ impl MP4Encoder {
             Err(e) => return Err(e),
         }
 
+        self.last_video_pts = Some(pts_duration);
         self.video_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
 
@@ -590,16 +589,32 @@ impl MP4Encoder {
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueFrameError::Construct)?;
 
         let sample_rate = frame.rate().max(1) as i32;
-        let pts_value = match (self.last_audio_end_pts, self.last_audio_timescale) {
+        let mut pts_value = match (self.last_audio_end_pts, self.last_audio_timescale) {
             (Some(end), Some(scale)) if scale == sample_rate => end,
             (Some(end), Some(scale)) => {
-                duration_to_timescale_value(timescale_value_to_duration(end, scale), sample_rate)
+                let converted = duration_to_timescale_value(
+                    timescale_value_to_duration(end, scale),
+                    sample_rate,
+                );
+                converted.max(end.max(0) + 1)
             }
             _ => 0,
         };
 
-        self.last_audio_end_pts = Some(pts_value.saturating_add(frame.samples() as i64));
-        self.last_audio_timescale = Some(sample_rate);
+        if let Some(last_end) = self.last_audio_end_pts
+            && self.last_audio_timescale == Some(sample_rate)
+            && pts_value < last_end
+        {
+            warn!(
+                pts_value,
+                last_end,
+                sample_rate,
+                "Audio PTS went backwards, correcting to maintain monotonicity"
+            );
+            pts_value = last_end;
+        }
+
+        let new_end = pts_value.saturating_add(frame.samples() as i64);
 
         let pts = cm::Time::new(pts_value, sample_rate);
 
@@ -626,6 +641,8 @@ impl MP4Encoder {
             Err(e) => return Err(e),
         }
 
+        self.last_audio_end_pts = Some(new_end);
+        self.last_audio_timescale = Some(sample_rate);
         self.audio_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
 

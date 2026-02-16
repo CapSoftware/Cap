@@ -502,3 +502,7 @@ fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), Rem
 
     remux_streams(&mut ictx, &mut octx)
 }
+
+pub fn remux_file(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
+    remux_to_regular_mp4(input_path, output_path)
+}

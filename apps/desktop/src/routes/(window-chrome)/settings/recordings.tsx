@@ -111,7 +111,7 @@ export default function Recordings() {
 	const recordings = createQuery(() => recordingsQuery);
 
 	createTauriEventListener(events.uploadProgressEvent, (e) => {
-		if (e.uploaded === e.total) {
+		if (e.uploaded === "0" && e.total === "0") {
 			setUploadProgress(
 				produce((s) => {
 					delete s[e.video_id];
