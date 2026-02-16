@@ -381,10 +381,12 @@ pub async fn spawn_instant_recording_actor(
 
             let output_path = content_dir.join("output.mp4");
 
+            #[cfg(not(target_os = "linux"))]
             let mut builder = OutputPipeline::builder(output_path.clone())
                 .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
                 .with_timestamps(timestamps);
 
+            #[cfg(not(target_os = "linux"))]
             if let Some(mic_feed) = inputs.mic_feed.clone() {
                 builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
             }

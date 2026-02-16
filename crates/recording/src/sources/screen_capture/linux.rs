@@ -3,7 +3,7 @@ use crate::output_pipeline::{
     ChannelVideoSourceConfig, FFmpegVideoFrame,
 };
 use anyhow::Context;
-use cap_media_info::{AudioInfo, VideoInfo};
+use cap_media_info::AudioInfo;
 use cap_timestamp::Timestamp;
 use futures::channel::mpsc;
 use std::time::Instant;
@@ -153,7 +153,7 @@ impl ScreenCaptureConfig<FFmpegX11Capture> {
                         frame.clone()
                     };
 
-                    let elapsed = start_time.elapsed();
+                    let _elapsed = start_time.elapsed();
                     let timestamp = Timestamp::Instant(std::time::Instant::now());
 
                     let video_frame = FFmpegVideoFrame {
@@ -240,7 +240,6 @@ fn open_x11grab_input(
 
 fn create_system_audio_source() -> anyhow::Result<SystemAudioSourceConfig> {
     use cpal::traits::{DeviceTrait, HostTrait};
-    use futures::SinkExt;
 
     let host = cpal::default_host();
     let output_device = host

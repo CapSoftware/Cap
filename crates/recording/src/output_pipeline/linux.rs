@@ -1,4 +1,4 @@
-use super::{FFmpegVideoFrame, VideoFrame};
+use super::VideoFrame;
 use cap_timestamp::Timestamp;
 
 #[derive(Clone)]
