@@ -206,6 +206,8 @@ export const ShareHeader = ({
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={data.public}
 				spacesData={spacesData}
+				hasPassword={!!data.hasPassword}
+				onPasswordUpdated={() => refresh()}
 			/>
 			<div className="mt-8">
 				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
@@ -258,7 +260,7 @@ export const ShareHeader = ({
 						<div className="flex space-x-2">
 							<div>
 								<div className="flex gap-2 items-center">
-									{data.password && (
+									{data.hasPassword && (
 										<FontAwesomeIcon
 											className="text-amber-600 size-4"
 											icon={faLock}

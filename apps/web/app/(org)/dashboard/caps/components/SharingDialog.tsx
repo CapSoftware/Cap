@@ -14,10 +14,14 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { Check, Globe2, Search } from "lucide-react";
+import { Check, Globe2, Lock, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
+import {
+	removeVideoPassword,
+	setVideoPassword,
+} from "@/actions/videos/password";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
@@ -38,6 +42,8 @@ interface SharingDialogProps {
 	onSharingUpdated: (updatedSharedSpaces: string[]) => void;
 	isPublic?: boolean;
 	spacesData?: Spaces[] | null;
+	hasPassword?: boolean;
+	onPasswordUpdated?: (protectedStatus: boolean) => void;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -49,8 +55,14 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	onSharingUpdated,
 	isPublic = false,
 	spacesData: propSpacesData = null,
+	hasPassword = false,
+	onPasswordUpdated,
 }) => {
-	const { spacesData: contextSpacesData } = useDashboardContext();
+	const {
+		spacesData: contextSpacesData,
+		user,
+		setUpgradeModalOpen,
+	} = useDashboardContext();
 	const spacesData = propSpacesData || contextSpacesData;
 	const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
 	const [searchTerm, setSearchTerm] = useState("");
@@ -59,6 +71,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	>(new Set());
 	const [publicToggle, setPublicToggle] = useState(isPublic);
 	const [initialPublicState, setInitialPublicState] = useState(isPublic);
+	const [passwordEnabled, setPasswordEnabled] = useState(hasPassword);
+	const [passwordValue, setPasswordValue] = useState("");
+	const [initialPasswordEnabled, setInitialPasswordEnabled] =
+		useState(hasPassword);
 	const tabs = ["Share", "Embed"] as const;
 	const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Share");
 
@@ -77,6 +93,18 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			if (!result.success) {
 				throw new Error(result.error || "Failed to update sharing settings");
 			}
+
+			if (passwordEnabled && passwordValue.trim()) {
+				const pwResult = await setVideoPassword(capId, passwordValue);
+				if (!pwResult.success) {
+					throw new Error(pwResult.error || "Failed to set password");
+				}
+			} else if (!passwordEnabled && initialPasswordEnabled) {
+				const pwResult = await removeVideoPassword(capId);
+				if (!pwResult.success) {
+					throw new Error(pwResult.error || "Failed to remove password");
+				}
+			}
 		},
 		onSuccess: () => {
 			const newSelectedSpaces = Array.from(selectedSpaces);
@@ -90,30 +118,46 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			);
 
 			const publicChanged = publicToggle !== initialPublicState;
+			const passwordChanged =
+				passwordEnabled !== initialPasswordEnabled ||
+				(passwordEnabled && passwordValue.trim().length > 0);
 
-			const getSpaceName = (id: string) => {
-				const space = spacesData?.find((space) => space.id === id);
-				return space?.name || `Space ${id}`;
-			};
+			if (passwordChanged) {
+				onPasswordUpdated?.(passwordEnabled);
+			}
 
 			if (
 				publicChanged &&
 				addedSpaceIds.length === 0 &&
-				removedSpaceIds.length === 0
+				removedSpaceIds.length === 0 &&
+				!passwordChanged
 			) {
 				toast.success(
 					publicToggle ? "Video is now public" : "Video is now private",
 				);
 			} else if (
+				passwordChanged &&
+				!publicChanged &&
+				addedSpaceIds.length === 0 &&
+				removedSpaceIds.length === 0
+			) {
+				toast.success(
+					passwordEnabled
+						? "Password protection enabled"
+						: "Password protection removed",
+				);
+			} else if (
 				addedSpaceIds.length === 1 &&
 				removedSpaceIds.length === 0 &&
-				!publicChanged
+				!publicChanged &&
+				!passwordChanged
 			) {
 				toast.success(`Shared to ${getSpaceName(addedSpaceIds[0] as string)}`);
 			} else if (
 				removedSpaceIds.length === 1 &&
 				addedSpaceIds.length === 0 &&
-				!publicChanged
+				!publicChanged &&
+				!passwordChanged
 			) {
 				toast.success(
 					`Unshared from ${getSpaceName(removedSpaceIds[0] as string)}`,
@@ -121,21 +165,24 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			} else if (
 				addedSpaceIds.length > 0 &&
 				removedSpaceIds.length === 0 &&
-				!publicChanged
+				!publicChanged &&
+				!passwordChanged
 			) {
 				toast.success(`Shared to ${addedSpaceIds.length} spaces`);
 			} else if (
 				removedSpaceIds.length > 0 &&
 				addedSpaceIds.length === 0 &&
-				!publicChanged
+				!publicChanged &&
+				!passwordChanged
 			) {
 				toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
 			} else if (
 				addedSpaceIds.length > 0 ||
 				removedSpaceIds.length > 0 ||
-				publicChanged
+				publicChanged ||
+				passwordChanged
 			) {
-				toast.success(`Sharing settings updated`);
+				toast.success("Sharing settings updated");
 			} else {
 				toast.info("No changes to sharing settings");
 			}
@@ -147,6 +194,22 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		},
 	});
 
+	const getSpaceName = (id: string) => {
+		const space = spacesData?.find((space) => space.id === id);
+		return space?.name || `Space ${id}`;
+	};
+
+	const handlePasswordToggle = (checked: boolean) => {
+		if (checked && !user.isPro) {
+			setUpgradeModalOpen(true);
+			return;
+		}
+		setPasswordEnabled(checked);
+		if (!checked) {
+			setPasswordValue("");
+		}
+	};
+
 	const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
 
 	useEffect(() => {
@@ -156,10 +219,13 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			setInitialSelectedSpaces(spaceIds);
 			setPublicToggle(isPublic);
 			setInitialPublicState(isPublic);
+			setPasswordEnabled(hasPassword);
+			setPasswordValue("");
+			setInitialPasswordEnabled(hasPassword);
 			setSearchTerm("");
 			setActiveTab(tabs[0]);
 		}
-	}, [isOpen, sharedSpaces, isPublic, tabs[0]]);
+	}, [isOpen, sharedSpaces, isPublic, hasPassword, tabs[0]]);
 
 	const isSpaceSharedViaOrganization = useCallback(
 		(spaceId: string) => {
@@ -280,6 +346,58 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								/>
 							</div>
 
+							<div
+								className={clsx(
+									"mb-4 rounded-lg border bg-gray-1 border-gray-4",
+									passwordEnabled && "overflow-hidden",
+								)}
+							>
+								<div className="flex justify-between items-center p-3">
+									<div className="flex gap-3 items-center">
+										<div className="flex justify-center items-center w-8 h-8 rounded-full bg-gray-3">
+											<Lock className="w-4 h-4 text-gray-11" />
+										</div>
+										<div>
+											<p className="text-sm font-medium text-gray-12">
+												{passwordEnabled
+													? initialPasswordEnabled
+														? "Password protected"
+														: "Password protection"
+													: "Add password"}
+											</p>
+											<p className="text-xs text-gray-10">
+												{passwordEnabled
+													? "Viewers must enter a password to view"
+													: "Restrict access with a password"}
+											</p>
+										</div>
+									</div>
+									<Switch
+										checked={passwordEnabled}
+										onCheckedChange={handlePasswordToggle}
+									/>
+								</div>
+								{passwordEnabled && (
+									<div className="px-3 pb-3">
+										<Input
+											type="password"
+											placeholder={
+												initialPasswordEnabled
+													? "Enter new password"
+													: "Set a password"
+											}
+											value={passwordValue}
+											onChange={(e) => setPasswordValue(e.target.value)}
+										/>
+										{initialPasswordEnabled && !passwordValue && (
+											<p className="mt-1.5 text-xs text-gray-9">
+												Leave blank to keep existing password
+											</p>
+										)}
+									</div>
+								)}
+							</div>
+
 							<div className="relative mb-3">
 								<Input
 									type="text"
@@ -347,15 +465,23 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								disabled={updateSharing.isPending}
 								size="sm"
 								variant="dark"
-								onClick={() =>
+								onClick={() => {
+									if (
+										passwordEnabled &&
+										!initialPasswordEnabled &&
+										!passwordValue.trim()
+									) {
+										toast.error("Please enter a password");
+										return;
+									}
 									updateSharing.mutate({
 										capId,
 										spaceIds: Array.from(selectedSpaces).map((v) =>
 											Space.SpaceId.make(v),
 										),
 										public: publicToggle,
-									})
-								}
+									});
+								}}
 							>
 								{updateSharing.isPending ? "Saving..." : "Save"}
 							</Button>
