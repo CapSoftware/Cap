@@ -1,4 +1,4 @@
-import { Action, ActionPanel, Form } from "@raycast/api";
+import { Action, ActionPanel, Form, Toast, showToast } from "@raycast/api";
 import { buildUrl, triggerCapDeepLink } from "./deeplink";
 
 type Values = {
@@ -13,18 +13,31 @@ type Values = {
 
 export default function Command() {
   async function onSubmit(values: Values) {
+    const target = values.target.trim();
+    if (!target) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Target is required",
+        message: "Please enter a display/window name",
+      });
+      return;
+    }
+
     const useSystemAudio = values.captureSystemAudio.includes("enabled")
       ? "true"
       : "false";
 
+    const cameraDeviceId = values.cameraDeviceId.trim();
+    const cameraModelId = values.cameraModelId.trim();
+
     const url = buildUrl("record/start", {
       mode: values.mode,
       capture_type: values.captureType,
-      target: values.target,
+      target,
       capture_system_audio: useSystemAudio,
       mic_label: values.micLabel,
-      device_id: values.cameraDeviceId,
-      model_id: values.cameraModelId,
+      device_id: cameraDeviceId || cameraModelId ? cameraDeviceId || undefined : undefined,
+      model_id: cameraDeviceId ? undefined : cameraModelId || undefined,
     });
 
     await triggerCapDeepLink(url, "Sent: Start recording");

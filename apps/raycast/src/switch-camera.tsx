@@ -10,11 +10,17 @@ type Values = {
 export default function Command() {
   async function onSubmit(values: Values) {
     const shouldDisable = values.off.includes("off");
+    const deviceId = values.deviceId.trim();
+    const modelId = values.modelId.trim();
 
     const url = buildUrl("device/camera", {
       off: shouldDisable ? "true" : undefined,
-      device_id: shouldDisable ? undefined : values.deviceId,
-      model_id: shouldDisable ? undefined : values.modelId,
+      device_id: shouldDisable
+        ? undefined
+        : deviceId || modelId
+          ? deviceId || undefined
+          : undefined,
+      model_id: shouldDisable ? undefined : deviceId ? undefined : modelId || undefined,
     });
 
     await triggerCapDeepLink(
