@@ -1,0 +1,13 @@
+{
+  "name": "cap-recording-control",
+  "title": "Cap Recording Control",
+  "description": "Control Cap screen recording via deeplinks (pause, resume, start, stop, switch camera/microphone)",
+  "author": "Cap Software",
+  "version": "1.0.0",
+  "keywords": [
+    "cap",
+    "screen-recording",
+    "recording-control",
+    "deeplink"
+  ]
+}

@@ -26,6 +26,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    SwitchCamera {
+        device_id: String,
+    },
+    SwitchMicrophone {
+        mic_label: String,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +153,31 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::pause_recording(state)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            DeepLinkAction::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::resume_recording(state)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            DeepLinkAction::SwitchCamera { device_id } => {
+                let state = app.state::<ArcLock<App>>();
+                let camera = DeviceOrModelID::ModelID(device_id.clone());
+                crate::set_camera_input(app.clone(), state.clone(), Some(camera), None)
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, Some(mic_label))
+                    .await
+                    .map(|_| ())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
