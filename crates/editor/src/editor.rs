@@ -147,20 +147,42 @@ impl Renderer {
                     break;
                 }
             }
-            match frame_renderer
-                .render_immediate(
-                    current.segment_frames,
-                    current.uniforms,
+            let nv12_result = frame_renderer
+                .render_nv12(
+                    current.segment_frames.clone(),
+                    current.uniforms.clone(),
                     &current.cursor,
                     &mut layers,
                 )
-                .await
-            {
-                Ok(frame) => {
-                    (self.frame_cb)(EditorFrameOutput::Rgba(frame));
+                .await;
+
+            match nv12_result {
+                Ok(Some(frame)) => {
+                    (self.frame_cb)(EditorFrameOutput::Nv12(frame));
+                }
+                Ok(None) => {
+                    if let Some(Ok(flushed)) = frame_renderer.flush_pipeline_nv12().await {
+                        (self.frame_cb)(EditorFrameOutput::Nv12(flushed));
+                    }
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to render frame in editor");
+                    tracing::warn!(error = %e, "NV12 render failed, falling back to RGBA");
+                    match frame_renderer
+                        .render_immediate(
+                            current.segment_frames,
+                            current.uniforms,
+                            &current.cursor,
+                            &mut layers,
+                        )
+                        .await
+                    {
+                        Ok(frame) => {
+                            (self.frame_cb)(EditorFrameOutput::Rgba(frame));
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to render frame in editor");
+                        }
+                    }
                 }
             }
 
