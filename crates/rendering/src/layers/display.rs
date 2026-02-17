@@ -475,32 +475,30 @@ impl DisplayLayer {
                     #[cfg(target_os = "windows")]
                     let d3d11_zero_copy_succeeded = {
                         let mut succeeded = false;
-                        if !self.prefer_cpu_conversion {
-                            if let (Some(y_handle), Some(uv_handle)) = (
+                        if !self.prefer_cpu_conversion
+                            && let (Some(y_handle), Some(uv_handle)) = (
                                 screen_frame.d3d11_y_handle(),
                                 screen_frame.d3d11_uv_handle(),
-                            ) {
-                                if self
-                                    .yuv_converter
-                                    .convert_nv12_from_d3d11_shared_handles(
-                                        device,
-                                        queue,
-                                        y_handle,
-                                        uv_handle,
-                                        actual_width,
-                                        actual_height,
-                                    )
-                                    .is_ok()
-                                    && self.yuv_converter.output_texture().is_some()
-                                {
-                                    self.pending_copy = Some(PendingTextureCopy {
-                                        width: actual_width,
-                                        height: actual_height,
-                                        dst_texture_index: next_texture,
-                                    });
-                                    succeeded = true;
-                                }
-                            }
+                            )
+                            && self
+                                .yuv_converter
+                                .convert_nv12_from_d3d11_shared_handles(
+                                    device,
+                                    queue,
+                                    y_handle,
+                                    uv_handle,
+                                    actual_width,
+                                    actual_height,
+                                )
+                                .is_ok()
+                            && self.yuv_converter.output_texture().is_some()
+                        {
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: actual_width,
+                                height: actual_height,
+                                dst_texture_index: next_texture,
+                            });
+                            succeeded = true;
                         }
                         succeeded
                     };

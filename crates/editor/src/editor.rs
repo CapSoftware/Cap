@@ -157,12 +157,12 @@ impl Renderer {
                 .await;
 
             match nv12_result {
-                Ok(Some(frame)) => {
-                    (self.frame_cb)(EditorFrameOutput::Nv12(frame));
-                }
-                Ok(None) => {
-                    if let Some(Ok(flushed)) = frame_renderer.flush_pipeline_nv12().await {
-                        (self.frame_cb)(EditorFrameOutput::Nv12(flushed));
+                Ok(pipeline_frame) => {
+                    if let Some(prev) = pipeline_frame {
+                        (self.frame_cb)(EditorFrameOutput::Nv12(prev));
+                    }
+                    if let Some(Ok(current_frame)) = frame_renderer.flush_pipeline_nv12().await {
+                        (self.frame_cb)(EditorFrameOutput::Nv12(current_frame));
                     }
                 }
                 Err(e) => {
