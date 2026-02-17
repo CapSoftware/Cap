@@ -2275,12 +2275,22 @@ mod tests {
         let pool = create_pixel_buffer_pool(1920, 1080);
 
         let mut timings: Vec<(i64, i64)> = Vec::new();
-        for i in 0..100i64 {
+        for i in 0..50i64 {
             timings.push((i * 33_333, 33_333));
         }
-        timings.push((100 * 33_333, 33_333));
-        timings.push((100 * 33_333, 33_333));
-        for i in 101..200i64 {
+        timings.push((50 * 33_333, 33_333));
+        timings.push((50 * 33_333, 33_333));
+        for i in 51..120i64 {
+            timings.push((i * 33_333, 33_333));
+        }
+        timings.push((120 * 33_333, 33_333));
+        timings.push((120 * 33_333, 33_333));
+        for i in 121..200i64 {
+            timings.push((i * 33_333, 33_333));
+        }
+        timings.push((200 * 33_333, 33_333));
+        timings.push((200 * 33_333, 33_333));
+        for i in 201..300i64 {
             timings.push((i * 33_333, 33_333));
         }
 
@@ -2289,7 +2299,7 @@ mod tests {
         let writer_failed = match &result {
             Err((_, msg)) => msg.contains("WriterFailed") || msg.contains("Failed"),
             Ok(_) => {
-                let finish = finish_raw_writer(&mut video_input, &mut asset_writer, 200 * 33_333);
+                let finish = finish_raw_writer(&mut video_input, &mut asset_writer, 300 * 33_333);
                 finish.is_err()
             }
         };
