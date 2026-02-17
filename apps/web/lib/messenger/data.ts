@@ -280,10 +280,3 @@ export const requireAdminViewer = async (): Promise<AdminViewerContext> => {
 		isAdmin: true,
 	};
 };
-
-export const listConversationMessages = async (conversationId: string) =>
-	db()
-		.select()
-		.from(messengerMessages)
-		.where(eq(messengerMessages.conversationId, conversationId))
-		.orderBy(asc(messengerMessages.createdAt));

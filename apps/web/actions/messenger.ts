@@ -17,7 +17,6 @@ import {
 	getViewerContext,
 	linkAnonymousConversationsToUser,
 	listAdminMessengerConversations,
-	listConversationMessages,
 	listViewerMessengerConversations,
 	requireAdminViewer,
 } from "@/lib/messenger/data";
@@ -53,7 +52,11 @@ const persistConversationToSupermemory = async ({
 	userId: string | null;
 	anonymousId: string | null;
 }) => {
-	const messages = await listConversationMessages(conversationId);
+	const messages = await db()
+		.select()
+		.from(messengerMessages)
+		.where(eq(messengerMessages.conversationId, conversationId))
+		.orderBy(asc(messengerMessages.createdAt));
 	if (!messages.length) return;
 
 	await storeConversationInSupermemory({
@@ -403,6 +406,7 @@ export const fetchAdminConversations = async () => {
 
 export const fetchAdminConversation = async (conversationId: string) => {
 	assertMessengerEnabled();
+	await requireAdminViewer();
 	const data = await getMessengerConversationForViewer({
 		conversationId,
 		allowAdmin: true,
