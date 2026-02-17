@@ -3681,16 +3681,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 }
             }
             tauri::RunEvent::Exit => {
-                let state = _handle.state::<ArcLock<App>>();
-                let _ = tauri::async_runtime::block_on(async {
-                    tokio::time::timeout(Duration::from_secs(2), async {
-                        let app_state = &mut *state.write().await;
-                        let _ = app_state.mic_feed.ask(microphone::RemoveInput).await;
-                        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-                        app_state.camera_in_use = false;
-                    })
-                    .await
-                });
+                let handle = _handle.clone();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let state = handle.state::<ArcLock<App>>();
+                    let _ = tauri::async_runtime::block_on(async {
+                        tokio::time::timeout(Duration::from_secs(2), async {
+                            let app_state = &mut *state.write().await;
+                            let _ = app_state.mic_feed.ask(microphone::RemoveInput).await;
+                            let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+                            app_state.camera_in_use = false;
+                        })
+                        .await
+                    });
+                }));
             }
             _ => {}
         });
