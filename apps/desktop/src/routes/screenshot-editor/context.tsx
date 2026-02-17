@@ -409,8 +409,8 @@ function createScreenshotEditorContext() {
 		const outputAspect = frameSize.width / frameSize.height;
 
 		const paddingFactor = (padding / 100.0) * SCREEN_MAX_PADDING;
-		const paddingPixels =
-			Math.max(frameSize.width, frameSize.height) * paddingFactor;
+		const cropBasis = Math.max(cropWidth, cropHeight);
+		const paddingPixels = cropBasis * paddingFactor;
 
 		const availableWidth = frameSize.width - 2 * paddingPixels;
 		const availableHeight = frameSize.height - 2 * paddingPixels;
