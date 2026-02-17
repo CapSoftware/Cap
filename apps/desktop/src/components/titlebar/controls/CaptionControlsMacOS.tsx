@@ -32,12 +32,8 @@ export default function CaptionControlsMacOS(
 	const showMinimize = () => local.showMinimize ?? true;
 	const showZoom = () => local.showZoom ?? true;
 
-	const handleClose = () => {
-		if (currentWindow.label === "main") {
-			currentWindow.hide();
-		} else {
-			currentWindow.close();
-		}
+	const handleClose = async () => {
+		currentWindow.close();
 	};
 
 	return (

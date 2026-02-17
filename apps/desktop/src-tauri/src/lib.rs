@@ -3419,16 +3419,45 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 });
                             }
                             CapWindowId::Main => {
+                                api.prevent_close();
+                                let _ = window.hide();
+
                                 let state = app.state::<ArcLock<App>>();
                                 let is_recording = state
                                     .try_read()
                                     .map(|s| s.is_recording_active_or_pending())
                                     .unwrap_or(true);
 
-                                if !is_recording
-                                    && let Some(camera_window) = CapWindowId::Camera.get(app)
-                                {
-                                    let _ = camera_window.hide();
+                                if !is_recording {
+                                    if let Some(camera_window) = CapWindowId::Camera.get(app) {
+                                        let _ = camera_window.hide();
+                                    }
+
+                                    for (id, overlay_window) in app.webview_windows() {
+                                        if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+                                            CapWindowId::from_str(&id)
+                                        {
+                                            let _ = overlay_window.hide();
+                                        }
+                                    }
+
+                                    let app = app.clone();
+                                    tokio::spawn(async move {
+                                        let state = app.state::<ArcLock<App>>();
+                                        let app_state = &mut *state.write().await;
+
+                                        app_state.camera_preview.pause();
+
+                                        let _ =
+                                            app_state.mic_feed.ask(microphone::RemoveInput).await;
+                                        let _ = app_state
+                                            .camera_feed
+                                            .ask(feeds::camera::RemoveInput)
+                                            .await;
+
+                                        app_state.selected_mic_label = None;
+                                        app_state.camera_in_use = false;
+                                    });
                                 }
                             }
                             _ => {}
