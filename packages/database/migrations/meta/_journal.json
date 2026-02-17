@@ -78,6 +78,13 @@
 			"when": 1738505600000,
 			"tag": "0010_video_uploads_bigint",
 			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "5",
+			"when": 1771325011010,
+			"tag": "0011_public_inhumans",
+			"breakpoints": true
 		}
 	]
 }
