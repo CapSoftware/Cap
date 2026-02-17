@@ -49,6 +49,12 @@ pub struct SharedGpuContext {
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 
 async fn init_gpu_inner() -> Option<SharedGpuContext> {
+    #[cfg(target_os = "windows")]
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
+        ..Default::default()
+    });
+    #[cfg(not(target_os = "windows"))]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
     let hardware_adapter = instance

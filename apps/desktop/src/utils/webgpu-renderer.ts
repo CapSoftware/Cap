@@ -81,7 +81,9 @@ export async function isWebGPUSupported(): Promise<boolean> {
 		return false;
 	}
 	try {
-		const adapter = await navigator.gpu.requestAdapter();
+		const adapter = await navigator.gpu.requestAdapter({
+			powerPreference: "high-performance",
+		});
 		return adapter !== null;
 	} catch {
 		return false;
@@ -91,7 +93,9 @@ export async function isWebGPUSupported(): Promise<boolean> {
 export async function initWebGPU(
 	canvas: OffscreenCanvas,
 ): Promise<WebGPURenderer> {
-	const adapter = await navigator.gpu.requestAdapter();
+	const adapter = await navigator.gpu.requestAdapter({
+		powerPreference: "high-performance",
+	});
 	if (!adapter) {
 		throw new Error("No WebGPU adapter available");
 	}
