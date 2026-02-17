@@ -96,7 +96,7 @@ const callAnthropic = async ({
 			"Content-Type": "application/json",
 		},
 		body: JSON.stringify({
-			model: "claude-sonnet-4-5",
+			model: "claude-sonnet-4-6",
 			temperature: 0.65,
 			max_tokens: 500,
 			system: systemPrompt,
