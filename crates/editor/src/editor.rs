@@ -161,8 +161,14 @@ impl Renderer {
                     if let Some(prev) = pipeline_frame {
                         (self.frame_cb)(EditorFrameOutput::Nv12(prev));
                     }
-                    if let Some(Ok(current_frame)) = frame_renderer.flush_pipeline_nv12().await {
-                        (self.frame_cb)(EditorFrameOutput::Nv12(current_frame));
+                    match frame_renderer.flush_pipeline_nv12().await {
+                        Some(Ok(current_frame)) => {
+                            (self.frame_cb)(EditorFrameOutput::Nv12(current_frame));
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!(error = %e, "Failed to flush NV12 pipeline frame");
+                        }
+                        None => {}
                     }
                 }
                 Err(e) => {

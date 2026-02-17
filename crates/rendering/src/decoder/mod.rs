@@ -729,13 +729,19 @@ pub async fn spawn_decoder(
                             status,
                         })
                     }
-                    Ok(Ok(Err(e))) => Err(format!("MediaFoundation initialization failed: {e}")),
-                    Ok(Err(e)) => Err(format!("MediaFoundation channel closed: {e}")),
+                    Ok(Ok(Err(e))) => Err(format!(
+                        "'{name}' MediaFoundation initialization failed: {e} ({path_display})"
+                    )),
+                    Ok(Err(e)) => Err(format!(
+                        "'{name}' MediaFoundation channel closed: {e} ({path_display})"
+                    )),
                     Err(_) => Err(format!(
-                        "MediaFoundation timed out after 30s initializing: {path_display}"
+                        "'{name}' MediaFoundation timed out after 30s initializing: {path_display}"
                     )),
                 },
-                Err(e) => Err(format!("MediaFoundation spawn failed: {e}")),
+                Err(e) => Err(format!(
+                    "'{name}' MediaFoundation spawn failed: {e} ({path_display})"
+                )),
             }
         };
 
