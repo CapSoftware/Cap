@@ -103,8 +103,8 @@ impl TryFrom<&Url> for DeepLinkAction {
             Some("toggle-mic") => return Ok(Self::ToggleMic),
             Some("toggle-cam") => return Ok(Self::ToggleCam),
             Some(v) if v != "action" => return Err(ActionParseFromUrlError::NotAction),
-            None => return Err(ActionParseFromUrlError::NotAction),
-            _ => {}
+            Some("action") => {}
+            None => return Err(ActionParseFromUrlError::Invalid),
         }
 
         let params = url
