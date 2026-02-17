@@ -1,11 +1,12 @@
+import { buildEnv } from "@cap/env";
 import type { PropsWithChildren } from "react";
-import { Intercom } from "../Layout/Intercom";
+import { MessengerWidget } from "../Layout/MessengerWidget";
 
 export default function Layout(props: PropsWithChildren) {
 	return (
 		<>
 			{props.children}
-			<Intercom />
+			{buildEnv.NEXT_PUBLIC_IS_CAP === "true" && <MessengerWidget />}
 		</>
 	);
 }
