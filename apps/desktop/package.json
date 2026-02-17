@@ -16,7 +16,6 @@
 		"@cap/utils": "workspace:*",
 		"@cap/web-api-contract": "workspace:*",
 		"@corvu/tooltip": "^0.2.1",
-		"@intercom/messenger-js-sdk": "^0.0.14",
 		"@kobalte/core": "^0.13.7",
 		"@radix-ui/colors": "^3.0.0",
 		"@rive-app/canvas": "^2.32.2",

@@ -159,14 +159,12 @@ async function processAuthData(data: z.infer<typeof paramsValidator>) {
 	identifyUser(data.user_id);
 	trackEvent("user_signed_in", { platform: "desktop" });
 
-	const existingAuth = await authStore.get();
 	await authStore.set({
 		secret:
 			"api_key" in data
 				? { api_key: data.api_key }
 				: { token: data.token, expires: data.expires },
 		user_id: data.user_id,
-		intercom_hash: existingAuth?.intercom_hash ?? "",
 		plan: null,
 	});
 

@@ -2446,7 +2446,6 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     let updated_auth = AuthStore {
         secret: auth.secret,
         user_id: auth.user_id,
-        intercom_hash: auth.intercom_hash,
         plan: Some(Plan {
             upgraded: is_pro,
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),
