@@ -1461,8 +1461,15 @@ impl ProjectUniforms {
 
         let padding = {
             let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+            let crop_basis = f64::max(cropped_size.x, cropped_size.y);
+            let base_padding = crop_basis * padding_factor;
 
-            f64::max(output_size.x, output_size.y) * padding_factor
+            let (base_w, base_h) = Self::get_base_size(options, project);
+            let output_scale = f64::min(
+                output_size.x / f64::max(base_w as f64, 1.0),
+                output_size.y / f64::max(base_h as f64, 1.0),
+            );
+            base_padding * output_scale
         };
 
         let is_height_constrained = cropped_aspect <= output_aspect;
