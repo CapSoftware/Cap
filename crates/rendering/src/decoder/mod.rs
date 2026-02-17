@@ -667,38 +667,125 @@ pub async fn spawn_decoder(
 
     #[cfg(target_os = "windows")]
     {
-        let _ = force_ffmpeg;
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
-        let (tx, rx) = mpsc::channel();
+        if force_ffmpeg {
+            info!(
+                "Video '{}' using FFmpeg decoder (forced via experimental setting)",
+                name
+            );
+            let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
+            let (tx, rx) = mpsc::channel();
 
-        ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
-            .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
+            ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+                .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
 
-        match tokio::time::timeout(timeout_duration, ready_rx).await {
-            Ok(Ok(Ok(init_result))) => {
-                info!(
-                    "Video '{}' using {} decoder ({}x{})",
-                    name, init_result.decoder_type, init_result.width, init_result.height
-                );
-                let status = DecoderStatus {
-                    decoder_type: init_result.decoder_type,
-                    video_width: init_result.width,
-                    video_height: init_result.height,
-                    fallback_reason: None,
-                };
-                Ok(AsyncVideoDecoderHandle {
-                    sender: tx,
-                    offset,
-                    status,
-                })
+            return match tokio::time::timeout(timeout_duration, ready_rx).await {
+                Ok(Ok(Ok(init_result))) => {
+                    info!(
+                        "Video '{}' using {} decoder ({}x{})",
+                        name, init_result.decoder_type, init_result.width, init_result.height
+                    );
+                    let status = DecoderStatus {
+                        decoder_type: init_result.decoder_type,
+                        video_width: init_result.width,
+                        video_height: init_result.height,
+                        fallback_reason: None,
+                    };
+                    Ok(AsyncVideoDecoderHandle {
+                        sender: tx,
+                        offset,
+                        status,
+                    })
+                }
+                Ok(Ok(Err(e))) => Err(format!(
+                    "'{name}' FFmpeg decoder initialization failed: {e}"
+                )),
+                Ok(Err(e)) => Err(format!("'{name}' FFmpeg decoder channel closed: {e}")),
+                Err(_) => Err(format!(
+                    "'{name}' FFmpeg decoder timed out after 30s initializing: {path_display}"
+                )),
+            };
+        }
+
+        let mf_result = {
+            let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
+            let (tx, rx) = mpsc::channel();
+
+            match media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
+                Ok(()) => match tokio::time::timeout(timeout_duration, ready_rx).await {
+                    Ok(Ok(Ok(init_result))) => {
+                        info!(
+                            "Video '{}' using {} decoder ({}x{})",
+                            name, init_result.decoder_type, init_result.width, init_result.height
+                        );
+                        let status = DecoderStatus {
+                            decoder_type: init_result.decoder_type,
+                            video_width: init_result.width,
+                            video_height: init_result.height,
+                            fallback_reason: None,
+                        };
+                        Ok(AsyncVideoDecoderHandle {
+                            sender: tx,
+                            offset,
+                            status,
+                        })
+                    }
+                    Ok(Ok(Err(e))) => Err(format!("MediaFoundation initialization failed: {e}")),
+                    Ok(Err(e)) => Err(format!("MediaFoundation channel closed: {e}")),
+                    Err(_) => Err(format!(
+                        "MediaFoundation timed out after 30s initializing: {path_display}"
+                    )),
+                },
+                Err(e) => Err(format!("MediaFoundation spawn failed: {e}")),
             }
-            Ok(Ok(Err(e))) => Err(format!(
-                "'{name}' FFmpeg decoder initialization failed: {e}"
-            )),
-            Ok(Err(e)) => Err(format!("'{name}' FFmpeg decoder channel closed: {e}")),
-            Err(_) => Err(format!(
-                "'{name}' FFmpeg decoder timed out after 30s initializing: {path_display}"
-            )),
+        };
+
+        match mf_result {
+            Ok(handle) => Ok(handle),
+            Err(mf_error) => {
+                tracing::warn!(
+                    name = name,
+                    error = %mf_error,
+                    "MediaFoundation failed, falling back to FFmpeg decoder"
+                );
+
+                let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
+                let (tx, rx) = mpsc::channel();
+
+                if let Err(e) = ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx) {
+                    return Err(format!(
+                        "'{name}' decoder failed - MediaFoundation: {mf_error}, FFmpeg: {e}"
+                    ));
+                }
+
+                match tokio::time::timeout(timeout_duration, ready_rx).await {
+                    Ok(Ok(Ok(init_result))) => {
+                        info!(
+                            "Video '{}' using {} decoder ({}x{}) after MediaFoundation failure",
+                            name, init_result.decoder_type, init_result.width, init_result.height
+                        );
+                        let status = DecoderStatus {
+                            decoder_type: init_result.decoder_type,
+                            video_width: init_result.width,
+                            video_height: init_result.height,
+                            fallback_reason: Some(mf_error),
+                        };
+                        Ok(AsyncVideoDecoderHandle {
+                            sender: tx,
+                            offset,
+                            status,
+                        })
+                    }
+                    Ok(Ok(Err(e))) => Err(format!(
+                        "'{name}' decoder failed - MediaFoundation: {mf_error}, FFmpeg: {e}"
+                    )),
+                    Ok(Err(e)) => Err(format!(
+                        "'{name}' decoder failed - MediaFoundation: {mf_error}, FFmpeg channel: {e}"
+                    )),
+                    Err(_) => Err(format!(
+                        "'{name}' decoder failed - MediaFoundation: {mf_error}, FFmpeg timed out"
+                    )),
+                }
+            }
         }
     }
 
