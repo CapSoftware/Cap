@@ -472,21 +472,48 @@ impl DisplayLayer {
                 PixelFormat::Nv12 => {
                     let screen_frame = &segment_frames.screen_frame;
 
-                    if !self.prefer_cpu_conversion {
+                    #[cfg(target_os = "windows")]
+                    let d3d11_zero_copy_succeeded = {
+                        let mut succeeded = false;
+                        if !self.prefer_cpu_conversion {
+                            if let (Some(y_handle), Some(uv_handle)) = (
+                                screen_frame.d3d11_y_handle(),
+                                screen_frame.d3d11_uv_handle(),
+                            ) {
+                                if self
+                                    .yuv_converter
+                                    .convert_nv12_from_d3d11_shared_handles(
+                                        device,
+                                        queue,
+                                        y_handle,
+                                        uv_handle,
+                                        actual_width,
+                                        actual_height,
+                                    )
+                                    .is_ok()
+                                    && self.yuv_converter.output_texture().is_some()
+                                {
+                                    self.pending_copy = Some(PendingTextureCopy {
+                                        width: actual_width,
+                                        height: actual_height,
+                                        dst_texture_index: next_texture,
+                                    });
+                                    succeeded = true;
+                                }
+                            }
+                        }
+                        succeeded
+                    };
+
+                    #[cfg(target_os = "windows")]
+                    if d3d11_zero_copy_succeeded {
+                        true
+                    } else if !self.prefer_cpu_conversion {
                         if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();
                             let uv_stride = screen_frame.uv_stride();
-
-                            #[cfg(target_os = "windows")]
-                            let convert_width = actual_width;
-                            #[cfg(target_os = "windows")]
-                            let convert_height = actual_height;
-                            #[cfg(not(target_os = "windows"))]
-                            let convert_width = frame_size.x;
-                            #[cfg(not(target_os = "windows"))]
-                            let convert_height = frame_size.y;
 
                             let convert_result = self.yuv_converter.convert_nv12_to_encoder(
                                 device,
@@ -494,8 +521,8 @@ impl DisplayLayer {
                                 encoder,
                                 y_data,
                                 uv_data,
-                                convert_width,
-                                convert_height,
+                                actual_width,
+                                actual_height,
                                 y_stride,
                                 uv_stride,
                             );
@@ -504,8 +531,81 @@ impl DisplayLayer {
                                 Ok(_) => {
                                     if self.yuv_converter.output_texture().is_some() {
                                         self.pending_copy = Some(PendingTextureCopy {
-                                            width: convert_width,
-                                            height: convert_height,
+                                            width: actual_width,
+                                            height: actual_height,
+                                            dst_texture_index: next_texture,
+                                        });
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                                Err(_) => false,
+                            }
+                        } else {
+                            false
+                        }
+                    } else if let (Some(y_data), Some(uv_data)) =
+                        (screen_frame.y_plane(), screen_frame.uv_plane())
+                    {
+                        let y_stride = screen_frame.y_stride();
+                        let uv_stride = screen_frame.uv_stride();
+                        let convert_result = self.yuv_converter.convert_nv12_cpu(
+                            device,
+                            queue,
+                            y_data,
+                            uv_data,
+                            actual_width,
+                            actual_height,
+                            y_stride,
+                            uv_stride,
+                        );
+
+                        match convert_result {
+                            Ok(_) => {
+                                if self.yuv_converter.output_texture().is_some() {
+                                    self.pending_copy = Some(PendingTextureCopy {
+                                        width: actual_width,
+                                        height: actual_height,
+                                        dst_texture_index: next_texture,
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            Err(_) => false,
+                        }
+                    } else {
+                        false
+                    }
+
+                    #[cfg(not(target_os = "windows"))]
+                    if !self.prefer_cpu_conversion {
+                        if let (Some(y_data), Some(uv_data)) =
+                            (screen_frame.y_plane(), screen_frame.uv_plane())
+                        {
+                            let y_stride = screen_frame.y_stride();
+                            let uv_stride = screen_frame.uv_stride();
+
+                            let convert_result = self.yuv_converter.convert_nv12_to_encoder(
+                                device,
+                                queue,
+                                encoder,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                y_stride,
+                                uv_stride,
+                            );
+
+                            match convert_result {
+                                Ok(_) => {
+                                    if self.yuv_converter.output_texture().is_some() {
+                                        self.pending_copy = Some(PendingTextureCopy {
+                                            width: frame_size.x,
+                                            height: frame_size.y,
                                             dst_texture_index: next_texture,
                                         });
                                         true
