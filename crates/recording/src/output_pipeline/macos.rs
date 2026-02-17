@@ -377,13 +377,22 @@ impl Muxer for AVFoundationMp4Muxer {
                                         std::thread::sleep(Duration::from_micros(500));
                                     }
                                     Err(QueueFrameError::WriterFailed(err)) => {
-                                        let message =
-                                            format!("Failed to encode video frame: WriterFailed/{err}");
+                                        let total = video_count_thread
+                                            .load(std::sync::atomic::Ordering::Relaxed);
+                                        let message = format!(
+                                            "Failed to encode video frame: WriterFailed/{err} \
+                                             (frame #{total}, ts={timestamp:?})"
+                                        );
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
                                     }
                                     Err(QueueFrameError::Failed) => {
-                                        let message = "Failed to encode video frame: Failed".to_string();
+                                        let total = video_count_thread
+                                            .load(std::sync::atomic::Ordering::Relaxed);
+                                        let message = format!(
+                                            "Failed to encode video frame: Failed \
+                                             (frame #{total}, ts={timestamp:?})"
+                                        );
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
                                     }
@@ -490,15 +499,22 @@ impl Muxer for AVFoundationMp4Muxer {
                                             std::thread::sleep(Duration::from_micros(500));
                                         }
                                         Err(QueueFrameError::WriterFailed(err)) => {
+                                            let total = audio_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
                                             let message = format!(
-                                                "Failed to encode audio frame: WriterFailed/{err}"
+                                                "Failed to encode audio frame: WriterFailed/{err} \
+                                                 (frame #{total}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&audio_fatal_error, message.clone());
                                             return Err(anyhow!(message));
                                         }
                                         Err(QueueFrameError::Failed) => {
-                                            let message =
-                                                "Failed to encode audio frame: Failed".to_string();
+                                            let total = audio_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
+                                            let message = format!(
+                                                "Failed to encode audio frame: Failed \
+                                                 (frame #{total}, ts={timestamp:?})"
+                                            );
                                             set_fatal_error(&audio_fatal_error, message.clone());
                                             return Err(anyhow!(message));
                                         }
