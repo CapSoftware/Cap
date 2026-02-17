@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tauri::{AppHandle, Manager, Url};
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
@@ -57,10 +57,10 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
             DeepLinkAction::try_from(&url)
                 .map_err(|e| match e {
                     ActionParseFromUrlError::ParseFailed(msg) => {
-                        eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
+                        error!("Failed to parse deep link \"{}\": {}", &url, msg)
                     }
                     ActionParseFromUrlError::Invalid => {
-                        eprintln!("Invalid deep link format \"{}\"", &url)
+                        error!("Invalid deep link format \"{}\"", &url)
                     }
                     // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
@@ -77,7 +77,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {e}");
+                error!("Failed to handle deep link action: {e}");
             }
         }
     });
