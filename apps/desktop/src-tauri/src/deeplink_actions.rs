@@ -119,6 +119,36 @@ impl TryFrom<&Url> for DeepLinkAction {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{ActionParseFromUrlError, DeepLinkAction};
+    use tauri::Url;
+
+    #[test]
+    fn parse_hostless_action_url_returns_invalid() {
+        let url = Url::parse("cap:?value=%7B%7D").expect("url should parse");
+        let result = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(result, Err(ActionParseFromUrlError::Invalid)));
+    }
+
+    #[test]
+    fn parse_non_action_host_returns_not_action() {
+        let url = Url::parse("cap://login?value=%7B%7D").expect("url should parse");
+        let result = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(result, Err(ActionParseFromUrlError::NotAction)));
+    }
+
+    #[test]
+    fn parse_toggle_mic_shortcut_host() {
+        let url = Url::parse("cap://toggle-mic").expect("url should parse");
+        let result = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(result, Ok(DeepLinkAction::ToggleMic)));
+    }
+}
+
 impl DeepLinkAction {
     async fn execute_start_recording(
         app: &AppHandle,
