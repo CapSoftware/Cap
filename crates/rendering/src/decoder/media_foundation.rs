@@ -269,8 +269,15 @@ impl MFDecoder {
 
                 let mut unfulfilled = Vec::with_capacity(pending_requests.len());
                 for req in pending_requests.drain(..) {
-                    if let Some(cached) = cache.get(&req.frame) {
-                        let _ = req.sender.send(cached.to_decoded_frame());
+                    let cached = cache.get(&req.frame).or_else(|| {
+                        cache
+                            .range(..=req.frame)
+                            .next_back()
+                            .filter(|(k, _)| req.frame - *k <= 2)
+                            .map(|(_, f)| f)
+                    });
+                    if let Some(frame) = cached {
+                        let _ = req.sender.send(frame.to_decoded_frame());
                     } else if !req.sender.is_closed() {
                         unfulfilled.push(req);
                     }
@@ -306,8 +313,11 @@ impl MFDecoder {
 
                 let needs_seek = last_decoded_frame
                     .map(|last| {
-                        requested_frame < last
-                            || requested_frame.saturating_sub(last) > FRAME_CACHE_SIZE as u32
+                        if requested_frame <= last {
+                            last - requested_frame > FRAME_CACHE_SIZE as u32 / 2
+                        } else {
+                            requested_frame - last > FRAME_CACHE_SIZE as u32
+                        }
                     })
                     .unwrap_or(true);
 
@@ -322,9 +332,30 @@ impl MFDecoder {
 
                 let mut last_valid_frame: Option<CachedFrame> = None;
 
+                let pixel_count = (video_width as u64) * (video_height as u64);
+                let readahead_frames = if pixel_count > 4_000_000 {
+                    8u32
+                } else if pixel_count > 2_000_000 {
+                    15u32
+                } else {
+                    30u32
+                };
+                let max_batch_duration = if pixel_count > 4_000_000 {
+                    Duration::from_millis(200)
+                } else if pixel_count > 2_000_000 {
+                    Duration::from_millis(400)
+                } else {
+                    Duration::from_millis(800)
+                };
+                let batch_start = Instant::now();
+
                 loop {
                     if sender.as_ref().is_some_and(|s| s.is_closed()) {
                         sender.take();
+                        break;
+                    }
+
+                    if sender.is_none() && batch_start.elapsed() > max_batch_duration {
                         break;
                     }
 
@@ -396,9 +427,13 @@ impl MFDecoder {
                                 let frame_to_send = if frame_number == requested_frame {
                                     cache.get(&requested_frame)
                                 } else {
-                                    last_valid_frame
-                                        .as_ref()
-                                        .or_else(|| cache.get(&frame_number))
+                                    last_valid_frame.as_ref().or_else(|| {
+                                        cache
+                                            .range(..=requested_frame)
+                                            .next_back()
+                                            .map(|(_, f)| f)
+                                            .or_else(|| cache.get(&frame_number))
+                                    })
                                 };
 
                                 if let Some(frame) = frame_to_send
@@ -408,7 +443,6 @@ impl MFDecoder {
                                 }
                             }
 
-                            let readahead_frames = 30u32;
                             let readahead_target = requested_frame + readahead_frames;
                             if frame_number >= readahead_target || frame_number > cache_max {
                                 break;
@@ -429,9 +463,14 @@ impl MFDecoder {
                 }
 
                 if let Some(s) = sender.take() {
-                    if let Some(frame) = last_valid_frame
-                        .or_else(|| cache.values().max_by_key(|f| f.number).cloned())
-                    {
+                    let fallback = last_valid_frame.as_ref().cloned().or_else(|| {
+                        cache
+                            .range(..=requested_frame)
+                            .next_back()
+                            .or_else(|| cache.range(requested_frame..).next())
+                            .map(|(_, f)| f.clone())
+                    });
+                    if let Some(frame) = fallback {
                         let _ = s.send(frame.to_decoded_frame());
                     } else {
                         let black_frame = DecodedFrame::new(
@@ -447,8 +486,19 @@ impl MFDecoder {
                     if req.sender.is_closed() {
                         continue;
                     }
-                    if let Some(cached) = cache.get(&req.frame) {
-                        let _ = req.sender.send(cached.to_decoded_frame());
+                    let frame_to_send = cache
+                        .get(&req.frame)
+                        .or_else(|| cache.range(..=req.frame).next_back().map(|(_, f)| f))
+                        .or(last_valid_frame.as_ref());
+                    if let Some(frame) = frame_to_send {
+                        let _ = req.sender.send(frame.to_decoded_frame());
+                    } else {
+                        let black_frame = DecodedFrame::new(
+                            vec![0u8; (video_width * video_height * 4) as usize],
+                            video_width,
+                            video_height,
+                        );
+                        let _ = req.sender.send(black_frame);
                     }
                 }
             }
