@@ -532,8 +532,7 @@ impl EditorInstance {
                                     &zoom_focus_interpolator,
                                 );
                                 self.renderer
-                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
-                                    .await;
+                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone());
                             } else {
                                 warn!("Preview renderer: no frames returned for frame {}", frame_number);
                             }

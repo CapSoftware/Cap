@@ -62,7 +62,7 @@ function convertNv12ToRgbaMainThread(
 	const ySize = yStride * height;
 	const yPlane = nv12Data;
 	const uvPlane = nv12Data.subarray(ySize);
-	const uvStride = width;
+	const uvStride = yStride;
 
 	for (let row = 0; row < height; row++) {
 		const yRowOffset = row * yStride;
@@ -308,7 +308,7 @@ export function createImageDataWS(
 
 		if (width > 0 && height > 0) {
 			const ySize = yStride * height;
-			const uvSize = width * (height / 2);
+			const uvSize = yStride * (height / 2);
 			const totalSize = ySize + uvSize;
 
 			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
@@ -351,7 +351,7 @@ export function createImageDataWS(
 
 		if (width > 0 && height > 0) {
 			const ySize = yStride * height;
-			const uvSize = width * (height / 2);
+			const uvSize = yStride * (height / 2);
 			const totalSize = ySize + uvSize;
 
 			const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
@@ -669,7 +669,7 @@ export function createImageDataWS(
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;
-					const uvSize = width * (height / 2);
+					const uvSize = yStride * (height / 2);
 					const totalSize = ySize + uvSize;
 
 					const frameData = new Uint8ClampedArray(buffer, 0, totalSize);
@@ -735,7 +735,7 @@ export function createImageDataWS(
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;
-					const uvSize = width * (height / 2);
+					const uvSize = yStride * (height / 2);
 					const totalSize = ySize + uvSize;
 
 					const nv12Data = new Uint8ClampedArray(buffer, 0, totalSize);

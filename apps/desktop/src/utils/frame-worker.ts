@@ -231,7 +231,7 @@ function parseFrameMetadata(bytes: Uint8Array): FrameMetadata | null {
 			if (!width || !height) return null;
 
 			const ySize = yStride * height;
-			const uvSize = width * (height / 2);
+			const uvSize = yStride * (height / 2);
 			const totalSize = ySize + uvSize;
 
 			if (bytes.byteLength - 28 < totalSize) {
@@ -303,7 +303,7 @@ function convertNv12ToRgba(
 	const ySize = yStride * height;
 	const yPlane = nv12Data;
 	const uvPlane = nv12Data.subarray(ySize);
-	const uvStride = width;
+	const uvStride = yStride;
 
 	for (let row = 0; row < height; row++) {
 		const yRowOffset = row * yStride;
