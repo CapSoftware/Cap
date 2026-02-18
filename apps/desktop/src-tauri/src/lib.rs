@@ -1999,9 +1999,11 @@ async fn generate_keyboard_segments(
         all_events.presses.extend(events.presses);
     }
 
-    all_events
-        .presses
-        .sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
+    all_events.presses.sort_by(|a, b| {
+        a.time_ms
+            .partial_cmp(&b.time_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let grouped = cap_project::group_key_events(
         &all_events,

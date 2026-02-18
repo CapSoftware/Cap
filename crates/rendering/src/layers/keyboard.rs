@@ -224,10 +224,7 @@ impl KeyboardLayer {
             return;
         };
 
-        let visible_text = build_visible_text(
-            &active.segment,
-            current_time,
-        );
+        let visible_text = build_visible_text(&active.segment, current_time);
 
         if visible_text.is_empty() {
             return;
@@ -287,13 +284,10 @@ impl KeyboardLayer {
             parse_color_component(bg_color_hex, 2),
         ];
 
-        let background_alpha = ((settings.background_opacity as f32 / 100.0) * fade_opacity as f32)
-            .clamp(0.0, 1.0);
+        let background_alpha =
+            ((settings.background_opacity as f32 / 100.0) * fade_opacity as f32).clamp(0.0, 1.0);
 
-        let font_size_base = active
-            .segment
-            .font_size_override
-            .unwrap_or(settings.size) as f32;
+        let font_size_base = active.segment.font_size_override.unwrap_or(settings.size) as f32;
         let font_size = font_size_base * (height as f32 / 1080.0);
         let metrics = Metrics::new(font_size, font_size * 1.2);
 
@@ -508,10 +502,7 @@ fn find_active_keyboard_segment<'a>(
     None
 }
 
-fn build_visible_text(
-    segment: &cap_project::KeyboardTrackSegment,
-    current_time: f64,
-) -> String {
+fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time: f64) -> String {
     if segment.keys.is_empty() {
         return segment.display_text.clone();
     }
@@ -567,12 +558,7 @@ fn calculate_fade(
     fade_in.min(fade_out).max(0.0)
 }
 
-fn calculate_keyboard_bounce(
-    current_time: f64,
-    start: f64,
-    end: f64,
-    fade_duration: f64,
-) -> f64 {
+fn calculate_keyboard_bounce(current_time: f64, start: f64, end: f64, fade_duration: f64) -> f64 {
     if fade_duration <= 0.0 {
         return 0.0;
     }

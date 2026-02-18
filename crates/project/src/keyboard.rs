@@ -28,22 +28,12 @@ impl KeyboardEvents {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file =
             File::open(path).map_err(|e| format!("Failed to open keyboard events file: {e}"))?;
-        serde_json::from_reader(file)
-            .map_err(|e| format!("Failed to parse keyboard events: {e}"))
+        serde_json::from_reader(file).map_err(|e| format!("Failed to parse keyboard events: {e}"))
     }
 }
 
 const MODIFIER_KEYS: &[&str] = &[
-    "LShift",
-    "RShift",
-    "LControl",
-    "RControl",
-    "LAlt",
-    "RAlt",
-    "LMeta",
-    "RMeta",
-    "Meta",
-    "Command",
+    "LShift", "RShift", "LControl", "RControl", "LAlt", "RAlt", "LMeta", "RMeta", "Meta", "Command",
 ];
 
 const SPECIAL_KEY_SYMBOLS: &[(&str, &str)] = &[
@@ -153,8 +143,7 @@ pub fn group_key_events(
 ) -> Vec<KeyboardTrackSegment> {
     let mut segments: Vec<KeyboardTrackSegment> = Vec::new();
 
-    let down_events: Vec<&KeyPressEvent> =
-        events.presses.iter().filter(|e| e.down).collect();
+    let down_events: Vec<&KeyPressEvent> = events.presses.iter().filter(|e| e.down).collect();
 
     if down_events.is_empty() {
         return segments;
@@ -244,14 +233,16 @@ pub fn group_key_events(
         }
 
         let active_mods = active_modifiers_at(event.time_ms);
-        let has_command_mod = active_mods
-            .iter()
-            .any(|m| matches!(m.as_str(), "LMeta" | "RMeta" | "Meta" | "Command" | "LControl" | "RControl"));
+        let has_command_mod = active_mods.iter().any(|m| {
+            matches!(
+                m.as_str(),
+                "LMeta" | "RMeta" | "Meta" | "Command" | "LControl" | "RControl"
+            )
+        });
 
         if has_command_mod && show_modifiers {
             let prefix = modifier_prefix(&active_mods);
-            let key_display = display_char_for_key(&event.key)
-                .unwrap_or_else(|| event.key.clone());
+            let key_display = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
             let combo = format!("{prefix}{key_display}");
 
             segment_counter += 1;
@@ -403,9 +394,7 @@ mod tests {
 
     #[test]
     fn empty_events_returns_empty() {
-        let events = KeyboardEvents {
-            presses: vec![],
-        };
+        let events = KeyboardEvents { presses: vec![] };
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert!(segments.is_empty());
     }
@@ -413,10 +402,7 @@ mod tests {
     #[test]
     fn special_keys_show_symbols() {
         let events = KeyboardEvents {
-            presses: vec![
-                key_down("Enter", 100.0),
-                key_up("Enter", 150.0),
-            ],
+            presses: vec![key_down("Enter", 100.0), key_up("Enter", 150.0)],
         };
 
         let segments = group_key_events(&events, 300.0, 500.0, true, true);

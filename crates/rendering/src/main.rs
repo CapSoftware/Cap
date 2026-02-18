@@ -133,7 +133,11 @@ async fn main() -> Result<()> {
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
                 let keyboard = Arc::new(s.keyboard_events(&recording_meta));
 
-                segments.push(RenderSegment { cursor, keyboard, decoders });
+                segments.push(RenderSegment {
+                    cursor,
+                    keyboard,
+                    decoders,
+                });
             }
             segments
         }
