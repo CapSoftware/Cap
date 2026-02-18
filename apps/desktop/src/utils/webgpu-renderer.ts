@@ -380,7 +380,7 @@ export function renderNv12FrameWebGPU(
 	const ySize = yStride * height;
 	const uvWidth = width / 2;
 	const uvHeight = height / 2;
-	const uvStride = width;
+	const uvStride = yStride;
 	const uvSize = uvStride * uvHeight;
 
 	if (data.byteLength < ySize + uvSize) {
