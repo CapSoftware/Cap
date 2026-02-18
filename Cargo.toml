@@ -83,7 +83,7 @@ unused_must_use = "deny"
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
-unchecked_time_subtraction = "deny"
+unchecked_duration_subtraction = "deny"
 collapsible_if = "deny"
 clone_on_copy = "deny"
 redundant_closure = "deny"

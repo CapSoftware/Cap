@@ -559,11 +559,11 @@ mod tests {
         let uv_size = (width * height / 2) as usize;
 
         let mut nv12_data = vec![0u8; y_size + uv_size];
-        for i in 0..y_size {
-            nv12_data[i] = (i % 256) as u8;
+        for (i, item) in nv12_data.iter_mut().take(y_size).enumerate() {
+            *item = (i % 256) as u8;
         }
-        for i in 0..uv_size {
-            nv12_data[y_size + i] = (128 + i % 128) as u8;
+        for (i, item) in nv12_data.iter_mut().skip(y_size).take(uv_size).enumerate() {
+            *item = (128 + i % 128) as u8;
         }
 
         let input = Nv12ExportFrame {
