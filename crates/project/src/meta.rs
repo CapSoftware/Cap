@@ -168,6 +168,38 @@ impl RecordingMeta {
             debug!("No captions.json found");
         }
 
+        if let Some(ref captions) = config.captions {
+            let timeline_has_captions = config
+                .timeline
+                .as_ref()
+                .map(|t| !t.caption_segments.is_empty())
+                .unwrap_or(false);
+
+            if !timeline_has_captions && !captions.segments.is_empty() {
+                let caption_track_segments: Vec<crate::CaptionTrackSegment> = captions
+                    .segments
+                    .iter()
+                    .map(|seg| crate::CaptionTrackSegment {
+                        id: seg.id.clone(),
+                        start: seg.start as f64,
+                        end: seg.end as f64,
+                        text: seg.text.clone(),
+                        words: seg.words.clone(),
+                        fade_duration_override: None,
+                        linger_duration_override: None,
+                        position_override: None,
+                        color_override: None,
+                        background_color_override: None,
+                        font_size_override: None,
+                    })
+                    .collect();
+
+                if let Some(ref mut timeline) = config.timeline {
+                    timeline.caption_segments = caption_track_segments;
+                }
+            }
+        }
+
         config
     }
 
