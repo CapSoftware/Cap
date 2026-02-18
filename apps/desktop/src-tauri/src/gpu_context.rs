@@ -49,13 +49,31 @@ pub struct SharedGpuContext {
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 
 async fn init_gpu_inner() -> Option<SharedGpuContext> {
-    #[cfg(target_os = "windows")]
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
     #[cfg(not(target_os = "windows"))]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+
+    #[cfg(target_os = "windows")]
+    let instance = {
+        let dx12_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            ..Default::default()
+        });
+        let has_dx12 = dx12_instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .is_ok();
+        if has_dx12 {
+            tracing::info!("Using DX12 backend for shared GPU context");
+            dx12_instance
+        } else {
+            tracing::info!("DX12 not available for shared context, falling back to all backends");
+            wgpu::Instance::new(&wgpu::InstanceDescriptor::default())
+        }
+    };
 
     let hardware_adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
