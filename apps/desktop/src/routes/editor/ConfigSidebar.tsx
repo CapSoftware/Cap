@@ -65,6 +65,7 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
+import { KeyboardTab } from "./KeyboardTab";
 import { type CornerRoundingType, useEditorContext } from "./context";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
@@ -370,7 +371,8 @@ export function ConfigSidebar() {
 			| "audio"
 			| "cursor"
 			| "hotkeys"
-			| "captions",
+			| "captions"
+			| "keyboard",
 	});
 
 	let scrollRef!: HTMLDivElement;
@@ -403,7 +405,10 @@ export function ConfigSidebar() {
 							id: "captions" as const,
 							icon: IconCapMessageBubble,
 						},
-						// { id: "hotkeys" as const, icon: IconCapHotkeys },
+						{
+							id: "keyboard" as const,
+							icon: IconLucideKeyboard,
+						},
 					].filter(Boolean)}
 				>
 					{(item) => (
@@ -818,6 +823,12 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<CaptionsTab />
+				</KTabs.Content>
+				<KTabs.Content
+					value="keyboard"
+					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
+				>
+					<KeyboardTab />
 				</KTabs.Content>
 			</div>
 			<div

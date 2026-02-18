@@ -890,6 +890,90 @@ export function CaptionsTab() {
 						</Field>
 					</div>
 
+					<Show
+						when={
+							editorState.timeline.selection?.type === "caption" &&
+							editorState.timeline.selection.indices.length === 1
+						}
+					>
+						{(() => {
+							const selectedIndex = () =>
+								editorState.timeline.selection?.type === "caption"
+									? editorState.timeline.selection.indices[0]
+									: -1;
+							const selectedSegment = () =>
+								project.timeline?.captionSegments?.[selectedIndex()];
+
+							return (
+								<Field
+									name="Selected Caption Override"
+									icon={<IconCapMessageBubble />}
+								>
+									<Show when={selectedSegment()}>
+										{(seg) => (
+											<div class="space-y-3">
+												<Subfield name="Start Time">
+													<Input
+														type="number"
+														value={seg().start.toFixed(2)}
+														step="0.1"
+														min={0}
+														onChange={(e) =>
+															setProject(
+																"timeline",
+																"captionSegments",
+																selectedIndex(),
+																"start",
+																Number.parseFloat(e.target.value),
+															)
+														}
+													/>
+												</Subfield>
+												<Subfield name="End Time">
+													<Input
+														type="number"
+														value={seg().end.toFixed(2)}
+														step="0.1"
+														min={seg().start}
+														onChange={(e) =>
+															setProject(
+																"timeline",
+																"captionSegments",
+																selectedIndex(),
+																"end",
+																Number.parseFloat(e.target.value),
+															)
+														}
+													/>
+												</Subfield>
+												<Subfield name="Fade Duration Override">
+													<Slider
+														value={[
+															(seg().fadeDurationOverride ??
+																getSetting("fadeDuration")) * 100,
+														]}
+														onChange={(v) =>
+															setProject(
+																"timeline",
+																"captionSegments",
+																selectedIndex(),
+																"fadeDurationOverride",
+																v[0] / 100,
+															)
+														}
+														minValue={0}
+														maxValue={50}
+														step={1}
+													/>
+												</Subfield>
+											</div>
+										)}
+									</Show>
+								</Field>
+							);
+						})()}
+					</Show>
+
 					<Show when={hasCaptions()}>
 						<Field name="Caption Segments" icon={<IconCapMessageBubble />}>
 							<div class="space-y-4">
