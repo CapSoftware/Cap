@@ -95,7 +95,7 @@ impl DecoderHealthMonitor {
 
         let should_warn = self
             .last_unhealthy_warning
-            .map_or(true, |last| last.elapsed() > Duration::from_secs(5));
+            .is_none_or(|last| last.elapsed() > Duration::from_secs(5));
 
         if should_warn {
             self.last_unhealthy_warning = Some(Instant::now());
