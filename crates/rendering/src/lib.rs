@@ -1455,7 +1455,7 @@ impl ProjectUniforms {
         let height_scale = resolution_base.y as f32 / base_height as f32;
         let scale = width_scale.min(height_scale);
 
-        let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
+        let scaled_width = ((base_width as f32 * scale) as u32 + 3) & !3;
         let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
         (scaled_width, scaled_height)
     }
@@ -2320,6 +2320,24 @@ impl<'a> FrameRenderer<'a> {
         }
     }
 
+    pub async fn render_immediate_nv12(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        layers: &mut RendererLayers,
+    ) -> Result<frame_pipeline::Nv12RenderedFrame, RenderingError> {
+        if let Some(frame) = self
+            .render_nv12(segment_frames, uniforms, cursor, layers)
+            .await?
+        {
+            return Ok(frame);
+        }
+        self.flush_pipeline_nv12()
+            .await
+            .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
+    }
+
     pub async fn flush_pipeline_nv12(
         &mut self,
     ) -> Option<Result<frame_pipeline::Nv12RenderedFrame, RenderingError>> {
@@ -2443,13 +2461,30 @@ impl RendererLayers {
         queue: &wgpu::Queue,
         prefer_cpu_conversion: bool,
     ) -> Self {
+        let shared_yuv_pipelines = Arc::new(yuv_converter::YuvConverterPipelines::new(device));
+        let shared_composite_pipeline =
+            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device));
+
         Self {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
-            display: DisplayLayer::new_with_options(device, prefer_cpu_conversion),
+            display: DisplayLayer::new_with_all_shared_pipelines(
+                device,
+                shared_yuv_pipelines.clone(),
+                shared_composite_pipeline.clone(),
+                prefer_cpu_conversion,
+            ),
             cursor: CursorLayer::new(device),
-            camera: CameraLayer::new(device),
-            camera_only: CameraLayer::new(device),
+            camera: CameraLayer::new_with_all_shared_pipelines(
+                device,
+                shared_yuv_pipelines.clone(),
+                shared_composite_pipeline.clone(),
+            ),
+            camera_only: CameraLayer::new_with_all_shared_pipelines(
+                device,
+                shared_yuv_pipelines,
+                shared_composite_pipeline,
+            ),
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
