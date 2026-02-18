@@ -611,12 +611,20 @@ impl Playback {
                             Arc::new(prefetched.segment_frames),
                             prefetched.segment_index,
                         ))
-                    } else if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
+                    } else if prefetch_buffer.is_empty() {
                         let _ = frame_request_tx.send(frame_number);
 
-                        match prefetch_rx.recv_timeout(Duration::from_millis(100)) {
+                        let wait_ms = if total_frames_rendered < 15 { 100 } else { 50 };
+                        match prefetch_rx.recv_timeout(Duration::from_millis(wait_ms)) {
                             Ok(prefetched) => {
                                 if prefetched.frame_number == frame_number {
+                                    Some((
+                                        Arc::new(prefetched.segment_frames),
+                                        prefetched.segment_index,
+                                    ))
+                                } else if prefetched.frame_number > frame_number {
+                                    frame_number = prefetched.frame_number;
+                                    total_frames_skipped += 1;
                                     Some((
                                         Arc::new(prefetched.segment_frames),
                                         prefetched.segment_index,
