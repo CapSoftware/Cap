@@ -408,9 +408,6 @@ impl MFDecoder {
                                 }
                             }
 
-                            #[cfg(target_os = "windows")]
-                            let readahead_frames = 12u32;
-                            #[cfg(not(target_os = "windows"))]
                             let readahead_frames = 30u32;
                             let readahead_target = requested_frame + readahead_frames;
                             if frame_number >= readahead_target || frame_number > cache_max {

@@ -20,7 +20,21 @@ use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
-mod composite_frame;
+static PRECOMPILED_COMPOSITE_PIPELINE: std::sync::OnceLock<
+    Arc<composite_frame::CompositeVideoFramePipeline>,
+> = std::sync::OnceLock::new();
+
+pub fn prewarm_composite_pipeline(device: &wgpu::Device) {
+    let pipeline = composite_frame::CompositeVideoFramePipeline::new(device);
+    let _ = PRECOMPILED_COMPOSITE_PIPELINE.set(Arc::new(pipeline));
+}
+
+pub fn get_precompiled_composite_pipeline()
+-> Option<Arc<composite_frame::CompositeVideoFramePipeline>> {
+    PRECOMPILED_COMPOSITE_PIPELINE.get().cloned()
+}
+
+pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
 mod cursor_interpolation;
@@ -963,7 +977,46 @@ pub struct RenderVideoConstants {
     pub is_software_adapter: bool,
 }
 
+pub struct SharedWgpuDevice {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub is_software_adapter: bool,
+}
+
 impl RenderVideoConstants {
+    pub fn new_with_device(
+        shared: SharedWgpuDevice,
+        segments: &[SegmentRecordings],
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
+    ) -> Result<Self, RenderingError> {
+        let first_segment = segments.first().ok_or(RenderingError::NoSegments)?;
+
+        let options = RenderOptions {
+            screen_size: XY::new(first_segment.display.width, first_segment.display.height),
+            camera_size: first_segment
+                .camera
+                .as_ref()
+                .map(|c| XY::new(c.width, c.height)),
+        };
+
+        let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
+        Ok(Self {
+            _instance: shared.instance,
+            _adapter: shared.adapter,
+            device: shared.device,
+            queue: shared.queue,
+            options,
+            background_textures,
+            meta,
+            recording_meta,
+            is_software_adapter: shared.is_software_adapter,
+        })
+    }
+
     pub async fn new(
         segments: &[SegmentRecordings],
         recording_meta: RecordingMeta,
@@ -1040,9 +1093,14 @@ impl RenderVideoConstants {
             (software_adapter, true)
         };
 
+        let mut required_features = wgpu::Features::empty();
+        if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            required_features |= wgpu::Features::PIPELINE_CACHE;
+        }
+
         let device_descriptor = wgpu::DeviceDescriptor {
             label: Some("cap-rendering-device"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             ..Default::default()
         };
 
@@ -2463,7 +2521,11 @@ impl RendererLayers {
     ) -> Self {
         let shared_yuv_pipelines = Arc::new(yuv_converter::YuvConverterPipelines::new(device));
         let shared_composite_pipeline =
-            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device));
+            if let Some(precompiled) = get_precompiled_composite_pipeline() {
+                precompiled
+            } else {
+                Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
+            };
 
         Self {
             background: BackgroundLayer::new(device),
