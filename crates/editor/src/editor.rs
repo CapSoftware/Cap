@@ -147,48 +147,20 @@ impl Renderer {
                     break;
                 }
             }
-            let nv12_result = frame_renderer
-                .render_nv12(
-                    current.segment_frames.clone(),
-                    current.uniforms.clone(),
+            match frame_renderer
+                .render_immediate_nv12(
+                    current.segment_frames,
+                    current.uniforms,
                     &current.cursor,
                     &mut layers,
                 )
-                .await;
-
-            match nv12_result {
-                Ok(pipeline_frame) => {
-                    if let Some(prev) = pipeline_frame {
-                        (self.frame_cb)(EditorFrameOutput::Nv12(prev));
-                    }
-                    match frame_renderer.flush_pipeline_nv12().await {
-                        Some(Ok(current_frame)) => {
-                            (self.frame_cb)(EditorFrameOutput::Nv12(current_frame));
-                        }
-                        Some(Err(e)) => {
-                            tracing::warn!(error = %e, "Failed to flush NV12 pipeline frame");
-                        }
-                        None => {}
-                    }
+                .await
+            {
+                Ok(frame) => {
+                    (self.frame_cb)(EditorFrameOutput::Nv12(frame));
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "NV12 render failed, falling back to RGBA");
-                    match frame_renderer
-                        .render_immediate(
-                            current.segment_frames,
-                            current.uniforms,
-                            &current.cursor,
-                            &mut layers,
-                        )
-                        .await
-                    {
-                        Ok(frame) => {
-                            (self.frame_cb)(EditorFrameOutput::Rgba(frame));
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to render frame in editor");
-                        }
-                    }
+                    tracing::error!(error = %e, "Failed to render frame in editor");
                 }
             }
 
@@ -198,11 +170,7 @@ impl Renderer {
 }
 
 impl RendererHandle {
-    async fn send(&self, msg: RendererMessage) {
-        let _ = self.tx.send(msg).await;
-    }
-
-    pub async fn render_frame(
+    pub fn render_frame(
         &self,
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
@@ -210,13 +178,12 @@ impl RendererHandle {
     ) {
         let (finished_tx, _finished_rx) = oneshot::channel();
 
-        self.send(RendererMessage::RenderFrame {
+        let _ = self.tx.try_send(RendererMessage::RenderFrame {
             segment_frames,
             uniforms,
             finished: finished_tx,
             cursor,
-        })
-        .await;
+        });
     }
 
     pub async fn stop(&self) {

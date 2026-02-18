@@ -17,6 +17,7 @@ pub struct RgbaToNv12Converter {
     pending: Option<PendingNv12Readback>,
     cached_width: u32,
     cached_height: u32,
+    cached_stride: u32,
     cached_bind_groups: Option<[wgpu::BindGroup; 2]>,
     cached_texture_view: Option<wgpu::TextureView>,
     cached_texture_ptr: usize,
@@ -108,20 +109,31 @@ impl RgbaToNv12Converter {
             pending: None,
             cached_width: 0,
             cached_height: 0,
+            cached_stride: 0,
             cached_bind_groups: None,
             cached_texture_view: None,
             cached_texture_ptr: 0,
         }
     }
 
+    fn aligned_stride(width: u32) -> u32 {
+        (width + 3) & !3
+    }
+
     fn nv12_size(width: u32, height: u32) -> u64 {
-        let y_size = (width as u64) * (height as u64);
-        let uv_size = (width as u64) * (height as u64 / 2);
+        let stride = Self::aligned_stride(width) as u64;
+        let aligned_height = ((height + 1) & !1) as u64;
+        let y_size = stride * aligned_height;
+        let uv_size = stride * (aligned_height / 2);
         y_size + uv_size
     }
 
     fn ensure_buffers(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        if self.cached_width == width && self.cached_height == height {
+        let stride = Self::aligned_stride(width);
+        if self.cached_width == width
+            && self.cached_height == height
+            && self.cached_stride == stride
+        {
             return;
         }
 
@@ -148,6 +160,7 @@ impl RgbaToNv12Converter {
         self.current_readback = 0;
         self.cached_width = width;
         self.cached_height = height;
+        self.cached_stride = stride;
         self.cached_bind_groups = None;
         self.cached_texture_view = None;
         self.cached_texture_ptr = 0;
@@ -165,7 +178,7 @@ impl RgbaToNv12Converter {
         frame_number: u32,
         frame_rate: u32,
     ) -> bool {
-        if width == 0 || height == 0 || !width.is_multiple_of(4) || !height.is_multiple_of(2) {
+        if width == 0 || height == 0 {
             return false;
         }
 
@@ -182,8 +195,8 @@ impl RgbaToNv12Converter {
         };
         self.current_readback = 1 - self.current_readback;
 
-        let y_stride = width;
-        let uv_stride = width;
+        let y_stride = Self::aligned_stride(width);
+        let uv_stride = Self::aligned_stride(width);
 
         let params = Nv12Params {
             width,

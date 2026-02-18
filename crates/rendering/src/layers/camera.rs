@@ -21,6 +21,7 @@ pub struct CameraLayer {
 }
 
 impl CameraLayer {
+    #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_with_all_shared_pipelines(
             device,

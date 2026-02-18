@@ -80,7 +80,7 @@ export const getPreviewResolution = (
 	quality: EditorPreviewQuality,
 ): XY<number> => {
 	const scale = previewQualityScale[quality];
-	const width = (Math.max(2, Math.round(OUTPUT_SIZE.x * scale)) + 1) & ~1;
+	const width = (Math.max(4, Math.round(OUTPUT_SIZE.x * scale)) + 3) & ~3;
 	const height = (Math.max(2, Math.round(OUTPUT_SIZE.y * scale)) + 1) & ~1;
 
 	return { x: width, y: height };

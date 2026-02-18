@@ -30,10 +30,10 @@ fn pack_nv12_frame_ref(
     data: &[u8],
     width: u32,
     height: u32,
+    y_stride: u32,
     frame_number: u32,
     target_time_ns: u64,
 ) -> Vec<u8> {
-    let y_stride = width;
     let metadata_size = 28;
     let mut output = Vec::with_capacity(data.len() + metadata_size);
     output.extend_from_slice(data);
@@ -90,6 +90,7 @@ fn pack_ws_frame_ref(frame: &WSFrame) -> Vec<u8> {
             &frame.data,
             frame.width,
             frame.height,
+            frame.stride,
             frame.frame_number,
             frame.target_time_ns,
         ),

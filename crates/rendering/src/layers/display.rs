@@ -1,9 +1,11 @@
 use cap_project::XY;
 
+use std::sync::Arc;
+
 use crate::{
     DecodedSegmentFrames, PixelFormat,
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
-    yuv_converter::YuvToRgbaConverter,
+    yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
 
 struct PendingTextureCopy {
@@ -17,7 +19,7 @@ pub struct DisplayLayer {
     frame_texture_views: [wgpu::TextureView; 2],
     current_texture: usize,
     uniforms_buffer: wgpu::Buffer,
-    pipeline: CompositeVideoFramePipeline,
+    pipeline: std::sync::Arc<CompositeVideoFramePipeline>,
     bind_groups: [Option<wgpu::BindGroup>; 2],
     last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
@@ -32,19 +34,32 @@ impl DisplayLayer {
     }
 
     pub fn new_with_options(device: &wgpu::Device, prefer_cpu_conversion: bool) -> Self {
+        Self::new_with_all_shared_pipelines(
+            device,
+            Arc::new(YuvConverterPipelines::new(device)),
+            Arc::new(CompositeVideoFramePipeline::new(device)),
+            prefer_cpu_conversion,
+        )
+    }
+
+    pub fn new_with_all_shared_pipelines(
+        device: &wgpu::Device,
+        yuv_pipelines: Arc<YuvConverterPipelines>,
+        composite_pipeline: Arc<CompositeVideoFramePipeline>,
+        prefer_cpu_conversion: bool,
+    ) -> Self {
         let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_view_0 = frame_texture_0.create_view(&Default::default());
         let frame_texture_view_1 = frame_texture_1.create_view(&Default::default());
 
         let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
-        let pipeline = CompositeVideoFramePipeline::new(device);
         let bind_group_0 =
-            Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_0));
+            Some(composite_pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_0));
         let bind_group_1 =
-            Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
+            Some(composite_pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
 
-        let yuv_converter = YuvToRgbaConverter::new(device);
+        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines(device, yuv_pipelines);
 
         if prefer_cpu_conversion {
             tracing::info!("DisplayLayer initialized with CPU YUV conversion preference");
@@ -55,12 +70,61 @@ impl DisplayLayer {
             frame_texture_views: [frame_texture_view_0, frame_texture_view_1],
             current_texture: 0,
             uniforms_buffer,
-            pipeline,
+            pipeline: composite_pipeline,
             bind_groups: [bind_group_0, bind_group_1],
             last_recording_time: None,
             yuv_converter,
             pending_copy: None,
             prefer_cpu_conversion,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn try_d3d11_staging_fallback(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen_frame: &crate::DecodedFrame,
+        actual_width: u32,
+        actual_height: u32,
+        next_texture: usize,
+    ) -> bool {
+        let Some(nv12_texture) = screen_frame.d3d11_texture_backing() else {
+            return false;
+        };
+
+        let Ok(d3d11_device) = (unsafe { nv12_texture.GetDevice() }) else {
+            return false;
+        };
+
+        let Ok(d3d11_context) = (unsafe { d3d11_device.GetImmediateContext() }) else {
+            return false;
+        };
+
+        if self
+            .yuv_converter
+            .convert_nv12_with_fallback(
+                device,
+                queue,
+                &d3d11_device,
+                &d3d11_context,
+                nv12_texture,
+                screen_frame.d3d11_y_handle(),
+                screen_frame.d3d11_uv_handle(),
+                actual_width,
+                actual_height,
+            )
+            .is_ok()
+            && self.yuv_converter.output_texture().is_some()
+        {
+            self.pending_copy = Some(PendingTextureCopy {
+                width: actual_width,
+                height: actual_height,
+                dst_texture_index: next_texture,
+            });
+            true
+        } else {
+            false
         }
     }
 
@@ -282,7 +346,14 @@ impl DisplayLayer {
                                 false
                             }
                         } else {
-                            false
+                            self.try_d3d11_staging_fallback(
+                                device,
+                                queue,
+                                screen_frame,
+                                actual_width,
+                                actual_height,
+                                next_texture,
+                            )
                         }
                     }
 
@@ -541,7 +612,14 @@ impl DisplayLayer {
                                 Err(_) => false,
                             }
                         } else {
-                            false
+                            self.try_d3d11_staging_fallback(
+                                device,
+                                queue,
+                                screen_frame,
+                                actual_width,
+                                actual_height,
+                                next_texture,
+                            )
                         }
                     } else if let (Some(y_data), Some(uv_data)) =
                         (screen_frame.y_plane(), screen_frame.uv_plane())
@@ -575,7 +653,14 @@ impl DisplayLayer {
                             Err(_) => false,
                         }
                     } else {
-                        false
+                        self.try_d3d11_staging_fallback(
+                            device,
+                            queue,
+                            screen_frame,
+                            actual_width,
+                            actual_height,
+                            next_texture,
+                        )
                     }
 
                     #[cfg(not(target_os = "windows"))]
