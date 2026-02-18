@@ -12,7 +12,7 @@ use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    MaskLayer, TextLayer,
+    KeyboardLayer, MaskLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -2414,6 +2414,7 @@ pub struct RendererLayers {
     mask: MaskLayer,
     text: TextLayer,
     captions: CaptionsLayer,
+    keyboard: KeyboardLayer,
 }
 
 impl RendererLayers {
@@ -2436,6 +2437,7 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+            keyboard: KeyboardLayer::new(device, queue),
         }
     }
 
@@ -2537,6 +2539,13 @@ impl RendererLayers {
             constants,
         );
 
+        self.keyboard.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
         Ok(())
     }
 
@@ -2612,6 +2621,13 @@ impl RendererLayers {
         );
 
         self.captions.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
+        self.keyboard.prepare(
             uniforms,
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
@@ -2703,6 +2719,11 @@ impl RendererLayers {
         if !uniforms.texts.is_empty() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.text.render(&mut pass);
+        }
+
+        if self.keyboard.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.keyboard.render(&mut pass);
         }
 
         if self.captions.has_content() {
