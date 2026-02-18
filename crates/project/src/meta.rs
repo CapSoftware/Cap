@@ -10,7 +10,7 @@ use std::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
+    CaptionsData, CursorEvents, CursorImage, KeyboardEvents, ProjectConfiguration, XY,
     cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
 };
 
@@ -361,6 +361,9 @@ pub struct MultipleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<String>)]
     pub cursor: Option<RelativePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<String>)]
+    pub keyboard: Option<RelativePathBuf>,
 }
 
 impl MultipleSegment {
@@ -393,6 +396,22 @@ impl MultipleSegment {
         data.stabilize_short_lived_cursor_shapes(pointer_ids_ref, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
 
         data
+    }
+
+    pub fn keyboard_events(&self, meta: &RecordingMeta) -> KeyboardEvents {
+        let Some(keyboard_path) = &self.keyboard else {
+            return KeyboardEvents::default();
+        };
+
+        let full_path = meta.path(keyboard_path);
+
+        match KeyboardEvents::load_from_file(&full_path) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("Failed to load keyboard data: {e}");
+                KeyboardEvents::default()
+            }
+        }
     }
 
     pub fn latest_start_time(&self) -> Option<f64> {
