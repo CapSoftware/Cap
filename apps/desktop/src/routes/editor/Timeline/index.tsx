@@ -160,6 +160,8 @@ export function Timeline() {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
+				captionSegments: [],
+				keyboardSegments: [],
 			});
 			resume();
 		}
@@ -201,11 +203,15 @@ export function Timeline() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					captionSegments: [],
+					keyboardSegments: [],
 				};
 				project.timeline.sceneSegments ??= [];
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
+				project.timeline.captionSegments ??= [];
+				project.timeline.keyboardSegments ??= [];
 			}),
 		);
 	}

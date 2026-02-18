@@ -86,7 +86,7 @@ export const getPreviewResolution = (
 	return { x: width, y: height };
 };
 
-export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask";
+export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask" | "caption" | "keyboard";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -104,6 +104,33 @@ export type CornerRoundingType = "rounded" | "squircle";
 
 type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 
+type CaptionTrackSegment = {
+	id: string;
+	start: number;
+	end: number;
+	text: string;
+	words?: Array<{ text: string; start: number; end: number }>;
+	fadeDurationOverride?: number | null;
+	lingerDurationOverride?: number | null;
+	positionOverride?: string | null;
+	colorOverride?: string | null;
+	backgroundColorOverride?: string | null;
+	fontSizeOverride?: number | null;
+};
+
+type KeyboardTrackSegment = {
+	id: string;
+	start: number;
+	end: number;
+	displayText: string;
+	keys?: Array<{ key: string; timeOffset: number }>;
+	fadeDurationOverride?: number | null;
+	positionOverride?: string | null;
+	colorOverride?: string | null;
+	backgroundColorOverride?: string | null;
+	fontSizeOverride?: number | null;
+};
+
 type EditorTimelineConfiguration = Omit<
 	TimelineConfiguration,
 	"sceneSegments" | "maskSegments"
@@ -111,6 +138,8 @@ type EditorTimelineConfiguration = Omit<
 	sceneSegments?: SceneSegment[];
 	maskSegments: MaskSegment[];
 	textSegments: TextSegment[];
+	captionSegments: CaptionTrackSegment[];
+	keyboardSegments: KeyboardTrackSegment[];
 };
 
 export type EditorProjectConfiguration = Omit<
@@ -155,6 +184,18 @@ export function normalizeProject(
 							textSegments?: TextSegment[];
 						}
 					).textSegments ?? [],
+				captionSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							captionSegments?: CaptionTrackSegment[];
+						}
+					).captionSegments ?? [],
+				keyboardSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							keyboardSegments?: KeyboardTrackSegment[];
+						}
+					).keyboardSegments ?? [],
 			}
 		: undefined;
 
@@ -179,6 +220,8 @@ export function serializeProjectConfiguration(
 				...project.timeline,
 				maskSegments: project.timeline.maskSegments ?? [],
 				textSegments: project.timeline.textSegments ?? [],
+				captionSegments: project.timeline.captionSegments ?? [],
+				keyboardSegments: project.timeline.keyboardSegments ?? [],
 			}
 		: project.timeline;
 
@@ -417,6 +460,86 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitCaptionSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"captionSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 0.5 || remaining < 0.5) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							id: `caption-${Date.now()}`,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteCaptionSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"captionSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			splitKeyboardSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"keyboardSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 0.5 || remaining < 0.5) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							id: `kb-${Date.now()}`,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteKeyboardSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"keyboardSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			setClipSegmentTimescale: (index: number, timescale: number) => {
 				setProject(
 					produce((project) => {
@@ -633,6 +756,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			(project.timeline?.maskSegments?.length ?? 0) > 0;
 		const initialTextTrackEnabled =
 			(project.timeline?.textSegments?.length ?? 0) > 0;
+		const initialCaptionTrackEnabled =
+			(project.timeline?.captionSegments?.length ?? 0) > 0 ||
+			(project.captions?.segments?.length ?? 0) > 0;
+		const initialKeyboardTrackEnabled =
+			(project.timeline?.keyboardSegments?.length ?? 0) > 0;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -652,7 +780,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "clip"; indices: number[] }
 					| { type: "scene"; indices: number[] }
 					| { type: "mask"; indices: number[] }
-					| { type: "text"; indices: number[] },
+					| { type: "text"; indices: number[] }
+					| { type: "caption"; indices: number[] }
+					| { type: "keyboard"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -695,6 +825,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					scene: true,
 					mask: initialMaskTrackEnabled,
 					text: initialTextTrackEnabled,
+					caption: initialCaptionTrackEnabled,
+					keyboard: initialKeyboardTrackEnabled,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},
