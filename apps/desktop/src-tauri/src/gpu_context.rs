@@ -158,6 +158,15 @@ pub async fn get_shared_gpu() -> Option<&'static SharedGpuContext> {
 
 pub fn prewarm_gpu() {
     tokio::spawn(async {
-        get_shared_gpu().await;
+        let gpu = get_shared_gpu().await;
+        if let Some(gpu) = gpu {
+            let device = gpu.device.clone();
+            std::thread::Builder::new()
+                .name("pipeline-prewarm".into())
+                .spawn(move || {
+                    cap_rendering::prewarm_composite_pipeline(&device);
+                })
+                .ok();
+        }
     });
 }
