@@ -288,6 +288,7 @@ pub enum RenderingError {
 
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
+    pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
 

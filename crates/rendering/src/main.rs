@@ -108,6 +108,7 @@ async fn main() -> Result<()> {
 
             vec![RenderSegment {
                 cursor: Arc::new(Default::default()),
+                keyboard: Arc::new(Default::default()),
                 decoders,
             }]
         }
@@ -130,8 +131,9 @@ async fn main() -> Result<()> {
                 })?;
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
+                let keyboard = Arc::new(s.keyboard_events(&recording_meta));
 
-                segments.push(RenderSegment { cursor, decoders });
+                segments.push(RenderSegment { cursor, keyboard, decoders });
             }
             segments
         }
