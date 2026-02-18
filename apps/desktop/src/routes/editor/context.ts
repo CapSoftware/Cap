@@ -583,6 +583,16 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							textSegment.end += diff(textSegment.end);
 						}
 
+						for (const captionSegment of timeline.captionSegments) {
+							captionSegment.start += diff(captionSegment.start);
+							captionSegment.end += diff(captionSegment.end);
+						}
+
+						for (const keyboardSegment of timeline.keyboardSegments) {
+							keyboardSegment.start += diff(keyboardSegment.start);
+							keyboardSegment.end += diff(keyboardSegment.end);
+						}
+
 						segment.timescale = timescale;
 					}),
 				);
