@@ -147,7 +147,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 		);
 		const currentUpdatedAt = currentProject.updatedAt.toISOString();
 
-		if (!expectedUpdatedAt || expectedUpdatedAt !== currentUpdatedAt) {
+		if (expectedUpdatedAt != null && expectedUpdatedAt !== currentUpdatedAt) {
 			return {
 				error: "Editor config is out of date",
 				code: "CONFIG_CONFLICT",
