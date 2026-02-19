@@ -17,6 +17,7 @@ dist-ssr
 .env.test
 target
 .cursorrules
+.github/hooks
 
 # Editor directories and files
 .vscode/*
