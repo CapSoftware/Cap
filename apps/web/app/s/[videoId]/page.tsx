@@ -313,6 +313,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 						organizationId: sharedVideos.organizationId,
 					},
 					orgSettings: organizations.settings,
+					orgAllowedEmailDomain: organizations.allowedEmailDomain,
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
@@ -360,6 +361,7 @@ async function AuthorizedContent({
 		hasPassword: boolean;
 		hasActiveUpload: boolean;
 		orgSettings?: OrganizationSettings | null;
+		orgAllowedEmailDomain?: string | null;
 		videoSettings?: OrganizationSettings | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
@@ -419,35 +421,34 @@ async function AuthorizedContent({
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 	}
 
-	if (video.sharedOrganization?.organizationId) {
-		const organization = await db()
-			.select()
-			.from(organizations)
-			.where(eq(organizations.id, video.sharedOrganization.organizationId))
-			.limit(1);
+	const domainToCheck =
+		video.orgAllowedEmailDomain ??
+		(video.sharedOrganization?.organizationId
+			? (
+					await db()
+						.select({ allowedEmailDomain: organizations.allowedEmailDomain })
+						.from(organizations)
+						.where(
+							eq(organizations.id, video.sharedOrganization.organizationId),
+						)
+						.limit(1)
+				)?.[0]?.allowedEmailDomain
+			: null);
 
-		if (organization[0]?.allowedEmailDomain) {
-			if (
-				!user?.email ||
-				!user.email.endsWith(`@${organization[0].allowedEmailDomain}`)
-			) {
-				console.log(
-					"[ShareVideoPage] Access denied - domain restriction:",
-					organization[0].allowedEmailDomain,
-				);
-				return (
-					<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-						<h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
-						<p className="mb-2 text-gray-10">
-							This video is only accessible to members of this organization.
-						</p>
-						<p className="text-gray-600">
-							Please sign in with your organization email address to access this
-							content.
-						</p>
-					</div>
-				);
-			}
+	if (domainToCheck) {
+		if (!user?.email || !user.email.endsWith(`@${domainToCheck}`)) {
+			return (
+				<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+					<h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
+					<p className="mb-2 text-gray-10">
+						This video is only accessible to members of this organization.
+					</p>
+					<p className="text-gray-600">
+						Please sign in with your organization email address to access this
+						content.
+					</p>
+				</div>
+			);
 		}
 	}
 
