@@ -154,11 +154,11 @@ export function KeyboardTrack(props: {
 							data-keyboard-segment
 							data-index={i()}
 							class={cx(
-								"border duration-200 hover:border-purple-6 transition-colors group",
-								"bg-gradient-to-r from-[#1a0d2e] via-[#231540] to-[#1a0d2e]",
-								isSelected() ? "border-purple-7" : "border-transparent",
+								"border duration-200 hover:border-gray-6 transition-colors group",
+								"bg-gradient-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
+								isSelected() ? "border-gray-7" : "border-transparent",
 							)}
-							innerClass="ring-purple-6"
+							innerClass="ring-gray-6"
 							segment={segment}
 							onMouseDown={(e) => {
 								e.stopPropagation();
