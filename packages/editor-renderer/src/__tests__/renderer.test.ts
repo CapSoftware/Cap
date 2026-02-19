@@ -110,7 +110,7 @@ describe("EditorRenderer", () => {
 		renderer.destroy();
 	});
 
-	it("applies scale factor via setTransform", () => {
+	it("renders with scaled spec instead of canvas transform", () => {
 		const { canvas, calls } = createMockCanvas();
 		const renderer = new EditorRenderer({
 			canvas,
@@ -122,7 +122,10 @@ describe("EditorRenderer", () => {
 		renderer.render();
 
 		const setTransform = calls.find((c) => c.method === "setTransform");
-		expect(setTransform).toBeDefined();
+		expect(setTransform).toBeUndefined();
+
+		const fillRect = calls.find((c) => c.method === "fillRect");
+		expect(fillRect).toBeDefined();
 
 		renderer.destroy();
 	});
