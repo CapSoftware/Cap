@@ -38,7 +38,7 @@ const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	mask: <IconLucideBoxSelect class="size-4" />,
 	zoom: <IconLucideSearch class="size-4" />,
 	scene: <IconLucideVideo class="size-4" />,
-	caption: <IconLucideSubtitles class="size-4" />,
+	caption: <IconLucideCaptions class="size-4" />,
 	keyboard: <IconLucideKeyboard class="size-4" />,
 };
 

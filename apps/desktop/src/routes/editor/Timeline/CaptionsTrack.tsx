@@ -135,7 +135,7 @@ export function CaptionsTrack(props: {
 					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
 						<div>No captions</div>
 						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
-							Generate captions in the sidebar
+							Generate captions in the Captions tab
 						</div>
 					</div>
 				}
