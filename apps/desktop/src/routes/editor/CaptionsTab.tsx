@@ -364,6 +364,31 @@ export function CaptionsTab() {
 			if (result && result.segments.length > 0) {
 				setProject("captions", "segments", result.segments);
 				updateCaptionSetting("enabled", true);
+
+				const trackSegments = result.segments.map(
+					(seg: {
+						id: string;
+						start: number;
+						end: number;
+						text: string;
+						words?: Array<{ text: string; start: number; end: number }>;
+					}) => ({
+						id: seg.id,
+						start: seg.start,
+						end: seg.end,
+						text: seg.text,
+						words: seg.words ?? [],
+						fadeDurationOverride: null,
+						lingerDurationOverride: null,
+						positionOverride: null,
+						colorOverride: null,
+						backgroundColorOverride: null,
+						fontSizeOverride: null,
+					}),
+				);
+				setProject("timeline", "captionSegments", trackSegments);
+				setEditorState("timeline", "tracks", "caption", true);
+
 				toast.success("Captions generated successfully!");
 			} else {
 				toast.error(
@@ -395,52 +420,14 @@ export function CaptionsTab() {
 		}
 	};
 
-	const deleteSegment = (id: string) => {
-		if (!project?.captions?.segments) return;
-
-		setProject(
-			"captions",
-			"segments",
-			project.captions.segments.filter((segment) => segment.id !== id),
-		);
-	};
-
-	const updateSegment = (
-		id: string,
-		updates: Partial<{ start: number; end: number; text: string }>,
-	) => {
-		if (!project?.captions?.segments) return;
-
-		setProject(
-			"captions",
-			"segments",
-			project.captions.segments.map((segment) =>
-				segment.id === id ? { ...segment, ...updates } : segment,
-			),
-		);
-	};
-
-	const addSegment = (time: number) => {
-		if (!project?.captions) return;
-
-		const id = `segment-${Date.now()}`;
-		setProject("captions", "segments", [
-			...project.captions.segments,
-			{
-				id,
-				start: time,
-				end: time + 2,
-				text: "New caption",
-			},
-		]);
-	};
-
 	const hasCaptions = createMemo(
-		() => (project.captions?.segments?.length ?? 0) > 0,
+		() =>
+			(project.timeline?.captionSegments?.length ?? 0) > 0 ||
+			(project.captions?.segments?.length ?? 0) > 0,
 	);
 
 	return (
-		<Field name="Captions" icon={<IconCapMessageBubble />}>
+		<Field name="Captions" icon={<IconCapMessageBubble />} badge="Beta">
 			<div class="flex flex-col gap-4">
 				<div class="space-y-6 transition-all duration-200">
 					<div class="space-y-4">
@@ -946,6 +933,21 @@ export function CaptionsTab() {
 														}
 													/>
 												</Subfield>
+												<Subfield name="Caption Text">
+													<Input
+														type="text"
+														value={seg().text}
+														onChange={(e) =>
+															setProject(
+																"timeline",
+																"captionSegments",
+																selectedIndex(),
+																"text",
+																e.target.value,
+															)
+														}
+													/>
+												</Subfield>
 												<Subfield name="Fade Duration Override">
 													<Slider
 														value={[
@@ -973,118 +975,8 @@ export function CaptionsTab() {
 							);
 						})()}
 					</Show>
-
-					<Show when={hasCaptions()}>
-						<Field name="Caption Segments" icon={<IconCapMessageBubble />}>
-							<div class="space-y-4">
-								<div class="flex items-center justify-between">
-									<Button
-										onClick={() => addSegment(editorState.playbackTime)}
-										class="w-full"
-									>
-										Add at Current Time
-									</Button>
-								</div>
-
-								<div class="max-h-[300px] overflow-y-auto space-y-3 pr-2">
-									<For each={project.captions?.segments}>
-										{(segment) => (
-											<div class="bg-gray-2 border border-gray-3 rounded-lg p-4 space-y-4">
-												<div class="flex flex-col space-y-4">
-													<div class="flex space-x-4">
-														<div class="flex-1">
-															<label class="text-xs text-gray-11">
-																Start Time
-															</label>
-															<Input
-																type="number"
-																class="w-full"
-																value={segment.start.toFixed(1)}
-																step="0.1"
-																min={0}
-																onChange={(e) =>
-																	updateSegment(segment.id, {
-																		start: parseFloat(e.target.value),
-																	})
-																}
-															/>
-														</div>
-														<div class="flex-1">
-															<label class="text-xs text-gray-11">
-																End Time
-															</label>
-															<Input
-																type="number"
-																class="w-full"
-																value={segment.end.toFixed(1)}
-																step="0.1"
-																min={segment.start}
-																onChange={(e) =>
-																	updateSegment(segment.id, {
-																		end: parseFloat(e.target.value),
-																	})
-																}
-															/>
-														</div>
-													</div>
-
-													<div class="space-y-2">
-														<label class="text-xs text-gray-11">
-															Caption Text
-														</label>
-														<div class="w-full px-3 py-2 bg-gray-2 border border-gray-3 rounded-lg text-sm focus-within:border-blue-9 focus-within:ring-1 focus-within:ring-blue-9 transition-colors">
-															<textarea
-																class="w-full resize-none outline-none bg-transparent text-[--text-primary]"
-																value={segment.text}
-																rows={2}
-																onChange={(e) =>
-																	updateSegment(segment.id, {
-																		text: e.target.value,
-																	})
-																}
-															/>
-														</div>
-													</div>
-
-													<div class="flex justify-end">
-														<Button
-															variant="destructive"
-															size="sm"
-															onClick={() => deleteSegment(segment.id)}
-															class="text-gray-11 inline-flex items-center gap-1.5"
-														>
-															<IconDelete />
-															Delete
-														</Button>
-													</div>
-												</div>
-											</div>
-										)}
-									</For>
-								</div>
-							</div>
-						</Field>
-					</Show>
 				</div>
 			</div>
 		</Field>
-	);
-}
-
-function IconDelete() {
-	return (
-		<svg
-			width="14"
-			height="14"
-			viewBox="0 0 24 24"
-			fill="none"
-			xmlns="http://www.w3.org/2000/svg"
-			class="size-4"
-		>
-			<path
-				d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
-				fill="currentColor"
-			/>
-		</svg>
 	);
 }
