@@ -56,7 +56,6 @@ export class VideoEditorProjects extends Effect.Service<VideoEditorProjects>()(
 
 					const config = createDefaultConfig(videoDuration);
 					const id = nanoId();
-					const now = new Date();
 
 					yield* db.use((db) =>
 						db.insert(Db.videoEditorProjects).values({
@@ -67,13 +66,33 @@ export class VideoEditorProjects extends Effect.Service<VideoEditorProjects>()(
 						}),
 					);
 
+					const inserted = yield* db
+						.use((db) =>
+							db
+								.select()
+								.from(Db.videoEditorProjects)
+								.where(Dz.eq(Db.videoEditorProjects.id, id)),
+						)
+						.pipe(Effect.map(Array.get(0)));
+
+					if (Option.isSome(inserted)) {
+						return {
+							id: inserted.value.id,
+							videoId: inserted.value.videoId as Video.VideoId,
+							ownerId: inserted.value.ownerId as User.UserId,
+							config: normalizeStoredConfig(inserted.value.config),
+							createdAt: inserted.value.createdAt,
+							updatedAt: inserted.value.updatedAt,
+						} satisfies EditorProject;
+					}
+
 					return {
 						id,
 						videoId,
 						ownerId,
 						config,
-						createdAt: now,
-						updatedAt: now,
+						createdAt: new Date(),
+						updatedAt: new Date(),
 					} satisfies EditorProject;
 				});
 
