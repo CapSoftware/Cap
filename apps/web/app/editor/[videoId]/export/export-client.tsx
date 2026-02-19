@@ -112,6 +112,61 @@ function downloadBlob(blob: Blob, fileName: string) {
 	setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+type SaveTarget =
+	| { kind: "file-handle"; handle: FileSystemFileHandle }
+	| { kind: "download" };
+
+async function writeSaveTarget(
+	target: SaveTarget,
+	blob: Blob,
+	fileName: string,
+) {
+	if (target.kind === "file-handle") {
+		const writable = await target.handle.createWritable();
+		await writable.write(blob);
+		await writable.close();
+	} else {
+		downloadBlob(blob, fileName);
+	}
+
+	const url = URL.createObjectURL(blob);
+	window.open(url, "_blank");
+	setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+async function promptSaveLocation(
+	fileName: string,
+	format: ExportFormat,
+): Promise<SaveTarget | null> {
+	const picker = (window as unknown as Record<string, unknown>)
+		.showSaveFilePicker as
+		| ((opts: unknown) => Promise<FileSystemFileHandle>)
+		| undefined;
+
+	if (typeof picker !== "function") {
+		return { kind: "download" };
+	}
+
+	const accept =
+		format === "gif" ? { "image/gif": [".gif"] } : { "video/mp4": [".mp4"] };
+
+	try {
+		const handle = await picker({
+			suggestedName: fileName,
+			types: [
+				{
+					description: format === "gif" ? "GIF Image" : "MP4 Video",
+					accept,
+				},
+			],
+		});
+		return { kind: "file-handle", handle };
+	} catch (err) {
+		if (err instanceof DOMException && err.name === "AbortError") return null;
+		throw err;
+	}
+}
+
 function evenFloor(value: number) {
 	const floored = Math.floor(value);
 	const even = floored - (floored % 2);
@@ -1197,6 +1252,10 @@ export function ExportClient({
 
 	const handleExport = useCallback(async () => {
 		if (exporting) return;
+
+		const saveTarget = await promptSaveLocation(exportFileName, format);
+		if (!saveTarget) return;
+
 		setExporting(true);
 		setExportProgress({ stage: "idle", progress: 0, message: null });
 
@@ -1210,16 +1269,14 @@ export function ExportClient({
 			if (format === "mp4") {
 				try {
 					const out = await convertMp4IfNeeded(rendered.blob);
-					downloadBlob(out, exportFileName);
+					await writeSaveTarget(saveTarget, out, exportFileName);
 					toast.success("Export complete");
 					return;
 				} catch (error) {
 					const ext = getVideoExtensionFromMimeType(rendered.mimeType);
 					if (ext !== "mp4") {
-						downloadBlob(
-							rendered.blob,
-							exportFileName.replace(/\\.mp4$/u, `.${ext}`),
-						);
+						const fallbackName = exportFileName.replace(/\.mp4$/u, `.${ext}`);
+						await writeSaveTarget(saveTarget, rendered.blob, fallbackName);
 						toast.success("Export complete");
 						return;
 					}
@@ -1228,7 +1285,7 @@ export function ExportClient({
 			}
 
 			const gifBlob = await exportGifFromMp4(rendered.blob);
-			downloadBlob(gifBlob, exportFileName);
+			await writeSaveTarget(saveTarget, gifBlob, exportFileName);
 			toast.success("Export complete");
 		} catch (error) {
 			if (error instanceof Error) toast.error(error.message);
