@@ -80,9 +80,11 @@ export function buildCanView(
 			}
 
 			const allowedEmails = yield* orgsRepo.allowedEmailDomain(video.orgId);
+			const restriction = Option.isSome(allowedEmails)
+				? allowedEmails.value.trim()
+				: "";
 
-			if (Option.isSome(allowedEmails)) {
-				const restriction = allowedEmails.value;
+			if (restriction.length > 0) {
 				if (Option.isNone(user)) {
 					yield* Effect.log(
 						"Email access restriction active and user not logged in. Access denied.",

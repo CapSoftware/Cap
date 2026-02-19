@@ -63,7 +63,7 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 							Effect.map(Array.get(0)),
 							Effect.map(
 								Option.flatMap((row) =>
-									Option.fromNullable(row.allowedEmailDomain),
+									Option.fromNullable(row.allowedEmailDomain?.trim() || null),
 								),
 							),
 						),

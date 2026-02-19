@@ -246,6 +246,24 @@ describe("VideosPolicy.canView", () => {
 			expect(await runCanView(deps, noUser)).toBe("allowed");
 		});
 
+		it("allows anonymous user when restriction is empty string", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				allowedEmailDomain: Option.some(""),
+			});
+
+			expect(await runCanView(deps, noUser)).toBe("allowed");
+		});
+
+		it("allows anonymous user when restriction is whitespace only", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				allowedEmailDomain: Option.some("  "),
+			});
+
+			expect(await runCanView(deps, noUser)).toBe("allowed");
+		});
+
 		it("allows any logged-in user", async () => {
 			const deps = makeDeps({
 				video: makeVideo({ public: true }),
