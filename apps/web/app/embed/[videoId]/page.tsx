@@ -153,7 +153,6 @@ export default async function EmbedVideoPage(
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
-					orgAllowedEmailDomain: organizations.allowedEmailDomain,
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
@@ -202,7 +201,6 @@ async function EmbedContent({
 	video: Omit<typeof videos.$inferSelect, "password"> & {
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
-		orgAllowedEmailDomain?: string | null;
 	};
 	autoplay: boolean;
 }) {
@@ -222,37 +220,6 @@ async function EmbedContent({
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
-	}
-
-	const domainToCheck =
-		video.orgAllowedEmailDomain ??
-		(video.sharedOrganization?.organizationId
-			? (
-					await db()
-						.select({ allowedEmailDomain: organizations.allowedEmailDomain })
-						.from(organizations)
-						.where(
-							eq(organizations.id, video.sharedOrganization.organizationId),
-						)
-						.limit(1)
-				)?.[0]?.allowedEmailDomain
-			: null);
-
-	if (domainToCheck) {
-		if (!user?.email || !user.email.endsWith(`@${domainToCheck}`)) {
-			return (
-				<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-					<h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
-					<p className="mb-2 text-gray-300">
-						This video is only accessible to members of this organization.
-					</p>
-					<p className="text-gray-400">
-						Please sign in with your organization email address to access this
-						content.
-					</p>
-				</div>
-			);
-		}
 	}
 
 	if (

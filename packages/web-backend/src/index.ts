@@ -14,6 +14,10 @@ export { SpacesPolicy } from "./Spaces/SpacesPolicy.ts";
 export { Tinybird } from "./Tinybird/index.ts";
 export { Users } from "./Users/index.ts";
 export { Videos } from "./Videos/index.ts";
-export { VideosPolicy } from "./Videos/VideosPolicy.ts";
+export {
+	buildCanView,
+	VideosPolicy,
+	type VideosPolicyDeps,
+} from "./Videos/VideosPolicy.ts";
 export { VideosRepo } from "./Videos/VideosRepo.ts";
 export * as Workflows from "./Workflows.ts";
