@@ -1,4 +1,4 @@
-import type { RenderSpec } from "@cap/editor-render-spec";
+import { type RenderSpec, scaleRenderSpec } from "@cap/editor-render-spec";
 import { composeFrame } from "./compose-frame";
 import { ImageCache } from "./image-cache";
 import type { RendererOptions, RendererState } from "./types";
@@ -24,7 +24,6 @@ export class EditorRenderer {
 			spec: options.spec,
 			video: null,
 			camera: null,
-			scaleFactor: 1,
 			displayWidth: options.spec.outputWidth,
 			displayHeight: options.spec.outputHeight,
 		};
@@ -71,7 +70,6 @@ export class EditorRenderer {
 
 		this.state = {
 			...this.state,
-			scaleFactor: (displayWidth * dpr) / outputWidth,
 			displayWidth,
 			displayHeight,
 		};
@@ -80,7 +78,7 @@ export class EditorRenderer {
 	render(): void {
 		if (this.destroyed) return;
 
-		const { spec, video, camera, scaleFactor } = this.state;
+		const { spec, video, camera } = this.state;
 
 		if (!video || video.readyState < 2) return;
 
@@ -88,8 +86,7 @@ export class EditorRenderer {
 
 		ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-		ctx.save();
-		ctx.setTransform(scaleFactor, 0, 0, scaleFactor, 0, 0);
+		const displaySpec = scaleRenderSpec(spec, this.canvas.width);
 
 		const videoFrame =
 			video && video.readyState >= 2
@@ -121,15 +118,13 @@ export class EditorRenderer {
 
 		composeFrame(
 			ctx,
-			spec,
+			displaySpec,
 			videoFrame,
 			bgImage,
 			bgImageWidth,
 			bgImageHeight,
 			cameraFrame,
 		);
-
-		ctx.restore();
 	}
 
 	destroy(): void {

@@ -10,7 +10,6 @@ export type RendererState = {
 	spec: RenderSpec;
 	video: HTMLVideoElement | null;
 	camera: HTMLVideoElement | null;
-	scaleFactor: number;
 	displayWidth: number;
 	displayHeight: number;
 };
