@@ -3,6 +3,7 @@
 import {
 	computeRenderSpec,
 	normalizeConfigForRender,
+	scaleRenderSpec,
 } from "@cap/editor-render-spec";
 import { composeFrame, EditorRenderer, ImageCache } from "@cap/editor-renderer";
 import {
@@ -311,6 +312,11 @@ export function ExportClient({
 
 	const abortRef = useRef<AbortController | null>(null);
 
+	const [sourceSize, setSourceSize] = useState(() => ({
+		width: Math.max(2, video.width),
+		height: Math.max(2, video.height),
+	}));
+
 	const normalizedConfig = useMemo(
 		() => normalizeConfigForRender(projectConfig).config,
 		[projectConfig],
@@ -325,33 +331,28 @@ export function ExportClient({
 		}
 
 		const preset = RESOLUTION_PRESETS.find((p) => p.value === resolutionPreset);
-		if (!preset) return { width: video.width, height: video.height };
+		if (!preset) return { width: sourceSize.width, height: sourceSize.height };
 		if (preset.value === "original")
-			return { width: video.width, height: video.height };
+			return { width: sourceSize.width, height: sourceSize.height };
 		return {
-			width: preset.width ?? video.width,
-			height: preset.height ?? video.height,
+			width: preset.width ?? sourceSize.width,
+			height: preset.height ?? sourceSize.height,
 		};
-	}, [resolutionPreset, customWidth, customHeight, video.width, video.height]);
+	}, [
+		resolutionPreset,
+		customWidth,
+		customHeight,
+		sourceSize.width,
+		sourceSize.height,
+	]);
 
 	const sourceSpec = useMemo(
-		() => computeRenderSpec(normalizedConfig, video.width, video.height),
-		[normalizedConfig, video.width, video.height],
+		() =>
+			computeRenderSpec(normalizedConfig, sourceSize.width, sourceSize.height),
+		[normalizedConfig, sourceSize.width, sourceSize.height],
 	);
 
-	const previewSpec = useMemo(
-		() =>
-			computeRenderSpec(
-				normalizedConfig,
-				previewBaseResolution.width,
-				previewBaseResolution.height,
-			),
-		[
-			normalizedConfig,
-			previewBaseResolution.width,
-			previewBaseResolution.height,
-		],
-	);
+	const previewSpec = useMemo(() => sourceSpec, [sourceSpec]);
 
 	const previewSpecRef = useRef(previewSpec);
 	previewSpecRef.current = previewSpec;
@@ -423,6 +424,14 @@ export function ExportClient({
 		previewRendererRef.current?.setVideoSource(videoEl);
 
 		const onLoaded = () => {
+			if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+				setSourceSize((prev) => {
+					const w = videoEl.videoWidth;
+					const h = videoEl.videoHeight;
+					if (prev.width === w && prev.height === h) return prev;
+					return { width: w, height: h };
+				});
+			}
 			setPreviewReady(true);
 			previewRendererRef.current?.render();
 		};
@@ -660,7 +669,6 @@ export function ExportClient({
 
 		const exportWidth = pickA ? widthA : widthB;
 		const exportHeight = pickA ? heightA : heightB;
-		const exportScale = exportWidth / sourceSpec.outputWidth;
 
 		const canvas = document.createElement("canvas");
 		canvas.width = exportWidth;
@@ -756,6 +764,8 @@ export function ExportClient({
 			}
 		};
 
+		const exportSpec = scaleRenderSpec(sourceSpec, exportWidth);
+
 		let rafId = 0;
 		let stopped = false;
 
@@ -791,10 +801,9 @@ export function ExportClient({
 				}
 			}
 
-			ctx.setTransform(exportScale, 0, 0, exportScale, 0, 0);
 			composeFrame(
 				ctx,
-				sourceSpec,
+				exportSpec,
 				videoFrame,
 				bgImage,
 				bgImageWidth,
