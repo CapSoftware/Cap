@@ -210,19 +210,21 @@ impl KeyboardLayer {
 
         let current_time = uniforms.frame_number as f64 / uniforms.frame_rate as f64;
         let settings = &keyboard_data.settings;
-        let fade_duration = settings.fade_duration as f64;
-        let linger_duration = settings.linger_duration as f64;
 
         let active_segment = find_active_keyboard_segment(
             current_time,
             &timeline.keyboard_segments,
-            linger_duration,
-            fade_duration,
+            settings.fade_duration,
         );
 
         let Some(active) = active_segment else {
             return;
         };
+
+        let segment_fade = active
+            .segment
+            .fade_duration_override
+            .unwrap_or(settings.fade_duration) as f64;
 
         let visible_text = build_visible_text(&active.segment, current_time);
 
@@ -234,8 +236,7 @@ impl KeyboardLayer {
             current_time,
             active.segment.start,
             active.segment.end,
-            fade_duration,
-            linger_duration,
+            segment_fade,
         );
 
         if fade_opacity <= 0.0 {
@@ -246,7 +247,7 @@ impl KeyboardLayer {
             current_time,
             active.segment.start,
             active.segment.end,
-            fade_duration,
+            segment_fade,
         );
 
         let (width, height) = (output_size.x, output_size.y);
@@ -482,11 +483,8 @@ struct ActiveKeyboardSegment<'a> {
 fn find_active_keyboard_segment<'a>(
     time: f64,
     segments: &'a [cap_project::KeyboardTrackSegment],
-    linger_duration: f64,
-    fade_duration: f64,
+    default_fade_duration: f32,
 ) -> Option<ActiveKeyboardSegment<'a>> {
-    let extended_end = linger_duration + fade_duration;
-
     for segment in segments {
         if time >= segment.start && time < segment.end {
             return Some(ActiveKeyboardSegment { segment });
@@ -494,7 +492,10 @@ fn find_active_keyboard_segment<'a>(
     }
 
     for segment in segments {
-        if time >= segment.end && time < segment.end + extended_end {
+        let fade = segment
+            .fade_duration_override
+            .unwrap_or(default_fade_duration) as f64;
+        if time >= segment.end && time < segment.end + fade {
             return Some(ActiveKeyboardSegment { segment });
         }
     }
@@ -513,10 +514,8 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
     let chars: Vec<char> = segment.display_text.chars().collect();
 
     for (i, key) in segment.keys.iter().enumerate() {
-        if time_offset_from_start >= key.time_offset {
-            if i < chars.len() {
-                visible.push(chars[i]);
-            }
+        if time_offset_from_start >= key.time_offset && i < chars.len() {
+            visible.push(chars[i]);
         }
     }
 
@@ -527,15 +526,9 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
     visible
 }
 
-fn calculate_fade(
-    current_time: f64,
-    start: f64,
-    end: f64,
-    fade_duration: f64,
-    linger_duration: f64,
-) -> f32 {
+fn calculate_fade(current_time: f64, start: f64, end: f64, fade_duration: f64) -> f32 {
     if fade_duration <= 0.0 {
-        if current_time >= start && current_time < end + linger_duration {
+        if current_time >= start && current_time < end {
             return 1.0;
         }
         return 0.0;
@@ -544,18 +537,16 @@ fn calculate_fade(
     let time_from_start = current_time - start;
     let time_to_end = end - current_time;
 
-    let fade_in = (time_from_start / fade_duration).min(1.0) as f32;
+    let fade_in = (time_from_start / fade_duration).clamp(0.0, 1.0) as f32;
 
-    let effective_time_to_end = time_to_end + linger_duration;
-    let fade_out = if effective_time_to_end > linger_duration {
+    let fade_out = if time_to_end >= 0.0 {
         1.0
-    } else if effective_time_to_end > 0.0 {
-        (effective_time_to_end / fade_duration).min(1.0) as f32
     } else {
-        0.0
+        let past_end = -time_to_end;
+        (1.0 - past_end / fade_duration).clamp(0.0, 1.0) as f32
     };
 
-    fade_in.min(fade_out).max(0.0)
+    fade_in.min(fade_out)
 }
 
 fn calculate_keyboard_bounce(current_time: f64, start: f64, end: f64, fade_duration: f64) -> f64 {
