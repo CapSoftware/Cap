@@ -893,6 +893,11 @@ export function ExportClient({
 		const step = () => {
 			if (controller.signal.aborted || stopped) return;
 
+			if (videoEl.ended) {
+				stopAll();
+				return;
+			}
+
 			const currentTime = videoEl.currentTime;
 			const segment = findSegmentAtTime(segments, currentTime);
 
