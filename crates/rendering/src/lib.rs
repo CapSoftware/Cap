@@ -20,20 +20,6 @@ use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
-static PRECOMPILED_COMPOSITE_PIPELINE: std::sync::OnceLock<
-    Arc<composite_frame::CompositeVideoFramePipeline>,
-> = std::sync::OnceLock::new();
-
-pub fn prewarm_composite_pipeline(device: &wgpu::Device) {
-    let pipeline = composite_frame::CompositeVideoFramePipeline::new(device);
-    let _ = PRECOMPILED_COMPOSITE_PIPELINE.set(Arc::new(pipeline));
-}
-
-pub fn get_precompiled_composite_pipeline()
--> Option<Arc<composite_frame::CompositeVideoFramePipeline>> {
-    PRECOMPILED_COMPOSITE_PIPELINE.get().cloned()
-}
-
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
@@ -2521,11 +2507,7 @@ impl RendererLayers {
     ) -> Self {
         let shared_yuv_pipelines = Arc::new(yuv_converter::YuvConverterPipelines::new(device));
         let shared_composite_pipeline =
-            if let Some(precompiled) = get_precompiled_composite_pipeline() {
-                precompiled
-            } else {
-                Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
-            };
+            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device));
 
         Self {
             background: BackgroundLayer::new(device),
