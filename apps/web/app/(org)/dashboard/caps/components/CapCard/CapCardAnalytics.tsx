@@ -19,6 +19,7 @@ interface CapCardAnalyticsProps {
 	isLoadingAnalytics: boolean;
 	totalReactions: number;
 	isOwner?: boolean;
+	isStudioPending?: boolean;
 }
 
 export const CapCardAnalytics = Object.assign(
@@ -29,6 +30,7 @@ export const CapCardAnalytics = Object.assign(
 		totalReactions,
 		isLoadingAnalytics,
 		isOwner = true,
+		isStudioPending = false,
 	}: CapCardAnalyticsProps) =>
 		isLoadingAnalytics ? (
 			<CapCardAnalytics.Skeleton />
@@ -78,16 +80,24 @@ export const CapCardAnalytics = Object.assign(
 						</Link>
 					</Tooltip>
 				</div>
-				{isOwner && (
-					<Link
-						href={`/dashboard/analytics?capId=${capId}`}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="text-xs text-blue-600 hover:underline"
-					>
-						View analytics
-					</Link>
-				)}
+				{isOwner &&
+					(isStudioPending ? (
+						<Link
+							href={`/editor/${capId}`}
+							className="text-xs text-blue-600 hover:underline"
+						>
+							Go to editor
+						</Link>
+					) : (
+						<Link
+							href={`/dashboard/analytics?capId=${capId}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="text-xs text-blue-600 hover:underline"
+						>
+							View analytics
+						</Link>
+					))}
 			</Shell>
 		),
 	{

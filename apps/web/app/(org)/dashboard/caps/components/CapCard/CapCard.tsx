@@ -97,6 +97,7 @@ export interface CapCardProps extends PropsWithChildren {
 		hasPassword?: boolean;
 		hasActiveUpload: boolean | undefined;
 		duration?: number;
+		source?: { type: string };
 		settings?: {
 			disableComments?: boolean;
 			disableSummary?: boolean;
@@ -145,6 +146,11 @@ export const CapCard = ({
 		cap.hasPassword || false,
 	);
 	const { webUrl } = usePublicEnv();
+
+	const editorRender = (cap.metadata as Record<string, unknown> | undefined)
+		?.editorSavedRender as { status: string } | undefined;
+	const isStudioPending =
+		cap.source?.type === "webStudio" && editorRender?.status !== "COMPLETE";
 
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
@@ -676,7 +682,7 @@ export const CapCard = ({
 						onClick={(e) => {
 							if (isDeleting) e.preventDefault();
 						}}
-						href={`/s/${cap.id}`}
+						href={isStudioPending ? `/editor/${cap.id}` : `/s/${cap.id}`}
 					>
 						{uploadProgress && uploadProgress?.status !== "fetching" && (
 							<>
@@ -831,6 +837,7 @@ export const CapCard = ({
 						isLoadingAnalytics={isLoadingAnalytics}
 						totalComments={cap.totalComments}
 						totalReactions={cap.totalReactions}
+						isStudioPending={isStudioPending}
 					/>
 				</div>
 			</div>

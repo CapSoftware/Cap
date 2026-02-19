@@ -170,6 +170,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				Boolean,
 			),
 			settings: videos.settings,
+			source: videos.source,
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))

@@ -202,6 +202,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 					Boolean,
 				),
+				source: videos.source,
 			})
 			.from(videos)
 			.leftJoin(comments, eq(videos.id, comments.videoId))
@@ -280,6 +281,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 						| undefined,
 					hasPassword: video.hasPassword,
 					hasActiveUpload: video.hasActiveUpload,
+					source: video.source as { type: string } | undefined,
 					foldersData: [], // Empty array since videos in a folder don't need folder data
 				};
 			}),
