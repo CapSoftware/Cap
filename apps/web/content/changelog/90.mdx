@@ -1,0 +1,14 @@
+---
+title: Faster Editor Playback, GPU-Accelerated Exports & Windows Performance
+app: Cap Desktop
+publishedAt: "2026-02-18"
+version: 0.4.7
+image:
+---
+
+- **Dramatically faster editor playback** — Color conversion now happens entirely on the GPU, cutting data transfer by 62% and making scrubbing and playback feel significantly snappier. Frame caching and prefetch logic were also reworked so the editor stays responsive even on longer recordings.
+- **GPU-accelerated exports** — Exports are noticeably faster thanks to a new GPU rendering path with pipelined decoding. When GPU conversion isn't available, an optimized CPU fallback takes over automatically. Export size and time estimates are now much more accurate.
+- **Windows playback performance** — Switched to the native MediaFoundation decoder with zero-copy frame handling and preferred the Dx12 GPU backend, resulting in much lower latency during playback on Windows.
+- **Prewarmed editor GPU pipeline** — The rendering pipeline now initializes in the background at startup, so the editor is ready to play the moment you open it.
+- **Better crop and padding rendering** — Fixed an issue where padding and backgrounds rendered incorrectly when a crop region was applied.
+- **Improved stability** — Graceful shutdown handling to prevent crashes on exit, reliable camera window cleanup when recordings end, and better audio sync for long recordings.
