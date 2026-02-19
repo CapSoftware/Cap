@@ -135,7 +135,7 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
         Keycode::RShift => ("RShift", "RShift"),
         Keycode::LAlt => ("LAlt", "LAlt"),
         Keycode::RAlt => ("RAlt", "RAlt"),
-        Keycode::Meta => ("Meta", "Meta"),
+        Keycode::LMeta => ("Meta", "Meta"),
         Keycode::Enter => ("Enter", "Enter"),
         Keycode::Up => ("Up", "Up"),
         Keycode::Down => ("Down", "Down"),
