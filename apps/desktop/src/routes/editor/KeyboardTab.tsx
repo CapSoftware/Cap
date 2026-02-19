@@ -1,29 +1,38 @@
+import { Button } from "@cap/ui-solid";
+import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
-import { createMemo, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { Toggle } from "~/components/Toggle";
 import {
-	type KeyboardSettings,
 	defaultKeyboardSettings,
+	type KeyboardSettings,
 } from "~/store/keyboard";
+import { commands } from "~/utils/tauri";
+import IconCapChevronDown from "~icons/cap/chevron-down";
 import { useEditorContext } from "./context";
 import {
 	Field,
 	Input,
+	MenuItem,
+	MenuItemList,
+	PopperContent,
 	Slider,
 	Subfield,
+	topSlideAnimateClasses,
 } from "./ui";
 
 export function KeyboardTab() {
-	const { project, setProject, editorState } = useEditorContext();
+	const { project, setProject, editorState, setEditorState } =
+		useEditorContext();
 
 	const getSetting = <K extends keyof KeyboardSettings>(
 		key: K,
 	): NonNullable<KeyboardSettings[K]> => {
 		const settings = project?.keyboard?.settings;
 		if (settings && key in settings) {
-			return (settings as Record<string, unknown>)[key as string] as NonNullable<
-				KeyboardSettings[K]
-			>;
+			return (settings as Record<string, unknown>)[
+				key as string
+			] as NonNullable<KeyboardSettings[K]>;
 		}
 		return defaultKeyboardSettings[key] as NonNullable<KeyboardSettings[K]>;
 	};
@@ -45,6 +54,29 @@ export function KeyboardTab() {
 		() => (project.timeline?.keyboardSegments?.length ?? 0) > 0,
 	);
 
+	const [isGenerating, setIsGenerating] = createSignal(false);
+
+	const generateSegments = async () => {
+		setIsGenerating(true);
+		try {
+			const segments = await commands.generateKeyboardSegments(
+				getSetting("groupingThresholdMs"),
+				getSetting("lingerDuration") * 1000,
+				getSetting("showModifiers"),
+				getSetting("showSpecialKeys"),
+			);
+
+			if (segments.length > 0) {
+				setProject("timeline", "keyboardSegments", segments);
+				setEditorState("timeline", "tracks", "keyboard", true);
+			}
+		} catch (e) {
+			console.error("Failed to generate keyboard segments:", e);
+		} finally {
+			setIsGenerating(false);
+		}
+	};
+
 	const selectedSegment = () => {
 		const selection = editorState.timeline.selection;
 		if (selection?.type !== "keyboard" || selection.indices.length !== 1)
@@ -60,7 +92,7 @@ export function KeyboardTab() {
 	};
 
 	return (
-		<Field name="Keyboard" icon={<IconLucideKeyboard />}>
+		<Field name="Keyboard" icon={<IconLucideKeyboard />} badge="Beta">
 			<div class="flex flex-col gap-4">
 				<Subfield name="Show Keyboard Presses">
 					<Toggle
@@ -75,9 +107,10 @@ export function KeyboardTab() {
 						!getSetting("enabled") && "opacity-50 pointer-events-none",
 					)}
 				>
-					<Field name="Appearance" icon={<IconLucideKeyboard />}>
+					<Field name="Font Settings" icon={<IconLucideKeyboard />}>
 						<div class="space-y-3">
-							<Subfield name="Font Size">
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Size</span>
 								<Slider
 									value={[getSetting("size")]}
 									onChange={(v) => updateSetting("size", v[0])}
@@ -85,19 +118,10 @@ export function KeyboardTab() {
 									maxValue={72}
 									step={1}
 								/>
-							</Subfield>
+							</div>
 
-							<Subfield name="Font Weight">
-								<Slider
-									value={[getSetting("fontWeight")]}
-									onChange={(v) => updateSetting("fontWeight", v[0])}
-									minValue={100}
-									maxValue={900}
-									step={100}
-								/>
-							</Subfield>
-
-							<Subfield name="Background Opacity">
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Background Opacity</span>
 								<Slider
 									value={[getSetting("backgroundOpacity")]}
 									onChange={(v) => updateSetting("backgroundOpacity", v[0])}
@@ -105,13 +129,77 @@ export function KeyboardTab() {
 									maxValue={100}
 									step={1}
 								/>
-							</Subfield>
+							</div>
 						</div>
 					</Field>
 
-					<Field name="Behavior" icon={<IconLucideKeyboard />}>
+					<Field name="Font Weight" icon={<IconLucideKeyboard />}>
+						<KSelect
+							options={[
+								{ label: "Normal", value: 400 },
+								{ label: "Medium", value: 500 },
+								{ label: "Bold", value: 700 },
+							]}
+							optionValue="value"
+							optionTextValue="label"
+							value={{
+								label: "Custom",
+								value: getSetting("fontWeight"),
+							}}
+							onChange={(value) => {
+								if (!value) return;
+								updateSetting("fontWeight", value.value);
+							}}
+							itemComponent={(selectItemProps) => (
+								<MenuItem<typeof KSelect.Item>
+									as={KSelect.Item}
+									item={selectItemProps.item}
+								>
+									<KSelect.ItemLabel class="flex-1">
+										{selectItemProps.item.rawValue.label}
+									</KSelect.ItemLabel>
+								</MenuItem>
+							)}
+						>
+							<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+								<KSelect.Value<{
+									label: string;
+									value: number;
+								}> class="truncate">
+									{(state) => {
+										const selected = state.selectedOption();
+										if (selected) return selected.label;
+										const weight = getSetting("fontWeight");
+										const option = [
+											{ label: "Normal", value: 400 },
+											{ label: "Medium", value: 500 },
+											{ label: "Bold", value: 700 },
+										].find((o) => o.value === weight);
+										return option ? option.label : "Bold";
+									}}
+								</KSelect.Value>
+								<KSelect.Icon>
+									<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+								</KSelect.Icon>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={cx(topSlideAnimateClasses, "z-50")}
+								>
+									<MenuItemList<typeof KSelect.Listbox>
+										class="overflow-y-auto max-h-40"
+										as={KSelect.Listbox}
+									/>
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
+					</Field>
+
+					<Field name="Animation" icon={<IconLucideKeyboard />}>
 						<div class="space-y-3">
-							<Subfield name="Fade Duration">
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Fade Duration</span>
 								<Slider
 									value={[getSetting("fadeDuration") * 100]}
 									onChange={(v) => updateSetting("fadeDuration", v[0] / 100)}
@@ -122,9 +210,10 @@ export function KeyboardTab() {
 								<span class="text-xs text-gray-11 text-right">
 									{(getSetting("fadeDuration") * 1000).toFixed(0)}ms
 								</span>
-							</Subfield>
+							</div>
 
-							<Subfield name="Linger Duration">
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Linger Duration</span>
 								<Slider
 									value={[getSetting("lingerDuration") * 100]}
 									onChange={(v) => updateSetting("lingerDuration", v[0] / 100)}
@@ -135,9 +224,10 @@ export function KeyboardTab() {
 								<span class="text-xs text-gray-11 text-right">
 									{(getSetting("lingerDuration") * 1000).toFixed(0)}ms
 								</span>
-							</Subfield>
+							</div>
 
-							<Subfield name="Grouping Threshold">
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Grouping Threshold</span>
 								<Slider
 									value={[getSetting("groupingThresholdMs")]}
 									onChange={(v) => updateSetting("groupingThresholdMs", v[0])}
@@ -148,27 +238,51 @@ export function KeyboardTab() {
 								<span class="text-xs text-gray-11 text-right">
 									{getSetting("groupingThresholdMs").toFixed(0)}ms
 								</span>
-							</Subfield>
-
-							<Subfield name="Show Modifier Keys">
-								<Toggle
-									checked={getSetting("showModifiers")}
-									onChange={(checked) =>
-										updateSetting("showModifiers", checked)
-									}
-								/>
-							</Subfield>
-
-							<Subfield name="Show Special Keys">
-								<Toggle
-									checked={getSetting("showSpecialKeys")}
-									onChange={(checked) =>
-										updateSetting("showSpecialKeys", checked)
-									}
-								/>
-							</Subfield>
+							</div>
 						</div>
 					</Field>
+
+					<Field name="Behavior" icon={<IconLucideKeyboard />}>
+						<div class="space-y-3">
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center justify-between">
+									<span class="text-gray-11 text-sm">Show Modifier Keys</span>
+									<Toggle
+										checked={getSetting("showModifiers")}
+										onChange={(checked) =>
+											updateSetting("showModifiers", checked)
+										}
+									/>
+								</div>
+							</div>
+
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center justify-between">
+									<span class="text-gray-11 text-sm">Show Special Keys</span>
+									<Toggle
+										checked={getSetting("showSpecialKeys")}
+										onChange={(checked) =>
+											updateSetting("showSpecialKeys", checked)
+										}
+									/>
+								</div>
+							</div>
+						</div>
+					</Field>
+
+					<div class="pt-2">
+						<Button
+							onClick={generateSegments}
+							disabled={isGenerating()}
+							class="w-full"
+						>
+							{isGenerating()
+								? "Generating..."
+								: hasKeyboardSegments()
+									? "Regenerate Keyboard Segments"
+									: "Generate Keyboard Segments"}
+						</Button>
+					</div>
 
 					<Show when={selectedSegment()}>
 						{(seg) => (
@@ -253,10 +367,10 @@ export function KeyboardTab() {
 
 					<Show when={!hasKeyboardSegments()}>
 						<div class="text-center text-sm text-gray-11 py-4">
-							<p>No keyboard events recorded.</p>
+							<p>No keyboard segments yet.</p>
 							<p class="text-xs mt-1 text-gray-10">
-								Keyboard presses are automatically recorded during studio mode
-								recording.
+								Click "Generate Keyboard Segments" to create segments from
+								recorded keyboard presses.
 							</p>
 						</div>
 					</Show>
