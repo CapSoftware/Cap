@@ -431,11 +431,18 @@ impl MultipleSegment {
     }
 
     pub fn keyboard_events(&self, meta: &RecordingMeta) -> KeyboardEvents {
-        let Some(keyboard_path) = &self.keyboard else {
+        let keyboard_path = self.keyboard.clone().or_else(|| {
+            let display_dir = self.display.path.parent()?;
+            let fallback = display_dir.join("keyboard.json");
+            let full = meta.path(&fallback);
+            full.exists().then_some(fallback)
+        });
+
+        let Some(keyboard_path) = keyboard_path else {
             return KeyboardEvents::default();
         };
 
-        let full_path = meta.path(keyboard_path);
+        let full_path = meta.path(&keyboard_path);
 
         match KeyboardEvents::load_from_file(&full_path) {
             Ok(data) => data,
