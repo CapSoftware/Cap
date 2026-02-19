@@ -54,7 +54,7 @@ use cap_recording::{
     },
     sources::screen_capture::ScreenCaptureTarget,
 };
-use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
+use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
@@ -2446,7 +2446,6 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     let updated_auth = AuthStore {
         secret: auth.secret,
         user_id: auth.user_id,
-        intercom_hash: auth.intercom_hash,
         plan: Some(Plan {
             upgraded: is_pro,
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),
@@ -3419,16 +3418,46 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 });
                             }
                             CapWindowId::Main => {
-                                let app = app.clone();
-                                tokio::spawn(async move {
-                                    let state = app.state::<ArcLock<App>>();
-                                    let app_state = state.read().await;
-                                    if !app_state.is_recording_active_or_pending()
-                                        && let Some(camera_window) = CapWindowId::Camera.get(&app)
-                                    {
+                                api.prevent_close();
+                                let _ = window.hide();
+
+                                let state = app.state::<ArcLock<App>>();
+                                let is_recording = state
+                                    .try_read()
+                                    .map(|s| s.is_recording_active_or_pending())
+                                    .unwrap_or(true);
+
+                                if !is_recording {
+                                    if let Some(camera_window) = CapWindowId::Camera.get(app) {
                                         let _ = camera_window.hide();
                                     }
-                                });
+
+                                    for (id, overlay_window) in app.webview_windows() {
+                                        if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+                                            CapWindowId::from_str(&id)
+                                        {
+                                            let _ = overlay_window.hide();
+                                        }
+                                    }
+
+                                    let app = app.clone();
+                                    tokio::spawn(async move {
+                                        let state = app.state::<ArcLock<App>>();
+                                        let app_state = &mut *state.write().await;
+
+                                        app_state.camera_preview.pause();
+
+                                        let _ =
+                                            app_state.mic_feed.ask(microphone::RemoveInput).await;
+                                        let _ = app_state
+                                            .camera_feed
+                                            .ask(feeds::camera::RemoveInput)
+                                            .await;
+
+                                        app_state.selected_mic_label = None;
+                                        app_state.camera_in_use = false;
+                                    });
+                                }
                             }
                             _ => {}
                         }
@@ -3451,17 +3480,15 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     }
                                 }
 
+                                if let Some(camera) = CapWindowId::Camera.get(&app) {
+                                    let _ = camera.hide();
+                                }
+
                                 tokio::spawn(async move {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
-                                    let camera_window_open =
-                                        CapWindowId::Camera.get(&app).is_some();
-
-                                    if !app_state.is_recording_active_or_pending()
-                                        && !camera_window_open
-                                        && !app_state.camera_in_use
-                                    {
+                                    if !app_state.is_recording_active_or_pending() {
                                         let _ =
                                             app_state.mic_feed.ask(microphone::RemoveInput).await;
                                         let _ = app_state
@@ -3471,6 +3498,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
+                                        app_state.camera_in_use = false;
                                     }
                                 });
                             }
@@ -3680,6 +3708,21 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     api.prevent_exit();
                 }
             }
+            tauri::RunEvent::Exit => {
+                let handle = _handle.clone();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let state = handle.state::<ArcLock<App>>();
+                    let _ = tauri::async_runtime::block_on(async {
+                        tokio::time::timeout(Duration::from_secs(2), async {
+                            let app_state = &mut *state.write().await;
+                            let _ = app_state.mic_feed.ask(microphone::RemoveInput).await;
+                            let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+                            app_state.camera_in_use = false;
+                        })
+                        .await
+                    });
+                }));
+            }
             _ => {}
         });
 }
@@ -3853,11 +3896,23 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
-    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+    frame_cb: Box<dyn FnMut(cap_editor::EditorFrameOutput) + Send>,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
     wait_for_recording_ready(&app, &path).await?;
+
+    let shared_device = if let Some(shared) = gpu_context::get_shared_gpu().await {
+        Some(cap_rendering::SharedWgpuDevice {
+            instance: (*shared.instance).clone(),
+            adapter: (*shared.adapter).clone(),
+            device: (*shared.device).clone(),
+            queue: (*shared.queue).clone(),
+            is_software_adapter: shared.is_software_adapter,
+        })
+    } else {
+        None
+    };
 
     let instance = {
         let app = app.clone();
@@ -3867,6 +3922,7 @@ async fn create_editor_instance_impl(
                 let _ = EditorStateChanged::new(state).emit(&app);
             },
             frame_cb,
+            shared_device,
         )
         .await?
     };

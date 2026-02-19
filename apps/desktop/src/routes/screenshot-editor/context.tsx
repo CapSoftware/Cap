@@ -38,7 +38,7 @@ function convertNv12ToRgba(
 	const ySize = yStride * height;
 	const yPlane = nv12Data;
 	const uvPlane = nv12Data.subarray(ySize);
-	const uvStride = width;
+	const uvStride = yStride;
 
 	for (let row = 0; row < height; row++) {
 		const yRowOffset = row * yStride;
@@ -285,7 +285,7 @@ function createScreenshotEditorContext() {
 				if (!width || !height) return;
 
 				const ySize = yStride * height;
-				const uvSize = width * (height / 2);
+				const uvSize = yStride * (height / 2);
 				const totalSize = ySize + uvSize;
 
 				const nv12Data = new Uint8ClampedArray(buffer, 0, totalSize);
@@ -409,8 +409,8 @@ function createScreenshotEditorContext() {
 		const outputAspect = frameSize.width / frameSize.height;
 
 		const paddingFactor = (padding / 100.0) * SCREEN_MAX_PADDING;
-		const paddingPixels =
-			Math.max(frameSize.width, frameSize.height) * paddingFactor;
+		const cropBasis = Math.max(cropWidth, cropHeight);
+		const paddingPixels = cropBasis * paddingFactor;
 
 		const availableWidth = frameSize.width - 2 * paddingPixels;
 		const availableHeight = frameSize.height - 2 * paddingPixels;

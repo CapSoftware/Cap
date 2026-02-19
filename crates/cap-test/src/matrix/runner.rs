@@ -362,39 +362,39 @@ impl CompatMatrixRunner {
         let mut blocking_failures = Vec::new();
 
         for result in &matrix_results.results {
-            if let Some(classification) = classify_test_failure(result) {
-                if classification.is_blocking() {
-                    blocking_failures.push(BlockingFailure {
-                        test_id: result.test_id.clone(),
-                        test_name: result.name.clone(),
-                        classification,
-                        reason: result
-                            .failure_reason
-                            .clone()
-                            .unwrap_or_else(|| "Unknown failure".to_string()),
-                        reproduction_steps: build_reproduction_steps(result),
-                    });
-                }
+            if let Some(classification) = classify_test_failure(result)
+                && classification.is_blocking()
+            {
+                blocking_failures.push(BlockingFailure {
+                    test_id: result.test_id.clone(),
+                    test_name: result.name.clone(),
+                    classification,
+                    reason: result
+                        .failure_reason
+                        .clone()
+                        .unwrap_or_else(|| "Unknown failure".to_string()),
+                    reproduction_steps: build_reproduction_steps(result),
+                });
             }
         }
 
         for scenario in &scenario_results {
-            if let Some(classification) = &scenario.failure_classification {
-                if classification.is_blocking() {
-                    blocking_failures.push(BlockingFailure {
-                        test_id: scenario.scenario_id.clone(),
-                        test_name: scenario.scenario_name.clone(),
-                        classification: *classification,
-                        reason: scenario
-                            .failure_reason
-                            .clone()
-                            .unwrap_or_else(|| "Unknown failure".to_string()),
-                        reproduction_steps: vec![format!(
-                            "Run: cap-test compat-matrix --interactive (scenario: {})",
-                            scenario.scenario_name
-                        )],
-                    });
-                }
+            if let Some(classification) = &scenario.failure_classification
+                && classification.is_blocking()
+            {
+                blocking_failures.push(BlockingFailure {
+                    test_id: scenario.scenario_id.clone(),
+                    test_name: scenario.scenario_name.clone(),
+                    classification: *classification,
+                    reason: scenario
+                        .failure_reason
+                        .clone()
+                        .unwrap_or_else(|| "Unknown failure".to_string()),
+                    reproduction_steps: vec![format!(
+                        "Run: cap-test compat-matrix --interactive (scenario: {})",
+                        scenario.scenario_name
+                    )],
+                });
             }
         }
 

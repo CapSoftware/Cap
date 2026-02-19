@@ -1,6 +1,7 @@
+import { buildEnv } from "@cap/env";
 import type { PropsWithChildren } from "react";
 import { formatStarCount, getGitHubStars } from "@/utils/github";
-import { Intercom } from "../Layout/Intercom";
+import { MessengerWidget } from "../Layout/MessengerWidget";
 import { Footer } from "./Footer";
 import { Navbar } from "./Navbar";
 
@@ -13,7 +14,7 @@ export default async function Layout(props: PropsWithChildren) {
 			<Navbar stars={stars} />
 			{props.children}
 			<Footer />
-			<Intercom />
+			{buildEnv.NEXT_PUBLIC_IS_CAP === "true" && <MessengerWidget />}
 		</>
 	);
 }

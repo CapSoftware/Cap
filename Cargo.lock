@@ -1315,6 +1315,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1389,6 +1391,7 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
+ "chrono",
  "clap",
  "directories 6.0.0",
  "ffmpeg-next",
@@ -1406,6 +1409,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 
@@ -9100,8 +9104,6 @@ dependencies = [
 [[package]]
 name = "tao"
 version = "0.34.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "959469667dbcea91e5485fc48ba7dd6023face91bb0f1a14681a70f99847c3f7"
 dependencies = [
  "bitflags 2.9.4",
  "block2 0.6.1",

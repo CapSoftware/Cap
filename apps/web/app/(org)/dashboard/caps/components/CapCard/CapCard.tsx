@@ -412,6 +412,8 @@ export const CapCard = ({
 				sharedSpaces={cap.sharedSpaces || []}
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={cap.public}
+				hasPassword={passwordProtected}
+				onPasswordUpdated={handlePasswordUpdated}
 			/>
 			<SettingsDialog
 				isOpen={isSettingsDialogOpen}

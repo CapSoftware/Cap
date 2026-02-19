@@ -291,6 +291,14 @@ export const ProCard = () => {
 						/>
 						<span className="text-gray-4">Shared team spaces</span>
 					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faCloud}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Loom video importer</span>
+					</li>
 				</ul>
 			</div>
 

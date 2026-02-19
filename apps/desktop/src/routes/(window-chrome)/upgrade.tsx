@@ -165,7 +165,6 @@ export default function Page() {
 	//         token,
 	//         user_id,
 	//         expires,
-	//         intercom_hash: existingAuth?.intercom_hash ?? "",
 	//         plan: {
 	//           upgraded: false,
 	//           last_checked: 0,

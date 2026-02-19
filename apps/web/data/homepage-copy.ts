@@ -185,6 +185,11 @@ export const homepageCopy: HomePageCopy = {
 				description:
 					"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording. AI features that actually save time instead of creating more work.",
 			},
+			{
+				title: "Import your Loom videos",
+				description:
+					"Switching from Loom? Import your existing Loom recordings directly into Cap with our built-in video importer. Keep all your content in one place without starting from scratch.",
+			},
 		],
 	},
 	testimonials: {
@@ -233,6 +238,7 @@ export const homepageCopy: HomePageCopy = {
 				"Password protected shares",
 				"Viewer analytics & engagement",
 				"Team workspaces",
+				"Loom video importer",
 				"Custom S3 bucket support",
 				"Priority support & early features",
 			],
@@ -274,7 +280,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "How is Cap different from Loom?",
 				answer:
-					"Cap gives you the best of both worlds: the simplicity of Loom with the power of professional tools. We're open source, support custom storage, offer better pricing, and our desktop app works offline. Plus, you actually own your content.",
+					"Cap gives you the best of both worlds: the simplicity of Loom with the power of professional tools. We're open source, support custom storage, offer better pricing, and our desktop app works offline. Plus, you actually own your content. Already using Loom? Our built-in Loom video importer makes switching effortless.",
 			},
 			{
 				question: "What happens to my recordings if I cancel?",

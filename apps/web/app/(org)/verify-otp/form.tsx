@@ -70,14 +70,15 @@ export function VerifyOTPForm({
 		}
 	};
 
+	const normalizedEmail = email.toLowerCase();
+
 	const handleVerify = useMutation({
 		mutationFn: async () => {
 			const otpCode = code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
 			);
 
 			if (!res.url.includes("/login-success")) {
@@ -115,7 +116,7 @@ export function VerifyOTPForm({
 			}
 
 			const result = await signIn("email", {
-				email,
+				email: normalizedEmail,
 				redirect: false,
 			});
 
@@ -164,7 +165,7 @@ export function VerifyOTPForm({
 					Enter verification code
 				</h1>
 				<p className="text-sm text-gray-10">
-					We sent a 6-digit code to {email}
+					We sent a 6-digit code to {normalizedEmail}
 				</p>
 			</div>
 

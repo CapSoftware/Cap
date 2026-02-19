@@ -7,6 +7,7 @@ import ClapIcon from "./Clap";
 import CogIcon from "./Cog";
 import DownloadIcon from "./Download";
 import HomeIcon from "./Home";
+import ImportIcon from "./Import";
 import LayersIcon from "./Layers";
 import LogoutIcon from "./Logout";
 import ReactionIcon from "./Reaction";
@@ -20,6 +21,7 @@ export {
 	CogIcon,
 	DownloadIcon,
 	HomeIcon,
+	ImportIcon,
 	LayersIcon,
 	LogoutIcon,
 	SettingsGearIcon,

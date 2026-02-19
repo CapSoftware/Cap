@@ -1,4 +1,3 @@
-import * as crypto from "node:crypto";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
@@ -10,7 +9,7 @@ import {
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
@@ -344,24 +343,19 @@ app.get("/plan", withAuth, async (c) => {
 		}
 	}
 
-	let intercomHash = "";
-	const intercomSecret = serverEnv().INTERCOM_SECRET;
-	if (intercomSecret) {
-		intercomHash = crypto
-			.createHmac("sha256", intercomSecret)
-			.update(user?.id ?? "")
-			.digest("hex");
-	}
-
 	return c.json({
 		upgraded: isSubscribed,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
-		intercomHash: intercomHash,
 	});
 });
 
 app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
+
+	const memberOrgIds = db()
+		.select({ id: organizationMembers.organizationId })
+		.from(organizationMembers)
+		.where(eq(organizationMembers.userId, user.id));
 
 	const orgs = await db()
 		.select({
@@ -370,20 +364,15 @@ app.get("/organizations", withAuth, async (c) => {
 			ownerId: organizations.ownerId,
 		})
 		.from(organizations)
-		.leftJoin(
-			organizationMembers,
-			eq(organizations.id, organizationMembers.organizationId),
-		)
 		.where(
 			and(
 				isNull(organizations.tombstoneAt),
 				or(
 					eq(organizations.ownerId, user.id),
-					eq(organizationMembers.userId, user.id),
+					inArray(organizations.id, memberOrgIds),
 				),
 			),
-		)
-		.groupBy(organizations.id);
+		);
 
 	return c.json(orgs);
 });

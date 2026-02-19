@@ -41,6 +41,7 @@ export type ExtendedDisplayMediaStreamOptions = DisplayMediaStreamOptions & {
 	surfaceSwitching?: "include" | "exclude";
 	selfBrowserSurface?: "include" | "exclude";
 	preferCurrentTab?: boolean;
+	systemAudio?: "include" | "exclude";
 };
 
 export type DetectedDisplayRecordingMode = Exclude<

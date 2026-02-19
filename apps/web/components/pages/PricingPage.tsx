@@ -85,7 +85,8 @@ export const PricingPage = () => {
 						>
 							Cap is currently in public beta, and we're offering special early
 							adopter pricing to our first users. This pricing will be locked in
-							for the lifetime of your subscription.
+							for the lifetime of your subscription. Switching from Loom? Import
+							all your existing videos with our built-in Loom importer.
 						</motion.p>
 						<motion.div
 							onClick={scrollToTestimonials}

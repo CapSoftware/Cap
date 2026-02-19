@@ -122,15 +122,15 @@ export const authOptions = (): NextAuthOptions => {
 				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
 				if (!allowedDomains) return true;
 
-				// Get email from either user object (OAuth) or email parameter (email provider)
-				const userEmail =
+				const rawEmail =
 					user?.email ||
 					(typeof email === "string"
 						? email
 						: typeof credentials?.email === "string"
 							? credentials.email
 							: null);
-				if (!userEmail || typeof userEmail !== "string") return true;
+				if (!rawEmail || typeof rawEmail !== "string") return true;
+				const userEmail = rawEmail.toLowerCase();
 
 				const [existingUser] = await db()
 					.select()
@@ -162,26 +162,36 @@ export const authOptions = (): NextAuthOptions => {
 				return session;
 			},
 			async jwt({ token, user }) {
-				const [dbUser] = await db()
-					.select()
-					.from(users)
-					.where(eq(users.email, token.email || ""))
-					.limit(1);
+				if (user || !token.id) {
+					const [dbUser] = await db()
+						.select({
+							id: users.id,
+							name: users.name,
+							lastName: users.lastName,
+							email: users.email,
+							image: users.image,
+						})
+						.from(users)
+						.where(eq(users.email, (token.email || "").toLowerCase()))
+						.limit(1);
 
-				if (!dbUser) {
-					if (user) {
-						token.id = user?.id;
+					if (!dbUser) {
+						if (user) {
+							token.id = user?.id;
+						}
+						return token;
 					}
-					return token;
+
+					return {
+						id: dbUser.id,
+						name: dbUser.name,
+						lastName: dbUser.lastName,
+						email: dbUser.email,
+						picture: dbUser.image,
+					};
 				}
 
-				return {
-					id: dbUser.id,
-					name: dbUser.name,
-					lastName: dbUser.lastName,
-					email: dbUser.email,
-					picture: dbUser.image,
-				};
+				return token;
 			},
 		},
 	};

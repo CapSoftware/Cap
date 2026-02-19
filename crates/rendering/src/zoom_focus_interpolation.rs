@@ -16,7 +16,7 @@ struct SmoothedFocusEvent {
 
 pub struct ZoomFocusInterpolator {
     events: Option<Vec<SmoothedFocusEvent>>,
-    cursor_events: CursorEvents,
+    cursor_events: std::sync::Arc<CursorEvents>,
     cursor_smoothing: Option<SpringMassDamperSimulationConfig>,
     screen_spring: ScreenMovementSpring,
     duration_secs: f64,
@@ -31,7 +31,22 @@ impl ZoomFocusInterpolator {
     ) -> Self {
         Self {
             events: None,
-            cursor_events: cursor_events.clone(),
+            cursor_events: std::sync::Arc::new(cursor_events.clone()),
+            cursor_smoothing,
+            screen_spring,
+            duration_secs,
+        }
+    }
+
+    pub fn new_arc(
+        cursor_events: std::sync::Arc<CursorEvents>,
+        cursor_smoothing: Option<SpringMassDamperSimulationConfig>,
+        screen_spring: ScreenMovementSpring,
+        duration_secs: f64,
+    ) -> Self {
+        Self {
+            events: None,
+            cursor_events,
             cursor_smoothing,
             screen_spring,
             duration_secs,

@@ -1514,17 +1514,27 @@ pub async fn take_screenshot(
     Ok(image_path)
 }
 
-// runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,
     recording: Result<CompletedRecording, String>,
     app: &mut App,
     recording_dir: PathBuf,
 ) -> Result<(), String> {
-    // Clear current recording, just in case :)
-    app.clear_current_recording();
+    let cleared = app.clear_current_recording();
     app.disconnected_inputs.clear();
     app.camera_in_use = false;
+
+    if recording.is_err()
+        && let Some(InProgressRecording::Instant {
+            progressive_upload,
+            video_upload_info,
+            ..
+        }) = cleared
+    {
+        info!("Aborting progressive upload due to recording failure");
+        progressive_upload.handle.abort();
+        crate::upload::emit_upload_complete(&handle, &video_upload_info.id);
+    }
 
     if app.was_camera_only_recording {
         app.was_camera_only_recording = false;
@@ -1574,17 +1584,17 @@ async fn handle_recording_end(
         let _ = window.hide();
     }
 
+    if let Some(camera) = CapWindowId::Camera.get(&handle) {
+        let _ = camera.hide();
+    }
+
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.hide();
-        }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
-        app.camera_in_use = false;
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
@@ -1796,33 +1806,62 @@ async fn handle_recording_finish(
 	                                }
 
                             }
-                    } else if let Ok(meta) = build_video_meta(&output_path)
-                        .map_err(|err| error!("Error getting video metadata: {}", err))
-                    {
-                        // The upload_video function handles screenshot upload, so we can pass it along
-                        upload_video(
-                            &app,
-                            video_upload_info.id.clone(),
-                            output_path,
-                            display_screenshot.clone(),
-                            meta,
-                            None,
-                        )
-                        .await
-                        .map(|_| info!("Final video upload with screenshot completed successfully"))
-                        .map_err(|error| {
-                            error!("Error in upload_video: {error}");
-
-                            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
-                                meta.upload = Some(UploadMeta::Failed {
-                                    error: error.to_string(),
-                                });
-                                meta.save_for_project()
-                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
-                                    .ok();
+                    } else {
+                        let meta = match build_video_meta(&output_path) {
+                            Ok(m) => Some(m),
+                            Err(err) => {
+                                error!("Error getting video metadata: {err}");
+                                warn!(
+                                    "Attempting to repair corrupt recording before fallback upload"
+                                );
+                                match crate::upload::try_repair_corrupt_mp4(&output_path) {
+                                    Ok(()) => {
+                                        info!("Repair succeeded, retrying metadata extraction");
+                                        build_video_meta(&output_path)
+                                            .map_err(|e| {
+                                                error!("Still unreadable after repair: {e}")
+                                            })
+                                            .ok()
+                                    }
+                                    Err(e) => {
+                                        error!("Repair failed: {e}");
+                                        None
+                                    }
+                                }
                             }
-                        })
-                        .ok();
+                        };
+
+                        if let Some(meta) = meta {
+                            upload_video(
+                                &app,
+                                video_upload_info.id.clone(),
+                                output_path,
+                                display_screenshot.clone(),
+                                meta,
+                                None,
+                            )
+                            .await
+                            .map(|_| {
+                                info!("Final video upload with screenshot completed successfully")
+                            })
+                            .map_err(|error| {
+                                error!("Error in upload_video: {error}");
+
+                                if let Ok(mut meta) =
+                                    RecordingMeta::load_for_project(&recording_dir)
+                                {
+                                    meta.upload = Some(UploadMeta::Failed {
+                                        error: error.to_string(),
+                                    });
+                                    meta.save_for_project()
+                                        .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                        .ok();
+                                }
+                            })
+                            .ok();
+                        } else {
+                            crate::upload::emit_upload_complete(&app, &video_upload_info.id);
+                        }
                     }
                 }
             });

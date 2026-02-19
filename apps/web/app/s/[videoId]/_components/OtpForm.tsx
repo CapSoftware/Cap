@@ -70,13 +70,15 @@ const OtpForm = ({
 		}
 	};
 
+	const normalizedEmail = email.toLowerCase();
+
 	const handleVerify = useMutation({
 		mutationFn: async () => {
 			const otpCode = code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
 			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
 			);
 
 			if (!res.url.includes("/login-success")) {
@@ -114,7 +116,7 @@ const OtpForm = ({
 			}
 
 			const result = await signIn("email", {
-				email,
+				email: normalizedEmail,
 				redirect: false,
 			});
 

@@ -9,7 +9,7 @@ export const loomAlternativeContent: SeoPageContent = {
 	title:
 		"The Ultimate Loom Alternative: Why Cap is the Best Open-Source Screen Recorder for Mac & Windows",
 	description:
-		"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows. See why users are switching today!",
+		"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows with a built-in Loom video importer. See why users are switching today!",
 
 	featuresTitle: "Why Cap is the Best Loom Alternative",
 	featuresDescription:
@@ -45,6 +45,11 @@ export const loomAlternativeContent: SeoPageContent = {
 			title: "Cross-Platform Support",
 			description:
 				"Available for both Mac and Windows, Cap delivers consistent performance across platforms. A perfect <a href='/screen-recording-software'>screen recording software</a> for all users.",
+		},
+		{
+			title: "Built-In Loom Video Importer",
+			description:
+				"Already using Loom? Cap's built-in video importer lets you seamlessly transfer your existing Loom recordings into Cap. No need to start from scratch — bring all your content with you when you switch.",
 		},
 	],
 
@@ -99,6 +104,11 @@ export const loomAlternativeContent: SeoPageContent = {
 			description:
 				"Cap's built-in thread commenting on shareable links makes it easy to collect feedback and collaborate without switching between different tools.",
 		},
+		{
+			title: "Effortless Migration from Loom",
+			description:
+				"Cap's built-in Loom video importer makes switching painless. Import your existing Loom recordings directly into Cap and keep all your content organized in one place — no downloads or re-uploads required.",
+		},
 	],
 
 	faqsTitle: "Frequently Asked Questions",
@@ -127,6 +137,11 @@ export const loomAlternativeContent: SeoPageContent = {
 			question: "Does Cap support collaboration features?",
 			answer:
 				"Yes, Cap includes built-in thread commenting on shareable links, making it easy to collaborate with teammates and collect feedback directly on your recordings. This keeps all your communication in one place.",
+		},
+		{
+			question: "Can I import my existing Loom videos into Cap?",
+			answer:
+				"Yes! Cap Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content.",
 		},
 	],
 
@@ -169,11 +184,16 @@ export const loomAlternativeContent: SeoPageContent = {
 				{ text: "Connect your own S3", status: "positive" },
 				{ text: "Not available", status: "negative" },
 			],
-			[
-				"Community Input",
-				{ text: "Direct via open source", status: "positive" },
-				{ text: "Limited", status: "neutral" },
-			],
+		[
+			"Community Input",
+			{ text: "Direct via open source", status: "positive" },
+			{ text: "Limited", status: "neutral" },
+		],
+		[
+			"Loom Video Import",
+			{ text: "Built-in importer", status: "positive" },
+			{ text: "Not available", status: "negative" },
+		],
 			[
 				"Data Ownership",
 				{ text: "100% with own storage", status: "positive" },
@@ -185,7 +205,8 @@ export const loomAlternativeContent: SeoPageContent = {
 		title: "How to Get Started with Cap (Easy Guide)",
 		steps: [
 			"Download Cap for your operating system (Mac or Windows)",
-			"Launch the application",
+			"Launch the application and sign in to your Cap account",
+			"Import your existing Loom videos using Cap's built-in Loom video importer",
 			"Start recording using either Instant Mode or Studio Mode",
 			"Share your recordings easily with Cap's built-in sharing features",
 			"Optional: Connect your own S3 storage and custom domain for complete data ownership",

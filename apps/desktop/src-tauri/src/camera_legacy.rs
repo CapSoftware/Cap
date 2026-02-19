@@ -60,12 +60,13 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
 
             frame_tx_clone
                 .send(WSFrame {
-                    data: frame.data(0).to_vec(),
+                    data: std::sync::Arc::new(frame.data(0).to_vec()),
                     width: frame.width(),
                     height: frame.height(),
                     stride: frame.stride(0) as u32,
                     frame_number: 0,
                     target_time_ns: 0,
+                    format: crate::frame_ws::WSFrameFormat::Rgba,
                     created_at: Instant::now(),
                 })
                 .ok();

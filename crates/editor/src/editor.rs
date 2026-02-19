@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
-    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
+    DecodedSegmentFrames, FrameRenderer, Nv12RenderedFrame, ProjectRecordingsMeta, ProjectUniforms,
     RenderVideoConstants, RenderedFrame, RendererLayers,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -21,10 +21,18 @@ pub enum RendererMessage {
     },
 }
 
+pub enum EditorFrameOutput {
+    Rgba(RenderedFrame),
+    Nv12(Nv12RenderedFrame),
+}
+
+pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
+
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+    frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
     render_constants: Arc<RenderVideoConstants>,
+    layers_rx: RendererLayersReceiver,
     #[allow(unused)]
     total_frames: u32,
 }
@@ -33,12 +41,32 @@ pub struct RendererHandle {
     tx: mpsc::Sender<RendererMessage>,
 }
 
+pub fn start_renderer_layers_creation(
+    render_constants: &Arc<RenderVideoConstants>,
+) -> RendererLayersReceiver {
+    let (layers_tx, layers_rx) = oneshot::channel();
+    let constants = render_constants.clone();
+    std::thread::Builder::new()
+        .name("renderer-layers-init".into())
+        .spawn(move || {
+            let layers = RendererLayers::new_with_options(
+                &constants.device,
+                &constants.queue,
+                constants.is_software_adapter,
+            );
+            let _ = layers_tx.send(layers);
+        })
+        .expect("failed to spawn renderer layers init thread");
+    layers_rx
+}
+
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
+        frame_cb: Box<dyn FnMut(EditorFrameOutput) + Send>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
+        layers_rx: RendererLayersReceiver,
     ) -> Result<RendererHandle, String> {
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
@@ -61,6 +89,7 @@ impl Renderer {
             rx,
             frame_cb,
             render_constants,
+            layers_rx,
             total_frames,
         };
 
@@ -72,11 +101,17 @@ impl Renderer {
     async fn run(mut self) {
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
 
-        let mut layers = RendererLayers::new_with_options(
-            &self.render_constants.device,
-            &self.render_constants.queue,
-            self.render_constants.is_software_adapter,
-        );
+        let mut layers = match self.layers_rx.await {
+            Ok(layers) => layers,
+            Err(_) => {
+                tracing::error!("Failed to receive pre-created renderer layers, creating inline");
+                RendererLayers::new_with_options(
+                    &self.render_constants.device,
+                    &self.render_constants.queue,
+                    self.render_constants.is_software_adapter,
+                )
+            }
+        };
 
         struct PendingFrame {
             segment_frames: DecodedSegmentFrames,
@@ -142,8 +177,9 @@ impl Renderer {
                     break;
                 }
             }
+
             match frame_renderer
-                .render(
+                .render_immediate_nv12(
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,
@@ -152,7 +188,7 @@ impl Renderer {
                 .await
             {
                 Ok(frame) => {
-                    (self.frame_cb)(frame);
+                    (self.frame_cb)(EditorFrameOutput::Nv12(frame));
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to render frame in editor");
@@ -165,11 +201,7 @@ impl Renderer {
 }
 
 impl RendererHandle {
-    async fn send(&self, msg: RendererMessage) {
-        let _ = self.tx.send(msg).await;
-    }
-
-    pub async fn render_frame(
+    pub fn render_frame(
         &self,
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
@@ -177,13 +209,12 @@ impl RendererHandle {
     ) {
         let (finished_tx, _finished_rx) = oneshot::channel();
 
-        self.send(RendererMessage::RenderFrame {
+        let _ = self.tx.try_send(RendererMessage::RenderFrame {
             segment_frames,
             uniforms,
             finished: finished_tx,
             cursor,
-        })
-        .await;
+        });
     }
 
     pub async fn stop(&self) {

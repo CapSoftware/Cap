@@ -12,6 +12,7 @@ import { createCurrentRecordingQuery } from "~/utils/queries";
 import {
 	type CameraInfo,
 	commands,
+	type DeviceOrModelID,
 	type OSPermissionsCheck,
 } from "~/utils/tauri";
 import InfoPill from "./InfoPill";
@@ -61,7 +62,14 @@ export default function CameraSelect(props: {
 
 	const openCameraWindow = async (e: MouseEvent) => {
 		e.stopPropagation();
-		await commands.showWindow({ Camera: { centered: false } });
+		if (props.value) {
+			const id: DeviceOrModelID = props.value.model_id
+				? { ModelID: props.value.model_id }
+				: { DeviceID: props.value.device_id };
+			await commands.setCameraInput(id, false);
+		} else {
+			await commands.showWindow({ Camera: { centered: false } });
+		}
 		await refreshCameraWindowState();
 	};
 
@@ -171,7 +179,14 @@ export function CameraSelectBase(props: {
 
 	const openCameraWindow = async (e: MouseEvent) => {
 		e.stopPropagation();
-		await commands.showWindow({ Camera: { centered: false } });
+		if (props.value) {
+			const id: DeviceOrModelID = props.value.model_id
+				? { ModelID: props.value.model_id }
+				: { DeviceID: props.value.device_id };
+			await commands.setCameraInput(id, false);
+		} else {
+			await commands.showWindow({ Camera: { centered: false } });
+		}
 		await refreshCameraWindowState();
 	};
 

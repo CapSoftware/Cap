@@ -459,6 +459,82 @@ export const notifications = mysqlTable(
 	}),
 );
 
+export type MessengerAgent = "Millie";
+export type MessengerConversationMode = "agent" | "human";
+export type MessengerMessageRole = "user" | "agent" | "admin";
+
+export const messengerConversations = mysqlTable(
+	"messenger_conversations",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		agent: varchar("agent", {
+			length: 32,
+			enum: ["Millie"],
+		})
+			.notNull()
+			.$type<MessengerAgent>(),
+		mode: varchar("mode", {
+			length: 16,
+			enum: ["agent", "human"],
+		})
+			.notNull()
+			.default("agent")
+			.$type<MessengerConversationMode>(),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		anonymousId: varchar("anonymousId", { length: 64 }),
+		takeoverByUserId: nanoIdNullable("takeoverByUserId").$type<User.UserId>(),
+		takeoverAt: timestamp("takeoverAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+		lastMessageAt: timestamp("lastMessageAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		userLastMessageIndex: index("user_last_message_idx").on(
+			table.userId,
+			table.lastMessageAt,
+		),
+		anonymousLastMessageIndex: index("anonymous_last_message_idx").on(
+			table.anonymousId,
+			table.lastMessageAt,
+		),
+		modeLastMessageIndex: index("mode_last_message_idx").on(
+			table.mode,
+			table.lastMessageAt,
+		),
+		updatedAtIndex: index("updated_at_idx").on(table.updatedAt),
+	}),
+);
+
+export const messengerMessages = mysqlTable(
+	"messenger_messages",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		conversationId: nanoId("conversationId")
+			.notNull()
+			.references(() => messengerConversations.id, { onDelete: "cascade" }),
+		role: varchar("role", {
+			length: 16,
+			enum: ["user", "agent", "admin"],
+		})
+			.notNull()
+			.$type<MessengerMessageRole>(),
+		content: text("content").notNull(),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		anonymousId: varchar("anonymousId", { length: 64 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		conversationCreatedAtIndex: index("conversation_created_at_idx").on(
+			table.conversationId,
+			table.createdAt,
+		),
+		roleCreatedAtIndex: index("role_created_at_idx").on(
+			table.role,
+			table.createdAt,
+		),
+	}),
+);
+
 export const s3Buckets = mysqlTable("s3_buckets", {
 	id: nanoId("id").notNull().primaryKey().$type<S3Bucket.S3BucketId>(),
 	ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
@@ -503,6 +579,31 @@ export const commentsRelations = relations(comments, ({ one }) => ({
 	}),
 }));
 
+export const messengerConversationsRelations = relations(
+	messengerConversations,
+	({ one, many }) => ({
+		user: one(users, {
+			fields: [messengerConversations.userId],
+			references: [users.id],
+		}),
+		messages: many(messengerMessages),
+	}),
+);
+
+export const messengerMessagesRelations = relations(
+	messengerMessages,
+	({ one }) => ({
+		conversation: one(messengerConversations, {
+			fields: [messengerMessages.conversationId],
+			references: [messengerConversations.id],
+		}),
+		user: one(users, {
+			fields: [messengerMessages.userId],
+			references: [users.id],
+		}),
+	}),
+);
+
 // Define Relationships
 export const usersRelations = relations(users, ({ many, one }) => ({
 	accounts: many(accounts),
@@ -513,6 +614,8 @@ export const usersRelations = relations(users, ({ many, one }) => ({
 	customBucket: one(s3Buckets),
 	spaces: many(spaces),
 	spaceMembers: many(spaceMembers),
+	messengerConversations: many(messengerConversations),
+	messengerMessages: many(messengerMessages),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({

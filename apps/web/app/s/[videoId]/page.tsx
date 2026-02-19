@@ -366,6 +366,7 @@ async function AuthorizedContent({
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
+		hasActiveUpload: boolean;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -459,6 +460,7 @@ async function AuthorizedContent({
 	}
 
 	if (
+		!video.hasActiveUpload &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
 		video.transcriptionStatus !== "SKIPPED" &&

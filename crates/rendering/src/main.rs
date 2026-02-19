@@ -250,6 +250,6 @@ fn save_as_jpeg(frame: &RenderedFrame, output_path: &PathBuf) -> Result<()> {
 
 fn save_as_raw(frame: &RenderedFrame, output_path: &PathBuf) -> Result<()> {
     // Save raw RGBA data
-    std::fs::write(output_path, &frame.data).context("Failed to save raw frame data")?;
+    std::fs::write(output_path, &*frame.data).context("Failed to save raw frame data")?;
     Ok(())
 }

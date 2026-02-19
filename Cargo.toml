@@ -83,7 +83,7 @@ unused_must_use = "deny"
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
-unchecked_time_subtraction = "deny"
+unchecked_duration_subtraction = "deny"
 collapsible_if = "deny"
 clone_on_copy = "deny"
 redundant_closure = "deny"
@@ -108,6 +108,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
+tao = { path = "vendor/tao" }
 
 # https://github.com/CapSoftware/posthog-rs/commit/c7e9712be2f9a9122b1df685d5a067afa5415288
 posthog-rs = { git = "https://github.com/CapSoftware/posthog-rs", rev = "c7e9712be2f9a9122b1df685d5a067afa5415288" }

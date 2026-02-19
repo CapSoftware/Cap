@@ -27,12 +27,8 @@ export default function (
 	});
 	onCleanup(() => unlisten?.());
 
-	const handleClose = () => {
-		if (currentWindow.label === "main") {
-			currentWindow.hide();
-		} else {
-			currentWindow.close();
-		}
+	const handleClose = async () => {
+		currentWindow.close();
 	};
 
 	return (

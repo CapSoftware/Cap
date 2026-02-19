@@ -25,6 +25,7 @@ import {
 } from "./RecordingModeSelector";
 import { SettingsButton } from "./SettingsButton";
 import { SettingsPanel } from "./SettingsPanel";
+import { SystemAudioToggle } from "./SystemAudioToggle";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
@@ -140,9 +141,11 @@ function RecorderDialogInner({
 		rememberDevices,
 		selectedCameraId,
 		selectedMicId,
+		systemAudioEnabled,
 		setSelectedCameraId,
 		handleCameraChange,
 		handleMicChange,
+		handleSystemAudioChange,
 		handleRememberDevicesChange,
 	} = useDevicePreferences({
 		open,
@@ -197,6 +200,7 @@ function RecorderDialogInner({
 		organisationId,
 		selectedMicId,
 		micEnabled,
+		systemAudioEnabled,
 		recordingMode,
 		selectedCameraId,
 		isProUser: user.isPro,
@@ -414,6 +418,14 @@ function RecorderDialogInner({
 									onMicChange={handleMicChange}
 									onRefreshDevices={refreshMics}
 								/>
+								{recordingMode !== "camera" && (
+									<SystemAudioToggle
+										enabled={systemAudioEnabled}
+										disabled={isBusy}
+										recordingMode={recordingMode}
+										onToggle={handleSystemAudioChange}
+									/>
+								)}
 								<RecordingButton
 									isRecording={isRecording}
 									disabled={!canStartRecording || (isBusy && !isRecording)}

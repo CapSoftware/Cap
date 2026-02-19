@@ -93,11 +93,19 @@ export const pickSupportedMimeType = (candidates: readonly string[]) => {
 	);
 };
 
+export const isUserCancellationError = (error: unknown): boolean => {
+	if (!(error instanceof DOMException)) return false;
+	return error.name === "NotAllowedError" || error.name === "AbortError";
+};
+
 export const shouldRetryDisplayMediaWithoutPreferences = (error: unknown) => {
+	if (isUserCancellationError(error)) return false;
+
 	if (error instanceof DOMException) {
 		return (
 			error.name === "OverconstrainedError" ||
-			error.name === "NotSupportedError"
+			error.name === "NotSupportedError" ||
+			error.name === "InvalidAccessError"
 		);
 	}
 

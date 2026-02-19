@@ -12,6 +12,20 @@ interface ToolCategory {
 
 const toolCategories: ToolCategory[] = [
 	{
+		title: "Loom Video Importer",
+		description:
+			"Import your existing Loom recordings directly into Cap — seamless migration",
+		href: "/loom-alternative",
+		icon: "M9 8.25H7.5a2.25 2.25 0 00-2.25 2.25v9a2.25 2.25 0 002.25 2.25h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25H15m0-3l-3-3m0 0l-3 3m3-3V15",
+	},
+	{
+		title: "Loom Video Downloader",
+		description:
+			"Download any public Loom video as an MP4 file — free and instant",
+		href: "/tools/loom-downloader",
+		icon: "M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3",
+	},
+	{
 		title: "File Conversion",
 		description:
 			"Convert between different file formats directly in your browser",
@@ -35,13 +49,13 @@ const toolCategories: ToolCategory[] = [
 export function PageContent() {
 	return (
 		<>
-			<div className="relative overflow-hidden pt-[100px] md:pt-[180px]">
-				<div className="relative z-10 px-5 w-full h-full flex flex-col justify-center">
+			<div className="relative overflow-hidden pt-24 md:pt-[180px]">
+				<div className="relative z-10 px-4 w-full h-full flex flex-col justify-center sm:px-5">
 					<div className="mx-auto text-center wrapper wrapper-sm">
-						<h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] font-medium relative z-10 text-black mb-6">
+						<h1 className="fade-in-down text-[1.75rem] leading-[2.25rem] sm:text-[2rem] sm:leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] font-medium relative z-10 text-black mb-4 md:mb-6">
 							Try our free tools
 						</h1>
-						<p className="mx-auto mb-10 max-w-2xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
+						<p className="mx-auto mb-8 max-w-2xl text-sm sm:text-md md:text-xl text-zinc-500 fade-in-down animate-delay-1 md:mb-10">
 							Powerful browser-based utilities that run directly on your device.
 							No uploads, no installations, maximum privacy.
 						</p>
@@ -50,17 +64,17 @@ export function PageContent() {
 				</div>
 			</div>
 			<div className="wrapper mx-auto">
-				<div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 px-12 mt-16">
+				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 lg:gap-8 px-0 sm:px-4 lg:px-12 mt-10 md:mt-16">
 					{toolCategories.map((category) => (
 						<Link
 							key={category.href}
 							href={category.href}
-							className="group block p-8 border border-gray-200 bg-gray-1 rounded-xl hover:border-blue-500 hover:shadow-md transition-all"
+							className="group block p-6 sm:p-8 border border-gray-200 bg-gray-1 rounded-xl hover:border-blue-500 hover:shadow-md transition-all"
 						>
 							<div className="flex flex-col items-center text-center">
-								<div className="flex-shrink-0 p-3 bg-blue-100 rounded-xl mb-5">
+								<div className="flex-shrink-0 p-3 bg-blue-100 rounded-xl mb-4 sm:mb-5">
 									<svg
-										className="w-8 h-8 text-blue-600"
+										className="w-7 h-7 sm:w-8 sm:h-8 text-blue-600"
 										fill="none"
 										viewBox="0 0 24 24"
 										stroke="currentColor"
@@ -73,31 +87,34 @@ export function PageContent() {
 										/>
 									</svg>
 								</div>
-								<h2 className="text-2xl font-semibold text-gray-900 group-hover:text-blue-600 transition-colors mb-3">
+								<h2 className="text-xl sm:text-2xl font-semibold text-gray-900 group-hover:text-blue-600 transition-colors mb-2 sm:mb-3">
 									{category.title}
 								</h2>
-								<p className="text-gray-600">{category.description}</p>
+								<p className="text-sm sm:text-base text-gray-600">
+									{category.description}
+								</p>
 							</div>
 						</Link>
 					))}
 				</div>
 				<div
-					className="mx-auto wrapper mt-16 mb-8 bg-white rounded-3xl overflow-hidden relative flex flex-col justify-center p-12"
+					className="mx-auto wrapper mt-10 mb-8 bg-white rounded-2xl sm:rounded-3xl overflow-hidden relative flex flex-col justify-center p-6 sm:p-8 md:p-12 md:mt-16"
 					style={{
-						minHeight: "300px",
+						minHeight: "250px",
 						backgroundImage: "url('/illustrations/ctabg.svg')",
 						backgroundSize: "cover",
 						backgroundRepeat: "no-repeat",
 					}}
 				>
-					<div className=" mx-auto h-full flex flex-col justify-center items-center relative z-10">
-						<div className="text-center max-w-[800px] mx-auto mb-8">
-							<h2 className="text-3xl md:text-4xl font-medium text-gray-12 mb-4 drop-shadow-md">
+					<div className="mx-auto h-full flex flex-col justify-center items-center relative z-10">
+						<div className="text-center max-w-[800px] mx-auto mb-6 md:mb-8">
+							<h2 className="text-2xl sm:text-3xl md:text-4xl font-medium text-gray-12 mb-3 md:mb-4 drop-shadow-md">
 								The open source Loom alternative
 							</h2>
-							<p className="text-xl  mb-6 text-gray-10">
+							<p className="text-base sm:text-lg md:text-xl mb-5 md:mb-6 text-gray-10">
 								Cap is lightweight, powerful, and cross-platform. Record and
-								share securely in seconds with custom S3 bucket support.
+								share securely in seconds. Import your Loom videos and get
+								started instantly.
 							</p>
 						</div>
 						<div className="flex flex-col sm:flex-row items-center justify-center space-y-3 sm:space-y-0 sm:space-x-4">

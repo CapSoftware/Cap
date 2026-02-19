@@ -34,7 +34,7 @@ fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {
     if result != 0 {
         return None;
     }
-    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64) / (1024 * 1024))
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize) / (1024 * 1024))
 }
 
 fn get_mp4_muxer_buffer_size(instant_mode: bool) -> usize {
@@ -377,13 +377,22 @@ impl Muxer for AVFoundationMp4Muxer {
                                         std::thread::sleep(Duration::from_micros(500));
                                     }
                                     Err(QueueFrameError::WriterFailed(err)) => {
-                                        let message =
-                                            format!("Failed to encode video frame: WriterFailed/{err}");
+                                        let total = video_count_thread
+                                            .load(std::sync::atomic::Ordering::Relaxed);
+                                        let message = format!(
+                                            "Failed to encode video frame: WriterFailed/{err} \
+                                             (frame #{total}, ts={timestamp:?})"
+                                        );
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
                                     }
                                     Err(QueueFrameError::Failed) => {
-                                        let message = "Failed to encode video frame: Failed".to_string();
+                                        let total = video_count_thread
+                                            .load(std::sync::atomic::Ordering::Relaxed);
+                                        let message = format!(
+                                            "Failed to encode video frame: Failed \
+                                             (frame #{total}, ts={timestamp:?})"
+                                        );
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
                                     }
@@ -490,15 +499,22 @@ impl Muxer for AVFoundationMp4Muxer {
                                             std::thread::sleep(Duration::from_micros(500));
                                         }
                                         Err(QueueFrameError::WriterFailed(err)) => {
+                                            let total = audio_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
                                             let message = format!(
-                                                "Failed to encode audio frame: WriterFailed/{err}"
+                                                "Failed to encode audio frame: WriterFailed/{err} \
+                                                 (frame #{total}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&audio_fatal_error, message.clone());
                                             return Err(anyhow!(message));
                                         }
                                         Err(QueueFrameError::Failed) => {
-                                            let message =
-                                                "Failed to encode audio frame: Failed".to_string();
+                                            let total = audio_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
+                                            let message = format!(
+                                                "Failed to encode audio frame: Failed \
+                                                 (frame #{total}, ts={timestamp:?})"
+                                            );
                                             set_fatal_error(&audio_fatal_error, message.clone());
                                             return Err(anyhow!(message));
                                         }

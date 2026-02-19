@@ -5,12 +5,12 @@ export const metadata: Metadata = {
 	title:
 		"The Ultimate Loom Alternative: Why Cap is the Best Open-Source Screen Recorder for Mac & Windows",
 	description:
-		"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows. See why users are switching today!",
+		"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows with a built-in Loom video importer. See why users are switching today!",
 	openGraph: {
 		title:
 			"The Ultimate Loom Alternative: Why Cap is the Best Open-Source Screen Recorder",
 		description:
-			"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows.",
+			"Looking for the best Loom alternative? Discover Cap with a built-in Loom video importer. Open-source, privacy-focused screen recorder for Mac & Windows.",
 		url: "https://cap.so/loom-alternative",
 		siteName: "Cap",
 		images: [

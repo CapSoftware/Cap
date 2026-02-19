@@ -903,12 +903,6 @@ footer a {
 	}
 }
 
-@media (max-width: 768px) {
-	.intercom-lightweight-app-launcher {
-		bottom: 90px;
-	}
-}
-
 @layer base {
 	* {
 		@apply border-border;
@@ -916,4 +910,12 @@ footer a {
 	body {
 		@apply bg-background text-foreground;
 	}
+}
+
+.messenger-markdown > :first-child {
+	margin-top: 0 !important;
+}
+
+.messenger-markdown > :last-child {
+	margin-bottom: 0 !important;
 }

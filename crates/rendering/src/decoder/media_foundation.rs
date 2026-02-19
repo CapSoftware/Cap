@@ -18,6 +18,8 @@ struct DecoderHealthMonitor {
     total_frames_decoded: u64,
     total_errors: u64,
     last_successful_decode: Instant,
+    last_request_time: Instant,
+    last_unhealthy_warning: Option<Instant>,
     frame_decode_times: [Duration; 32],
     frame_decode_index: usize,
     slow_frame_count: u32,
@@ -31,10 +33,16 @@ impl DecoderHealthMonitor {
             total_frames_decoded: 0,
             total_errors: 0,
             last_successful_decode: Instant::now(),
+            last_request_time: Instant::now(),
+            last_unhealthy_warning: None,
             frame_decode_times: [Duration::ZERO; 32],
             frame_decode_index: 0,
             slow_frame_count: 0,
         }
+    }
+
+    fn record_request(&mut self) {
+        self.last_request_time = Instant::now();
     }
 
     fn record_success(&mut self, decode_time: Duration) {
@@ -66,9 +74,34 @@ impl DecoderHealthMonitor {
         const MAX_CONSECUTIVE_TEXTURE_FAILURES: u32 = 5;
         const MAX_TIME_SINCE_SUCCESS: Duration = Duration::from_secs(5);
 
-        self.consecutive_errors < MAX_CONSECUTIVE_ERRORS
-            && self.consecutive_texture_read_failures < MAX_CONSECUTIVE_TEXTURE_FAILURES
-            && self.last_successful_decode.elapsed() < MAX_TIME_SINCE_SUCCESS
+        if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS
+            || self.consecutive_texture_read_failures >= MAX_CONSECUTIVE_TEXTURE_FAILURES
+        {
+            return false;
+        }
+
+        let idle_duration = self.last_request_time.elapsed();
+        if idle_duration > Duration::from_secs(2) {
+            return true;
+        }
+
+        self.last_successful_decode.elapsed() < MAX_TIME_SINCE_SUCCESS
+    }
+
+    fn should_warn_unhealthy(&mut self) -> bool {
+        if self.is_healthy() {
+            return false;
+        }
+
+        let should_warn = self
+            .last_unhealthy_warning
+            .is_none_or(|last| last.elapsed() > Duration::from_secs(5));
+
+        if should_warn {
+            self.last_unhealthy_warning = Some(Instant::now());
+        }
+
+        should_warn
     }
 
     #[allow(dead_code)]
@@ -198,157 +231,274 @@ impl MFDecoder {
             };
             let _ = ready_tx.send(Ok(init_result));
 
+            struct PendingRequest {
+                frame: u32,
+                time: f32,
+                sender: oneshot::Sender<DecodedFrame>,
+            }
+
             while let Ok(r) = rx.recv() {
+                let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+
+                let mut push_request =
+                    |requested_time: f32, sender: oneshot::Sender<DecodedFrame>| {
+                        if sender.is_closed() {
+                            return;
+                        }
+                        let frame = (requested_time * fps as f32).floor() as u32;
+                        pending_requests.push(PendingRequest {
+                            frame,
+                            time: requested_time,
+                            sender,
+                        });
+                    };
+
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
-                        if sender.is_closed() {
-                            continue;
+                        push_request(requested_time, sender);
+                    }
+                }
+
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                            push_request(requested_time, sender);
                         }
+                    }
+                }
 
-                        if !health.is_healthy() {
-                            warn!(
-                                name = name,
-                                consecutive_errors = health.consecutive_errors,
-                                texture_failures = health.consecutive_texture_read_failures,
-                                total_decoded = health.total_frames_decoded,
-                                "MediaFoundation decoder unhealthy, performance may degrade"
-                            );
+                let mut unfulfilled = Vec::with_capacity(pending_requests.len());
+                for req in pending_requests.drain(..) {
+                    let cached = cache.get(&req.frame).or_else(|| {
+                        cache
+                            .range(..=req.frame)
+                            .next_back()
+                            .filter(|(k, _)| req.frame - *k <= 2)
+                            .map(|(_, f)| f)
+                    });
+                    if let Some(frame) = cached {
+                        let _ = req.sender.send(frame.to_decoded_frame());
+                    } else if !req.sender.is_closed() {
+                        unfulfilled.push(req);
+                    }
+                }
+                pending_requests = unfulfilled;
+
+                if pending_requests.is_empty() {
+                    continue;
+                }
+
+                pending_requests.sort_by_key(|r| r.frame);
+
+                let target_request = pending_requests.pop().unwrap();
+                let deferred_requests = pending_requests;
+
+                let requested_frame = target_request.frame;
+                let mut sender = Some(target_request.sender);
+
+                health.record_request();
+
+                if health.should_warn_unhealthy() {
+                    warn!(
+                        name = name,
+                        consecutive_errors = health.consecutive_errors,
+                        texture_failures = health.consecutive_texture_read_failures,
+                        total_decoded = health.total_frames_decoded,
+                        "MediaFoundation decoder unhealthy, performance may degrade"
+                    );
+                }
+
+                let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
+
+                let needs_seek = last_decoded_frame
+                    .map(|last| {
+                        if requested_frame <= last {
+                            last - requested_frame > FRAME_CACHE_SIZE as u32 / 2
+                        } else {
+                            requested_frame - last > FRAME_CACHE_SIZE as u32
                         }
+                    })
+                    .unwrap_or(true);
 
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
+                if needs_seek {
+                    let time_100ns = frame_to_100ns(requested_frame, fps);
+                    if let Err(e) = decoder.seek(time_100ns) {
+                        warn!("MediaFoundation seek failed: {e}");
+                    }
+                    cache.clear();
+                    last_decoded_frame = None;
+                }
 
-                        if let Some(cached) = cache.get(&requested_frame) {
-                            let _ = sender.send(cached.to_decoded_frame());
-                            continue;
-                        }
+                let mut last_valid_frame: Option<CachedFrame> = None;
 
-                        let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                        let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
+                let pixel_count = (video_width as u64) * (video_height as u64);
+                let readahead_frames = if pixel_count > 4_000_000 {
+                    8u32
+                } else if pixel_count > 2_000_000 {
+                    15u32
+                } else {
+                    30u32
+                };
+                let max_batch_duration = if pixel_count > 4_000_000 {
+                    Duration::from_millis(200)
+                } else if pixel_count > 2_000_000 {
+                    Duration::from_millis(400)
+                } else {
+                    Duration::from_millis(800)
+                };
+                let batch_start = Instant::now();
 
-                        let needs_seek = last_decoded_frame
-                            .map(|last| {
-                                requested_frame < last
-                                    || requested_frame.saturating_sub(last)
-                                        > FRAME_CACHE_SIZE as u32
-                            })
-                            .unwrap_or(true);
+                loop {
+                    if sender.as_ref().is_some_and(|s| s.is_closed()) {
+                        sender.take();
+                        break;
+                    }
 
-                        if needs_seek {
-                            let time_100ns = frame_to_100ns(requested_frame, fps);
-                            if let Err(e) = decoder.seek(time_100ns) {
-                                warn!("MediaFoundation seek failed: {e}");
-                            }
-                            cache.clear();
-                            last_decoded_frame = None;
-                        }
+                    if sender.is_none() && batch_start.elapsed() > max_batch_duration {
+                        break;
+                    }
 
-                        let mut sender = Some(sender);
-                        let mut last_valid_frame: Option<CachedFrame> = None;
+                    let decode_start = Instant::now();
+                    match decoder.read_sample() {
+                        Ok(Some(mf_frame)) => {
+                            let decode_time = decode_start.elapsed();
+                            let frame_number = pts_100ns_to_frame(mf_frame.pts, fps);
 
-                        loop {
-                            let decode_start = Instant::now();
-                            match decoder.read_sample() {
-                                Ok(Some(mf_frame)) => {
-                                    let decode_time = decode_start.elapsed();
-                                    let frame_number = pts_100ns_to_frame(mf_frame.pts, fps);
+                            let has_valid_zero_copy_handles = {
+                                let null_ptr = std::ptr::null_mut();
+                                mf_frame.textures.y.handle.0 != null_ptr
+                                    && mf_frame.textures.uv.handle.0 != null_ptr
+                            };
 
-                                    let nv12_data = match decoder.read_texture_to_cpu(
-                                        &mf_frame.textures.nv12.texture,
-                                        mf_frame.width,
-                                        mf_frame.height,
-                                    ) {
-                                        Ok(data) => {
-                                            health.record_success(decode_time);
-                                            Some(Arc::new(data))
-                                        }
-                                        Err(e) => {
-                                            health.record_texture_read_failure();
-                                            warn!(
-                                                "Failed to read texture to CPU for frame {frame_number}: {e}"
-                                            );
-                                            None
-                                        }
-                                    };
-
-                                    let cached = CachedFrame {
-                                        number: frame_number,
-                                        _texture: mf_frame.textures.nv12.texture.clone(),
-                                        _shared_handle: Some(mf_frame.textures.nv12.handle),
-                                        _y_handle: Some(mf_frame.textures.y.handle),
-                                        _uv_handle: Some(mf_frame.textures.uv.handle),
-                                        nv12_data,
-                                        width: mf_frame.width,
-                                        height: mf_frame.height,
-                                    };
-
-                                    last_decoded_frame = Some(frame_number);
-
-                                    if frame_number >= cache_min && frame_number <= cache_max {
-                                        if cache.len() >= FRAME_CACHE_SIZE {
-                                            let key_to_remove = if frame_number > requested_frame {
-                                                *cache.keys().next().unwrap()
-                                            } else {
-                                                *cache.keys().next_back().unwrap()
-                                            };
-                                            cache.remove(&key_to_remove);
-                                        }
-                                        cache.insert(frame_number, cached.clone());
-                                    }
-
-                                    if frame_number <= requested_frame {
-                                        last_valid_frame = Some(cached);
-                                    }
-
-                                    if frame_number >= requested_frame {
-                                        let frame_to_send = if frame_number == requested_frame {
-                                            cache.get(&requested_frame)
-                                        } else {
-                                            last_valid_frame
-                                                .as_ref()
-                                                .or_else(|| cache.get(&frame_number))
-                                        };
-
-                                        if let Some(frame) = frame_to_send
-                                            && let Some(s) = sender.take()
-                                        {
-                                            let _ = s.send(frame.to_decoded_frame());
-                                        }
-                                    }
-
-                                    let readahead_target = requested_frame + 30;
-                                    if frame_number >= readahead_target || frame_number > cache_max
-                                    {
-                                        break;
-                                    }
-                                }
-                                Ok(None) => {
-                                    break;
-                                }
-                                Err(e) => {
-                                    health.record_error();
-                                    warn!(
-                                        consecutive_errors = health.consecutive_errors,
-                                        "MediaFoundation read_sample error: {e}"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-
-                        if let Some(s) = sender.take() {
-                            if let Some(frame) = last_valid_frame
-                                .or_else(|| cache.values().max_by_key(|f| f.number).cloned())
-                            {
-                                let _ = s.send(frame.to_decoded_frame());
+                            let nv12_data = if has_valid_zero_copy_handles {
+                                health.record_success(decode_time);
+                                None
                             } else {
-                                let black_frame = DecodedFrame::new(
-                                    vec![0u8; (video_width * video_height * 4) as usize],
-                                    video_width,
-                                    video_height,
-                                );
-                                let _ = s.send(black_frame);
+                                match decoder.read_texture_to_cpu(
+                                    &mf_frame.textures.nv12.texture,
+                                    mf_frame.width,
+                                    mf_frame.height,
+                                ) {
+                                    Ok(data) => {
+                                        health.record_success(decode_time);
+                                        Some(Arc::new(data))
+                                    }
+                                    Err(e) => {
+                                        health.record_texture_read_failure();
+                                        warn!(
+                                            "Failed to read texture to CPU for frame {frame_number}: {e}"
+                                        );
+                                        None
+                                    }
+                                }
+                            };
+
+                            let cached = CachedFrame {
+                                number: frame_number,
+                                _texture: mf_frame.textures.nv12.texture.clone(),
+                                _shared_handle: Some(mf_frame.textures.nv12.handle),
+                                _y_handle: Some(mf_frame.textures.y.handle),
+                                _uv_handle: Some(mf_frame.textures.uv.handle),
+                                nv12_data,
+                                width: mf_frame.width,
+                                height: mf_frame.height,
+                            };
+
+                            last_decoded_frame = Some(frame_number);
+
+                            if frame_number >= cache_min && frame_number <= cache_max {
+                                if cache.len() >= FRAME_CACHE_SIZE {
+                                    let key_to_remove = if frame_number > requested_frame {
+                                        *cache.keys().next().unwrap()
+                                    } else {
+                                        *cache.keys().next_back().unwrap()
+                                    };
+                                    cache.remove(&key_to_remove);
+                                }
+                                cache.insert(frame_number, cached.clone());
+                            }
+
+                            if frame_number <= requested_frame {
+                                last_valid_frame = Some(cached);
+                            }
+
+                            if frame_number >= requested_frame {
+                                let frame_to_send = if frame_number == requested_frame {
+                                    cache.get(&requested_frame)
+                                } else {
+                                    last_valid_frame.as_ref().or_else(|| {
+                                        cache
+                                            .range(..=requested_frame)
+                                            .next_back()
+                                            .map(|(_, f)| f)
+                                            .or_else(|| cache.get(&frame_number))
+                                    })
+                                };
+
+                                if let Some(frame) = frame_to_send
+                                    && let Some(s) = sender.take()
+                                {
+                                    let _ = s.send(frame.to_decoded_frame());
+                                }
+                            }
+
+                            let readahead_target = requested_frame + readahead_frames;
+                            if frame_number >= readahead_target || frame_number > cache_max {
+                                break;
                             }
                         }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(e) => {
+                            health.record_error();
+                            warn!(
+                                consecutive_errors = health.consecutive_errors,
+                                "MediaFoundation read_sample error: {e}"
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(s) = sender.take() {
+                    let fallback = last_valid_frame.as_ref().cloned().or_else(|| {
+                        cache
+                            .range(..=requested_frame)
+                            .next_back()
+                            .or_else(|| cache.range(requested_frame..).next())
+                            .map(|(_, f)| f.clone())
+                    });
+                    if let Some(frame) = fallback {
+                        let _ = s.send(frame.to_decoded_frame());
+                    } else {
+                        let black_frame = DecodedFrame::new(
+                            vec![0u8; (video_width * video_height * 4) as usize],
+                            video_width,
+                            video_height,
+                        );
+                        let _ = s.send(black_frame);
+                    }
+                }
+
+                for req in deferred_requests {
+                    if req.sender.is_closed() {
+                        continue;
+                    }
+                    let frame_to_send = cache
+                        .get(&req.frame)
+                        .or_else(|| cache.range(..=req.frame).next_back().map(|(_, f)| f))
+                        .or(last_valid_frame.as_ref());
+                    if let Some(frame) = frame_to_send {
+                        let _ = req.sender.send(frame.to_decoded_frame());
+                    } else {
+                        let black_frame = DecodedFrame::new(
+                            vec![0u8; (video_width * video_height * 4) as usize],
+                            video_width,
+                            video_height,
+                        );
+                        let _ = req.sender.send(black_frame);
                     }
                 }
             }

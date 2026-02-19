@@ -299,12 +299,10 @@ impl AudioSource for Microphone {
 
                                 silence_counter.fetch_add(1, Ordering::Relaxed);
 
-                                match tokio::time::timeout(send_timeout, audio_tx.send(audio_frame))
-                                    .await
-                                {
-                                    Ok(Ok(())) => {}
-                                    _ => {}
-                                }
+                                if let Ok(Ok(())) =
+                                    tokio::time::timeout(send_timeout, audio_tx.send(audio_frame))
+                                        .await
+                                {}
                             }
                         }
                     }

@@ -3,9 +3,11 @@ use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
+use cap_rendering::GpuOutputFormat;
+
 use crate::{
     create_editor_instance_impl,
-    frame_ws::{WSFrame, create_watch_frame_ws},
+    frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
 };
 
 pub struct EditorInstance {
@@ -27,16 +29,36 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let inner = create_editor_instance_impl(
         &app,
         path,
-        Box::new(move |frame| {
-            let _ = frame_tx.send(Some(WSFrame {
-                data: frame.data,
-                width: frame.width,
-                height: frame.height,
-                stride: frame.padded_bytes_per_row,
-                frame_number: frame.frame_number,
-                target_time_ns: frame.target_time_ns,
-                created_at: Instant::now(),
-            }));
+        Box::new(move |output| {
+            let ws_frame = match output {
+                cap_editor::EditorFrameOutput::Nv12(frame) => {
+                    let ws_format = match frame.format {
+                        GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                        GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
+                    };
+                    WSFrame {
+                        data: frame.data,
+                        width: frame.width,
+                        height: frame.height,
+                        stride: frame.y_stride,
+                        frame_number: frame.frame_number,
+                        target_time_ns: frame.target_time_ns,
+                        format: ws_format,
+                        created_at: Instant::now(),
+                    }
+                }
+                cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                    data: frame.data,
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.padded_bytes_per_row,
+                    frame_number: frame.frame_number,
+                    target_time_ns: frame.target_time_ns,
+                    format: WSFrameFormat::Rgba,
+                    created_at: Instant::now(),
+                },
+            };
+            let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
         }),
     )
     .await?;
@@ -218,16 +240,36 @@ impl EditorInstances {
                 let inner = create_editor_instance_impl(
                     window.app_handle(),
                     path,
-                    Box::new(move |frame| {
-                        let _ = frame_tx.send(Some(WSFrame {
-                            data: frame.data,
-                            width: frame.width,
-                            height: frame.height,
-                            stride: frame.padded_bytes_per_row,
-                            frame_number: frame.frame_number,
-                            target_time_ns: frame.target_time_ns,
-                            created_at: Instant::now(),
-                        }));
+                    Box::new(move |output| {
+                        let ws_frame = match output {
+                            cap_editor::EditorFrameOutput::Nv12(frame) => {
+                                let ws_format = match frame.format {
+                                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12,
+                                    GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
+                                };
+                                WSFrame {
+                                    data: frame.data,
+                                    width: frame.width,
+                                    height: frame.height,
+                                    stride: frame.y_stride,
+                                    frame_number: frame.frame_number,
+                                    target_time_ns: frame.target_time_ns,
+                                    format: ws_format,
+                                    created_at: Instant::now(),
+                                }
+                            }
+                            cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+                                data: frame.data,
+                                width: frame.width,
+                                height: frame.height,
+                                stride: frame.padded_bytes_per_row,
+                                frame_number: frame.frame_number,
+                                target_time_ns: frame.target_time_ns,
+                                format: WSFrameFormat::Rgba,
+                                created_at: Instant::now(),
+                            },
+                        };
+                        let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
                     }),
                 )
                 .await?;

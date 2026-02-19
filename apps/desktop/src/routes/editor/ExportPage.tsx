@@ -730,8 +730,7 @@ export function ExportPage() {
 								exportSpeedMultiplier;
 							const estimatedTimeSeconds = Math.max(1, totalTimeMs / 1000);
 
-							const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
-							const estimatedSizeMb = data.estimatedSizeMb * sizeMultiplier;
+							const estimatedSizeMb = data.estimatedSizeMb;
 
 							return (
 								<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
@@ -1203,11 +1202,9 @@ export function ExportPage() {
 						</span>
 						<Show when={renderEstimate()}>
 							{(est) => {
-								const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
 								return (
 									<span>
-										Estimated size:{" "}
-										{(est().estimatedSizeMb * sizeMultiplier).toFixed(1)} MB
+										Estimated size: {est().estimatedSizeMb.toFixed(1)} MB
 									</span>
 								);
 							}}
