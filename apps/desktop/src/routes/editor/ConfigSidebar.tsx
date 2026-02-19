@@ -48,6 +48,7 @@ import {
 	type CursorAnimationStyle,
 	type CursorType,
 	commands,
+	type KeyboardTrackSegment,
 	type SceneSegment,
 	type StereoMode,
 	type TimelineSegment,
@@ -65,8 +66,8 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
-import { KeyboardTab } from "./KeyboardTab";
 import { type CornerRoundingType, useEditorContext } from "./context";
+import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
 	DEFAULT_GRADIENT_FROM,
@@ -80,6 +81,7 @@ import {
 	ComingSoonTooltip,
 	EditorButton,
 	Field,
+	Input,
 	MenuItem,
 	MenuItemList,
 	PopperContent,
@@ -1194,6 +1196,75 @@ export function ConfigSidebar() {
 											</div>
 										</div>
 									</Show>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const kbSelection = selection();
+									if (kbSelection.type !== "keyboard") return;
+
+									const segments = kbSelection.indices
+										.map((idx) => ({
+											segment: project.timeline?.keyboardSegments?.[idx],
+											index: idx,
+										}))
+										.filter(
+											(
+												s,
+											): s is {
+												index: number;
+												segment: KeyboardTrackSegment;
+											} => s.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: kbSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} keyboard{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteKeyboardSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<KeyboardSegmentConfig
+													segment={item.segment}
+													segmentIndex={item.index}
+												/>
+											)}
+										</For>
+									</div>
 								)}
 							</Show>
 						</Suspense>
@@ -3738,6 +3809,102 @@ function hexToRgb(hex: string): [number, number, number, number] | null {
 	}
 
 	return [...rgb, 255];
+}
+
+function KeyboardSegmentConfig(props: {
+	segment: KeyboardTrackSegment;
+	segmentIndex: number;
+}) {
+	const { project, setProject } = useEditorContext();
+
+	const getSetting = (key: "fadeDuration") => {
+		const settings = project?.keyboard?.settings;
+		if (settings && key in settings) {
+			return (settings as Record<string, unknown>)[key] as number;
+		}
+		return 0.15;
+	};
+
+	return (
+		<div class="p-4 rounded-lg border border-gray-200 space-y-3">
+			<Subfield name="Display Text">
+				<Input
+					type="text"
+					value={props.segment.displayText}
+					onChange={(e) =>
+						setProject(
+							"timeline",
+							"keyboardSegments",
+							props.segmentIndex,
+							"displayText",
+							e.target.value,
+						)
+					}
+				/>
+			</Subfield>
+			<Subfield name="Start Time">
+				<Input
+					type="number"
+					value={props.segment.start.toFixed(2)}
+					step="0.1"
+					min={0}
+					onChange={(e) =>
+						setProject(
+							"timeline",
+							"keyboardSegments",
+							props.segmentIndex,
+							"start",
+							Number.parseFloat(e.target.value),
+						)
+					}
+				/>
+			</Subfield>
+			<Subfield name="End Time">
+				<Input
+					type="number"
+					value={props.segment.end.toFixed(2)}
+					step="0.1"
+					min={props.segment.start}
+					onChange={(e) =>
+						setProject(
+							"timeline",
+							"keyboardSegments",
+							props.segmentIndex,
+							"end",
+							Number.parseFloat(e.target.value),
+						)
+					}
+				/>
+			</Subfield>
+			<Subfield name="Fade Duration">
+				<Slider
+					value={[
+						(props.segment.fadeDurationOverride ?? getSetting("fadeDuration")) *
+							100,
+					]}
+					onChange={(v) =>
+						setProject(
+							"timeline",
+							"keyboardSegments",
+							props.segmentIndex,
+							"fadeDurationOverride",
+							v[0] / 100,
+						)
+					}
+					minValue={0}
+					maxValue={50}
+					step={1}
+				/>
+				<span class="text-xs text-gray-11 text-right">
+					{(
+						(props.segment.fadeDurationOverride ?? getSetting("fadeDuration")) *
+						1000
+					).toFixed(0)}
+					ms
+				</span>
+			</Subfield>
+		</div>
+	);
 }
 
 const CHECKERED_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;
