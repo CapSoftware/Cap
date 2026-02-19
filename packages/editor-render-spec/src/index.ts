@@ -1,4 +1,4 @@
-export { computeRenderSpec } from "./compute";
+export { computeRenderSpec, scaleRenderSpec } from "./compute";
 
 export { normalizeConfigForRender } from "./normalize";
 export {

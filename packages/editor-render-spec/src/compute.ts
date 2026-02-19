@@ -7,6 +7,53 @@ import type {
 } from "./types";
 import { ASPECT_RATIO_VALUES } from "./types";
 
+export function scaleRenderSpec(
+	spec: RenderSpec,
+	targetWidth: number,
+): RenderSpec {
+	const scale = targetWidth / spec.outputWidth;
+
+	const scaleRect = (rect: RenderInnerRect): RenderInnerRect => ({
+		x: Math.round(rect.x * scale),
+		y: Math.round(rect.y * scale),
+		width: Math.round(rect.width * scale),
+		height: Math.round(rect.height * scale),
+	});
+
+	return {
+		outputWidth: Math.round(spec.outputWidth * scale),
+		outputHeight: Math.round(spec.outputHeight * scale),
+		innerRect: scaleRect(spec.innerRect),
+		videoCrop: spec.videoCrop,
+		backgroundSpec: spec.backgroundSpec,
+		maskSpec: {
+			...spec.maskSpec,
+			radiusPx: Math.round(spec.maskSpec.radiusPx * scale),
+		},
+		shadowSpec: {
+			...spec.shadowSpec,
+			offsetX: spec.shadowSpec.offsetX * scale,
+			offsetY: spec.shadowSpec.offsetY * scale,
+			blurPx: spec.shadowSpec.blurPx * scale,
+			spreadPx: spec.shadowSpec.spreadPx * scale,
+		},
+		cameraSpec: spec.cameraSpec
+			? {
+					...spec.cameraSpec,
+					rect: scaleRect(spec.cameraSpec.rect),
+					rounding: Math.round(spec.cameraSpec.rounding * scale),
+					shadow: {
+						...spec.cameraSpec.shadow,
+						offsetX: spec.cameraSpec.shadow.offsetX * scale,
+						offsetY: spec.cameraSpec.shadow.offsetY * scale,
+						blurPx: spec.cameraSpec.shadow.blurPx * scale,
+						spreadPx: spec.cameraSpec.shadow.spreadPx * scale,
+					},
+				}
+			: undefined,
+	};
+}
+
 function normalizeVideoCrop(
 	crop: NormalizedRenderConfig["background"]["crop"],
 	sourceWidth: number,
@@ -129,7 +176,7 @@ export function computeRenderSpec(
 	let fitContainerWidth = paddedInnerWidth;
 	let fitContainerHeight = paddedInnerHeight;
 
-	if (shadowEnabled && Math.abs(targetRatio - sourceRatio) > 0.0001) {
+	if (shadowEnabled) {
 		const insetX = Math.ceil(spreadPx + blurPx * 0.6);
 		const insetY = Math.ceil(spreadPx + blurPx * 0.6 + Math.max(0, offsetY));
 
