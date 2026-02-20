@@ -3,8 +3,8 @@ use cap_recording::{
     feeds::{camera::DeviceOrModelID, microphone::MicrophoneFeed},
     sources::screen_capture::ScreenCaptureTarget,
 };
-use serde::{Deserialize, Serialize};
 use scap_targets::Display;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
@@ -197,9 +197,13 @@ impl DeepLinkAction {
                     return crate::set_mic_input(app.state(), Some(mic_label)).await;
                 }
 
-                let current_mic = app.state::<ArcLock<App>>().read().await.selected_mic_label.clone();
-                let mut microphones: Vec<String> =
-                    MicrophoneFeed::list().keys().cloned().collect();
+                let current_mic = app
+                    .state::<ArcLock<App>>()
+                    .read()
+                    .await
+                    .selected_mic_label
+                    .clone();
+                let mut microphones: Vec<String> = MicrophoneFeed::list().keys().cloned().collect();
 
                 if microphones.is_empty() {
                     return Err("No microphone devices found".to_string());
@@ -216,8 +220,13 @@ impl DeepLinkAction {
                     let camera_id = find_camera_by_selector(&camera_selector)
                         .ok_or(format!("No camera matching \"{}\"", camera_selector))?;
 
-                    return crate::set_camera_input(app.clone(), app.state(), Some(camera_id), None)
-                        .await;
+                    return crate::set_camera_input(
+                        app.clone(),
+                        app.state(),
+                        Some(camera_id),
+                        None,
+                    )
+                    .await;
                 }
 
                 let camera_ids: Vec<DeviceOrModelID> = cap_camera::list_cameras()
@@ -228,7 +237,12 @@ impl DeepLinkAction {
                     return Err("No camera devices found".to_string());
                 }
 
-                let current_camera = app.state::<ArcLock<App>>().read().await.selected_camera_id.clone();
+                let current_camera = app
+                    .state::<ArcLock<App>>()
+                    .read()
+                    .await
+                    .selected_camera_id
+                    .clone();
                 let next_camera = next_item(camera_ids, current_camera.as_ref())
                     .ok_or("No camera devices found".to_string())?;
 

@@ -1184,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.4.7"
+version = "0.4.71"
 dependencies = [
  "aho-corasick",
  "anyhow",
