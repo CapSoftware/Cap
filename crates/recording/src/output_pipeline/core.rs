@@ -1185,11 +1185,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
-                    muxer
-                        .lock()
-                        .await
-                        .send_video_frame(frame, duration)
-                        .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
+                    if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
+                        warn!("Video encoder stopped accepting frames: {e}");
+                        break;
+                    }
                 }
 
                 info!("mux-video stream ended (rx closed)");
@@ -1381,7 +1380,10 @@ impl PreparedAudioSources {
                                         .await
                                         .send_audio_frame(silence_frame, sample_based_before)
                                     {
-                                        error!("Audio encoder (silence): {e}");
+                                        warn!(
+                                            "Audio encoder stopped accepting frames (silence): {e}"
+                                        );
+                                        break;
                                     }
                                 }
                             }
@@ -1408,7 +1410,8 @@ impl PreparedAudioSources {
                             }
 
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
-                                error!("Audio encoder: {e}");
+                                warn!("Audio encoder stopped accepting frames: {e}");
+                                break;
                             }
                         }
                         Ok::<(), anyhow::Error>(())
