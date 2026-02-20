@@ -2,13 +2,16 @@ import type { Metadata } from "next";
 import { ScreenRecordingSoftwarePage } from "@/components/pages/seo/ScreenRecordingSoftwarePage";
 
 export const metadata: Metadata = {
-	title: "Screen Recording Software: High-Quality, User-Friendly, and Free",
+	title: "Screen Recording Software — Free HD Screen Capture | Cap",
 	description:
-		"Cap is an all-in-one screen recording software offering high-quality video capture with an intuitive interface. Ideal for creating tutorials, presentations, and educational content, Cap provides everything you need at no cost.",
+		"Free, open-source screen recording software for Mac and Windows. Capture HD video with audio, share instantly, and own your data. Download Cap today.",
+	alternates: {
+		canonical: "https://cap.so/screen-recording-software",
+	},
 	openGraph: {
-		title: "Screen Recording Software: High-Quality, User-Friendly, and Free",
+		title: "Screen Recording Software — Free HD Screen Capture | Cap",
 		description:
-			"Cap is an all-in-one screen recording software offering high-quality video capture with an intuitive interface. Ideal for creating tutorials, presentations, and educational content, Cap provides everything you need at no cost.",
+			"Free, open-source screen recording software for Mac and Windows. Capture HD video with audio, share instantly, and own your data.",
 		url: "https://cap.so/screen-recording-software",
 		siteName: "Cap",
 		images: [
@@ -24,9 +27,9 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "Screen Recording Software: High-Quality, User-Friendly, and Free",
+		title: "Screen Recording Software — Free HD Screen Capture | Cap",
 		description:
-			"Cap is an all-in-one screen recording software offering high-quality video capture with an intuitive interface. Ideal for creating tutorials, presentations, and educational content.",
+			"Free, open-source screen recording software for Mac and Windows. Capture HD video with audio, share instantly, and own your data.",
 		images: ["https://cap.so/og.png"],
 	},
 };
