@@ -166,7 +166,9 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::RestartRecording => {
-                crate::recording::restart_recording(app.clone(), app.state()).await
+                crate::recording::restart_recording(app.clone(), app.state())
+                    .await
+                    .map(|_| ())
             }
             DeepLinkAction::SwitchMicrophone { mic_label } => {
                 crate::set_mic_input(app.state(), mic_label).await
