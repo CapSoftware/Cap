@@ -1,0 +1,71 @@
+{
+  "name": "cap-raycast",
+  "version": "0.1.0",
+  "description": "Control Cap desktop recording with Raycast",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "raycast": {
+    "schemaVersion": 1,
+    "title": "Cap",
+    "description": "Control Cap desktop recording",
+    "icon": "icon.png",
+    "author": "cap-so",
+    "categories": [
+      "Productivity"
+    ],
+    "commands": [
+      {
+        "name": "start-recording",
+        "title": "Start Recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "stop-recording",
+        "title": "Stop Recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "pause-recording",
+        "title": "Pause Recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "resume-recording",
+        "title": "Resume Recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "switch-microphone",
+        "title": "Switch Microphone",
+        "mode": "no-view",
+        "arguments": [
+          {
+            "name": "micLabel",
+            "type": "text",
+            "placeholder": "Optional microphone label"
+          }
+        ]
+      },
+      {
+        "name": "switch-camera",
+        "title": "Switch Camera",
+        "mode": "no-view",
+        "arguments": [
+          {
+            "name": "cameraSelector",
+            "type": "text",
+            "placeholder": "Optional camera display name/device/model id"
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "@raycast/api": "^1.102.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "typescript": "^5.8.3"
+  }
+}
