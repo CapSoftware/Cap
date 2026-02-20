@@ -157,13 +157,25 @@ impl DeepLinkAction {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::PauseRecording => {
-                crate::recording::pause_recording(app.clone(), app.state()).await
+                let state = app.state::<ArcLock<App>>();
+                if state.read().await.current_recording().is_none() {
+                    return Err("Recording not in progress".to_string());
+                }
+                crate::recording::pause_recording(app.clone(), state).await
             }
             DeepLinkAction::ResumeRecording => {
-                crate::recording::resume_recording(app.clone(), app.state()).await
+                let state = app.state::<ArcLock<App>>();
+                if state.read().await.current_recording().is_none() {
+                    return Err("Recording not in progress".to_string());
+                }
+                crate::recording::resume_recording(app.clone(), state).await
             }
             DeepLinkAction::TogglePauseRecording => {
-                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+                let state = app.state::<ArcLock<App>>();
+                if state.read().await.current_recording().is_none() {
+                    return Err("Recording not in progress".to_string());
+                }
+                crate::recording::toggle_pause_recording(app.clone(), state).await
             }
             DeepLinkAction::RestartRecording => {
                 crate::recording::restart_recording(app.clone(), app.state())
