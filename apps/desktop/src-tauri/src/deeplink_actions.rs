@@ -171,7 +171,11 @@ impl DeepLinkAction {
                     .map(|_| ())
             }
             DeepLinkAction::SwitchMicrophone { mic_label } => {
-                crate::set_mic_input(app.state(), mic_label).await
+                crate::set_mic_input(
+                    app.state::<ArcLock<App>>(),
+                    mic_label.filter(|label| !label.trim().is_empty()),
+                )
+                .await
             }
             DeepLinkAction::SwitchCamera { camera } => {
                 crate::set_camera_input(app.clone(), app.state(), camera, None).await
