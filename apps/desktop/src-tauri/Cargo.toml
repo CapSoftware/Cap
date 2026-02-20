@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.4.71"
+version = "0.4.8"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
