@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use scap_targets::{Window, WindowId};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -84,6 +84,27 @@ pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
                         window_title.as_deref(),
                     )
                 })
+                .map(|_| window.id())
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
+    if exclusions.is_empty() {
+        return Vec::new();
+    }
+
+    Window::list()
+        .into_iter()
+        .filter_map(|window| {
+            let owner_name = window.owner_name();
+            let window_title = window.name();
+
+            exclusions
+                .iter()
+                .find(|entry| entry.matches(None, owner_name.as_deref(), window_title.as_deref()))
                 .map(|_| window.id())
         })
         .collect()

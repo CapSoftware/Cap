@@ -92,6 +92,10 @@ cap-camera-windows = { path = "../camera-windows" }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-cpal = { path = "../scap-cpal" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "2.21", features = ["xlib", "xfixes"] }
+scap-cpal = { path = "../scap-cpal" }
+
 [dev-dependencies]
 tempfile = "3.20.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
