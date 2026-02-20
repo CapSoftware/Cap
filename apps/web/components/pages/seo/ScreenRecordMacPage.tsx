@@ -26,7 +26,7 @@ export const screenRecordMacContent = {
 		{
 			title: "User-Friendly Interface",
 			description:
-				"Designed for ease of use on Mac, Cap offers an intuitive setup and simple recording options.",
+				"Designed for ease of use on Mac, Cap offers an intuitive setup and simple recording options. Follow our <a href='/how-to-screen-record'>step-by-step screen recording guide</a> to start capturing your screen in minutes.",
 		},
 		{
 			title: "Unlimited Recording Time",

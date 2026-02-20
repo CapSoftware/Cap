@@ -3,6 +3,10 @@ import {
 	freeScreenRecorderContent,
 } from "@/components/pages/seo/FreeScreenRecorderPage";
 import {
+	HowToScreenRecordPage,
+	howToScreenRecordContent,
+} from "@/components/pages/seo/HowToScreenRecordPage";
+import {
 	LoomAlternativePage,
 	loomAlternativeContent,
 } from "@/components/pages/seo/LoomAlternativePage";
@@ -62,6 +66,10 @@ export const seoPages: Record<
 	"solutions/remote-team-collaboration": {
 		component: RemoteTeamCollaborationPage,
 		content: remoteTeamCollaborationContent,
+	},
+	"how-to-screen-record": {
+		component: HowToScreenRecordPage,
+		content: howToScreenRecordContent,
 	},
 };
 

@@ -24,14 +24,18 @@ export const seoMetadata = {
 		ogImage: "/og.png",
 	},
 	"screen-recorder-windows": {
-		title: "Screen Record on Windows | Cap - Best Screen Recorder for Windows",
+		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
 		description:
-			"Cap is a powerful, user-friendly screen recorder for Windows, offering high-quality video capture with seamless functionality. Perfect for creating tutorials, presentations, and educational content on Windows.",
+			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks. Works on Windows 10 & 11.",
 		keywords: [
-			"windows screen recorder",
-			"screen recording windows",
-			"windows screen capture",
-			"screen recorder for windows",
+			"screen record windows",
+			"screen recorder windows",
+			"screen record windows 10",
+			"free screen recording software",
+			"free screen recorder for pc",
+			"free windows screen recorder",
+			"screen recorder for windows 10",
+			"screen recorder for windows 11",
 		],
 		ogImage: "/og.png",
 	},
@@ -56,6 +60,20 @@ export const seoMetadata = {
 			"video capture software",
 			"professional screen recorder",
 			"screen capture tool",
+		],
+		ogImage: "/og.png",
+	},
+	"how-to-screen-record": {
+		title:
+			"How to Screen Record | Step-by-Step Guide for Mac, Windows & Browser",
+		description:
+			"Learn how to screen record on Mac, Windows, and in your browser. Step-by-step guide covering screen recording with audio, free tools, and the best screen recording software.",
+		keywords: [
+			"how to screen record",
+			"how to screen record on mac",
+			"how to screen record on windows",
+			"how to screen record with audio",
+			"screen recording guide",
 		],
 		ogImage: "/og.png",
 	},
