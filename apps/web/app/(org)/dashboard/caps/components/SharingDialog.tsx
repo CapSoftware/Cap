@@ -67,10 +67,13 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		spacesData: contextSpacesData,
 		user: contextUser,
 		setUpgradeModalOpen,
+		activeOrganization,
 	} = useDashboardContext() ?? {};
 	const spacesData = propSpacesData || contextSpacesData;
 	const user = propUser ?? contextUser;
 	const onUpgradeRequest = propOnUpgradeRequest ?? setUpgradeModalOpen;
+	const allowedEmailDomain =
+		activeOrganization?.organization.allowedEmailDomain;
 	const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
 	const [searchTerm, setSearchTerm] = useState("");
 	const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
@@ -338,12 +341,16 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									</div>
 									<div>
 										<p className="text-sm font-medium text-gray-12">
-											Anyone with the link
+											{allowedEmailDomain?.trim()
+												? "Restricted link access"
+												: "Anyone with the link"}
 										</p>
 										<p className="text-xs text-gray-10">
-											{publicToggle
-												? "Anyone on the internet with the link can view"
-												: "Only people with access can view"}
+											{!publicToggle
+												? "Only people with access can view"
+												: allowedEmailDomain?.trim()
+													? `Only users with ${allowedEmailDomain.trim()} can view`
+													: "Anyone on the internet with the link can view"}
 										</p>
 									</div>
 								</div>

@@ -158,9 +158,7 @@ export const screenRecordWindowsContent: SeoPageContent = {
 			"Cap gives you flexible recording options to match your workflow — whether you need a quick screen capture or a polished studio recording",
 		modes: [
 			{
-				icon: (
-					<Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />
-				),
+				icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
 				title: "Instant Mode",
 				description:
 					"Click record and share your screen right away with an auto-generated link. Ideal for quick bug reports, async standups, and answering questions with a screencast instead of a wall of text.",
@@ -240,8 +238,7 @@ export const screenRecordWindowsContent: SeoPageContent = {
 				"Absolutely. Cap records system audio (everything you hear through your speakers or headphones) and microphone input simultaneously. You can toggle each source independently before or during recording. This makes Cap ideal for tutorials, gameplay, and presentations where both audio tracks matter.",
 		},
 		{
-			question:
-				"What is the best free screen recording software for Windows?",
+			question: "What is the best free screen recording software for Windows?",
 			answer:
 				"Cap is the best free screen recording software for Windows if you want a balance of simplicity, quality, and sharing speed. Unlike OBS, Cap requires zero configuration. Unlike Windows Game Bar, Cap can record your full desktop, custom regions, and add a webcam overlay. And unlike Loom, Cap is fully <a href='/loom-alternative'>open source</a> with no per-seat pricing.",
 		},
@@ -266,7 +263,8 @@ export const screenRecordWindowsContent: SeoPageContent = {
 				"Yes. Cap can record full-screen applications including games. While Windows Game Bar is limited to a single app window and has a 4-hour cap, Cap records for as long as you want with system audio captured natively. For dedicated streamers, OBS may offer more broadcast features, but for quick gameplay clips and highlights, Cap is the simpler choice.",
 		},
 		{
-			question: "Is Cap better than Windows Snipping Tool for screen recording?",
+			question:
+				"Is Cap better than Windows Snipping Tool for screen recording?",
 			answer:
 				"Windows Snipping Tool (available on Windows 11) can record your screen but offers no audio recording, no webcam overlay, no editing, and no sharing features. Cap records with audio, adds facecam, includes a built-in editor, and generates instant share links — making it a far more complete <a href='/screen-recording-software'>screen recording solution</a> for Windows.",
 		},

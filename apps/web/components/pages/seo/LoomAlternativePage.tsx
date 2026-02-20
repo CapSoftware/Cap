@@ -184,16 +184,16 @@ export const loomAlternativeContent: SeoPageContent = {
 				{ text: "Connect your own S3", status: "positive" },
 				{ text: "Not available", status: "negative" },
 			],
-		[
-			"Community Input",
-			{ text: "Direct via open source", status: "positive" },
-			{ text: "Limited", status: "neutral" },
-		],
-		[
-			"Loom Video Import",
-			{ text: "Built-in importer", status: "positive" },
-			{ text: "Not available", status: "negative" },
-		],
+			[
+				"Community Input",
+				{ text: "Direct via open source", status: "positive" },
+				{ text: "Limited", status: "neutral" },
+			],
+			[
+				"Loom Video Import",
+				{ text: "Built-in importer", status: "positive" },
+				{ text: "Not available", status: "negative" },
+			],
 			[
 				"Data Ownership",
 				{ text: "100% with own storage", status: "positive" },
