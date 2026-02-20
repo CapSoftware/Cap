@@ -201,6 +201,8 @@ impl EditorInstance {
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
+                    caption_segments: Vec::new(),
+                    keyboard_segments: Vec::new(),
                 });
 
                 if let Err(e) = project.write(&recording_meta.project_path) {
@@ -594,6 +596,7 @@ pub struct SegmentMedia {
     pub audio: Option<Arc<AudioData>>,
     pub system_audio: Option<Arc<AudioData>>,
     pub cursor: Arc<CursorEvents>,
+    pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
 
@@ -651,6 +654,7 @@ pub async fn create_segments(
                 audio,
                 system_audio: None,
                 cursor,
+                keyboard: Arc::new(Default::default()),
                 decoders,
             }])
         }
@@ -693,10 +697,13 @@ pub async fn create_segments(
                 .await
                 .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
 
+                let keyboard = Arc::new(s.keyboard_events(recording_meta));
+
                 segments.push(SegmentMedia {
                     audio,
                     system_audio,
                     cursor,
+                    keyboard,
                     decoders,
                 });
             }
