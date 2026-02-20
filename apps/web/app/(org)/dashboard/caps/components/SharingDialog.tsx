@@ -349,7 +349,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 											{!publicToggle
 												? "Only people with access can view"
 												: allowedEmailDomain?.trim()
-													? `Only users with ${allowedEmailDomain.trim()} can view`
+													? `Only users with matching ${allowedEmailDomain.trim().includes(",") ? "emails" : "email"} can view`
 													: "Anyone on the internet with the link can view"}
 										</p>
 									</div>
