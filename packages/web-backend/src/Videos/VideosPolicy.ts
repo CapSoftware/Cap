@@ -89,11 +89,22 @@ export function buildCanView(
 					yield* Effect.log(
 						"Email access restriction active and user not logged in. Access denied.",
 					);
-					return false;
+					yield* Effect.fail(
+						new Policy.PolicyDeniedError({
+							reason: "email_restriction_login_required",
+						}),
+					);
 				}
-				if (!isEmailAllowedByRestriction(user.value.email, restriction)) {
+				if (
+					Option.isSome(user) &&
+					!isEmailAllowedByRestriction(user.value.email, restriction)
+				) {
 					yield* Effect.log("Email access restriction active. Access denied.");
-					return false;
+					yield* Effect.fail(
+						new Policy.PolicyDeniedError({
+							reason: "email_restriction_denied",
+						}),
+					);
 				}
 			}
 

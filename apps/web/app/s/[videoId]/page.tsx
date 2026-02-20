@@ -116,26 +116,47 @@ const ALLOWED_REFERRERS = [
 	"linkedin.com",
 ];
 
-function PolicyDeniedView() {
+function PolicyDeniedView({ reason }: { reason?: string }) {
+	let title = "This video is private";
+	let description = (
+		<>
+			If you own this video, please <Link href="/login">sign in</Link> to manage
+			sharing.
+		</>
+	);
+
+	if (reason === "email_restriction_login_required") {
+		title = "This video requires sign-in";
+		description = (
+			<>
+				The owner of this video has restricted access. Please{" "}
+				<Link href="/login">sign in</Link> with an authorized email address to
+				view.
+			</>
+		);
+	} else if (reason === "email_restriction_denied") {
+		title = "Access restricted";
+		description =
+			"Your email address does not meet the requirements set by the video owner.";
+	}
+
 	return (
 		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
 			<Logo className="size-32" />
-			<h1 className="mb-2 text-2xl font-semibold">This video is private</h1>
-			<p className="text-gray-400">
-				If you own this video, please <Link href="/login">sign in</Link> to
-				manage sharing.
-			</p>
+			<h1 className="mb-2 text-2xl font-semibold">{title}</h1>
+			<p className="text-gray-400">{description}</p>
 		</div>
 	);
 }
 
-const renderPolicyDenied = (videoId: Video.VideoId) =>
-	Effect.succeed(<PolicyDeniedView key={videoId} />);
+const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
+	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());
 
 const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
-	PolicyDenied: () => renderPolicyDenied(videoId),
+	PolicyDenied: (e: Policy.PolicyDeniedError) =>
+		renderPolicyDenied(videoId, e.reason),
 	NoSuchElementException: renderNoSuchElement,
 });
 
@@ -210,8 +231,8 @@ export async function generateMetadata(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed({
-					title: "Cap: This video is private",
-					description: "This video is private and cannot be shared.",
+					title: "Cap: This video is restricted",
+					description: "This video has restricted access.",
 					openGraph: {
 						images: [
 							{
