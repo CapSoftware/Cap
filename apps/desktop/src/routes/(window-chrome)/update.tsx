@@ -4,6 +4,7 @@ import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { createResource, createSignal, Match, Show, Switch } from "solid-js";
+import { generalSettingsStore } from "~/store";
 
 export default function () {
 	const navigate = useNavigate();
@@ -11,6 +12,14 @@ export default function () {
 
 	const [update] = createResource(async () => {
 		try {
+			const settings = await generalSettingsStore.get();
+			const isDisabled = settings?.disableUpdateChecks ?? false;
+			
+			if(isDisabled) {
+				setUpdateError("Update checks are currently disabled.");
+				return;
+			}
+			
 			const update = await check();
 			if (!update) return;
 			return update;
