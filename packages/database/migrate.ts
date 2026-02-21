@@ -20,7 +20,7 @@ function errorIsOrgIdMigration(e: unknown): e is DrizzleQueryError {
 }
 
 export async function migrateDb() {
-	runMigrate()
+	await runMigrate()
 		.catch(async (e) => {
 			if (errorIsOrgIdMigration(e)) {
 				console.log("non-null videos.orgId migration failed, running backfill");
@@ -34,5 +34,6 @@ export async function migrateDb() {
 				throw new Error(
 					"videos.orgId backfill failed, you will need to manually update the videos.orgId column before attempting to migrate again.",
 				);
+			throw e;
 		});
 }
