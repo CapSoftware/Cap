@@ -1,8 +1,8 @@
-import { executeCapAction, createOpenSettingsAction } from "./utils";
+import { createOpenSettingsAction, executeCapAction } from "./utils";
 
 export default async function Command() {
-  await executeCapAction(createOpenSettingsAction(), {
-    feedbackMessage: "Opening Cap settings...",
-    feedbackType: "hud",
-  });
+	await executeCapAction(createOpenSettingsAction(), {
+		feedbackMessage: "Opening Cap settings...",
+		feedbackType: "hud",
+	});
 }

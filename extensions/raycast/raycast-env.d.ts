@@ -29,6 +29,10 @@ declare namespace Preferences {
   export type RecordingStatus = ExtensionPreferences & {}
   /** Preferences accessible in the `restart-recording` command */
   export type RestartRecording = ExtensionPreferences & {}
+  /** Preferences accessible in the `switch-microphone` command */
+  export type SwitchMicrophone = ExtensionPreferences & {}
+  /** Preferences accessible in the `switch-camera` command */
+  export type SwitchCamera = ExtensionPreferences & {}
   /** Preferences accessible in the `open-settings` command */
   export type OpenSettings = ExtensionPreferences & {}
 }
@@ -50,6 +54,10 @@ declare namespace Arguments {
   export type RecordingStatus = {}
   /** Arguments passed to the `restart-recording` command */
   export type RestartRecording = {}
+  /** Arguments passed to the `switch-microphone` command */
+  export type SwitchMicrophone = {}
+  /** Arguments passed to the `switch-camera` command */
+  export type SwitchCamera = {}
   /** Arguments passed to the `open-settings` command */
   export type OpenSettings = {}
 }

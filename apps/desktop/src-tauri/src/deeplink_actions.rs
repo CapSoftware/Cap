@@ -292,6 +292,7 @@ fn write_deeplink_response<T: Serialize>(app: &AppHandle, data: &T) -> Result<()
 
     // Atomic write: write to temp file, then rename
     std::fs::write(&temp_path, &json).map_err(|e| format!("Failed to write response file: {e}"))?;
+    let _ = std::fs::remove_file(&response_path);
     std::fs::rename(&temp_path, &response_path)
         .map_err(|e| format!("Failed to rename response file: {e}"))?;
 
