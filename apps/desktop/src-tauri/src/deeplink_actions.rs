@@ -201,3 +201,46 @@ impl DeepLinkAction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionParseFromUrlError, DeepLinkAction};
+    use tauri::Url;
+
+    fn action_url(payload: &str) -> Url {
+        let mut url = Url::parse("cap-desktop://action").expect("valid action url");
+        url.query_pairs_mut().append_pair("value", payload);
+        url
+    }
+
+    #[test]
+    fn parses_pause_recording_action() {
+        let url = action_url(r#""pause_recording""#);
+
+        let action = DeepLinkAction::try_from(&url).expect("parse pause action");
+        assert!(matches!(action, DeepLinkAction::PauseRecording));
+    }
+
+    #[test]
+    fn parses_switch_microphone_action() {
+        let url = action_url(r#"{"switch_microphone":{"mic_label":"Studio Mic"}}"#);
+
+        let action = DeepLinkAction::try_from(&url).expect("parse switch microphone action");
+        match action {
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                assert_eq!(mic_label.as_deref(), Some("Studio Mic"));
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_non_action_domain() {
+        let mut url = Url::parse("cap-desktop://signin").expect("valid signin url");
+        url.query_pairs_mut()
+            .append_pair("value", r#""stop_recording""#);
+
+        let error = DeepLinkAction::try_from(&url).expect_err("signin deeplink is not action");
+        assert!(matches!(error, ActionParseFromUrlError::NotAction));
+    }
+}
