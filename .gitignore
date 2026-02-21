@@ -68,23 +68,4 @@ seo/
 analysis/
 analysis/plans/
 .ralphy
-# Solari internal artifacts (auto-added)
-.solari_*
 
-# Auto-added by Solari to prevent build artifact commits
-.venv/
-venv/
-node_modules/
-__pycache__/
-*.pyc
-.solari_deps_installed
-*.egg-info/
-dist/
-build/
-.tox/
-.pytest_cache/
-.mypy_cache/
-target/
-.gradle/
-*.class
-.idea/
