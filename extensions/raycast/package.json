@@ -5,7 +5,10 @@
   "description": "Control Cap screen recording from Raycast",
   "icon": "icon.png",
   "author": "cap",
-  "categories": ["Productivity", "Applications"],
+  "categories": [
+    "Productivity",
+    "Applications"
+  ],
   "license": "MIT",
   "commands": [
     {
@@ -14,7 +17,11 @@
       "subtitle": "Cap",
       "description": "Start a new screen recording",
       "mode": "view",
-      "keywords": ["record", "capture", "screen"]
+      "keywords": [
+        "record",
+        "capture",
+        "screen"
+      ]
     },
     {
       "name": "stop-recording",
@@ -22,7 +29,11 @@
       "subtitle": "Cap",
       "description": "Stop the current recording",
       "mode": "no-view",
-      "keywords": ["stop", "end", "finish"]
+      "keywords": [
+        "stop",
+        "end",
+        "finish"
+      ]
     },
     {
       "name": "pause-recording",
@@ -30,7 +41,10 @@
       "subtitle": "Cap",
       "description": "Pause the current recording",
       "mode": "no-view",
-      "keywords": ["pause", "hold"]
+      "keywords": [
+        "pause",
+        "hold"
+      ]
     },
     {
       "name": "resume-recording",
@@ -38,7 +52,10 @@
       "subtitle": "Cap",
       "description": "Resume a paused recording",
       "mode": "no-view",
-      "keywords": ["resume", "continue"]
+      "keywords": [
+        "resume",
+        "continue"
+      ]
     },
     {
       "name": "toggle-pause",
@@ -46,7 +63,11 @@
       "subtitle": "Cap",
       "description": "Toggle pause/resume on the current recording",
       "mode": "no-view",
-      "keywords": ["toggle", "pause", "resume"]
+      "keywords": [
+        "toggle",
+        "pause",
+        "resume"
+      ]
     },
     {
       "name": "take-screenshot",
@@ -54,15 +75,34 @@
       "subtitle": "Cap",
       "description": "Take a screenshot of a screen or window",
       "mode": "view",
-      "keywords": ["screenshot", "capture", "snap"]
+      "keywords": [
+        "screenshot",
+        "capture",
+        "snap"
+      ]
     },
     {
       "name": "recording-status",
       "title": "Recording Status",
       "subtitle": "Cap",
       "description": "Show the current recording status",
+      "mode": "view",
+      "keywords": [
+        "status",
+        "state",
+        "info"
+      ]
+    },
+    {
+      "name": "restart-recording",
+      "title": "Restart Recording",
+      "subtitle": "Cap",
+      "description": "Restart the current recording",
       "mode": "no-view",
-      "keywords": ["status", "state"]
+      "keywords": [
+        "restart",
+        "redo"
+      ]
     },
     {
       "name": "open-settings",
@@ -70,7 +110,11 @@
       "subtitle": "Cap",
       "description": "Open Cap settings",
       "mode": "no-view",
-      "keywords": ["settings", "preferences", "config"]
+      "keywords": [
+        "settings",
+        "preferences",
+        "config"
+      ]
     }
   ],
   "dependencies": {

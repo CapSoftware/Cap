@@ -27,6 +27,8 @@ declare namespace Preferences {
   export type TakeScreenshot = ExtensionPreferences & {}
   /** Preferences accessible in the `recording-status` command */
   export type RecordingStatus = ExtensionPreferences & {}
+  /** Preferences accessible in the `restart-recording` command */
+  export type RestartRecording = ExtensionPreferences & {}
   /** Preferences accessible in the `open-settings` command */
   export type OpenSettings = ExtensionPreferences & {}
 }
@@ -46,6 +48,8 @@ declare namespace Arguments {
   export type TakeScreenshot = {}
   /** Arguments passed to the `recording-status` command */
   export type RecordingStatus = {}
+  /** Arguments passed to the `restart-recording` command */
+  export type RestartRecording = {}
   /** Arguments passed to the `open-settings` command */
   export type OpenSettings = {}
 }

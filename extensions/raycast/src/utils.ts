@@ -1,8 +1,17 @@
 import { closeMainWindow, getApplications, Keyboard, open, showHUD, showToast, Toast } from "@raycast/api";
+import { existsSync, readFileSync, unlinkSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 
 const CAP_BUNDLE_ID = "so.cap.desktop";
 const CAP_DEV_BUNDLE_ID = "so.cap.desktop.dev";
 const CAP_URL_SCHEME = "cap-desktop";
+
+// Response file paths for both production and dev builds
+const RESPONSE_FILE_PATHS = [
+  join(homedir(), "Library", "Application Support", CAP_DEV_BUNDLE_ID, "deeplink-response.json"),
+  join(homedir(), "Library", "Application Support", CAP_BUNDLE_ID, "deeplink-response.json"),
+];
 
 export interface DeepLinkAction {
   [key: string]: unknown;
@@ -58,6 +67,80 @@ export async function executeCapAction(
   }
 
   return true;
+}
+
+function getResponseFilePath(): string | null {
+  for (const path of RESPONSE_FILE_PATHS) {
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+  // Return the dev path as default (for writing)
+  return RESPONSE_FILE_PATHS[0];
+}
+
+function clearResponseFile(): void {
+  for (const path of RESPONSE_FILE_PATHS) {
+    try {
+      if (existsSync(path)) {
+        unlinkSync(path);
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readResponseFile<T>(timeoutMs = 3000): Promise<T | null> {
+  const startTime = Date.now();
+  const pollInterval = 100;
+
+  while (Date.now() - startTime < timeoutMs) {
+    for (const path of RESPONSE_FILE_PATHS) {
+      try {
+        if (existsSync(path)) {
+          const content = readFileSync(path, "utf-8");
+          if (content.trim()) {
+            return JSON.parse(content) as T;
+          }
+        }
+      } catch {
+        // File may still be being written, continue polling
+      }
+    }
+    await sleep(pollInterval);
+  }
+
+  return null;
+}
+
+/**
+ * Execute a Cap deeplink action and read the response from the response file.
+ * Used for actions like GetStatus and ListDevices that return data.
+ */
+export async function executeCapActionWithResponse<T>(
+  action: DeepLinkAction,
+  timeoutMs = 3000
+): Promise<T | null> {
+  if (await capNotInstalled()) {
+    return null;
+  }
+
+  // Clear any previous response
+  clearResponseFile();
+
+  const jsonValue = JSON.stringify(action);
+  const encodedValue = encodeURIComponent(jsonValue);
+  const url = `${CAP_URL_SCHEME}://action?value=${encodedValue}`;
+
+  await open(url);
+
+  // Poll for the response
+  return await readResponseFile<T>(timeoutMs);
 }
 
 export interface RecordingStatus {

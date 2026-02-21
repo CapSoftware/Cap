@@ -237,9 +237,7 @@ impl DeepLinkAction {
             }
             DeepLinkAction::ListDevices => {
                 let devices = get_available_devices();
-                let json = serde_json::to_string(&devices).map_err(|e| e.to_string())?;
-                println!("CAP_DEEPLINK_RESPONSE:{}", json);
-                Ok(())
+                write_deeplink_response(app, &devices)
             }
             DeepLinkAction::GetStatus => {
                 let state = app.state::<ArcLock<App>>();
@@ -266,9 +264,7 @@ impl DeepLinkAction {
                         recording_mode: None,
                     }
                 };
-                let json = serde_json::to_string(&status).map_err(|e| e.to_string())?;
-                println!("CAP_DEEPLINK_RESPONSE:{}", json);
-                Ok(())
+                write_deeplink_response(app, &status)
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
@@ -278,6 +274,29 @@ impl DeepLinkAction {
             }
         }
     }
+}
+
+fn write_deeplink_response<T: Serialize>(app: &AppHandle, data: &T) -> Result<(), String> {
+    let response_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+
+    std::fs::create_dir_all(&response_dir)
+        .map_err(|e| format!("Failed to create app data dir: {e}"))?;
+
+    let response_path = response_dir.join("deeplink-response.json");
+    let temp_path = response_dir.join("deeplink-response.json.tmp");
+
+    let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
+
+    // Atomic write: write to temp file, then rename
+    std::fs::write(&temp_path, &json).map_err(|e| format!("Failed to write response file: {e}"))?;
+    std::fs::rename(&temp_path, &response_path)
+        .map_err(|e| format!("Failed to rename response file: {e}"))?;
+
+    trace!("Wrote deeplink response to {:?}", response_path);
+    Ok(())
 }
 
 fn get_available_devices() -> DeepLinkDevices {
