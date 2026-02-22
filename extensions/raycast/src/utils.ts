@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +67,7 @@ export async function executeCapAction(
 	options?: {
 		feedbackMessage?: string;
 		feedbackType?: "toast" | "hud";
+		closeWindow?: boolean;
 	},
 ): Promise<boolean> {
 	if (await capNotInstalled()) {
@@ -76,7 +78,9 @@ export async function executeCapAction(
 	const encodedValue = encodeURIComponent(jsonValue);
 	const url = `${CAP_URL_SCHEME}://action?value=${encodedValue}`;
 
-	await closeMainWindow({ clearRootSearch: true });
+	if (options?.closeWindow !== false) {
+		await closeMainWindow({ clearRootSearch: true });
+	}
 	await open(url);
 
 	if (options?.feedbackMessage) {
@@ -127,7 +131,7 @@ async function readResponseFile<T>(timeoutMs = 3000): Promise<T | null> {
 
 export async function executeCapActionWithResponse<T>(
 	action: DeepLinkAction,
-	timeoutMs = 3000,
+	timeoutMs = 6000,
 ): Promise<T | null> {
 	if (await capNotInstalled()) {
 		return null;
@@ -140,9 +144,8 @@ export async function executeCapActionWithResponse<T>(
 	const encodedValue = encodeURIComponent(jsonValue);
 	const url = `${CAP_URL_SCHEME}://action?value=${encodedValue}`;
 
-	await open(url);
+	execSync(`open -g '${url}'`);
 
-	// Poll for the response
 	return await readResponseFile<T>(timeoutMs);
 }
 
@@ -185,7 +188,7 @@ export function createStartRecordingAction(
 	captureMode: CaptureMode,
 	mode: RecordingMode = "instant",
 	options?: {
-		camera?: { device: string } | { model: string } | null;
+		camera?: { DeviceID: string } | { ModelID: string } | null;
 		mic_label?: string | null;
 		capture_system_audio?: boolean;
 	},
@@ -202,23 +205,23 @@ export function createStartRecordingAction(
 }
 
 export function createStopRecordingAction(): DeepLinkAction {
-	return { stop_recording: {} };
+	return { stop_recording: null };
 }
 
 export function createPauseRecordingAction(): DeepLinkAction {
-	return { pause_recording: {} };
+	return { pause_recording: null };
 }
 
 export function createResumeRecordingAction(): DeepLinkAction {
-	return { resume_recording: {} };
+	return { resume_recording: null };
 }
 
 export function createTogglePauseAction(): DeepLinkAction {
-	return { toggle_pause_recording: {} };
+	return { toggle_pause_recording: null };
 }
 
 export function createRestartRecordingAction(): DeepLinkAction {
-	return { restart_recording: {} };
+	return { restart_recording: null };
 }
 
 export function createTakeScreenshotAction(
@@ -242,7 +245,7 @@ export function createSetMicrophoneAction(
 }
 
 export function createSetCameraAction(
-	id: { device: string } | { model: string } | null,
+	id: { DeviceID: string } | { ModelID: string } | null,
 ): DeepLinkAction {
 	return {
 		set_camera: {
@@ -252,11 +255,11 @@ export function createSetCameraAction(
 }
 
 export function createListDevicesAction(): DeepLinkAction {
-	return { list_devices: {} };
+	return { list_devices: null };
 }
 
 export function createGetStatusAction(): DeepLinkAction {
-	return { get_status: {} };
+	return { get_status: null };
 }
 
 export function createOpenSettingsAction(page?: string): DeepLinkAction {

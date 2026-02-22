@@ -13,6 +13,13 @@ use crate::{
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub struct DeepLinkStartRecordingResult {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct DeepLinkRecordingStatus {
     pub is_recording: bool,
     pub is_paused: bool,
@@ -144,8 +151,9 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
+            Some("action") => Ok(()),
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
+            None => Err(ActionParseFromUrlError::Invalid),
         }?;
 
         let params = url
@@ -199,9 +207,33 @@ impl DeepLinkAction {
                     organization_id: None,
                 };
 
-                crate::recording::start_recording(app.clone(), state, inputs)
-                    .await
-                    .map(|_| ())
+                let result = crate::recording::start_recording(app.clone(), state, inputs).await;
+                match result {
+                    Ok(crate::recording::RecordingAction::Started) => {
+                        write_deeplink_response(app, &DeepLinkStartRecordingResult {
+                            success: true,
+                            error: None,
+                        })
+                    }
+                    Ok(crate::recording::RecordingAction::InvalidAuthentication) => {
+                        write_deeplink_response(app, &DeepLinkStartRecordingResult {
+                            success: false,
+                            error: Some("Please sign in to Cap to use instant recording".to_string()),
+                        })
+                    }
+                    Ok(crate::recording::RecordingAction::UpgradeRequired) => {
+                        write_deeplink_response(app, &DeepLinkStartRecordingResult {
+                            success: false,
+                            error: Some("A Cap upgrade is required to use this feature".to_string()),
+                        })
+                    }
+                    Err(e) => {
+                        write_deeplink_response(app, &DeepLinkStartRecordingResult {
+                            success: false,
+                            error: Some(e),
+                        })
+                    }
+                }
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await

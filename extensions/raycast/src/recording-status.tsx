@@ -104,13 +104,14 @@ export default function Command() {
 									status.is_paused ? "Resume Recording" : "Pause Recording"
 								}
 								icon={status.is_paused ? Icon.Play : Icon.Pause}
-								shortcut={{ modifiers: ["cmd"], key: "p" }}
+								shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
 								onAction={async () => {
 									await executeCapAction(createTogglePauseAction(), {
 										feedbackMessage: status.is_paused
 											? "Resuming..."
 											: "Pausing...",
-										feedbackType: "hud",
+										feedbackType: "toast",
+										closeWindow: false,
 									});
 									setTimeout(fetchStatus, 500);
 								}}
@@ -122,7 +123,8 @@ export default function Command() {
 								onAction={async () => {
 									await executeCapAction(createRestartRecordingAction(), {
 										feedbackMessage: "Restarting recording...",
-										feedbackType: "hud",
+										feedbackType: "toast",
+										closeWindow: false,
 									});
 									setTimeout(fetchStatus, 1000);
 								}}
@@ -135,7 +137,8 @@ export default function Command() {
 								onAction={async () => {
 									await executeCapAction(createStopRecordingAction(), {
 										feedbackMessage: "Stopping recording...",
-										feedbackType: "hud",
+										feedbackType: "toast",
+										closeWindow: false,
 									});
 									setTimeout(fetchStatus, 1000);
 								}}

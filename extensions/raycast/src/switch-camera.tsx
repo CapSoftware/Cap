@@ -93,7 +93,7 @@ export default function Command() {
 										shortcut={{ modifiers: ["cmd"], key: "return" }}
 										onAction={() =>
 											executeCapAction(
-												createSetCameraAction({ device: camera.id }),
+												createSetCameraAction({ DeviceID: camera.id }),
 												{
 													feedbackMessage: `Camera set to ${camera.name}`,
 													feedbackType: "hud",

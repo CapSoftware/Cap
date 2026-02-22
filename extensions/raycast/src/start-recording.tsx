@@ -12,7 +12,6 @@ import {
 	createListDevicesAction,
 	createStartRecordingAction,
 	type DeepLinkDevices,
-	executeCapAction,
 	executeCapActionWithResponse,
 	type RecordingMode,
 } from "./utils";
@@ -74,13 +73,23 @@ export default function Command() {
 				? { screen: selectedTarget }
 				: { window: selectedTarget };
 
-		await executeCapAction(
-			createStartRecordingAction(captureMode, recordingMode),
-			{
-				feedbackMessage: `Starting ${recordingMode} recording...`,
-				feedbackType: "hud",
-			},
-		);
+		const result = await executeCapActionWithResponse<{
+			success: boolean;
+			error: string | null;
+		}>(createStartRecordingAction(captureMode, recordingMode));
+
+		if (result?.success) {
+			showToast({
+				style: Toast.Style.Success,
+				title: `${recordingMode === "instant" ? "Instant" : "Studio"} recording started`,
+			});
+		} else {
+			showToast({
+				style: Toast.Style.Failure,
+				title: "Failed to start recording",
+				message: result?.error ?? "Make sure Cap is running",
+			});
+		}
 	}
 
 	const targets =
