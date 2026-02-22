@@ -30,7 +30,7 @@
 		"updater": { "active": false, "pubkey": "" },
 		"deep-link": {
 			"desktop": {
-				"schemes": ["cap-desktop"]
+				"schemes": ["cap-desktop", "cap"]
 			}
 		}
 	},
