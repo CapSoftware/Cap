@@ -9,14 +9,14 @@ import { generalSettingsStore } from "~/store";
 export default function () {
 	const navigate = useNavigate();
 	const [updateError, setUpdateError] = createSignal<string | null>(null);
+	const [updatesDisabled, setUpdatesDisabled] = createSignal<boolean>(false);
 
 	const [update] = createResource(async () => {
 		try {
-			const settings = await generalSettingsStore.get();
-			const isDisabled = settings?.disableUpdateChecks ?? false;
+			const generalSettings = await generalSettingsStore.get();
 			
-			if(isDisabled) {
-				setUpdateError("Update checks are currently disabled.");
+			if (generalSettings?.disableUpdateChecks ?? false) {
+				setUpdatesDisabled(true);
 				return;
 			}
 			
@@ -32,6 +32,15 @@ export default function () {
 
 	return (
 		<div class="flex flex-col justify-center flex-1 items-center gap-[3rem] p-[1rem] text-[0.875rem] font-[400] h-full">
+			<Show when={updatesDisabled()}>
+			    <div class="flex flex-col gap-4 items-center text-center max-w-md">
+					<p class="text-[--text-primary]">Update checks are currently disabled.</p>
+					<p class="text-[--text-tertiary]">
+						To enable updates, go to General Settings and disable "Disable Update Checks".
+					</p>
+			        <Button onClick={() => navigate("/")}>Go Back</Button>
+			    </div>
+			</Show>
 			<Show when={updateError()}>
 				<div class="flex flex-col gap-4 items-center text-center max-w-md">
 					<p class="text-[--text-primary]">{updateError()}</p>
@@ -48,7 +57,7 @@ export default function () {
 			<Show
 				when={!updateError() && update()}
 				fallback={
-					!updateError() && (
+					!updateError() && !updatesDisabled() && (
 						<span class="text-[--text-tertiary]">No update available</span>
 					)
 				}
