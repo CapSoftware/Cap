@@ -32,6 +32,18 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    PauseRecording,
+    ResumeRecording, 
+    TogglePauseRecording,
+    TakeScreenshot{
+        target: ScreenCaptureTarget
+    },
+    SetCamera{
+        camera_id: Option<DeviceOrModelID>
+    },
+    SetMicrophone{
+        mic_label: Option<String>
+    }
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -151,6 +163,28 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TakeScreenshot{ target } => {
+                crate::recording::take_screenshot(app.clone(), app.state(), target).await.map(|_| ())
+            }
+            DeepLinkAction::SetCamera{ camera_id } => {
+                let camera_id = camera_id.ok_or_else(|| "camera_id is required".to_string())?;
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state.clone(), Some(camera_id), None).await
+            }
+            DeepLinkAction::SetMicrophone{ mic_label } => {
+                let label = mic_label.ok_or_else(|| "mic_label is required".to_string())?;
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state.clone(), Some(mic_label)).await
             }
         }
     }
