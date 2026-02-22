@@ -42,8 +42,9 @@ use auth::{AuthStore, Plan};
 use camera::{CameraPreviewManager, CameraPreviewState};
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
-    InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, UploadMeta, VideoUploadInfo, XY, ZoomSegment,
+    CursorEvents, InstantRecordingMeta, KeyboardEvent, ProjectConfiguration, RecordingMeta,
+    RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus, UploadMeta,
+    VideoUploadInfo, XY, ZoomSegment,
 };
 use cap_recording::{
     RecordingMode,
@@ -1971,6 +1972,54 @@ async fn generate_zoom_segments_from_clicks(
     Ok(zoom_segments)
 }
 
+#[derive(Serialize, Deserialize, Type, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SegmentKeyboardEvents {
+    segment_index: u32,
+    events: Vec<KeyboardEvent>,
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
+async fn get_keyboard_events(
+    editor_instance: WindowEditorInstance,
+) -> Result<Vec<SegmentKeyboardEvents>, String> {
+    let meta = editor_instance.meta();
+
+    let load_events = |path| {
+        let full_path = meta.path(path);
+        CursorEvents::load_from_file(&full_path)
+            .map(|events| events.keyboard)
+            .unwrap_or_default()
+    };
+
+    let events = match &meta.inner {
+        RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment { segment }) => segment
+            .cursor
+            .as_ref()
+            .map(|path| {
+                vec![SegmentKeyboardEvents {
+                    segment_index: 0,
+                    events: load_events(path),
+                }]
+            })
+            .unwrap_or_default(),
+        RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) => inner
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(segment_index, segment)| SegmentKeyboardEvents {
+                segment_index: segment_index as u32,
+                events: segment.cursor.as_ref().map(load_events).unwrap_or_default(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    Ok(events)
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -2960,6 +3009,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_project_config,
             update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
+            get_keyboard_events,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,

@@ -33,6 +33,20 @@ pub struct CursorClickEvent {
     pub down: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Type, Debug, PartialEq)]
+pub struct KeyboardEvent {
+    pub active_modifiers: Vec<String>,
+    pub key: String,
+    pub time_ms: f64,
+    pub down: bool,
+}
+
+impl PartialOrd for KeyboardEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.time_ms.partial_cmp(&other.time_ms)
+    }
+}
+
 impl PartialOrd for CursorClickEvent {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.time_ms.partial_cmp(&other.time_ms)
@@ -53,6 +67,8 @@ pub struct CursorImage {
 pub struct CursorData {
     pub clicks: Vec<CursorClickEvent>,
     pub moves: Vec<CursorMoveEvent>,
+    #[serde(default)]
+    pub keyboard: Vec<KeyboardEvent>,
     pub cursor_images: CursorImages,
 }
 
@@ -67,6 +83,8 @@ impl CursorData {
 pub struct CursorEvents {
     pub clicks: Vec<CursorClickEvent>,
     pub moves: Vec<CursorMoveEvent>,
+    #[serde(default)]
+    pub keyboard: Vec<KeyboardEvent>,
 }
 
 impl CursorEvents {
@@ -262,6 +280,7 @@ impl From<CursorData> for CursorEvents {
         Self {
             clicks: value.clicks,
             moves: value.moves,
+            keyboard: value.keyboard,
         }
     }
 }
@@ -312,6 +331,7 @@ mod tests {
                 move_event(900.0, "pointer"),
             ],
             clicks: vec![click_event(250.0, "ibeam")],
+            keyboard: vec![],
         };
 
         events.stabilize_short_lived_cursor_shapes(
@@ -345,6 +365,7 @@ mod tests {
                 move_event(1500.0, "pointer"),
             ],
             clicks: vec![click_event(400.0, "ibeam")],
+            keyboard: vec![],
         };
 
         events.stabilize_short_lived_cursor_shapes(
@@ -366,6 +387,7 @@ mod tests {
                 move_event(1200.0, "pointer"),
             ],
             clicks: vec![click_event(250.0, "ibeam")],
+            keyboard: vec![],
         };
 
         events.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);

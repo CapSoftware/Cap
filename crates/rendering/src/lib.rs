@@ -12,7 +12,7 @@ use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    MaskLayer, TextLayer,
+    KeyboardLayer, MaskLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -2488,6 +2488,7 @@ pub struct RendererLayers {
     background_blur: BlurLayer,
     display: DisplayLayer,
     cursor: CursorLayer,
+    keyboard: KeyboardLayer,
     camera: CameraLayer,
     camera_only: CameraLayer,
     mask: MaskLayer,
@@ -2519,6 +2520,7 @@ impl RendererLayers {
                 prefer_cpu_conversion,
             ),
             cursor: CursorLayer::new(device),
+            keyboard: KeyboardLayer::new(device, queue),
             camera: CameraLayer::new_with_all_shared_pipelines(
                 device,
                 shared_yuv_pipelines.clone(),
@@ -2593,6 +2595,14 @@ impl RendererLayers {
             &uniforms.zoom,
             uniforms,
             constants,
+        );
+
+        self.keyboard.prepare(
+            &constants.device,
+            &constants.queue,
+            cursor,
+            segment_frames,
+            (uniforms.output_size.0, uniforms.output_size.1),
         );
 
         self.camera.prepare(
@@ -2672,6 +2682,14 @@ impl RendererLayers {
             &uniforms.zoom,
             uniforms,
             constants,
+        );
+
+        self.keyboard.prepare(
+            &constants.device,
+            &constants.queue,
+            cursor,
+            segment_frames,
+            (uniforms.output_size.0, uniforms.output_size.1),
         );
 
         self.camera.prepare_with_encoder(
@@ -2774,6 +2792,11 @@ impl RendererLayers {
         if should_render {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
+        }
+
+        if should_render {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.keyboard.render(&mut pass);
         }
 
         // Render camera-only layer when transitioning with CameraOnly mode
@@ -2957,6 +2980,7 @@ mod project_uniforms_tests {
         let events = CursorEvents {
             clicks: vec![],
             moves: vec![],
+            keyboard: vec![],
         };
 
         let focus = ProjectUniforms::auto_zoom_focus(&events, 0.3, None, None);
@@ -2974,6 +2998,7 @@ mod project_uniforms_tests {
                 cursor_move(200.0, 0.55, 0.5),
                 cursor_move(400.0, 0.6, 0.5),
             ],
+            keyboard: vec![],
         };
 
         let smoothing = Some(default_smoothing());
@@ -2994,6 +3019,7 @@ mod project_uniforms_tests {
         let events = CursorEvents {
             clicks: vec![],
             moves: vec![cursor_move(0.0, 0.1, 0.5), cursor_move(40.0, 0.9, 0.5)],
+            keyboard: vec![],
         };
 
         let smoothing = Some(default_smoothing());

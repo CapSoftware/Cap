@@ -2,6 +2,7 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
+import { invoke } from "@tauri-apps/api/core";
 import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
@@ -444,8 +445,34 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
-		useEditorContext();
+	const {
+		latestFrame,
+		canvasControls,
+		performanceMode,
+		setPerformanceMode,
+		project,
+		editorState,
+	} = useEditorContext();
+
+	type KeyboardOverlayEvent = {
+		active_modifiers: string[];
+		key: string;
+		time_ms: number;
+		down: boolean;
+	};
+
+	type SegmentKeyboardEvents = {
+		segment_index: number;
+		events: KeyboardOverlayEvent[];
+	};
+
+	const [keyboardEventsBySegment] = createResource(async () => {
+		try {
+			return await invoke<SegmentKeyboardEvents[]>("get_keyboard_events");
+		} catch {
+			return [];
+		}
+	});
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
 
@@ -475,6 +502,200 @@ function PreviewCanvas() {
 	const [debouncedBounds, setDebouncedBounds] = createSignal({
 		width: 0,
 		height: 0,
+	});
+
+	const currentSourceTime = createMemo(() => {
+		const timeline = project.timeline?.segments ?? [];
+		if (timeline.length === 0) return null;
+
+		const timelineTime = Math.max(
+			editorState.previewTime ?? editorState.playbackTime,
+			0,
+		);
+		let consumed = 0;
+
+		for (
+			let timelineIndex = 0;
+			timelineIndex < timeline.length;
+			timelineIndex++
+		) {
+			const segment = timeline[timelineIndex];
+			if (!segment) continue;
+			const duration = (segment.end - segment.start) / segment.timescale;
+
+			if (timelineTime <= consumed + duration) {
+				const elapsed = timelineTime - consumed;
+				return {
+					recordingSegmentIndex: segment.recordingSegment ?? timelineIndex,
+					sourceTimeSec: segment.start + elapsed * segment.timescale,
+				};
+			}
+
+			consumed += duration;
+		}
+
+		const last = timeline[timeline.length - 1];
+		if (!last) return null;
+		return {
+			recordingSegmentIndex: last.recordingSegment ?? timeline.length - 1,
+			sourceTimeSec: last.end,
+		};
+	});
+
+	const activeShortcut = createMemo(() => {
+		const recentWindowMs = 850;
+		const modifierKeys = new Set([
+			"Meta",
+			"MetaLeft",
+			"MetaRight",
+			"Command",
+			"Cmd",
+			"Ctrl",
+			"Control",
+			"ControlLeft",
+			"ControlRight",
+			"Alt",
+			"Option",
+			"Opt",
+			"AltLeft",
+			"AltRight",
+			"Shift",
+			"ShiftLeft",
+			"ShiftRight",
+		]);
+		const modifierOrder = new Map([
+			["⌃", 0],
+			["⌥", 1],
+			["⇧", 2],
+			["⌘", 3],
+		]);
+
+		const isModifierKey = (key: string) => modifierKeys.has(key);
+
+		const normalizeModifier = (
+			modifier: string,
+		): "⌘" | "⌃" | "⌥" | "⇧" | null => {
+			switch (modifier) {
+				case "Meta":
+				case "Command":
+				case "Cmd":
+				case "Super":
+				case "Win":
+					return "⌘";
+				case "Ctrl":
+				case "Control":
+					return "⌃";
+				case "Alt":
+				case "Option":
+				case "Opt":
+				case "AltGraph":
+					return "⌥";
+				case "Shift":
+					return "⇧";
+				default:
+					return null;
+			}
+		};
+
+		const normalizeKey = (key: string) => {
+			switch (key) {
+				case "Left":
+					return "←";
+				case "Right":
+					return "→";
+				case "Up":
+					return "↑";
+				case "Down":
+					return "↓";
+				case "Enter":
+				case "Return":
+					return "Return";
+				case "Escape":
+					return "Esc";
+				case "Backspace":
+					return "Delete";
+				case "Delete":
+					return "Del";
+				case "CapsLock":
+					return "Caps";
+				case "PageUp":
+					return "Page Up";
+				case "PageDown":
+					return "Page Down";
+				case "Space":
+					return "Space";
+				default:
+					return key.toUpperCase();
+			}
+		};
+
+		const source = currentSourceTime();
+		const segments = keyboardEventsBySegment();
+		if (!source || !segments) return null;
+
+		const segmentEvents =
+			segments.find((s) => s.segment_index === source.recordingSegmentIndex)
+				?.events ?? [];
+		if (segmentEvents.length === 0) return null;
+
+		const nowMs = source.sourceTimeSec * 1000;
+		const active = new Map<string, { label: string; downTime: number }>();
+		let lastRecent: { label: string; downTime: number } | null = null;
+
+		for (const event of segmentEvents) {
+			if (event.time_ms > nowMs) break;
+			if (isModifierKey(event.key)) continue;
+
+			const normalizedModifiers = event.active_modifiers
+				.filter((modifier) => modifier !== event.key)
+				.map(normalizeModifier)
+				.filter(
+					(modifier): modifier is "⌘" | "⌃" | "⌥" | "⇧" => modifier !== null,
+				)
+				.sort()
+				.filter((value, index, values) => values.indexOf(value) === index)
+				.sort(
+					(a, b) =>
+						(modifierOrder.get(a) ?? Number.POSITIVE_INFINITY) -
+						(modifierOrder.get(b) ?? Number.POSITIVE_INFINITY),
+				);
+			const label = [...normalizedModifiers, normalizeKey(event.key)].join(
+				" + ",
+			);
+
+			if (event.down) {
+				const state = { label, downTime: event.time_ms };
+				active.set(event.key, state);
+				if (!lastRecent || state.downTime > lastRecent.downTime) {
+					lastRecent = state;
+				}
+			} else {
+				active.delete(event.key);
+			}
+		}
+
+		const activeValues = [...active.values()].sort(
+			(a, b) => b.downTime - a.downTime,
+		);
+		if (activeValues.length > 0) {
+			return {
+				label: activeValues[0]?.label ?? "",
+				opacity: 1,
+				scale: 1.05,
+			};
+		}
+
+		if (lastRecent && nowMs - lastRecent.downTime <= recentWindowMs) {
+			const remaining = 1 - (nowMs - lastRecent.downTime) / recentWindowMs;
+			const clamped = Math.min(Math.max(remaining, 0), 1);
+			return {
+				label: lastRecent.label,
+				opacity: clamped,
+				scale: 1 + 0.05 * clamped,
+			};
+		}
+
+		return null;
 	});
 
 	const updateDebouncedBounds = debounce(
@@ -557,6 +778,32 @@ function PreviewCanvas() {
 			style={{ contain: "layout style" }}
 			onContextMenu={handleContextMenu}
 		>
+			<Show when={activeShortcut()}>
+				{(shortcut) => (
+					<div class="absolute left-0 right-0 z-20 flex justify-center bottom-3 pointer-events-none">
+						<div
+							class="rounded-md border border-gray-6 bg-gray-1/95 px-3 py-1.5 shadow-lg backdrop-blur-sm transition-[opacity,transform] duration-75"
+							style={{
+								opacity: shortcut().opacity,
+								transform: `scale(${shortcut().scale})`,
+							}}
+						>
+							<div class="flex items-center gap-1.5 text-[11px] text-gray-10 uppercase tracking-wide">
+								<span>Shortcut</span>
+							</div>
+							<div class="mt-0.5 flex flex-wrap items-center gap-1">
+								<For each={shortcut().label.split(" + ")}>
+									{(part) => (
+										<kbd class="rounded border border-gray-6 bg-gray-2 px-1.5 py-0.5 text-[11px] font-mono font-medium text-gray-12 shadow-sm">
+											{part}
+										</kbd>
+									)}
+								</For>
+							</div>
+						</div>
+					</div>
+				)}
+			</Show>
 			<div
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
 				style={{ visibility: hasFrame() ? "visible" : "hidden" }}
