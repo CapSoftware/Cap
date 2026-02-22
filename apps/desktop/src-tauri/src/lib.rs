@@ -1995,25 +1995,27 @@ async fn get_keyboard_events(
     };
 
     let events = match &meta.inner {
-        RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment { segment }) => segment
-            .cursor
-            .as_ref()
-            .map(|path| {
-                vec![SegmentKeyboardEvents {
-                    segment_index: 0,
-                    events: load_events(path),
-                }]
-            })
-            .unwrap_or_default(),
-        RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) => inner
-            .segments
-            .iter()
-            .enumerate()
-            .map(|(segment_index, segment)| SegmentKeyboardEvents {
-                segment_index: segment_index as u32,
-                events: segment.cursor.as_ref().map(load_events).unwrap_or_default(),
-            })
-            .collect(),
+        RecordingMetaInner::Studio(ref meta) => match meta.as_ref() {
+            StudioRecordingMeta::SingleSegment { segment } => segment
+                .cursor
+                .as_ref()
+                .map(|path| {
+                    vec![SegmentKeyboardEvents {
+                        segment_index: 0,
+                        events: load_events(path),
+                    }]
+                })
+                .unwrap_or_default(),
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(segment_index, segment)| SegmentKeyboardEvents {
+                    segment_index: segment_index as u32,
+                    events: segment.cursor.as_ref().map(load_events).unwrap_or_default(),
+                })
+                .collect(),
+        },
         _ => Vec::new(),
     };
 
