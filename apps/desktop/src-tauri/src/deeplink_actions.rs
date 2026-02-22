@@ -227,11 +227,12 @@ impl DeepLinkAction {
                             error: Some("A Cap upgrade is required to use this feature".to_string()),
                         })
                     }
-                    Err(e) => {
-                        write_deeplink_response(app, &DeepLinkStartRecordingResult {
+                    Err(error) => {
+                        let _ = write_deeplink_response(app, &DeepLinkStartRecordingResult {
                             success: false,
-                            error: Some(e),
-                        })
+                            error: Some(error.clone()),
+                        });
+                        Err(error)
                     }
                 }
             }

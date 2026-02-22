@@ -1,22 +1,71 @@
 import {
 	Action,
 	ActionPanel,
+	Detail,
 	Form,
 	Icon,
+	LocalStorage,
 	showToast,
 	Toast,
 } from "@raycast/api";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+	CAP_URL_SCHEME,
 	capNotInstalled,
 	createListDevicesAction,
 	createStartRecordingAction,
 	type DeepLinkDevices,
+	executeCapAction,
 	executeCapActionWithResponse,
 	type RecordingMode,
 } from "./utils";
 
 type CaptureType = "screen" | "window";
+type RecentTarget = { type: CaptureType; name: string; timestamp: number };
+
+const RECENT_TARGETS_KEY = "recent-capture-targets";
+const MAX_RECENT_TARGETS = 5;
+
+function EmptyState({
+	capNotRunning,
+	onOpenCap,
+}: {
+	capNotRunning: boolean;
+	onOpenCap: () => void;
+}) {
+	const markdown = capNotRunning
+		? "## Cap Not Running\n\nPlease open Cap to start recording.\n\nIf you don't have Cap installed, you can download it from the website."
+		: "## No Capture Targets Found\n\nCould not find any screens or windows to capture.\n\nMake sure screen recording permissions are granted.";
+
+	return (
+		<Detail
+			markdown={markdown}
+			actions={
+				<ActionPanel>
+					{capNotRunning ? (
+						<>
+							<Action
+								title="Open Cap"
+								icon={Icon.AppWindow}
+								onAction={onOpenCap}
+							/>
+							<Action.OpenInBrowser
+								title="Download Cap"
+								url="https://cap.so/download"
+							/>
+						</>
+					) : (
+						<Action
+							title="Retry"
+							icon={Icon.RotateClockwise}
+							onAction={() => {}}
+						/>
+					)}
+				</ActionPanel>
+			}
+		/>
+	);
+}
 
 export default function Command() {
 	const [captureType, setCaptureType] = useState<CaptureType>("screen");
@@ -24,10 +73,24 @@ export default function Command() {
 	const [recordingMode, setRecordingMode] = useState<RecordingMode>("instant");
 	const [devices, setDevices] = useState<DeepLinkDevices | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
+	const [capNotRunning, setCapNotRunning] = useState(false);
+	const [recentTargets, setRecentTargets] = useState<RecentTarget[]>([]);
+
+	useEffect(() => {
+		async function loadRecentTargets() {
+			const stored = await LocalStorage.getItem<string>(RECENT_TARGETS_KEY);
+			if (stored) {
+				setRecentTargets(JSON.parse(stored));
+			}
+		}
+		loadRecentTargets();
+	}, []);
 
 	useEffect(() => {
 		async function loadDevices() {
-			if (await capNotInstalled()) {
+			const notInstalled = await capNotInstalled();
+			if (notInstalled) {
+				setCapNotRunning(true);
 				setIsLoading(false);
 				return;
 			}
@@ -36,24 +99,41 @@ export default function Command() {
 				createListDevicesAction(),
 			);
 
-			if (result) {
+			if (result && (result.screens.length > 0 || result.windows.length > 0)) {
 				setDevices(result);
-				// Auto-select first available target
-				if (result.screens.length > 0) {
+				const relevantRecent = recentTargets.find(
+					(r) => r.type === captureType,
+				);
+				if (relevantRecent) {
+					const exists =
+						captureType === "screen"
+							? result.screens.some((s) => s.name === relevantRecent.name)
+							: result.windows.some((w) => w.name === relevantRecent.name);
+					if (exists) {
+						setSelectedTarget(relevantRecent.name);
+					} else if (result.screens.length > 0) {
+						setSelectedTarget(result.screens[0].name);
+					}
+				} else if (result.screens.length > 0) {
 					setSelectedTarget(result.screens[0].name);
 				}
 			} else {
-				showToast({
-					style: Toast.Style.Failure,
-					title: "Could not fetch devices",
-					message: "Make sure Cap is running",
-				});
+				setCapNotRunning(true);
 			}
 			setIsLoading(false);
 		}
 
 		loadDevices();
-	}, []);
+	}, [captureType, recentTargets]);
+
+	async function saveRecentTarget(type: CaptureType, name: string) {
+		const updated: RecentTarget[] = [
+			{ type, name, timestamp: Date.now() },
+			...recentTargets.filter((t) => !(t.type === type && t.name === name)),
+		].slice(0, MAX_RECENT_TARGETS);
+		setRecentTargets(updated);
+		await LocalStorage.setItem(RECENT_TARGETS_KEY, JSON.stringify(updated));
+	}
 
 	async function handleSubmit() {
 		if (await capNotInstalled()) {
@@ -73,32 +153,46 @@ export default function Command() {
 				? { screen: selectedTarget }
 				: { window: selectedTarget };
 
-		const result = await executeCapActionWithResponse<{
-			success: boolean;
-			error: string | null;
-		}>(createStartRecordingAction(captureMode, recordingMode));
+		await saveRecentTarget(captureType, selectedTarget);
 
-		if (result?.success) {
-			showToast({
-				style: Toast.Style.Success,
-				title: `${recordingMode === "instant" ? "Instant" : "Studio"} recording started`,
-			});
-		} else {
-			showToast({
-				style: Toast.Style.Failure,
-				title: "Failed to start recording",
-				message: result?.error ?? "Make sure Cap is running",
-			});
-		}
+		await executeCapAction(
+			createStartRecordingAction(captureMode, recordingMode),
+			{
+				feedbackMessage: `🎬 ${recordingMode === "instant" ? "Instant" : "Studio"} recording started`,
+				feedbackType: "hud",
+			},
+		);
 	}
 
-	const targets =
-		captureType === "screen"
-			? (devices?.screens ?? []).map((s) => ({ name: s.name, value: s.name }))
-			: (devices?.windows ?? []).map((w) => ({
-					name: w.owner_name ? `${w.owner_name} — ${w.name}` : w.name,
-					value: w.name,
-				}));
+	function handleOpenCap() {
+		import("node:child_process").then(({ execFileSync }) => {
+			execFileSync("open", [CAP_URL_SCHEME]);
+		});
+	}
+
+	if (!isLoading && capNotRunning) {
+		return (
+			<EmptyState capNotRunning={capNotRunning} onOpenCap={handleOpenCap} />
+		);
+	}
+
+	const allTargets = useMemo(() => {
+		if (captureType === "screen") {
+			return (devices?.screens ?? []).map((s) => ({
+				name: s.name,
+				value: s.name,
+			}));
+		}
+		return (devices?.windows ?? []).map((w) => ({
+			name: w.owner_name ? `${w.owner_name} — ${w.name}` : w.name,
+			value: w.name,
+		}));
+	}, [captureType, devices]);
+
+	// Build dropdown items with sections
+	const recentForCurrentType = recentTargets.filter(
+		(r) => r.type === captureType && allTargets.some((t) => t.value === r.name),
+	);
 
 	return (
 		<Form
@@ -108,8 +202,37 @@ export default function Command() {
 					<Action.SubmitForm
 						title="Start Recording"
 						icon={Icon.Video}
+						shortcut={{ modifiers: ["cmd"], key: "return" }}
 						onSubmit={handleSubmit}
 					/>
+					<ActionPanel.Section title="Quick Actions">
+						<Action
+							title="Toggle Capture Type"
+							icon={Icon.Switch}
+							shortcut={{ modifiers: ["cmd"], key: "t" }}
+							onAction={() => {
+								const newType = captureType === "screen" ? "window" : "screen";
+								setCaptureType(newType);
+								const newTargets =
+									newType === "screen"
+										? (devices?.screens ?? [])
+										: (devices?.windows ?? []);
+								if (newTargets.length > 0) {
+									setSelectedTarget(newTargets[0].name);
+								}
+							}}
+						/>
+						<Action
+							title="Toggle Recording Mode"
+							icon={Icon.LightBulb}
+							shortcut={{ modifiers: ["cmd"], key: "m" }}
+							onAction={() =>
+								setRecordingMode((m) =>
+									m === "instant" ? "studio" : "instant",
+								)
+							}
+						/>
+					</ActionPanel.Section>
 				</ActionPanel>
 			}
 		>
@@ -139,9 +262,28 @@ export default function Command() {
 				value={selectedTarget}
 				onChange={setSelectedTarget}
 			>
-				{targets.map((t) => (
-					<Form.Dropdown.Item key={t.value} value={t.value} title={t.name} />
-				))}
+				{recentForCurrentType.length > 0 && (
+					<Form.Dropdown.Section title="Recent">
+						{recentForCurrentType.map((r) => (
+							<Form.Dropdown.Item
+								key={r.name}
+								value={r.name}
+								title={r.name}
+								icon={Icon.Clock}
+							/>
+						))}
+					</Form.Dropdown.Section>
+				)}
+				<Form.Dropdown.Section title="All">
+					{allTargets.map((t) => (
+						<Form.Dropdown.Item
+							key={t.value}
+							value={t.value}
+							title={t.name}
+							icon={t.value === selectedTarget ? Icon.CheckCircle : Icon.Dot}
+						/>
+					))}
+				</Form.Dropdown.Section>
 			</Form.Dropdown>
 			<Form.Separator />
 			<Form.Dropdown

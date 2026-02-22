@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import {
 
 const CAP_BUNDLE_ID = "so.cap.desktop";
 const CAP_DEV_BUNDLE_ID = "so.cap.desktop.dev";
-const CAP_URL_SCHEME = "cap-desktop";
+export const CAP_URL_SCHEME = "cap-desktop";
 
 // Response file paths for both production and dev builds
 const RESPONSE_FILE_PATHS = [
@@ -144,7 +144,11 @@ export async function executeCapActionWithResponse<T>(
 	const encodedValue = encodeURIComponent(jsonValue);
 	const url = `${CAP_URL_SCHEME}://action?value=${encodedValue}`;
 
-	execSync(`open -g '${url}'`);
+	try {
+		execFileSync("open", ["-g", url], { stdio: "ignore" });
+	} catch {
+		return null;
+	}
 
 	return await readResponseFile<T>(timeoutMs);
 }
