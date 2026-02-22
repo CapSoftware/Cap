@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import {
+	For,
 	createEffect,
 	createMemo,
 	createResource,
