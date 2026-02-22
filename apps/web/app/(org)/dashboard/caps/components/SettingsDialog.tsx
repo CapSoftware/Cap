@@ -22,6 +22,7 @@ interface SettingsDialogProps {
 	onClose: () => void;
 	capId: Video.VideoId;
 	settingsData?: OrganizationSettings;
+	isPro?: boolean;
 }
 
 const options: {
@@ -70,8 +71,10 @@ export const SettingsDialog = ({
 	onClose,
 	capId,
 	settingsData,
+	isPro,
 }: SettingsDialogProps) => {
 	const { user, organizationSettings } = useDashboardContext();
+	const isProUser = isPro ?? user?.isPro ?? false;
 	const [saveLoading, setSaveLoading] = useState(false);
 	const buildSettings = useCallback(
 		(data?: OrganizationSettings): OrganizationSettings => ({
@@ -190,7 +193,7 @@ export const SettingsDialog = ({
 								</div>
 								<Switch
 									disabled={
-										(option.pro && !user.isPro) ||
+										(option.pro && !isProUser) ||
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue(
 												"disableTranscript" as keyof OrganizationSettings,
