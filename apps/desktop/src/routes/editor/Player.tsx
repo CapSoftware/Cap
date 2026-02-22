@@ -5,7 +5,14 @@ import { debounce } from "@solid-primitives/scheduled";
 import { invoke } from "@tauri-apps/api/core";
 import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
-import { createEffect, createMemo, createResource, createSignal, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	onMount,
+	Show,
+} from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
