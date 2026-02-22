@@ -173,7 +173,7 @@ pub struct KeyboardLayer {
 impl KeyboardLayer {
     pub fn new(device: &Device, queue: &Queue) -> Self {
         let overlay = OverlayStatics::new(device);
-        let mut font_system = glyphon::FontSystem::new();
+        let font_system = glyphon::FontSystem::new();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
