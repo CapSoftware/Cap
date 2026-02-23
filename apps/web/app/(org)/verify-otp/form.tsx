@@ -49,7 +49,7 @@ export function VerifyOTPForm({
 				inputRefs.current[5]?.focus();
 			}
 
-			if (index + value.length >= 5) handleVerify.mutate();
+			if (newCode.every((d) => d)) handleVerify.mutate(newCode.join(""));
 		} else {
 			const newCode = [...code];
 			newCode[index] = value;
@@ -73,15 +73,17 @@ export function VerifyOTPForm({
 	const normalizedEmail = email.toLowerCase();
 
 	const handleVerify = useMutation({
-		mutationFn: async () => {
-			const otpCode = code.join("");
+		mutationFn: async (pastedCode?: string) => {
+			const otpCode = pastedCode ?? code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+			await fetch(
+				`/api/auth/callback/email?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(next || "/dashboard")}`,
 			);
 
-			if (!res.url.includes("/login-success")) {
+			const sessionRes = await fetch("/api/auth/session");
+			const session = await sessionRes.json();
+			if (!session?.user) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
 				throw "Invalid code. Please try again.";
@@ -202,7 +204,7 @@ export function VerifyOTPForm({
 				variant="primary"
 				className="w-full"
 				spinner={isVerifying}
-				onClick={() => handleVerify.mutate()}
+				onClick={() => handleVerify.mutate(code.join(""))}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>
 				{isVerifying ? "Verifying..." : "Verify Code"}
