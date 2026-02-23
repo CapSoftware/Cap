@@ -115,7 +115,14 @@ impl TryFrom<&Url> for DeepLinkAction {
                     if raw.is_empty() {
                         return None;
                     }
+                    // Try JSON-tagged enum first (e.g. {"DeviceID":"..."}), then
+                    // fall back to treating the raw string as a device ID.
                     serde_json::from_str::<DeviceOrModelID>(raw)
+                        .or_else(|_| {
+                            serde_json::from_value::<DeviceOrModelID>(
+                                serde_json::Value::String(raw.to_string()),
+                            )
+                        })
                         .ok()
                         .or_else(|| Some(DeviceOrModelID::DeviceID(raw.to_string())))
                 });
