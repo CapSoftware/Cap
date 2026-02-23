@@ -10,7 +10,11 @@ interface Preferences {
 export default async function Command() {
   const prefs = getPreferenceValues<Preferences>();
 
-  const captureName = prefs.captureName?.trim() || "";
+  const captureName = prefs.captureName?.trim();
+  if (!captureName) {
+    await showHUD("Set a screen/window name in Raycast preferences first");
+    return;
+  }
   const captureMode =
     prefs.captureType === "window"
       ? { window: captureName }

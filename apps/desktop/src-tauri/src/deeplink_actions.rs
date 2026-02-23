@@ -42,8 +42,6 @@ pub enum DeepLinkAction {
     },
 }
 
-
-
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     trace!("Handling deep actions for: {:?}", &urls);
 
