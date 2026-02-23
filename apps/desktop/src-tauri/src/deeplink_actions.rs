@@ -95,9 +95,9 @@ impl TryFrom<&Url> for DeepLinkAction {
             });
         }
 
-        let domain = url.domain().unwrap_or_default();
+        let host = url.host_str().unwrap_or_default();
 
-        match domain {
+        match host {
             "stop-recording" => return Ok(Self::StopRecording),
             "pause-recording" => return Ok(Self::PauseRecording),
             "resume-recording" => return Ok(Self::ResumeRecording),
