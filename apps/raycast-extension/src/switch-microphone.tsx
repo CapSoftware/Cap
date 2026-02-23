@@ -19,10 +19,14 @@ export default function Command() {
 			: "cap://switch-mic";
 
 		await closeMainWindow();
-		await open(url);
-		await showHUD(
-			label ? `Switching microphone to: ${label}` : "Disabling microphone",
-		);
+		try {
+			await open(url);
+			await showHUD(
+				label ? `Switching microphone to: ${label}` : "Disabling microphone",
+			);
+		} catch {
+			await showHUD("Failed to open Cap");
+		}
 	}
 
 	return (

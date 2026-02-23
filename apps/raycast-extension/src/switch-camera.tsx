@@ -19,8 +19,12 @@ export default function Command() {
 			: "cap://switch-camera";
 
 		await closeMainWindow();
-		await open(url);
-		await showHUD(id ? `Switching camera to: ${id}` : "Disabling camera");
+		try {
+			await open(url);
+			await showHUD(id ? `Switching camera to: ${id}` : "Disabling camera");
+		} catch {
+			await showHUD("Failed to open Cap");
+		}
 	}
 
 	return (

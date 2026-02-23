@@ -115,11 +115,6 @@ impl TryFrom<&Url> for DeepLinkAction {
                         return None;
                     }
                     serde_json::from_str::<DeviceOrModelID>(raw)
-                        .or_else(|_| {
-                            serde_json::from_value::<DeviceOrModelID>(serde_json::Value::String(
-                                raw.to_string(),
-                            ))
-                        })
                         .ok()
                         .or_else(|| Some(DeviceOrModelID::DeviceID(raw.to_string())))
                 });

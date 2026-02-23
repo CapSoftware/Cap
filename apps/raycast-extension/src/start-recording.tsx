@@ -38,6 +38,10 @@ export default async function Command() {
 	const url = `cap://action?value=${encodeURIComponent(JSON.stringify(action))}`;
 
 	await closeMainWindow();
-	await open(url);
-	await showHUD("Starting recording…");
+	try {
+		await open(url);
+		await showHUD("Starting recording…");
+	} catch {
+		await showHUD("Failed to open Cap");
+	}
 }
