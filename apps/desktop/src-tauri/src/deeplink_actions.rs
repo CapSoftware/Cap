@@ -97,7 +97,6 @@ impl TryFrom<&Url> for DeepLinkAction {
 
         let domain = url.domain().unwrap_or_default();
 
-        // Handle simple path-based deeplinks (e.g. cap://stop-recording)
         match domain {
             "stop-recording" => return Ok(Self::StopRecording),
             "pause-recording" => return Ok(Self::PauseRecording),
@@ -115,8 +114,6 @@ impl TryFrom<&Url> for DeepLinkAction {
                     if raw.is_empty() {
                         return None;
                     }
-                    // Try JSON-tagged enum first (e.g. {"DeviceID":"..."}), then
-                    // fall back to treating the raw string as a device ID.
                     serde_json::from_str::<DeviceOrModelID>(raw)
                         .or_else(|_| {
                             serde_json::from_value::<DeviceOrModelID>(
@@ -128,13 +125,11 @@ impl TryFrom<&Url> for DeepLinkAction {
                 });
                 return Ok(Self::SwitchCamera { id });
             }
-            "action" => {
-                // Fall through to JSON-based parsing below.
-            }
+            "action" => {}
+
             _ => return Err(ActionParseFromUrlError::NotAction),
         }
 
-        // Legacy JSON-based action parsing: cap://action?value=<json>
         let params = url
             .query_pairs()
             .collect::<std::collections::HashMap<_, _>>();
