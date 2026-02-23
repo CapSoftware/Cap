@@ -112,11 +112,12 @@ impl TryFrom<&Url> for DeepLinkAction {
                 let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
                 let id = params.get("id").and_then(|v| {
                     let raw = v.as_ref();
+                    if raw.is_empty() {
+                        return None;
+                    }
                     serde_json::from_str::<DeviceOrModelID>(raw)
-                        .or_else(|_| {
-                            serde_json::from_str::<DeviceOrModelID>(&format!(r#""{}""#, raw))
-                        })
                         .ok()
+                        .or_else(|| Some(DeviceOrModelID::DeviceID(raw.to_string())))
                 });
                 return Ok(Self::SwitchCamera { id });
             }

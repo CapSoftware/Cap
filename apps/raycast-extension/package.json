@@ -30,7 +30,7 @@
         {
           "name": "captureName",
           "title": "Screen or Window Name",
-          "description": "Exact name of the screen or window to capture (leave blank for first available)",
+          "description": "Exact name of the screen or window to capture",
           "type": "textfield",
           "required": false,
           "default": ""
@@ -50,7 +50,7 @@
           "description": "Instant shares immediately; Studio lets you edit first",
           "type": "dropdown",
           "required": false,
-          "default": "instant",
+          "default": "studio",
           "data": [
             { "title": "Instant", "value": "instant" },
             { "title": "Studio", "value": "studio" }

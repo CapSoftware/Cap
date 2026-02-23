@@ -67,7 +67,6 @@ scripts/releases-backfill-data.txt
 .opencode/
 analysis/
 analysis/plans/
-.ralphy
 .venv/
 venv/
 node_modules/
