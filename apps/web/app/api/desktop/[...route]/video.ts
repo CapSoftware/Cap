@@ -195,6 +195,7 @@ app.get(
 			if (clientSupportsUploadProgress)
 				await db().insert(videoUploads).values({
 					videoId: idToUse,
+					mode: "singlepart",
 				});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
@@ -346,7 +347,7 @@ app.post(
 				);
 
 			if (video.upload) {
-				if (uploaded === total && video.upload.mode === "singlepart") {
+				if (uploaded === total && video.upload.mode !== "multipart") {
 					await db()
 						.delete(videoUploads)
 						.where(eq(videoUploads.videoId, videoId));
