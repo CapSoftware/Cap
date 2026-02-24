@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "MP4 to MP3 Converter | Extract Audio from Video | Cap",
@@ -31,6 +32,16 @@ export const metadata: Metadata = {
 		canonical: "https://cap.so/tools/convert/mp4-to-mp3",
 	},
 };
+
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+	{
+		name: "MP4 to MP3 Converter",
+		url: "https://cap.so/tools/convert/mp4-to-mp3",
+	},
+]);
 
 export default function MP4ToMP3Page() {
 	const pageContent: ToolPageContent = {
@@ -82,11 +93,19 @@ export default function MP4ToMP3Page() {
 	};
 
 	return (
-		<ToolsPageTemplate
-			content={pageContent}
-			toolComponent={
-				<MediaFormatConverter initialConversionPath="mp4-to-mp3" />
-			}
-		/>
+		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
+			<ToolsPageTemplate
+				content={pageContent}
+				toolComponent={
+					<MediaFormatConverter initialConversionPath="mp4-to-mp3" />
+				}
+			/>
+		</>
 	);
 }

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "MP4 to GIF Converter — Free Online Animated GIF Maker | Cap",
@@ -125,6 +126,16 @@ const howToStructuredData = {
 	},
 };
 
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+	{
+		name: "MP4 to GIF Converter",
+		url: "https://cap.so/tools/convert/mp4-to-gif",
+	},
+]);
+
 export default function MP4ToGIFPage() {
 	const pageContent: ToolPageContent = {
 		title: "MP4 to GIF Converter",
@@ -176,6 +187,12 @@ export default function MP4ToGIFPage() {
 
 	return (
 		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
 			<script
 				type="application/ld+json"
 				dangerouslySetInnerHTML={{

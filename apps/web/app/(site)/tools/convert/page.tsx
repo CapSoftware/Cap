@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "File Conversion Tools | Free Online Converters",
@@ -63,75 +64,89 @@ const conversionTools: ConversionTool[] = [
 	},
 ];
 
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+]);
+
 export default function ConvertToolsPage() {
 	return (
-		<div className="py-32 md:py-40">
-			<div className="wrapper">
-				<div className="mb-8">
-					<Link
-						href="/tools"
-						className="inline-flex items-center text-sm text-blue-600 hover:text-blue-800"
-					>
-						<svg
-							className="mr-1 w-5 h-5"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-							xmlns="http://www.w3.org/2000/svg"
-						>
-							<path
-								strokeLinecap="round"
-								strokeLinejoin="round"
-								strokeWidth={2}
-								d="M10 19l-7-7m0 0l7-7m-7 7h18"
-							/>
-						</svg>
-						Back to All Tools
-					</Link>
-				</div>
-
-				<h1 className="mb-8 text-3xl font-medium tracking-tight text-gray-900">
-					File Conversion Tools
-				</h1>
-				<p className="mb-12 text-lg text-gray-600">
-					Our free online conversion tools help you transform files between
-					different formats without uploading them to any server. All
-					conversions happen directly in your browser for maximum privacy and
-					security.
-				</p>
-
-				<div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-					{conversionTools.map((tool) => (
+		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
+			<div className="py-32 md:py-40">
+				<div className="wrapper">
+					<div className="mb-8">
 						<Link
-							key={tool.href}
-							href={tool.href}
-							className="block p-6 rounded-lg border border-gray-200 transition-colors group hover:border-blue-500"
+							href="/tools"
+							className="inline-flex items-center text-sm text-blue-600 hover:text-blue-800"
 						>
-							<div className="flex items-center mb-4">
-								<div className="flex-shrink-0 p-2 bg-blue-100 rounded-lg">
-									<svg
-										className="w-6 h-6 text-blue-600"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										strokeWidth={1.5}
-									>
-										<path
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											d={tool.icon}
-										/>
-									</svg>
-								</div>
-								<h2 className="ml-3 text-xl font-semibold text-gray-900 transition-colors group-hover:text-blue-600">
-									{tool.title}
-								</h2>
-							</div>
-							<p className="text-gray-600">{tool.description}</p>
+							<svg
+								className="mr-1 w-5 h-5"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+								xmlns="http://www.w3.org/2000/svg"
+							>
+								<path
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									strokeWidth={2}
+									d="M10 19l-7-7m0 0l7-7m-7 7h18"
+								/>
+							</svg>
+							Back to All Tools
 						</Link>
-					))}
+					</div>
+
+					<h1 className="mb-8 text-3xl font-medium tracking-tight text-gray-900">
+						File Conversion Tools
+					</h1>
+					<p className="mb-12 text-lg text-gray-600">
+						Our free online conversion tools help you transform files between
+						different formats without uploading them to any server. All
+						conversions happen directly in your browser for maximum privacy and
+						security.
+					</p>
+
+					<div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+						{conversionTools.map((tool) => (
+							<Link
+								key={tool.href}
+								href={tool.href}
+								className="block p-6 rounded-lg border border-gray-200 transition-colors group hover:border-blue-500"
+							>
+								<div className="flex items-center mb-4">
+									<div className="flex-shrink-0 p-2 bg-blue-100 rounded-lg">
+										<svg
+											className="w-6 h-6 text-blue-600"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											strokeWidth={1.5}
+										>
+											<path
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												d={tool.icon}
+											/>
+										</svg>
+									</div>
+									<h2 className="ml-3 text-xl font-semibold text-gray-900 transition-colors group-hover:text-blue-600">
+										{tool.title}
+									</h2>
+								</div>
+								<p className="text-gray-600">{tool.description}</p>
+							</Link>
+						))}
+					</div>
 				</div>
 			</div>
-		</div>
+		</>
 	);
 }

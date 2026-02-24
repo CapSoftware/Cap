@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "AVI to MP4 Converter | Free Online Video Converter | Cap",
@@ -31,6 +32,16 @@ export const metadata: Metadata = {
 		canonical: "https://cap.so/tools/convert/avi-to-mp4",
 	},
 };
+
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+	{
+		name: "AVI to MP4 Converter",
+		url: "https://cap.so/tools/convert/avi-to-mp4",
+	},
+]);
 
 export default function AVIToMP4Page() {
 	const pageContent: ToolPageContent = {
@@ -82,11 +93,19 @@ export default function AVIToMP4Page() {
 	};
 
 	return (
-		<ToolsPageTemplate
-			content={pageContent}
-			toolComponent={
-				<MediaFormatConverter initialConversionPath="avi-to-mp4" />
-			}
-		/>
+		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
+			<ToolsPageTemplate
+				content={pageContent}
+				toolComponent={
+					<MediaFormatConverter initialConversionPath="avi-to-mp4" />
+				}
+			/>
+		</>
 	);
 }

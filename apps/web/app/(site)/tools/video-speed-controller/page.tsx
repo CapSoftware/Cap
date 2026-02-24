@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { SpeedController } from "@/components/tools/SpeedController";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title:
@@ -137,6 +138,15 @@ const howToStructuredData = {
 	},
 };
 
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{
+		name: "Video Speed Controller",
+		url: "https://cap.so/tools/video-speed-controller",
+	},
+]);
+
 export default function SpeedControllerPage() {
 	const pageContent: ToolPageContent = {
 		title: "Video Speed Controller (0.25×–3×)",
@@ -188,6 +198,12 @@ export default function SpeedControllerPage() {
 
 	return (
 		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
 			<script
 				type="application/ld+json"
 				dangerouslySetInnerHTML={{
