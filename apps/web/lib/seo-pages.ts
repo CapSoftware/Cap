@@ -31,6 +31,10 @@ import {
 	onlineClassroomToolsContent,
 } from "@/components/pages/seo/OnlineClassroomToolsPage";
 import {
+	OpenSourceScreenRecorderPage,
+	openSourceScreenRecorderContent,
+} from "@/components/pages/seo/OpenSourceScreenRecorderPage";
+import {
 	RemoteTeamCollaborationPage,
 	remoteTeamCollaborationContent,
 } from "@/components/pages/seo/RemoteTeamCollaborationPage";
@@ -118,6 +122,10 @@ export const seoPages: Record<
 	"how-to-screen-record": {
 		component: HowToScreenRecordPage,
 		content: howToScreenRecordContent,
+	},
+	"open-source-screen-recorder": {
+		component: OpenSourceScreenRecorderPage,
+		content: openSourceScreenRecorderContent,
 	},
 };
 
