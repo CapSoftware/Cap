@@ -1,0 +1,156 @@
+---
+title: How to Record Your Screen on Mac with Audio
+description: Learn how to record your Mac screen with audio — both system sound and microphone — using built-in tools and free third-party apps. A practical 2026 guide.
+publishedAt: "2026-02-24"
+category: Guide
+image: /blog/og.png
+author: Richie McIlroy
+tags: Screen Recording, Mac, Audio, Guide
+---
+
+Recording your screen on a Mac is easy. Recording it *with audio* — especially internal system audio — is where most people get stuck.
+
+macOS doesn't make this obvious. Cmd+Shift+5, Apple's built-in screen recorder, can capture microphone audio but won't capture what's playing through your speakers or headphones. If you're recording a demo, a tutorial, or anything where the viewer needs to hear what's on screen, you need a different approach.
+
+Here's everything you need to know.
+
+---
+
+## Why Mac Screen Recording with Audio Is Complicated
+
+The short version: Apple restricts system audio capture by default for privacy and copyright reasons.
+
+When you use Cmd+Shift+5 or QuickTime to record your screen, you can:
+- Record video of your screen ✅
+- Record your microphone ✅
+- Record system audio (what's playing through speakers) ❌
+
+To capture system audio with Apple's tools, you need a virtual audio device like BlackHole or Loopback — which involves terminal commands, Audio MIDI Setup configuration, and remembering to switch everything back when you're done.
+
+Or you can skip all of that and use Cap.
+
+---
+
+## Method 1: Cap — Screen Recording with Audio in 2 Clicks
+
+[Cap](https://cap.so) handles Mac system audio capture natively. No virtual audio drivers, no Audio MIDI Setup, no configuration.
+
+**How to record your Mac screen with audio using Cap:**
+
+1. **Download Cap** from [cap.so/download](https://cap.so/download) and install it
+2. **Click the Cap icon** in your menu bar
+3. **Enable "Record System Audio"** — this captures everything playing through your Mac
+4. **Optionally enable your microphone** if you want to narrate while recording
+5. **Select your recording area** — full screen, a specific window, or a custom region
+6. **Click Start Recording**
+
+When you stop, Cap generates a shareable link instantly. No exporting, no uploading — your link is live the moment recording stops.
+
+**Why Cap is the best option:**
+
+- Works on macOS Sonoma, Ventura, Monterey and all M-series chips (M1, M2, M3, M4)
+- No kernel extensions or virtual audio devices required
+- Records system audio and microphone on separate tracks — adjust levels independently in the editor
+- Free to use with no recording time limits
+- Open source — [github.com/CapSoftware/Cap](https://github.com/CapSoftware/Cap)
+
+---
+
+## Method 2: QuickTime + BlackHole (Free but Technical)
+
+If you prefer Apple's built-in QuickTime, you can route system audio through BlackHole, a free virtual audio driver.
+
+**Setup steps:**
+
+1. Install BlackHole: run `brew install blackhole-2ch` in Terminal (requires Homebrew)
+2. Open **Audio MIDI Setup** (search in Spotlight)
+3. Click the **+** button and choose **Create Multi-Output Device**
+4. Check both your normal output (speakers/headphones) and BlackHole 2ch
+5. Open **System Preferences → Sound → Output** and select the Multi-Output Device
+6. Open QuickTime Player, go to **File → New Screen Recording**
+7. Click the dropdown arrow next to the record button and select **BlackHole 2ch** as the microphone
+8. Record your screen
+
+**The catch:** You need to remember to switch your audio output back to normal speakers when you're done, otherwise your Mac will have no audio output. It's also a multi-step process every time you want to record.
+
+---
+
+## Method 3: OBS Studio (Free, Powerful, Complex)
+
+OBS Studio is the standard for professional recording and live streaming. It can record system audio on Mac, but the setup is non-trivial.
+
+You'll need BlackHole installed (same as Method 2), then configure OBS to use it as an audio capture source. OBS gives you complete control over scenes, multiple sources, and output formats — but it's significant overkill if you just want to record your screen with audio and share it.
+
+---
+
+## Comparison: Mac Screen Recording with Audio Options
+
+| Method | System Audio | Microphone | Complexity | Cost |
+|--------|-------------|------------|------------|------|
+| **Cap** | ✅ Built-in | ✅ | Simple | Free |
+| Cmd+Shift+5 | ❌ | ✅ | Simple | Free |
+| QuickTime + BlackHole | ✅ | ✅ | Complex | Free |
+| OBS Studio | ✅ (with BlackHole) | ✅ | Complex | Free |
+| Loopback | ✅ | ✅ | Medium | $99 |
+
+---
+
+## Recording Both Microphone and System Audio Simultaneously
+
+With Cap, both audio sources are captured at the same time and stored on separate tracks. In the Cap editor, you can:
+
+- Adjust the volume of system audio independently from your microphone
+- Increase or decrease dB gain to fix quiet or loud audio
+- Mute either track entirely for a section
+
+This is particularly useful for tutorials where you're narrating (microphone) while demonstrating software that has its own sound effects or music (system audio).
+
+---
+
+## Common Issues and Fixes
+
+**"System audio option is greyed out or missing"**
+
+Make sure you've granted Cap screen recording permission. Go to **System Settings → Privacy & Security → Screen Recording** and ensure Cap is checked. You may need to restart Cap after granting permission.
+
+**"My recording has no audio at all"**
+
+Check that the correct audio source is selected in Cap's recording menu. If using QuickTime, verify BlackHole is set as the input device.
+
+**"FaceTime or Zoom audio isn't being captured"**
+
+Some apps have special privacy protections. In Cap, make sure to select "Record entire screen" (not just a window) to capture protected app audio.
+
+**"There's an echo in my recording"**
+
+This happens when your microphone picks up audio playing through your speakers. Either use headphones when recording, or disable the microphone track if you only need system audio.
+
+**"Recording stopped working after a macOS update"**
+
+macOS updates sometimes reset privacy permissions. Check **System Settings → Privacy & Security → Screen Recording** and re-authorize Cap.
+
+---
+
+## Tips for Better Screen Recordings
+
+**Use headphones when narrating.** Prevents echo between your microphone and speakers when recording system audio.
+
+**Record at 60fps for demos.** Cap supports high frame rate recording — enable it in settings for smoother animations and cursor movement.
+
+**Trim before sharing.** Cap's built-in editor lets you cut the first few seconds (where you're getting set up) and the last few (awkward pauses before you remember to stop).
+
+**Add a custom background.** If you're recording a window rather than full screen, Cap can add padding and a custom background color or gradient to make it look more polished.
+
+---
+
+## Getting Started
+
+The fastest way to record your Mac screen with audio:
+
+1. Download Cap at [cap.so/download](https://cap.so/download)
+2. Enable system audio recording in the menu bar icon
+3. Hit record
+
+Your recording is shareable as a link the moment you stop. No file management, no uploading, no waiting.
+
+[Download Cap for macOS →](https://cap.so/download)
