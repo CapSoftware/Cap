@@ -1,4 +1,19 @@
 export const seoMetadata = {
+	"best-screen-recorder": {
+		title:
+			"Best Screen Recorder in 2026 — Free, No Watermark, 4K Quality | Cap",
+		description:
+			"Cap is the best screen recorder for Mac and Windows. Record in 4K with audio and webcam overlay, then share instantly. 100% free with no watermarks, no time limits in Studio Mode.",
+		keywords: [
+			"best screen recorder",
+			"best free screen recorder",
+			"best screen recorder for mac",
+			"best screen recorder for windows",
+			"screen recorder no watermark",
+			"best screen recording software",
+		],
+		ogImage: "/og.png",
+	},
 	"screen-recorder": {
 		title: "Screen Recorder | Cap - Beautiful Screen Recording Software",
 		description:

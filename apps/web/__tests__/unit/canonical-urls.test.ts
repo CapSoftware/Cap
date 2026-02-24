@@ -10,6 +10,10 @@ function readPage(routePath: string): string {
 
 const expectedCanonicals: Array<{ file: string; canonical: string }> = [
 	{
+		file: "(site)/(seo)/best-screen-recorder/page.tsx",
+		canonical: "https://cap.so/best-screen-recorder",
+	},
+	{
 		file: "(site)/(seo)/screen-recorder/page.tsx",
 		canonical: "https://cap.so/screen-recorder",
 	},

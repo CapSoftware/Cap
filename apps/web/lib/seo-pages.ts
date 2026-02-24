@@ -3,6 +3,10 @@ import {
 	agenciesContent,
 } from "@/components/pages/seo/AgenciesPage";
 import {
+	BestScreenRecorderPage,
+	bestScreenRecorderContent,
+} from "@/components/pages/seo/BestScreenRecorderPage";
+import {
 	DailyStandupSoftwarePage,
 	dailyStandupSoftwareContent,
 } from "@/components/pages/seo/DailyStandupSoftwarePage";
@@ -59,6 +63,10 @@ export const seoPages: Record<
 		content: SeoPageContent;
 	}
 > = {
+	"best-screen-recorder": {
+		component: BestScreenRecorderPage,
+		content: bestScreenRecorderContent,
+	},
 	"screen-recorder": {
 		component: ScreenRecorderPage,
 		content: screenRecorderContent,
