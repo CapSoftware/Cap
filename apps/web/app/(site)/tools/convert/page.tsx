@@ -5,6 +5,9 @@ export const metadata: Metadata = {
 	title: "File Conversion Tools | Free Online Converters",
 	description:
 		"Free online file conversion tools. Convert between various file formats directly in your browser with no uploads needed.",
+	alternates: {
+		canonical: "https://cap.so/tools/convert",
+	},
 };
 
 interface ConversionTool {

@@ -27,6 +27,9 @@ export const metadata: Metadata = {
 			"Convert Apple QuickTime MOV videos to MP4 format directly in your browser. No uploads required for maximum privacy.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mov-to-mp4",
+	},
 };
 
 export default function MOVToMP4Page() {

@@ -31,6 +31,9 @@ export const metadata: Metadata = {
 			"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/loom-alternative",
+	},
 };
 
 export default function Page() {

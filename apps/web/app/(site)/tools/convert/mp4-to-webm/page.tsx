@@ -27,6 +27,9 @@ export const metadata: Metadata = {
 			"Convert MP4 videos to WebM format for better web compatibility. Process locally with no uploads for maximum privacy.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mp4-to-webm",
+	},
 };
 
 export default function MP4ToWebMPage() {

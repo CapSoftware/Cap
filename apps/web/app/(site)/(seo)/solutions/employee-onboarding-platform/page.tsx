@@ -32,6 +32,9 @@ export const metadata: Metadata = {
 			"Discover how Cap's open-source screen recorder simplifies new-hire training with asynchronous video and built-in feedback.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/solutions/employee-onboarding-platform",
+	},
 };
 
 import Script from "next/script";

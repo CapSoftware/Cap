@@ -27,6 +27,9 @@ export const metadata: Metadata = {
 			"Extract audio from MP4 videos and save as high-quality MP3 files. No uploads required, completely private and secure.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mp4-to-mp3",
+	},
 };
 
 export default function MP4ToMP3Page() {

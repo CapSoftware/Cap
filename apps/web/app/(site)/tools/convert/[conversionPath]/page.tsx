@@ -51,6 +51,9 @@ export async function generateMetadata(
 				},
 			],
 		},
+		alternates: {
+			canonical: `https://cap.so/tools/convert/${conversionPath}`,
+		},
 	};
 }
 

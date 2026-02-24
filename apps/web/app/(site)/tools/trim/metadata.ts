@@ -10,4 +10,7 @@ export const metadata: Metadata = {
 		description: trimVideoContent.description,
 		type: "website",
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/trim",
+	},
 };

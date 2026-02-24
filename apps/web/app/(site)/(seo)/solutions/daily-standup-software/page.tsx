@@ -249,6 +249,9 @@ export const metadata: Metadata = {
 			"Looking for daily standup software? Discover how Cap helps remote or hybrid teams run async standups efficiently—no more timezone conflicts!",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/solutions/daily-standup-software",
+	},
 };
 
 export default function Page() {

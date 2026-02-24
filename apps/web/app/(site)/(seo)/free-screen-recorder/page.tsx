@@ -34,6 +34,9 @@ export const metadata: Metadata = {
 			"Cap offers a top-rated, free screen recorder with high-quality video capture, making it perfect for creating tutorials, educational content, and professional demos without any hidden fees.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/free-screen-recorder",
+	},
 };
 
 export default function Page() {

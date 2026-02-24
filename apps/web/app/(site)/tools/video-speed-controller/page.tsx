@@ -77,4 +77,7 @@ export const metadata = {
 		"change video playback speed",
 		"adjust video speed in browser",
 	],
+	alternates: {
+		canonical: "https://cap.so/tools/video-speed-controller",
+	},
 };

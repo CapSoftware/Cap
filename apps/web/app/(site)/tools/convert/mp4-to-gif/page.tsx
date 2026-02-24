@@ -27,6 +27,9 @@ export const metadata: Metadata = {
 			"Convert MP4 videos to animated GIF images directly in your browser. No uploads required, maximum privacy.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mp4-to-gif",
+	},
 };
 
 export default function MP4ToGIFPage() {

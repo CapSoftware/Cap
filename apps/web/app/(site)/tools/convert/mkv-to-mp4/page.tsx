@@ -27,6 +27,9 @@ export const metadata: Metadata = {
 			"Convert MKV videos to MP4 format for better compatibility. No uploads required, completely private and secure.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mkv-to-mp4",
+	},
 };
 
 export default function MKVToMP4Page() {
