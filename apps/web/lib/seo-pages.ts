@@ -1,4 +1,16 @@
 import {
+	AgenciesPage,
+	agenciesContent,
+} from "@/components/pages/seo/AgenciesPage";
+import {
+	DailyStandupSoftwarePage,
+	dailyStandupSoftwareContent,
+} from "@/components/pages/seo/DailyStandupSoftwarePage";
+import {
+	EmployeeOnboardingPlatformPage,
+	employeeOnboardingContent,
+} from "@/components/pages/seo/EmployeeOnboardingPlatformPage";
+import {
 	FreeScreenRecorderPage,
 	freeScreenRecorderContent,
 } from "@/components/pages/seo/FreeScreenRecorderPage";
@@ -10,6 +22,10 @@ import {
 	LoomAlternativePage,
 	loomAlternativeContent,
 } from "@/components/pages/seo/LoomAlternativePage";
+import {
+	OnlineClassroomToolsPage,
+	onlineClassroomToolsContent,
+} from "@/components/pages/seo/OnlineClassroomToolsPage";
 import {
 	RemoteTeamCollaborationPage,
 	remoteTeamCollaborationContent,
@@ -66,6 +82,22 @@ export const seoPages: Record<
 	"solutions/remote-team-collaboration": {
 		component: RemoteTeamCollaborationPage,
 		content: remoteTeamCollaborationContent,
+	},
+	"solutions/agencies": {
+		component: AgenciesPage,
+		content: agenciesContent,
+	},
+	"solutions/daily-standup-software": {
+		component: DailyStandupSoftwarePage,
+		content: dailyStandupSoftwareContent,
+	},
+	"solutions/employee-onboarding-platform": {
+		component: EmployeeOnboardingPlatformPage,
+		content: employeeOnboardingContent,
+	},
+	"solutions/online-classroom-tools": {
+		component: OnlineClassroomToolsPage,
+		content: onlineClassroomToolsContent,
 	},
 	"how-to-screen-record": {
 		component: HowToScreenRecordPage,

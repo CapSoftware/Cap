@@ -77,6 +77,83 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"loom-alternative": {
+		title:
+			"The Ultimate Loom Alternative: Why Cap is the Best Open-Source Screen Recorder",
+		description:
+			"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows with a built-in Loom video importer. See why users are switching today!",
+		keywords: [
+			"loom alternative",
+			"best loom alternative",
+			"open source screen recorder",
+			"loom video importer",
+			"privacy screen recorder",
+		],
+		ogImage: "/og.png",
+	},
+	"solutions/remote-team-collaboration": {
+		title:
+			"Remote Team Collaboration Software: Asynchronous Screen Recording for Distributed Teams",
+		description:
+			"Enhance your remote team collaboration with Cap's secure, open-source screen recording platform. Save time, improve clarity, and boost productivity across time zones.",
+		keywords: [
+			"remote team collaboration",
+			"async screen recording",
+			"distributed teams",
+			"remote work tools",
+			"asynchronous video",
+		],
+		ogImage: "/og.png",
+	},
+	"solutions/agencies": {
+		title: "Cap for Agencies — Faster Client Updates with Instant Video Links",
+		description:
+			"Send clearer client updates in minutes. Share instant links with comments, or craft polished walkthroughs. Cap for Agencies on macOS & Windows.",
+		keywords: [
+			"screen recorder for agencies",
+			"client video updates",
+			"agency screen recording",
+			"client communication tool",
+		],
+		ogImage: "/og.png",
+	},
+	"solutions/daily-standup-software": {
+		title: "Daily Standup Software: Streamline Your Agile Meetings with Cap",
+		description:
+			"Looking for daily standup software? Discover how Cap helps remote or hybrid teams run async standups efficiently—no more timezone conflicts!",
+		keywords: [
+			"daily standup software",
+			"async standup",
+			"agile standup tool",
+			"remote standup meetings",
+		],
+		ogImage: "/og.png",
+	},
+	"solutions/employee-onboarding-platform": {
+		title:
+			"Employee Onboarding Platform: Streamline New-Hire Training with Cap",
+		description:
+			"Looking for a powerful employee onboarding platform? Discover how Cap's open-source screen recorder and asynchronous features simplify new-hire training.",
+		keywords: [
+			"employee onboarding platform",
+			"onboarding software",
+			"new hire training",
+			"onboarding video platform",
+		],
+		ogImage: "/og.png",
+	},
+	"solutions/online-classroom-tools": {
+		title: "Online Classroom Tools: Empower Remote Teaching with Cap",
+		description:
+			"Searching for online classroom tools? Learn how Cap's screen recorder helps educators create engaging lessons, manage student feedback, and streamline remote learning.",
+		keywords: [
+			"online classroom tools",
+			"remote teaching",
+			"educational screen recorder",
+			"async teaching platform",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>
