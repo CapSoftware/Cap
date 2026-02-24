@@ -58,6 +58,10 @@ import {
 	ScreenRecordWindowsPage,
 	screenRecordWindowsContent,
 } from "@/components/pages/seo/ScreenRecordWindowsPage";
+import {
+	VideoRecordingSoftwarePage,
+	videoRecordingSoftwareContent,
+} from "@/components/pages/seo/VideoRecordingSoftwarePage";
 import type { SeoPageContent } from "@/components/seo/types";
 
 export const seoPages: Record<
@@ -126,6 +130,10 @@ export const seoPages: Record<
 	"open-source-screen-recorder": {
 		component: OpenSourceScreenRecorderPage,
 		content: openSourceScreenRecorderContent,
+	},
+	"video-recording-software": {
+		component: VideoRecordingSoftwarePage,
+		content: videoRecordingSoftwareContent,
 	},
 };
 

@@ -196,6 +196,20 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"video-recording-software": {
+		title: "Video Recording Software — Free HD Capture, Instant Sharing | Cap",
+		description:
+			"Cap is free video recording software for Mac and Windows. Record your screen, webcam, and audio in HD, then share instantly with a link. Open-source, no watermarks, no time limits in Studio Mode.",
+		keywords: [
+			"video recording software",
+			"free video recording software",
+			"video capture software",
+			"screen and video recorder",
+			"video recorder for pc",
+			"video recorder for mac",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>
