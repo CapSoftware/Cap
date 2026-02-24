@@ -70,7 +70,9 @@ pub fn interpolate_masks(
 ) -> Vec<PreparedMask> {
     let mut prepared = Vec::new();
 
-    for segment in segments.iter().filter(|s| s.enabled) {
+    let enabled: Vec<&MaskSegment> = segments.iter().filter(|s| s.enabled).collect();
+
+    for (i, segment) in enabled.iter().enumerate() {
         if frame_time < segment.start || frame_time > segment.end {
             continue;
         }
@@ -85,11 +87,30 @@ pub fn interpolate_masks(
 
         let fade_duration = segment.fade_duration.max(0.0);
         if fade_duration > 0.0 {
+            let adjacent_before = enabled
+                .iter()
+                .enumerate()
+                .any(|(j, other)| i != j && (segment.start - other.end).abs() < fade_duration);
+
+            let adjacent_after = enabled
+                .iter()
+                .enumerate()
+                .any(|(j, other)| i != j && (other.start - segment.end).abs() < fade_duration);
+
             let time_since_start = (frame_time - segment.start).max(0.0);
             let time_until_end = (segment.end - frame_time).max(0.0);
 
-            let fade_in = (time_since_start / fade_duration).min(1.0);
-            let fade_out = (time_until_end / fade_duration).min(1.0);
+            let fade_in = if adjacent_before {
+                1.0
+            } else {
+                (time_since_start / fade_duration).min(1.0)
+            };
+
+            let fade_out = if adjacent_after {
+                1.0
+            } else {
+                (time_until_end / fade_duration).min(1.0)
+            };
 
             intensity *= fade_in * fade_out;
         }
