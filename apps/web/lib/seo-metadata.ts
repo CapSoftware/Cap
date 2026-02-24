@@ -269,6 +269,20 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"async-video-code-reviews": {
+		title: "Async Video Code Reviews — Ship Faster Without the Meetings | Cap",
+		description:
+			"Record screen walkthroughs of pull requests and share a timestamped link your team watches on their schedule. Cap makes async code reviews faster and calendar-free.",
+		keywords: [
+			"async video code reviews",
+			"async code review",
+			"video code review",
+			"async pull request review",
+			"screen recording for code review",
+			"async developer feedback",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>

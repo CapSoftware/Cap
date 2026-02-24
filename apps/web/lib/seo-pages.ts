@@ -3,6 +3,10 @@ import {
 	agenciesContent,
 } from "@/components/pages/seo/AgenciesPage";
 import {
+	AsyncVideoCodeReviewsPage,
+	asyncVideoCodeReviewsContent,
+} from "@/components/pages/seo/AsyncVideoCodeReviewsPage";
+import {
 	BestScreenRecorderPage,
 	bestScreenRecorderContent,
 } from "@/components/pages/seo/BestScreenRecorderPage";
@@ -166,6 +170,10 @@ export const seoPages: Record<
 	"self-hosted-screen-recording": {
 		component: SelfHostedScreenRecordingPage,
 		content: selfHostedScreenRecordingContent,
+	},
+	"async-video-code-reviews": {
+		component: AsyncVideoCodeReviewsPage,
+		content: asyncVideoCodeReviewsContent,
 	},
 };
 
