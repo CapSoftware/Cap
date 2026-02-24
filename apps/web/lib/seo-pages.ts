@@ -27,6 +27,10 @@ import {
 	loomAlternativeContent,
 } from "@/components/pages/seo/LoomAlternativePage";
 import {
+	MacScreenRecordingWithAudioPage,
+	macScreenRecordingWithAudioContent,
+} from "@/components/pages/seo/MacScreenRecordingWithAudioPage";
+import {
 	OnlineClassroomToolsPage,
 	onlineClassroomToolsContent,
 } from "@/components/pages/seo/OnlineClassroomToolsPage";
@@ -134,6 +138,10 @@ export const seoPages: Record<
 	"video-recording-software": {
 		component: VideoRecordingSoftwarePage,
 		content: videoRecordingSoftwareContent,
+	},
+	"mac-screen-recording-with-audio": {
+		component: MacScreenRecordingWithAudioPage,
+		content: macScreenRecordingWithAudioContent,
 	},
 };
 

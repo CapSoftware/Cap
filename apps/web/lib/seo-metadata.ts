@@ -210,6 +210,20 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"mac-screen-recording-with-audio": {
+		title: "Mac Screen Recording with Audio — Capture System Sound & Mic | Cap",
+		description:
+			"Record your Mac screen with system audio and microphone using Cap. No BlackHole, no plugins required. Free, open-source screen recorder for macOS.",
+		keywords: [
+			"mac screen recording with audio",
+			"screen recording mac with audio",
+			"record mac screen with internal audio",
+			"mac screen recorder with system audio",
+			"how to record screen on mac with audio",
+			"mac screen capture with sound",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>
