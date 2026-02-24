@@ -111,8 +111,9 @@ const MockSharePage = () => {
 		if (!container || !video) return;
 
 		const observer = new IntersectionObserver(
-			([entry]) => {
-				if (entry.isIntersecting) {
+			(entries) => {
+				const entry = entries[0];
+				if (entry?.isIntersecting) {
 					if (!videoLoadedRef.current) {
 						video.src = "/illustrations/homepage-animation.mp4";
 						videoLoadedRef.current = true;
@@ -138,7 +139,8 @@ const MockSharePage = () => {
 		let index = 0;
 		const interval = setInterval(() => {
 			index = (index + 1) % TABS.length;
-			setActiveTab(TABS[index]);
+			const tab = TABS[index];
+			if (tab) setActiveTab(tab);
 		}, 3000);
 		return () => clearInterval(interval);
 	}, [tabInteracted]);
