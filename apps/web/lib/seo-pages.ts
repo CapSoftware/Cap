@@ -35,6 +35,10 @@ import {
 	screenRecorderContent,
 } from "@/components/pages/seo/ScreenRecorderPage";
 import {
+	ScreenRecordingPage,
+	screenRecordingContent,
+} from "@/components/pages/seo/ScreenRecordingPage";
+import {
 	ScreenRecordingSoftwarePage,
 	screenRecordingSoftwareContent,
 } from "@/components/pages/seo/ScreenRecordingSoftwarePage";
@@ -70,6 +74,10 @@ export const seoPages: Record<
 	"screen-recorder-windows": {
 		component: ScreenRecordWindowsPage,
 		content: screenRecordWindowsContent,
+	},
+	"screen-recording": {
+		component: ScreenRecordingPage,
+		content: screenRecordingContent,
 	},
 	"screen-recording-software": {
 		component: ScreenRecordingSoftwarePage,

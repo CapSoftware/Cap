@@ -30,6 +30,10 @@ const expectedCanonicals: Array<{ file: string; canonical: string }> = [
 		canonical: "https://cap.so/screen-recorder-windows",
 	},
 	{
+		file: "(site)/(seo)/screen-recording/page.tsx",
+		canonical: "https://cap.so/screen-recording",
+	},
+	{
 		file: "(site)/(seo)/screen-recording-software/page.tsx",
 		canonical: "https://cap.so/screen-recording-software",
 	},

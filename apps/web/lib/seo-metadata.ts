@@ -51,6 +51,19 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"screen-recording": {
+		title: "Screen Recording — Free HD Capture, Instant Sharing | Cap",
+		description:
+			"Record your screen in HD with audio and webcam overlay, then share instantly with a link. Cap is free, open-source screen recording software for Mac and Windows.",
+		keywords: [
+			"screen recording",
+			"screen record",
+			"record screen",
+			"screen capture",
+			"screen recording software",
+		],
+		ogImage: "/og.png",
+	},
 	"screen-recording-software": {
 		title: "Screen Recording Software | Cap - Professional Video Capture Tool",
 		description:
