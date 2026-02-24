@@ -12,7 +12,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
 import { type Organisation, Policy, type Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -164,7 +164,8 @@ export default async function EmbedVideoPage(
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-				.where(eq(videos.id, videoId)),
+				.leftJoin(organizations, eq(videos.orgId, organizations.id))
+				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
 		return Option.fromNullable(video);
@@ -226,34 +227,6 @@ async function EmbedContent({
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
-	}
-
-	if (video.sharedOrganization?.organizationId) {
-		const organization = await db()
-			.select()
-			.from(organizations)
-			.where(eq(organizations.id, video.sharedOrganization.organizationId))
-			.limit(1);
-
-		if (organization[0]?.allowedEmailDomain) {
-			if (
-				!user?.email ||
-				!user.email.endsWith(`@${organization[0].allowedEmailDomain}`)
-			) {
-				return (
-					<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-						<h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
-						<p className="mb-2 text-gray-300">
-							This video is only accessible to members of this organization.
-						</p>
-						<p className="text-gray-400">
-							Please sign in with your organization email address to access this
-							content.
-						</p>
-					</div>
-				);
-			}
-		}
 	}
 
 	if (

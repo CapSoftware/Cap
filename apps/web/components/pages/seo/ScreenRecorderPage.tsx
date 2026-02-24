@@ -14,7 +14,7 @@ export const screenRecorderContent: SeoPageContent = {
 		{
 			title: "Easy to Use",
 			description:
-				"Start recording with just a few clicks. No complex setup needed.",
+				"Start recording with just a few clicks. No complex setup needed. Check out our <a href='/how-to-screen-record'>how to screen record guide</a> to get started in minutes.",
 		},
 		{
 			title: "High-Quality Recording",
@@ -24,7 +24,7 @@ export const screenRecorderContent: SeoPageContent = {
 		{
 			title: "Cross-Platform Support",
 			description:
-				"Whether you need to <a href='/screen-recorder-mac'>screen record on Mac</a> or Windows, Cap works perfectly on both platforms.",
+				"Whether you need to <a href='/screen-recorder-mac'>screen record on Mac</a> or use a <a href='/screen-recorder-windows'>Windows screen recorder</a>, Cap works perfectly on both platforms.",
 		},
 		{
 			title: "Completely Free",
@@ -95,7 +95,7 @@ export const screenRecorderContent: SeoPageContent = {
 		{
 			question: "What platforms does Cap support?",
 			answer:
-				"Cap is compatible with <a href='/screen-recorder-mac'>macOS</a> and Windows, making it versatile for any user or team. Our <a href='/free-screen-recorder'>free screen recorder</a> works great on both platforms.",
+				"Cap is compatible with <a href='/screen-recorder-mac'>macOS</a> and <a href='/screen-recorder-windows'>Windows</a>, making it versatile for any user or team. Our <a href='/free-screen-recorder'>free screen recorder</a> works great on both platforms.",
 		},
 		{
 			question: "How does Cap improve team productivity?",

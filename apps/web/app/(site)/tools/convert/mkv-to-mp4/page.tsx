@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "MKV to MP4 Converter | Free Online Video Converter | Cap",
@@ -27,7 +28,20 @@ export const metadata: Metadata = {
 			"Convert MKV videos to MP4 format for better compatibility. No uploads required, completely private and secure.",
 		images: ["/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/tools/convert/mkv-to-mp4",
+	},
 };
+
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+	{
+		name: "MKV to MP4 Converter",
+		url: "https://cap.so/tools/convert/mkv-to-mp4",
+	},
+]);
 
 export default function MKVToMP4Page() {
 	const pageContent: ToolPageContent = {
@@ -79,11 +93,19 @@ export default function MKVToMP4Page() {
 	};
 
 	return (
-		<ToolsPageTemplate
-			content={pageContent}
-			toolComponent={
-				<MediaFormatConverter initialConversionPath="mkv-to-mp4" />
-			}
-		/>
+		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
+			<ToolsPageTemplate
+				content={pageContent}
+				toolComponent={
+					<MediaFormatConverter initialConversionPath="mkv-to-mp4" />
+				}
+			/>
+		</>
 	);
 }

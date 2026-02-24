@@ -80,3 +80,24 @@ export const getDisplayProgress = (
 ) => {
 	return uploadProgress !== undefined ? uploadProgress : processingProgress;
 };
+
+export function isEmailAllowedByRestriction(
+	email: string,
+	restriction: string,
+): boolean {
+	const entries = restriction
+		.split(",")
+		.map((e) => e.trim().toLowerCase())
+		.filter(Boolean);
+
+	if (entries.length === 0) return true;
+
+	const lowerEmail = email.toLowerCase();
+
+	return entries.some((entry) => {
+		if (entry.includes("@")) {
+			return lowerEmail === entry;
+		}
+		return lowerEmail.endsWith(`@${entry}`);
+	});
+}

@@ -31,6 +31,9 @@ export const metadata: Metadata = {
 			"Enhance your remote team collaboration with Cap's secure, open-source screen recording platform. Save time and boost productivity.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/solutions/remote-team-collaboration",
+	},
 };
 
 export default RemoteTeamCollaborationPage;

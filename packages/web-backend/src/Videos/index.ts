@@ -333,7 +333,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
 						if (record.upload) {
-							if (uploaded === total && record.upload.mode === "singlepart") {
+							if (uploaded === total && record.upload.mode !== "multipart") {
 								await tx
 									.delete(Db.videoUploads)
 									.where(Dz.eq(Db.videoUploads.videoId, videoId));

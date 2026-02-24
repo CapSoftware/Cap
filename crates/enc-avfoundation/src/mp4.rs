@@ -449,7 +449,13 @@ impl MP4Encoder {
 
         let mut deferred_offset: Option<Duration> = None;
 
-        if let Some(last_pts) = self.last_video_pts
+        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
+        let effective_last_pts = match (self.last_video_pts, pending_pts) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+
+        if let Some(last_pts) = effective_last_pts
             && pts_duration <= last_pts
         {
             let frame_duration = self.video_frame_duration();
@@ -2786,6 +2792,441 @@ mod tests {
             meta.len()
         );
 
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn realistic_retina_instant_mode_65s() {
+        let output = test_output_path("realistic_retina_65s");
+        let video = retina_video_config();
+        let audio = wireless_audio_config();
+        let output_height = Some(1248u32);
+
+        let harness =
+            ThreadedEncoderHarness::new(output.clone(), video, Some(audio), output_height);
+
+        let recording_secs = 65u64;
+        let fps = 30u64;
+        let total_video_frames = recording_secs * fps;
+
+        let mut video_timestamps = Vec::new();
+        let mut drop_count = 0u64;
+        for i in 0..total_video_frames {
+            let is_drop = i % 9 == 7 || i % 31 == 15 || (i > 1500 && i % 20 == 0);
+            if is_drop {
+                drop_count += 1;
+                continue;
+            }
+            let base_us = i * 1_000_000 / fps;
+            let jitter_us = ((i * 11 + 17) % 4000) as i64 - 2000;
+            let ts_us = (base_us as i64 + jitter_us).max(0) as u64;
+            video_timestamps.push(Duration::from_micros(ts_us));
+        }
+
+        let audio_frames_per_sec = 48000u64 / 3840;
+        let total_audio_frames = recording_secs * audio_frames_per_sec;
+
+        let wireless_jitter: Vec<u64> = (0..total_audio_frames)
+            .map(|i| {
+                if i % 23 == 0 {
+                    40
+                } else if i % 11 == 0 {
+                    20
+                } else if i % 5 == 0 {
+                    5
+                } else {
+                    0
+                }
+            })
+            .collect();
+
+        let enc_v = harness.encoder.clone();
+        let pool = harness.pool.clone();
+        let video_handle = ThreadedEncoderHarness::run_video_thread(
+            enc_v,
+            pool,
+            video_timestamps.clone(),
+            1000 / fps,
+        );
+
+        let enc_a = harness.encoder.clone();
+        let audio_pace = 1000 / audio_frames_per_sec;
+        let audio_handle = ThreadedEncoderHarness::run_audio_thread(
+            enc_a,
+            total_audio_frames,
+            3840,
+            audio_pace,
+            wireless_jitter,
+        );
+
+        let (v_appended, v_dropped, v_errors) = video_handle.join().unwrap();
+        let (a_appended, a_dropped, a_errors) = audio_handle.join().unwrap();
+
+        eprintln!(
+            "65s retina test: video appended={v_appended} dropped={v_dropped} \
+             source_drops={drop_count}, audio appended={a_appended} dropped={a_dropped}"
+        );
+
+        assert!(
+            v_errors.is_empty(),
+            "Video encoding errors in 65s test: {:?} (appended={v_appended}, dropped={v_dropped})",
+            v_errors
+        );
+        assert!(
+            a_errors.is_empty(),
+            "Audio encoding errors in 65s test: {:?} (appended={a_appended}, dropped={a_dropped})",
+            a_errors
+        );
+
+        assert!(
+            v_appended >= video_timestamps.len() as u64 / 2,
+            "Expected at least {} video frames, got {v_appended}",
+            video_timestamps.len() / 2,
+        );
+        assert!(
+            a_appended >= total_audio_frames / 2,
+            "Expected at least {} audio frames, got {a_appended}",
+            total_audio_frames / 2,
+        );
+
+        let finish_ts = Duration::from_secs(recording_secs + 1);
+        let result = harness.encoder.lock().unwrap().finish(Some(finish_ts));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
+        let meta = std::fs::metadata(&output).unwrap();
+        assert!(
+            meta.len() > 100_000,
+            "Output file too small for 65s recording: {} bytes",
+            meta.len()
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn reproduce_user_16364_retina_65s_variable_intervals() {
+        let output = test_output_path("user_16364_variable");
+        let video = retina_video_config();
+        let audio = wireless_audio_config();
+        let output_height = Some(1248u32);
+
+        let harness =
+            ThreadedEncoderHarness::new(output.clone(), video, Some(audio), output_height);
+
+        let recording_secs = 68u64;
+        let fps = 30u64;
+
+        let mut video_timestamps = Vec::new();
+        let mut ts_us = 0u64;
+        let nominal_us = 1_000_000u64 / fps;
+        for i in 0..(recording_secs * fps) {
+            let is_drop = i % 11 == 7 || (i > 1500 && i % 17 == 0);
+            if is_drop {
+                ts_us += nominal_us;
+                continue;
+            }
+
+            let interval = match i % 6 {
+                0 => nominal_us,
+                1 => 16_500,
+                2 => nominal_us + 16_833,
+                3 => nominal_us,
+                4 => 17_000,
+                5 => nominal_us + 16_333,
+                _ => nominal_us,
+            };
+
+            video_timestamps.push(Duration::from_micros(ts_us));
+            ts_us += interval;
+        }
+
+        let audio_frames_per_sec = 48000u64 / 3840;
+        let total_audio_frames = recording_secs * audio_frames_per_sec;
+
+        let wireless_jitter: Vec<u64> = (0..total_audio_frames)
+            .map(|i| {
+                let audio_time_ms = i * 80;
+                if (52_000..52_168).contains(&audio_time_ms) {
+                    200
+                } else if i % 23 == 0 {
+                    50
+                } else if i % 11 == 0 {
+                    25
+                } else {
+                    0
+                }
+            })
+            .collect();
+
+        let enc_v = harness.encoder.clone();
+        let pool = harness.pool.clone();
+        let video_handle = ThreadedEncoderHarness::run_video_thread(
+            enc_v,
+            pool,
+            video_timestamps.clone(),
+            1000 / fps,
+        );
+
+        let enc_a = harness.encoder.clone();
+        let audio_pace = 1000 / audio_frames_per_sec;
+        let audio_handle = ThreadedEncoderHarness::run_audio_thread(
+            enc_a,
+            total_audio_frames,
+            3840,
+            audio_pace,
+            wireless_jitter,
+        );
+
+        let (v_appended, v_dropped, v_errors) = video_handle.join().unwrap();
+        let (a_appended, a_dropped, a_errors) = audio_handle.join().unwrap();
+
+        eprintln!(
+            "User-scenario 65s variable intervals: video appended={v_appended} dropped={v_dropped}, \
+             audio appended={a_appended} dropped={a_dropped}"
+        );
+
+        assert!(
+            v_errors.is_empty(),
+            "Video errors in user-scenario test: {:?} (appended={v_appended}, dropped={v_dropped})",
+            v_errors
+        );
+        assert!(
+            a_errors.is_empty(),
+            "Audio errors in user-scenario test: {:?} (appended={a_appended}, dropped={a_dropped})",
+            a_errors
+        );
+
+        assert!(
+            v_appended >= video_timestamps.len() as u64 / 2,
+            "Expected at least {} video frames, got {v_appended}",
+            video_timestamps.len() / 2,
+        );
+
+        let finish_ts = Duration::from_secs(recording_secs + 1);
+        let result = harness.encoder.lock().unwrap().finish(Some(finish_ts));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
+        let meta = std::fs::metadata(&output).unwrap();
+        assert!(
+            meta.len() > 100_000,
+            "Output file too small: {} bytes",
+            meta.len()
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_pts_between_written_and_pending_causes_overlap() {
+        let output = test_output_path("pts_sandwich_regression");
+        let video = retina_video_config();
+        let audio = wireless_audio_config();
+
+        let mut encoder =
+            MP4Encoder::init_instant_mode(output.clone(), video, Some(audio), Some(1248)).unwrap();
+
+        let pool = create_pixel_buffer_pool(2940, 1912);
+
+        let sandwich_indices: Vec<u64> = vec![30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
+        let total_frames = 400u64;
+
+        let mut errors = Vec::new();
+        let mut frame_idx = 0u64;
+
+        while frame_idx < total_frames {
+            if sandwich_indices.contains(&frame_idx) && frame_idx > 0 {
+                let sandwich_us = frame_idx * 33_333 - 35_000;
+                let ts = Duration::from_micros(sandwich_us);
+                let frame = create_test_video_frame(&pool, sandwich_us as i64, 33_333);
+                match encoder.queue_video_frame(frame, ts) {
+                    Ok(()) => {}
+                    Err(QueueFrameError::WriterFailed(e)) => {
+                        errors.push(format!("WriterFailed at sandwich frame {frame_idx}: {e}"));
+                        break;
+                    }
+                    Err(QueueFrameError::Failed) => {
+                        errors.push(format!("Failed at sandwich frame {frame_idx}"));
+                        break;
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            let ts_us = frame_idx * 33_333;
+            let ts = Duration::from_micros(ts_us);
+            let frame = create_test_video_frame(&pool, ts_us as i64, 33_333);
+            match encoder.queue_video_frame(frame, ts) {
+                Ok(()) => {}
+                Err(QueueFrameError::WriterFailed(e)) => {
+                    errors.push(format!("WriterFailed at frame {frame_idx}: {e}"));
+                    break;
+                }
+                Err(QueueFrameError::Failed) => {
+                    errors.push(format!("Failed at frame {frame_idx}"));
+                    break;
+                }
+                Err(_) => {}
+            }
+
+            if frame_idx % 4 == 0 {
+                let audio_frame = create_test_audio_frame(48000, 3840);
+                let _ = encoder.queue_audio_frame(&audio_frame, ts);
+            }
+
+            frame_idx += 1;
+        }
+
+        assert!(
+            errors.is_empty(),
+            "Sandwich PTS frames should not trigger -16364: {:?}",
+            errors
+        );
+
+        let _ = encoder.finish(Some(Duration::from_secs(15)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_repeated_sandwich_pts_across_65s() {
+        let output = test_output_path("repeated_sandwich_65s");
+        let video = retina_video_config();
+        let audio = wireless_audio_config();
+
+        let harness = ThreadedEncoderHarness::new(output.clone(), video, Some(audio), Some(1248));
+
+        let recording_secs = 65u64;
+        let fps = 30u64;
+        let total_video_frames = recording_secs * fps;
+
+        let mut video_timestamps = Vec::new();
+        for i in 0..total_video_frames {
+            let base_us = i * 1_000_000 / fps;
+            let backward = match i {
+                60 | 180 | 350 | 520 | 700 | 900 | 1100 | 1300 | 1500 | 1700 => 35_000i64,
+                120 | 300 | 450 | 650 | 850 | 1050 | 1250 | 1450 | 1650 | 1850 => 34_500,
+                _ => 0,
+            };
+            let jitter_us = ((i * 11 + 17) % 3000) as i64 - 1500;
+            let ts_us = (base_us as i64 - backward + jitter_us).max(0) as u64;
+            video_timestamps.push(Duration::from_micros(ts_us));
+        }
+
+        let audio_frames_per_sec = 48000u64 / 3840;
+        let total_audio_frames = recording_secs * audio_frames_per_sec;
+
+        let wireless_jitter: Vec<u64> = (0..total_audio_frames)
+            .map(|i| {
+                if i % 23 == 0 {
+                    50
+                } else if i % 11 == 0 {
+                    25
+                } else if i % 5 == 0 {
+                    5
+                } else {
+                    0
+                }
+            })
+            .collect();
+
+        let enc_v = harness.encoder.clone();
+        let pool = harness.pool.clone();
+        let video_handle = ThreadedEncoderHarness::run_video_thread(
+            enc_v,
+            pool,
+            video_timestamps.clone(),
+            1000 / fps,
+        );
+
+        let enc_a = harness.encoder.clone();
+        let audio_pace = 1000 / audio_frames_per_sec;
+        let audio_handle = ThreadedEncoderHarness::run_audio_thread(
+            enc_a,
+            total_audio_frames,
+            3840,
+            audio_pace,
+            wireless_jitter,
+        );
+
+        let (v_appended, v_dropped, v_errors) = video_handle.join().unwrap();
+        let (a_appended, a_dropped, a_errors) = audio_handle.join().unwrap();
+
+        eprintln!(
+            "Repeated sandwich 65s: video appended={v_appended} dropped={v_dropped}, \
+             audio appended={a_appended} dropped={a_dropped}"
+        );
+
+        assert!(
+            v_errors.is_empty(),
+            "Video errors in repeated sandwich 65s test: {:?} \
+             (appended={v_appended}, dropped={v_dropped})",
+            v_errors
+        );
+        assert!(
+            a_errors.is_empty(),
+            "Audio errors in repeated sandwich 65s test: {:?} \
+             (appended={a_appended}, dropped={a_dropped})",
+            a_errors
+        );
+
+        assert!(
+            v_appended >= video_timestamps.len() as u64 / 2,
+            "Expected at least {} video frames, got {v_appended}",
+            video_timestamps.len() / 2,
+        );
+        assert!(
+            a_appended >= total_audio_frames / 2,
+            "Expected at least {} audio frames, got {a_appended}",
+            total_audio_frames / 2,
+        );
+
+        let finish_ts = Duration::from_secs(recording_secs + 1);
+        let result = harness.encoder.lock().unwrap().finish(Some(finish_ts));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
+        let meta = std::fs::metadata(&output).unwrap();
+        assert!(
+            meta.len() > 100_000,
+            "Output file too small for 65s recording: {} bytes",
+            meta.len()
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn writer_failure_field_prevents_further_encoding() {
+        let output = test_output_path("writer_failure_field");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init_instant_mode(output.clone(), video, None, None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        for i in 0..30u64 {
+            let ts = Duration::from_micros(i * 33_333);
+            let frame = create_test_video_frame(&pool, (i * 33_333) as i64, 33_333);
+            let result = encoder.queue_video_frame(frame, ts);
+            assert!(
+                !matches!(
+                    result,
+                    Err(QueueFrameError::WriterFailed(_)) | Err(QueueFrameError::Failed)
+                ),
+                "Should not fail during normal encoding at frame {i}: {result:?}"
+            );
+        }
+
+        encoder.writer_failed = true;
+
+        let frame = create_test_video_frame(&pool, 30 * 33_333, 33_333);
+        let ts = Duration::from_micros(30 * 33_333);
+        let result = encoder.queue_video_frame(frame, ts);
+
+        assert!(
+            matches!(result, Err(QueueFrameError::Failed)),
+            "Should return Failed when writer_failed is set, got: {result:?}"
+        );
+
+        let _ = encoder.finish(Some(Duration::from_secs(2)));
         let _ = std::fs::remove_file(&output);
     }
 }

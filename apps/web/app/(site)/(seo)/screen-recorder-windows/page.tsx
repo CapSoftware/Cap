@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import { ScreenRecordWindowsPage } from "@/components/pages/seo/ScreenRecordWindowsPage";
 
 export const metadata: Metadata = {
-	title: "Best Screen Recorder for Windows: Easy, Powerful & Free (2025)",
+	title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
 	description:
-		"Cap is the best screen recorder for Windows, offering HD quality recording, unlimited free usage, and seamless sharing. A perfect OBS alternative for tutorials, presentations, and more.",
+		"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks. Works on Windows 10 & 11.",
 	openGraph: {
-		title: "Best Screen Recorder for Windows: Easy, Powerful & Free (2025)",
+		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
 		description:
-			"Cap is the best screen recorder for Windows, offering HD quality recording, unlimited free usage, and seamless sharing. A perfect OBS alternative for tutorials, presentations, and more.",
+			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks. Works on Windows 10 & 11.",
 		url: "https://cap.so/screen-recorder-windows",
 		siteName: "Cap",
 		images: [
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 				url: "https://cap.so/og.png",
 				width: 1200,
 				height: 630,
-				alt: "Cap: Best Screen Recorder for Windows",
+				alt: "Cap: Best Free Screen Recorder for Windows",
 			},
 		],
 		locale: "en_US",
@@ -24,10 +24,13 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "Best Screen Recorder for Windows | Cap",
+		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
 		description:
-			"Cap is the best screen recorder for Windows, offering HD quality recording, unlimited free usage, and seamless sharing. A perfect OBS alternative for tutorials, presentations, and more.",
+			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks.",
 		images: ["https://cap.so/og.png"],
+	},
+	alternates: {
+		canonical: "https://cap.so/screen-recorder-windows",
 	},
 };
 

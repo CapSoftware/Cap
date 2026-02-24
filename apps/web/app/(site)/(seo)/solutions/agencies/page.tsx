@@ -111,6 +111,9 @@ export const metadata: Metadata = {
 			"Send clearer client updates in minutes. Share instant links with comments, or craft polished walkthroughs. Cap for Agencies on macOS & Windows.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/solutions/agencies",
+	},
 };
 
 export default function Page() {

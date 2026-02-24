@@ -61,7 +61,8 @@ scripts/update-github-releases.sh
 scripts/releases-backfill-data.txt
 
 # SEO agent state (machine-local, contains sensitive ranking data)
-seo/
+/seo/
+/docs/
 
 # OpenCode commands (local)
 .opencode/

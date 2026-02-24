@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { LoomDownloader } from "@/components/tools/LoomDownloader";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "Loom Video Downloader — Download Loom Videos Free Online | Cap",
@@ -145,11 +146,28 @@ const pageContent: ToolPageContent = {
 	},
 };
 
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{
+		name: "Loom Video Downloader",
+		url: "https://cap.so/tools/loom-downloader",
+	},
+]);
+
 export default function LoomDownloaderPage() {
 	return (
-		<ToolsPageTemplate
-			content={pageContent}
-			toolComponent={<LoomDownloader />}
-		/>
+		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
+			<ToolsPageTemplate
+				content={pageContent}
+				toolComponent={<LoomDownloader />}
+			/>
+		</>
 	);
 }

@@ -66,12 +66,12 @@ export const DesktopNav = () => {
 							variant="white"
 							onClick={toggleSidebarCollapsed}
 							className={clsx(
-								"size-7 p-0 min-w-[unset] rounded-full transition-all z-10 opacity-0 group-hover:opacity-100",
-								sidebarCollapsed ? "hidden" : "",
+								"p-0 min-w-[unset] rounded-full transition-all z-10 opacity-0 group-hover:opacity-100",
+								sidebarCollapsed ? "size-5 absolute right-0.5 top-7" : "size-7",
 							)}
 						>
 							<ChevronRight
-								size={14}
+								size={sidebarCollapsed ? 12 : 14}
 								className={clsx(
 									"transition-transform duration-200 text-gray-12",
 									!sidebarCollapsed ? "rotate-180" : "",
