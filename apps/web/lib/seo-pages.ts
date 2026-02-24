@@ -31,6 +31,10 @@ import {
 	macScreenRecordingWithAudioContent,
 } from "@/components/pages/seo/MacScreenRecordingWithAudioPage";
 import {
+	ObsAlternativePage,
+	obsAlternativeContent,
+} from "@/components/pages/seo/ObsAlternativePage";
+import {
 	OnlineClassroomToolsPage,
 	onlineClassroomToolsContent,
 } from "@/components/pages/seo/OnlineClassroomToolsPage";
@@ -142,6 +146,10 @@ export const seoPages: Record<
 	"mac-screen-recording-with-audio": {
 		component: MacScreenRecordingWithAudioPage,
 		content: macScreenRecordingWithAudioContent,
+	},
+	"obs-alternative": {
+		component: ObsAlternativePage,
+		content: obsAlternativeContent,
 	},
 };
 

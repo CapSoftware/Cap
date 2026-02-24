@@ -224,6 +224,21 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"obs-alternative": {
+		title:
+			"OBS Alternative — Easier Screen Recording with Instant Sharing | Cap",
+		description:
+			"Cap is the modern OBS alternative for async screen sharing. Record in 4K, get a shareable link in seconds, and collaborate with timestamped comments. No configuration required.",
+		keywords: [
+			"obs alternative",
+			"obs studio alternative",
+			"alternative to obs",
+			"screen recorder without obs",
+			"simpler obs replacement",
+			"obs for screen sharing",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>
