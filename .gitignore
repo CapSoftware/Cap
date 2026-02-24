@@ -62,6 +62,7 @@ scripts/releases-backfill-data.txt
 
 # SEO agent state (machine-local, contains sensitive ranking data)
 /seo/
+/docs/
 
 # OpenCode commands (local)
 .opencode/
