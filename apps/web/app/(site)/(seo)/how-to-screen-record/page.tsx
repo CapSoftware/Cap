@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
-import { HowToScreenRecordPage } from "@/components/pages/seo/HowToScreenRecordPage";
+import Script from "next/script";
+import {
+	HowToScreenRecordPage,
+	howToScreenRecordContent,
+} from "@/components/pages/seo/HowToScreenRecordPage";
+import { createFAQSchema, createHowToSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
@@ -34,6 +39,53 @@ export const metadata: Metadata = {
 	},
 };
 
+const howToSteps = [
+	{
+		name: "Download and install Cap",
+		text: "Download Cap for free from cap.so/download for Mac or Windows, or use Instant Mode in your browser for quick recordings without any installation.",
+	},
+	{
+		name: "Choose your recording settings",
+		text: "Open Cap and select your recording source. Choose between full screen, specific window, or custom region capture. Toggle microphone and system audio on or off based on your needs.",
+	},
+	{
+		name: "Start recording your screen",
+		text: "Click the record button to begin capturing your screen. Cap records in high definition with minimal system impact so you can present, demo, or teach without lag.",
+	},
+	{
+		name: "Share or export your recording",
+		text: "Stop the recording when finished. Cap generates an instant shareable link, or you can export the video locally in your preferred format. Share your recording with anyone in seconds.",
+	},
+];
+
 export default function Page() {
-	return <HowToScreenRecordPage />;
+	return (
+		<>
+			<Script
+				id="faq-structured-data"
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(
+						createFAQSchema(howToScreenRecordContent.faqs),
+					),
+				}}
+			/>
+			<Script
+				id="howto-structured-data"
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(
+						createHowToSchema({
+							name: "How to Screen Record on Mac, Windows & Chrome",
+							description:
+								"Learn how to screen record with audio on Mac, Windows, or in your browser using Cap, the free open-source screen recorder.",
+							totalTime: "PT2M",
+							steps: howToSteps,
+						}),
+					),
+				}}
+			/>
+			<HowToScreenRecordPage />
+		</>
+	);
 }
