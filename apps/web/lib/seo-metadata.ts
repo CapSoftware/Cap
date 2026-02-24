@@ -239,6 +239,21 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"hipaa-compliant-screen-recording": {
+		title:
+			"HIPAA-Compliant Screen Recording — Secure Healthcare Recordings | Cap",
+		description:
+			"Cap enables HIPAA-compliant screen recording for healthcare teams. Self-host recordings on your own AWS S3 bucket, keep PHI off third-party servers, and audit every line of open-source code.",
+		keywords: [
+			"hipaa compliant screen recording",
+			"hipaa screen recorder",
+			"hipaa compliant recording software",
+			"screen recording for healthcare",
+			"hipaa video recording",
+			"secure screen recording healthcare",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>

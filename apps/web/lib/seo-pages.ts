@@ -19,6 +19,10 @@ import {
 	freeScreenRecorderContent,
 } from "@/components/pages/seo/FreeScreenRecorderPage";
 import {
+	HipaaCompliantScreenRecordingPage,
+	hipaaCompliantScreenRecordingContent,
+} from "@/components/pages/seo/HipaaCompliantScreenRecordingPage";
+import {
 	HowToScreenRecordPage,
 	howToScreenRecordContent,
 } from "@/components/pages/seo/HowToScreenRecordPage";
@@ -150,6 +154,10 @@ export const seoPages: Record<
 	"obs-alternative": {
 		component: ObsAlternativePage,
 		content: obsAlternativeContent,
+	},
+	"hipaa-compliant-screen-recording": {
+		component: HipaaCompliantScreenRecordingPage,
+		content: hipaaCompliantScreenRecordingContent,
 	},
 };
 

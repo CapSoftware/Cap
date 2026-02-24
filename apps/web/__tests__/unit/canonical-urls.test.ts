@@ -105,6 +105,10 @@ const expectedCanonicals: Array<{ file: string; canonical: string }> = [
 		file: "(site)/tools/convert/mp4-to-webm/page.tsx",
 		canonical: "https://cap.so/tools/convert/mp4-to-webm",
 	},
+	{
+		file: "(site)/(seo)/hipaa-compliant-screen-recording/page.tsx",
+		canonical: "https://cap.so/hipaa-compliant-screen-recording",
+	},
 ];
 
 describe("Canonical URLs", () => {
