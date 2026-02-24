@@ -68,7 +68,3 @@ scripts/releases-backfill-data.txt
 analysis/
 analysis/plans/
 .ralphy
-.venv/
-venv/
-__pycache__/
-*.pyc
