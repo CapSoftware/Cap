@@ -70,3 +70,29 @@ All Rust code must respect these workspace-level lints defined in `Cargo.toml`:
 ## Code Formatting
 - Always format code before completing work: run `pnpm format` for TypeScript/JavaScript and `cargo fmt` for Rust.
 - Run these commands regularly during development and always at the end of a coding session to ensure consistent formatting.
+
+## Cursor Cloud specific instructions
+
+### Services overview
+- **Web app** (`apps/web`): Next.js 15 on port 3000. Start with `cd apps/web && dotenv -e ../../.env -- pnpm dev` or use `npx dotenv -e .env -- pnpm --dir apps/web dev` from root.
+- **MySQL 8.0**: Docker container `mysql-primary-db` on port 3306 (empty root password, database `cap`).
+- **MinIO (S3)**: Docker container `minio-storage` on ports 9000/9001 (creds: `capso`/`capso_secret`).
+- **Media Server**: Docker container `cap-media-server-dev` on port 3456.
+
+### Starting services
+1. Start Docker daemon: `sudo dockerd &` then `sudo chmod 666 /var/run/docker.sock`
+2. Start containers: `cd packages/local-docker && docker compose up -d`
+3. Wait for MySQL: `docker exec mysql-primary-db mysqladmin ping -u root --silent`
+4. Ensure the `cap` database exists: `docker exec mysql-primary-db mysql -u root -e "CREATE DATABASE IF NOT EXISTS cap;"`
+5. Push schema: `pnpm db:push`
+6. Start web dev server: `npx dotenv -e .env -- pnpm --dir apps/web dev`
+
+### Gotchas
+- `pnpm env-setup` is interactive and cannot run non-interactively. Create `.env` manually with the Docker defaults from `scripts/env-cli.js` (see the `DOCKER_S3_ENVS` and `DOCKER_DB_ENVS` constants).
+- The `dotenv` CLI lives in root `node_modules`; use `npx dotenv` or the full path when running outside the root package.json scripts context.
+- `pnpm install` in pnpm 10 blocks build scripts by default. The repo needs `pnpm.onlyBuiltDependencies` in root `package.json` listing at least `@parcel/watcher`, `@swc/core`, `esbuild`, `sharp`, `protobufjs`, `unrs-resolver`.
+- In dev mode, email auth OTP codes are logged to the Next.js server console (look for `VERIFICATION CODE (Development Mode)`).
+- First page loads after starting the dev server are slow (10-30s) due to on-demand compilation. Subsequent loads are fast.
+- The `pnpm lint` command reports many pre-existing Biome warnings/errors; this is normal for the current codebase.
+- Web tests (`pnpm test:web`) have 2 pre-existing failures due to missing blog post MDX files; 25/27 test files and 481 tests pass.
+- Desktop app development requires macOS or Windows with Rust toolchain; it cannot run on the cloud Linux VM.
