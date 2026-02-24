@@ -87,15 +87,17 @@ pub fn interpolate_masks(
 
         let fade_duration = segment.fade_duration.max(0.0);
         if fade_duration > 0.0 {
+            let adjacency_epsilon = 1e-3;
+
             let adjacent_before = enabled
                 .iter()
                 .enumerate()
-                .any(|(j, other)| i != j && (segment.start - other.end).abs() < fade_duration);
+                .any(|(j, other)| i != j && (segment.start - other.end).abs() < adjacency_epsilon);
 
             let adjacent_after = enabled
                 .iter()
                 .enumerate()
-                .any(|(j, other)| i != j && (other.start - segment.end).abs() < fade_duration);
+                .any(|(j, other)| i != j && (other.start - segment.end).abs() < adjacency_epsilon);
 
             let time_since_start = (frame_time - segment.start).max(0.0);
             let time_until_end = (segment.end - frame_time).max(0.0);
