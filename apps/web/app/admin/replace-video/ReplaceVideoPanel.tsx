@@ -1,7 +1,11 @@
 "use client";
 
-import { useCallback, useId, useRef, useState } from "react";
-import { getVideoReplaceUploadUrl } from "@/actions/admin/replace-video";
+import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
+import { useCallback, useId, useState } from "react";
+import {
+	getVideoReplaceUploadUrl,
+	invalidateVideoCache,
+} from "@/actions/admin/replace-video";
 
 type Status =
 	| { type: "idle" }
@@ -9,11 +13,47 @@ type Status =
 	| { type: "success" }
 	| { type: "error"; message: string };
 
+function uploadWithPresignedPost(
+	postData: PresignedPost,
+	file: File,
+	onProgress: (percent: number) => void,
+): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const formData = new FormData();
+		for (const [key, value] of Object.entries(postData.fields)) {
+			formData.append(key, value);
+		}
+		formData.append("file", file);
+
+		const xhr = new XMLHttpRequest();
+
+		xhr.upload.addEventListener("progress", (e) => {
+			if (e.lengthComputable) {
+				onProgress(Math.round((e.loaded / e.total) * 100));
+			}
+		});
+
+		xhr.addEventListener("load", () => {
+			if (xhr.status >= 200 && xhr.status < 300) {
+				resolve();
+			} else {
+				reject(new Error(`Upload failed with status ${xhr.status}`));
+			}
+		});
+
+		xhr.addEventListener("error", () => {
+			reject(new Error("Upload failed"));
+		});
+
+		xhr.open("POST", postData.url);
+		xhr.send(formData);
+	});
+}
+
 export function ReplaceVideoPanel() {
 	const [videoId, setVideoId] = useState("");
 	const [file, setFile] = useState<File | null>(null);
 	const [status, setStatus] = useState<Status>({ type: "idle" });
-	const xhrRef = useRef<XMLHttpRequest | null>(null);
 	const videoIdInputId = useId();
 	const fileInputId = useId();
 
@@ -26,46 +66,19 @@ export function ReplaceVideoPanel() {
 			setStatus({ type: "uploading", progress: 0 });
 
 			try {
-				const { presignedUrl } = await getVideoReplaceUploadUrl(trimmedId);
+				const { presignedPostData } = await getVideoReplaceUploadUrl(trimmedId);
 
-				await new Promise<void>((resolve, reject) => {
-					const xhr = new XMLHttpRequest();
-					xhrRef.current = xhr;
-
-					xhr.upload.addEventListener("progress", (e) => {
-						if (e.lengthComputable) {
-							setStatus({
-								type: "uploading",
-								progress: Math.round((e.loaded / e.total) * 100),
-							});
-						}
-					});
-
-					xhr.addEventListener("load", () => {
-						if (xhr.status >= 200 && xhr.status < 300) {
-							resolve();
-						} else {
-							reject(new Error(`Upload failed with status ${xhr.status}`));
-						}
-					});
-
-					xhr.addEventListener("error", () => {
-						reject(new Error("Upload failed"));
-					});
-
-					xhr.open("PUT", presignedUrl);
-					xhr.setRequestHeader("Content-Type", "video/mp4");
-					xhr.send(file);
+				await uploadWithPresignedPost(presignedPostData, file, (progress) => {
+					setStatus({ type: "uploading", progress });
 				});
 
+				await invalidateVideoCache(trimmedId);
 				setStatus({ type: "success" });
 			} catch (err) {
 				setStatus({
 					type: "error",
 					message: err instanceof Error ? err.message : "Something went wrong",
 				});
-			} finally {
-				xhrRef.current = null;
 			}
 		},
 		[videoId, file],
