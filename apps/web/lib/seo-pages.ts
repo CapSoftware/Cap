@@ -15,6 +15,10 @@ import {
 	dailyStandupSoftwareContent,
 } from "@/components/pages/seo/DailyStandupSoftwarePage";
 import {
+	DeveloperDocumentationVideosPage,
+	developerDocumentationVideosContent,
+} from "@/components/pages/seo/DeveloperDocumentationVideosPage";
+import {
 	EmployeeOnboardingPlatformPage,
 	employeeOnboardingContent,
 } from "@/components/pages/seo/EmployeeOnboardingPlatformPage";
@@ -174,6 +178,10 @@ export const seoPages: Record<
 	"async-video-code-reviews": {
 		component: AsyncVideoCodeReviewsPage,
 		content: asyncVideoCodeReviewsContent,
+	},
+	"developer-documentation-videos": {
+		component: DeveloperDocumentationVideosPage,
+		content: developerDocumentationVideosContent,
 	},
 };
 

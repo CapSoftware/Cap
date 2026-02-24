@@ -283,6 +283,21 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"developer-documentation-videos": {
+		title:
+			"Developer Documentation Videos — Record API Demos and SDK Walkthroughs | Cap",
+		description:
+			"Create professional developer documentation videos with screen recording. Record API demos, SDK walkthroughs, and technical tutorials instantly. Cap is free, open-source, 4K quality, and built for developers.",
+		keywords: [
+			"developer documentation videos",
+			"api demo video",
+			"sdk walkthrough video",
+			"technical documentation recording",
+			"screen recorder for developers",
+			"developer docs video",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>
