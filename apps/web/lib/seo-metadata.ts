@@ -254,6 +254,21 @@ export const seoMetadata = {
 		],
 		ogImage: "/og.png",
 	},
+	"self-hosted-screen-recording": {
+		title:
+			"Self-Hosted Screen Recording — Own Your Data, No Vendor Lock-In | Cap",
+		description:
+			"Cap lets you self-host screen recordings on your own S3-compatible storage. Connect AWS S3, Cloudflare R2, or MinIO — recordings go directly to your infrastructure. Open source, MIT-licensed, free to use.",
+		keywords: [
+			"self hosted screen recording",
+			"self hosted screen recorder",
+			"self-host screen recordings",
+			"s3 screen recorder",
+			"private screen recording",
+			"on premise screen recorder",
+		],
+		ogImage: "/og.png",
+	},
 };
 
 export const getMetadataBySlug = (slug: string) =>

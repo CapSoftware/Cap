@@ -71,6 +71,10 @@ import {
 	screenRecordWindowsContent,
 } from "@/components/pages/seo/ScreenRecordWindowsPage";
 import {
+	SelfHostedScreenRecordingPage,
+	selfHostedScreenRecordingContent,
+} from "@/components/pages/seo/SelfHostedScreenRecordingPage";
+import {
 	VideoRecordingSoftwarePage,
 	videoRecordingSoftwareContent,
 } from "@/components/pages/seo/VideoRecordingSoftwarePage";
@@ -158,6 +162,10 @@ export const seoPages: Record<
 	"hipaa-compliant-screen-recording": {
 		component: HipaaCompliantScreenRecordingPage,
 		content: hipaaCompliantScreenRecordingContent,
+	},
+	"self-hosted-screen-recording": {
+		component: SelfHostedScreenRecordingPage,
+		content: selfHostedScreenRecordingContent,
 	},
 };
 
