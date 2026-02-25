@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { createEventBus } from "@solid-primitives/event-bus";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { useMutation } from "@tanstack/solid-query";
 import { createResource, Suspense } from "solid-js";
@@ -112,7 +111,36 @@ export default function S3ConfigPage() {
 		},
 	}));
 
-	const events = createEventBus<"save" | "test">();
+	const [s3Config, setS3Config] = createWritableMemo(
+		() => _s3Config.latest ?? DEFAULT_CONFIG,
+	);
+
+	const renderInput = (
+		label: string,
+		key: keyof ReturnType<typeof s3Config>,
+		placeholder: string,
+		type: "text" | "password" = "text",
+	) => (
+		<div class="space-y-2">
+			<label class="text-[13px] text-gray-12">{label}</label>
+			<Input
+				class="!bg-gray-3"
+				type={type}
+				value={s3Config()[key] ?? ""}
+				onInput={(e: InputEvent & { currentTarget: HTMLInputElement }) =>
+					setS3Config({
+						...s3Config(),
+						[key]: e.currentTarget.value,
+					})
+				}
+				placeholder={placeholder}
+				autocomplete="off"
+				autocapitalize="off"
+				autocorrect="off"
+				spellcheck={false}
+			/>
+		</div>
+	);
 
 	return (
 		<div class="flex flex-col p-4 h-full">
@@ -125,123 +153,75 @@ export default function S3ConfigPage() {
 							</div>
 						}
 					>
-						{(() => {
-							const [s3Config, setS3Config] = createWritableMemo(
-								() => _s3Config.latest ?? DEFAULT_CONFIG,
-							);
+						<div class="p-4 space-y-4 animate-in fade-in">
+							<div class="pb-4 border-b border-gray-3">
+								<p class="text-sm text-gray-11">
+									It should take under 10 minutes to set up and connect your
+									storage bucket to Cap. View the{" "}
+									<a
+										href="https://cap.so/docs/s3-config"
+										target="_blank"
+										class="underline text-gray-12"
+										rel="noopener"
+									>
+										Storage Config Guide
+									</a>{" "}
+									to get started.
+								</p>
+							</div>
 
-							const renderInput = (
-								label: string,
-								key: keyof ReturnType<typeof s3Config>,
-								placeholder: string,
-								type: "text" | "password" = "text",
-							) => (
-								<div class="space-y-2">
-									<label class="text-[13px] text-gray-12">{label}</label>
-									<Input
-										class="!bg-gray-3"
-										type={type}
-										value={s3Config()[key] ?? ""}
-										onInput={(
-											e: InputEvent & { currentTarget: HTMLInputElement },
-										) =>
-											setS3Config({
-												...s3Config(),
-												[key]: e.currentTarget.value,
-											})
+							<div class="space-y-2">
+								<label class="text-[13px] text-gray-12">Storage Provider</label>
+								<div class="relative">
+									<select
+										value={s3Config().provider}
+										onChange={(e) =>
+											setS3Config((c) => ({
+												...c,
+												provider: e.currentTarget.value,
+											}))
 										}
-										placeholder={placeholder}
-										autocomplete="off"
-										autocapitalize="off"
-										autocorrect="off"
-										spellcheck={false}
-									/>
-								</div>
-							);
-
-							events.listen((v) => {
-								if (v === "save") saveConfig.mutate(s3Config());
-								else if (v === "test") testConfig.mutate(s3Config());
-							});
-
-							return (
-								<div class="p-4 space-y-4 animate-in fade-in">
-									<div class="pb-4 border-b border-gray-3">
-										<p class="text-sm text-gray-11">
-											It should take under 10 minutes to set up and connect your
-											storage bucket to Cap. View the{" "}
-											<a
-												href="https://cap.so/docs/s3-config"
-												target="_blank"
-												class="underline text-gray-12"
-												rel="noopener"
-											>
-												Storage Config Guide
-											</a>{" "}
-											to get started.
-										</p>
+										class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-none bg-gray-3 focus:border-gray-8"
+									>
+										<option value="aws">AWS S3</option>
+										<option value="cloudflare">Cloudflare R2</option>
+										<option value="supabase">Supabase</option>
+										<option value="minio">MinIO</option>
+										<option value="other">Other S3-Compatible</option>
+									</select>
+									<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
+										<svg
+											class="w-4 h-4 text-gray-11"
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 20 20"
+											fill="currentColor"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+												clip-rule="evenodd"
+											/>
+										</svg>
 									</div>
-
-									<div class="space-y-2">
-										<label class="text-[13px] text-gray-12">
-											Storage Provider
-										</label>
-										<div class="relative">
-											<select
-												value={s3Config().provider}
-												onChange={(e) =>
-													setS3Config((c) => ({
-														...c,
-														provider: e.currentTarget.value,
-													}))
-												}
-												class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-none bg-gray-3 focus:border-gray-8"
-											>
-												<option value="aws">AWS S3</option>
-												<option value="cloudflare">Cloudflare R2</option>
-												<option value="supabase">Supabase</option>
-												<option value="minio">MinIO</option>
-												<option value="other">Other S3-Compatible</option>
-											</select>
-											<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
-												<svg
-													class="w-4 h-4 text-gray-11"
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 20 20"
-													fill="currentColor"
-												>
-													<path
-														fill-rule="evenodd"
-														d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-														clip-rule="evenodd"
-													/>
-												</svg>
-											</div>
-										</div>
-									</div>
-
-									{renderInput(
-										"Access Key ID",
-										"accessKeyId",
-										"PL31OADSQNK",
-										"password",
-									)}
-									{renderInput(
-										"Secret Access Key",
-										"secretAccessKey",
-										"PL31OADSQNK",
-										"password",
-									)}
-									{renderInput(
-										"Endpoint",
-										"endpoint",
-										"https://s3.amazonaws.com",
-									)}
-									{renderInput("Bucket Name", "bucketName", "my-bucket")}
-									{renderInput("Region", "region", "us-east-1")}
 								</div>
-							);
-						})()}
+							</div>
+
+							{renderInput(
+								"Access Key ID",
+								"accessKeyId",
+								"PL31OADSQNK",
+								"password",
+							)}
+							{renderInput(
+								"Secret Access Key",
+								"secretAccessKey",
+								"PL31OADSQNK",
+								"password",
+							)}
+							{renderInput("Endpoint", "endpoint", "https://s3.amazonaws.com")}
+							{renderInput("Bucket Name", "bucketName", "my-bucket")}
+							{renderInput("Region", "region", "us-east-1")}
+						</div>
 					</Suspense>
 				</div>
 			</div>
@@ -264,14 +244,17 @@ export default function S3ConfigPage() {
 								{deleteConfig.isPending ? "Removing..." : "Remove Config"}
 							</Button>
 						)}
-						<Button variant="gray" onClick={() => events.emit("test")}>
+						<Button
+							variant="gray"
+							onClick={() => testConfig.mutate(s3Config())}
+						>
 							{testConfig.isPending ? "Testing..." : "Test Connection"}
 						</Button>
 					</div>
 					<Button
 						class="min-w-[72px]"
 						variant="primary"
-						onClick={() => events.emit("save")}
+						onClick={() => saveConfig.mutate(s3Config())}
 					>
 						{saveConfig.isPending ? "Saving..." : "Save"}
 					</Button>
