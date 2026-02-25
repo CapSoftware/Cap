@@ -764,7 +764,8 @@ impl output_pipeline::VideoSource for VideoSource {
 }
 
 fn is_system_stop_error(err: &ns::Error) -> bool {
-    err.localized_description().to_string() == "Stream was stopped by the system"
+    err.code() == sc::error::code::SYSTEM_STOPPED_STREAM as ns::Integer
+        && err.domain().to_string() == sc::error::domain().to_string()
 }
 
 pub struct SystemAudioSourceConfig(
