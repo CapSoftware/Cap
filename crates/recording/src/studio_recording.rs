@@ -100,6 +100,15 @@ impl Actor {
                 })?,
             )?;
 
+            if !res.keyboard_presses.is_empty() {
+                std::fs::write(
+                    &cursor.keyboard_output_path,
+                    serde_json::to_string_pretty(&cap_project::KeyboardEvents {
+                        presses: res.keyboard_presses,
+                    })?,
+                )?;
+            }
+
             (res.cursors, res.next_cursor_id)
         } else {
             (Default::default(), 0)
@@ -419,6 +428,7 @@ impl Pipeline {
 
 struct CursorPipeline {
     output_path: PathBuf,
+    keyboard_output_path: PathBuf,
     actor: CursorActor,
 }
 
@@ -790,6 +800,12 @@ async fn stop_recording(
                     .cursor
                     .as_ref()
                     .map(|cursor| make_relative(&cursor.output_path)),
+                keyboard: s
+                    .pipeline
+                    .cursor
+                    .as_ref()
+                    .filter(|cursor| cursor.keyboard_output_path.exists())
+                    .map(|cursor| make_relative(&cursor.keyboard_output_path)),
             }
         })
         .collect::<Vec<_>>()
@@ -1226,8 +1242,14 @@ async fn create_segment_pipeline(
                     .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
                 let cursor_output_path = dir.join("cursor.json");
+                let keyboard_output_path = dir.join("keyboard.json");
                 let incremental_output = if fragmented {
                     Some(cursor_output_path.clone())
+                } else {
+                    None
+                };
+                let keyboard_incremental_output = if fragmented {
+                    Some(keyboard_output_path.clone())
                 } else {
                     None
                 };
@@ -1242,10 +1264,12 @@ async fn create_segment_pipeline(
                     next_cursors_id,
                     start_time,
                     incremental_output,
+                    keyboard_incremental_output,
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
                     output_path: cursor_output_path,
+                    keyboard_output_path,
                     actor: cursor,
                 })
             })

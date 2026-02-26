@@ -788,6 +788,33 @@ pub struct TimelineConfiguration {
     pub mask_segments: Vec<MaskSegment>,
     #[serde(default)]
     pub text_segments: Vec<TextSegment>,
+    #[serde(default)]
+    pub caption_segments: Vec<CaptionTrackSegment>,
+    #[serde(default)]
+    pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionTrackSegment {
+    pub id: String,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+    #[serde(default)]
+    pub words: Vec<CaptionWord>,
+    #[serde(default)]
+    pub fade_duration_override: Option<f32>,
+    #[serde(default)]
+    pub linger_duration_override: Option<f32>,
+    #[serde(default)]
+    pub position_override: Option<String>,
+    #[serde(default)]
+    pub color_override: Option<String>,
+    #[serde(default)]
+    pub background_color_override: Option<String>,
+    #[serde(default)]
+    pub font_size_override: Option<u32>,
 }
 
 impl TimelineConfiguration {
@@ -932,6 +959,50 @@ impl Default for CaptionSettings {
 pub struct CaptionsData {
     pub segments: Vec<CaptionSegment>,
     pub settings: CaptionSettings,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KeyboardSettings {
+    pub enabled: bool,
+    pub font: String,
+    pub size: u32,
+    pub color: String,
+    pub background_color: String,
+    pub background_opacity: u32,
+    pub position: String,
+    pub font_weight: u32,
+    pub fade_duration: f32,
+    pub linger_duration: f32,
+    pub grouping_threshold_ms: f64,
+    pub show_modifiers: bool,
+    pub show_special_keys: bool,
+}
+
+impl Default for KeyboardSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            font: "System Sans-Serif".to_string(),
+            size: 28,
+            color: "#FFFFFF".to_string(),
+            background_color: "#000000".to_string(),
+            background_opacity: 85,
+            position: "above-captions".to_string(),
+            font_weight: 500,
+            fade_duration: 0.15,
+            linger_duration: 0.8,
+            grouping_threshold_ms: 300.0,
+            show_modifiers: true,
+            show_special_keys: true,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardData {
+    pub settings: KeyboardSettings,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
@@ -1083,6 +1154,7 @@ pub struct ProjectConfiguration {
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
     pub captions: Option<CaptionsData>,
+    pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
     pub annotations: Vec<Annotation>,
     #[serde(skip_serializing)]

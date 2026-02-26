@@ -10,7 +10,7 @@ use std::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
+    CaptionsData, CursorEvents, CursorImage, KeyboardEvents, ProjectConfiguration, XY,
     cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
 };
 
@@ -166,6 +166,38 @@ impl RecordingMeta {
             }
         } else {
             debug!("No captions.json found");
+        }
+
+        if let Some(ref captions) = config.captions {
+            let timeline_has_captions = config
+                .timeline
+                .as_ref()
+                .map(|t| !t.caption_segments.is_empty())
+                .unwrap_or(false);
+
+            if !timeline_has_captions && !captions.segments.is_empty() {
+                let caption_track_segments: Vec<crate::CaptionTrackSegment> = captions
+                    .segments
+                    .iter()
+                    .map(|seg| crate::CaptionTrackSegment {
+                        id: seg.id.clone(),
+                        start: seg.start as f64,
+                        end: seg.end as f64,
+                        text: seg.text.clone(),
+                        words: seg.words.clone(),
+                        fade_duration_override: None,
+                        linger_duration_override: None,
+                        position_override: None,
+                        color_override: None,
+                        background_color_override: None,
+                        font_size_override: None,
+                    })
+                    .collect();
+
+                if let Some(ref mut timeline) = config.timeline {
+                    timeline.caption_segments = caption_track_segments;
+                }
+            }
         }
 
         config
@@ -361,6 +393,9 @@ pub struct MultipleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<String>)]
     pub cursor: Option<RelativePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<String>)]
+    pub keyboard: Option<RelativePathBuf>,
 }
 
 impl MultipleSegment {
@@ -393,6 +428,29 @@ impl MultipleSegment {
         data.stabilize_short_lived_cursor_shapes(pointer_ids_ref, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
 
         data
+    }
+
+    pub fn keyboard_events(&self, meta: &RecordingMeta) -> KeyboardEvents {
+        let keyboard_path = self.keyboard.clone().or_else(|| {
+            let display_dir = self.display.path.parent()?;
+            let fallback = display_dir.join("keyboard.json");
+            let full = meta.path(&fallback);
+            full.exists().then_some(fallback)
+        });
+
+        let Some(keyboard_path) = keyboard_path else {
+            return KeyboardEvents::default();
+        };
+
+        let full_path = meta.path(&keyboard_path);
+
+        match KeyboardEvents::load_from_file(&full_path) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("Failed to load keyboard data: {e}");
+                KeyboardEvents::default()
+            }
+        }
     }
 
     pub fn latest_start_time(&self) -> Option<f64> {
