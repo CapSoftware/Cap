@@ -70,3 +70,29 @@ All Rust code must respect these workspace-level lints defined in `Cargo.toml`:
 ## Code Formatting
 - Always format code before completing work: run `pnpm format` for TypeScript/JavaScript and `cargo fmt` for Rust.
 - Run these commands regularly during development and always at the end of a coding session to ensure consistent formatting.
+
+## Cursor Cloud specific instructions
+
+### Services overview
+- **Web app** (`apps/web`): Next.js 15, the primary testable product on Linux. Start with `cd apps/web && pnpm dev` (uses `dotenv -e ../../.env`).
+- **Docker services** (MySQL 8.0 on :3306, MinIO S3 on :9000/:9001, media-server on :3456): managed via `packages/local-docker/docker-compose.yml`. Start with `cd packages/local-docker && sudo docker compose up -d`.
+- **Desktop app** (`apps/desktop`): Tauri v2, requires macOS/Windows—not runnable on Linux cloud VMs.
+
+### Starting the web app for development/testing
+1. Ensure Docker daemon is running: `sudo dockerd &>/tmp/dockerd.log &` (wait ~3s).
+2. Start backing services: `cd /workspace/packages/local-docker && sudo docker compose up -d`.
+3. Wait for MySQL: `sudo docker exec mysql-primary-db mysqladmin ping -h localhost --silent`.
+4. Push schema if first run or schema changed: `pnpm db:push`.
+5. Start Next.js: `cd /workspace/apps/web && pnpm dev` (listens on :3000).
+
+### Authentication in development
+- No email provider (Resend) is configured locally; login codes print to the Next.js server log.
+- Look for `🔐 VERIFICATION CODE (Development Mode)` in the terminal running `pnpm dev`.
+- Use that 6-digit code on the `/verify-otp` page to complete sign-in.
+
+### Known caveats
+- `pnpm lint` exits non-zero due to pre-existing Biome warnings/errors in the codebase; this is expected.
+- Two Vitest suites in `apps/web` fail because blog `.mdx` content files are missing from the repo (`record-screen-mac-audio-blog-post.test.ts`, `record-screen-windows-blog-post.test.ts`); the remaining 25 suites (481 tests) pass.
+- The `pnpm env-setup` script is interactive (uses `@clack/prompts`); in non-interactive environments, create `.env` manually with at minimum: `NODE_ENV`, `WEB_URL`, `NEXTAUTH_URL`, `NEXTAUTH_SECRET`, `DATABASE_ENCRYPTION_KEY`, `DATABASE_URL`, `CAP_AWS_ACCESS_KEY`, `CAP_AWS_SECRET_KEY`, `CAP_AWS_BUCKET`, `CAP_AWS_REGION`, `CAP_AWS_ENDPOINT`, `NEXT_PUBLIC_WEB_URL`. See `scripts/env-cli.js` for Docker default values.
+- Node 20 is required (set via `nvm use 20`). pnpm 10.5.2 is required (activated via corepack).
+- First page load after `pnpm dev` takes ~15s due to compilation + workflow discovery; subsequent loads are fast.
