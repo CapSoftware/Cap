@@ -69,6 +69,7 @@ type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	uploadIndividualFiles: false,
 	hideDockIcon: false,
+	disableUpdateChecks: false,
 	autoCreateShareableLink: false,
 	enableNotifications: true,
 	enableNativeCameraPreview: false,
@@ -592,6 +593,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						handleChange("serverUrl", origin);
 					}}
 				/>
+				<SettingGroup title="Update Settings">
+					<ToggleSettingItem
+						label="Disable update checks"
+						description="Disable automatic update checks."
+						value={!!settings.disableUpdateChecks}
+						onChange={(v) => handleChange("disableUpdateChecks", v)}
+					/>
+				</SettingGroup>
 			</div>
 		</div>
 	);

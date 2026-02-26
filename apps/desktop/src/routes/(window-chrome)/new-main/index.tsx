@@ -35,7 +35,7 @@ import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -930,6 +930,10 @@ function createUpdateCheck() {
 
 		let update: updater.Update | undefined;
 		try {
+			const generalSettings = await generalSettingsStore.get();
+			
+			if (generalSettings?.disableUpdateChecks ?? false) return;
+			
 			const result = await updater.check();
 			if (result) update = result;
 		} catch (e) {
