@@ -1,0 +1,124 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recorder via deeplinks",
+  "icon": "cap-icon.png",
+  "author": "CapSoftware",
+  "categories": [
+    "Productivity",
+    "Media"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording with Cap",
+      "mode": "no-view",
+      "icon": "record-icon.png"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current recording",
+      "mode": "no-view",
+      "icon": "stop-icon.png"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause the current recording",
+      "mode": "no-view",
+      "icon": "pause-icon.png"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "subtitle": "Cap",
+      "description": "Resume the paused recording",
+      "mode": "no-view",
+      "icon": "resume-icon.png"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "subtitle": "Cap",
+      "description": "Toggle pause/resume for the current recording",
+      "mode": "no-view",
+      "icon": "toggle-icon.png"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "subtitle": "Cap",
+      "description": "Switch to a different microphone",
+      "mode": "view",
+      "icon": "mic-icon.png"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "subtitle": "Cap",
+      "description": "Switch to a different camera",
+      "mode": "view",
+      "icon": "camera-icon.png"
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "subtitle": "Cap",
+      "description": "Open Cap settings",
+      "mode": "no-view",
+      "icon": "settings-icon.png"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "recordingMode",
+      "title": "Default Recording Mode",
+      "description": "Default mode for new recordings",
+      "type": "dropdown",
+      "required": false,
+      "default": "studio",
+      "data": [
+        {
+          "title": "Studio",
+          "value": "studio"
+        },
+        {
+          "title": "Instant",
+          "value": "instant"
+        }
+      ]
+    },
+    {
+      "name": "captureSystemAudio",
+      "title": "Capture System Audio",
+      "description": "Capture system audio by default",
+      "type": "checkbox",
+      "required": false,
+      "default": false,
+      "label": "Enable system audio capture"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.64.0",
+    "@raycast/utils": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.8.10",
+    "@types/react": "18.2.27",
+    "typescript": "^5.2.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray fix-lint",
+    "lint": "ray lint",
+    "publish": "ray publish"
+  }
+}
