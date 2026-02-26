@@ -527,7 +527,7 @@ async fn setup_camera(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 async fn setup_camera(
     id: &DeviceOrModelID,
     recipient: Recipient<NewFrame>,
@@ -582,6 +582,81 @@ async fn setup_camera(
                     }
                 }
             }
+
+            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
+                return;
+            };
+
+            ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
+
+            if let Some(signal) = ready_signal.take() {
+                let video_info = VideoInfo::from_raw_ffmpeg(
+                    ff_frame.format(),
+                    ff_frame.width(),
+                    ff_frame.height(),
+                    frame_rate,
+                );
+
+                let _ = signal.send(video_info);
+            }
+
+            let send_result = recipient
+                .tell(NewFrame(FFmpegVideoFrame {
+                    inner: ff_frame,
+                    timestamp,
+                }))
+                .try_send();
+
+            if send_result.is_err() && callback_num.is_multiple_of(30) {
+                tracing::warn!(
+                    "Camera callback: failed to send frame {} to actor (mailbox full?)",
+                    callback_num
+                );
+            }
+        })
+        .map_err(|e| SetInputError::StartCapturing(e.to_string()))?;
+
+    let video_info = tokio::time::timeout(CAMERA_INIT_TIMEOUT, ready_rx)
+        .await
+        .map_err(|e| SetInputError::Timeout(e.to_string()))?
+        .map_err(|_| SetInputError::Initialisation)?;
+
+    Ok(SetupCameraResult {
+        handle: capture_handle,
+        camera_info: camera,
+        video_info,
+    })
+}
+
+#[cfg(target_os = "linux")]
+async fn setup_camera(
+    id: &DeviceOrModelID,
+    recipient: Recipient<NewFrame>,
+    native_recipient: Recipient<NewNativeFrame>,
+) -> Result<SetupCameraResult, SetInputError> {
+    let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
+    let format = select_camera_format(&camera)?;
+    let frame_rate = format.frame_rate().round().max(1.0) as u32;
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let mut ready_signal = Some(ready_tx);
+
+    let capture_handle = camera
+        .start_capturing(format.clone(), move |frame| {
+            let callback_num =
+                CAMERA_CALLBACK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let timestamp = Timestamp::Instant(std::time::Instant::now());
+
+            let native = frame.native();
+            let _ = native_recipient
+                .tell(NewNativeFrame(NativeCameraFrame {
+                    data: native.data.clone(),
+                    width: native.width,
+                    height: native.height,
+                    timestamp,
+                }))
+                .try_send();
 
             let Ok(mut ff_frame) = frame.as_ffmpeg() else {
                 return;

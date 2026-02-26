@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use ffmpeg::{format, frame, sys::AVHWDeviceType};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use ffmpeg::sys::AVHWDeviceType;
+use ffmpeg::{format, frame};
 use std::{
     cell::RefCell,
     collections::BTreeMap,

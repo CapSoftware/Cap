@@ -81,8 +81,10 @@ pub fn spawn_cursor_recorder(
 
     let stop_token_child = stop_token.child_token();
     spawn_actor(async move {
-        let device_state = DeviceState::new();
-        let mut last_mouse_state = device_state.get_mouse();
+        let mut last_mouse_state = {
+            let ds = DeviceState::new();
+            ds.get_mouse()
+        };
 
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
@@ -108,7 +110,10 @@ pub fn spawn_cursor_recorder(
             };
 
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
-            let mouse_state = device_state.get_mouse();
+            let mouse_state = {
+                let ds = DeviceState::new();
+                ds.get_mouse()
+            };
 
             let position = cap_cursor_capture::RawCursorPosition::get();
             let position_changed = position != last_position;
@@ -566,5 +571,119 @@ fn get_cursor_data() -> Option<CursorData> {
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
         })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_cursor_data() -> Option<CursorData> {
+    unsafe {
+        let display = x11::xlib::XOpenDisplay(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+
+        let cursor_image = x11::xfixes::XFixesGetCursorImage(display);
+        if cursor_image.is_null() {
+            x11::xlib::XCloseDisplay(display);
+            return None;
+        }
+
+        let width = (*cursor_image).width as u32;
+        let height = (*cursor_image).height as u32;
+        let hotspot_x = (*cursor_image).xhot as f64 / width as f64;
+        let hotspot_y = (*cursor_image).yhot as f64 / height as f64;
+
+        let cursor_name = if !(*cursor_image).name.is_null() {
+            Some(
+                std::ffi::CStr::from_ptr((*cursor_image).name)
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        let shape = cursor_name
+            .as_deref()
+            .and_then(xcursor_name_to_shape)
+            .map(Into::into);
+
+        let pixels_ptr = (*cursor_image).pixels;
+        let pixel_count = (width * height) as usize;
+        let pixels = std::slice::from_raw_parts(pixels_ptr, pixel_count);
+
+        let mut rgba_data = Vec::with_capacity(pixel_count * 4);
+        for &pixel in pixels {
+            let a = ((pixel >> 24) & 0xFF) as u8;
+            let r = ((pixel >> 16) & 0xFF) as u8;
+            let g = ((pixel >> 8) & 0xFF) as u8;
+            let b = (pixel & 0xFF) as u8;
+            rgba_data.push(r);
+            rgba_data.push(g);
+            rgba_data.push(b);
+            rgba_data.push(a);
+        }
+
+        x11::xlib::XFree(cursor_image as *mut _);
+        x11::xlib::XCloseDisplay(display);
+
+        let img = image::RgbaImage::from_raw(width, height, rgba_data)?;
+
+        let mut png_data = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_data),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+
+        Some(CursorData {
+            image: png_data,
+            hotspot: XY::new(hotspot_x, hotspot_y),
+            shape,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn xcursor_name_to_shape(name: &str) -> Option<cap_cursor_info::CursorShapeLinux> {
+    use cap_cursor_info::CursorShapeLinux;
+
+    match name {
+        "left_ptr" | "arrow" | "default" | "top_left_arrow" => Some(CursorShapeLinux::Arrow),
+        "xterm" | "ibeam" | "text" => Some(CursorShapeLinux::Text),
+        "hand" | "hand1" | "hand2" | "pointer" | "pointing_hand" => Some(CursorShapeLinux::Pointer),
+        "watch" | "wait" => Some(CursorShapeLinux::Wait),
+        "crosshair" | "cross" | "tcross" => Some(CursorShapeLinux::Crosshair),
+        "not-allowed" | "circle" | "forbidden" | "crossed_circle" => {
+            Some(CursorShapeLinux::NotAllowed)
+        }
+        "grab" | "openhand" | "fleur" => Some(CursorShapeLinux::Grab),
+        "grabbing" | "closedhand" | "dnd-move" => Some(CursorShapeLinux::Grabbing),
+        "right_side" | "e-resize" | "w-resize" | "left_side" => Some(CursorShapeLinux::EwResize),
+        "top_side" | "n-resize" | "s-resize" | "bottom_side" => Some(CursorShapeLinux::NsResize),
+        "top_right_corner" | "ne-resize" | "sw-resize" | "bottom_left_corner" => {
+            Some(CursorShapeLinux::NeswResize)
+        }
+        "top_left_corner" | "nw-resize" | "se-resize" | "bottom_right_corner" => {
+            Some(CursorShapeLinux::NwseResize)
+        }
+        "sb_h_double_arrow" | "ew-resize" | "col-resize" | "split_h" => {
+            Some(CursorShapeLinux::EwResize)
+        }
+        "sb_v_double_arrow" | "ns-resize" | "row-resize" | "split_v" => {
+            Some(CursorShapeLinux::NsResize)
+        }
+        "move" | "all-scroll" | "size_all" => Some(CursorShapeLinux::Move),
+        "help" | "question_arrow" | "whats_this" => Some(CursorShapeLinux::Help),
+        "progress" | "left_ptr_watch" | "half-busy" => Some(CursorShapeLinux::Progress),
+        "context-menu" => Some(CursorShapeLinux::ContextMenu),
+        "zoom-in" => Some(CursorShapeLinux::ZoomIn),
+        "zoom-out" => Some(CursorShapeLinux::ZoomOut),
+        "copy" | "dnd-copy" => Some(CursorShapeLinux::Copy),
+        "alias" | "dnd-link" => Some(CursorShapeLinux::Alias),
+        "vertical-text" => Some(CursorShapeLinux::VerticalText),
+        "cell" | "plus" => Some(CursorShapeLinux::Cell),
+        "no-drop" | "dnd-no-drop" => Some(CursorShapeLinux::NoDrop),
+        _ => Some(CursorShapeLinux::Default),
     }
 }

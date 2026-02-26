@@ -82,6 +82,18 @@ fn is_system_dark_mode() -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
+fn is_system_dark_mode() -> bool {
+    if let Ok(output) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
+        .output()
+    {
+        let theme = String::from_utf8_lossy(&output.stdout);
+        return theme.to_lowercase().contains("dark");
+    }
+    false
+}
+
 fn hide_recording_windows(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label)
@@ -1706,6 +1718,9 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 let position = display.raw_handle().physical_position().unwrap();
 
+                #[cfg(target_os = "linux")]
+                let position = display.raw_handle().logical_position();
+
                 let bounds = display.physical_size().unwrap();
 
                 let mut window_builder = self
@@ -1839,6 +1854,24 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
+                #[cfg(target_os = "linux")]
+                let window = self
+                    .window_builder(app, "/in-progress-recording")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .transparent(true)
+                    .visible_on_all_workspaces(true)
+                    .inner_size(width, height)
+                    .skip_taskbar(false)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
+                    .build()?;
+
                 let (pos_x, pos_y) = cursor_monitor.bottom_center_position(width, height, 120.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
@@ -1923,6 +1956,14 @@ impl ShowCapWindow {
                         "InProgressRecording window.show() result: {:?}",
                         show_result
                     );
+                    window.set_focus().ok();
+                    fake_window::spawn_fake_window_listener(app.clone(), window.clone());
+                }
+
+                #[cfg(target_os = "linux")]
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    window.show().ok();
                     window.set_focus().ok();
                     fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 }
@@ -2254,6 +2295,30 @@ impl MonitorExt for Display {
         #[cfg(windows)]
         {
             let Some(bounds) = self.raw_handle().physical_bounds() else {
+                return false;
+            };
+
+            let left = bounds.position().x() as i32;
+            let right = left + bounds.size().width() as i32;
+            let top = bounds.position().y() as i32;
+            let bottom = top + bounds.size().height() as i32;
+
+            [
+                (position.x, position.y),
+                (position.x + size.width as i32, position.y),
+                (position.x, position.y + size.height as i32),
+                (
+                    position.x + size.width as i32,
+                    position.y + size.height as i32,
+                ),
+            ]
+            .into_iter()
+            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let Some(bounds) = self.raw_handle().logical_bounds() else {
                 return false;
             };
 

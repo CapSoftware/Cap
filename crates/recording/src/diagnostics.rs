@@ -541,3 +541,38 @@ pub use windows_impl::*;
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::*;
+
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Type)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SystemDiagnostics {
+        pub kernel_version: Option<String>,
+        pub available_encoders: Vec<String>,
+        pub display_server: Option<String>,
+    }
+
+    pub fn collect_diagnostics() -> SystemDiagnostics {
+        let kernel_version = std::fs::read_to_string("/proc/version")
+            .ok()
+            .map(|v| v.trim().to_string());
+
+        let display_server = std::env::var("WAYLAND_DISPLAY")
+            .ok()
+            .map(|_| "Wayland".to_string())
+            .or_else(|| std::env::var("DISPLAY").ok().map(|_| "X11".to_string()));
+
+        let available_encoders = vec!["libx264".to_string(), "aac".to_string()];
+
+        SystemDiagnostics {
+            kernel_version,
+            available_encoders,
+            display_server,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux_impl::*;

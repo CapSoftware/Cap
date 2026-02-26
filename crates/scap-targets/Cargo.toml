@@ -36,3 +36,6 @@ windows = { workspace = true, features = [
 	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "2.21", features = ["xlib", "xrandr", "xinerama", "xfixes"] }
