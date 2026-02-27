@@ -71,9 +71,17 @@ fn calculate_bottom_center_position(display: &Display) -> Option<(f64, f64)> {
 }
 
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
-    window.set_ignore_cursor_events(true).ok();
-
     let is_recording_controls = window.label() == RECORDING_CONTROLS_LABEL;
+
+    #[cfg(target_os = "linux")]
+    if is_recording_controls {
+        window.set_ignore_cursor_events(false).ok();
+    } else {
+        window.set_ignore_cursor_events(true).ok();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    window.set_ignore_cursor_events(true).ok();
 
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
@@ -97,6 +105,14 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             let map = state.0.read().await;
 
             let Some(windows) = map.get(window.label()) else {
+                #[cfg(target_os = "linux")]
+                if is_recording_controls {
+                    window.set_ignore_cursor_events(false).ok();
+                } else {
+                    window.set_ignore_cursor_events(true).ok();
+                }
+
+                #[cfg(not(target_os = "linux"))]
                 window.set_ignore_cursor_events(true).ok();
                 continue;
             };
@@ -106,6 +122,14 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 window.cursor_position(),
                 window.scale_factor(),
             ) else {
+                #[cfg(target_os = "linux")]
+                if is_recording_controls {
+                    let _ = window.set_ignore_cursor_events(false);
+                } else {
+                    let _ = window.set_ignore_cursor_events(true);
+                }
+
+                #[cfg(not(target_os = "linux"))]
                 let _ = window.set_ignore_cursor_events(true);
                 continue;
             };
