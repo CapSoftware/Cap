@@ -642,7 +642,7 @@ function PreviewCanvas() {
 		if (!source || !segments) return null;
 
 		const segmentEvents =
-			segments.find((s) => s.segment_index === source.recordingSegmentIndex)
+				segments.find((s) => s.segmentIndex === source.recordingSegmentIndex)
 				?.events ?? [];
 		if (segmentEvents.length === 0) return null;
 
