@@ -143,6 +143,29 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn write_debug_log(
+    hypothesis_id: &str,
+    location: &str,
+    message: &str,
+    data: serde_json::Value,
+) {
+    let payload = json!({
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": now_millis()
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/opt/cursor/logs/debug.log")
+    {
+        use std::io::Write as _;
+        let _ = writeln!(file, "{}", payload);
+    }
+}
+
 #[derive(Debug)]
 pub struct CameraWindowPositionGuard {
     ignore_until_ms: AtomicU64,

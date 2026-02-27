@@ -72,6 +72,17 @@ fn calculate_bottom_center_position(display: &Display) -> Option<(f64, f64)> {
 
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     let is_recording_controls = window.label() == RECORDING_CONTROLS_LABEL;
+    // #region agent log
+    crate::write_debug_log(
+        "H3",
+        "apps/desktop/src-tauri/src/fake_window.rs:spawn_fake_window_listener",
+        "fake-window listener started",
+        serde_json::json!({
+            "label": window.label(),
+            "isRecordingControls": is_recording_controls
+        }),
+    );
+    // #endregion
 
     #[cfg(target_os = "linux")]
     if is_recording_controls {
@@ -86,6 +97,7 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
         let mut current_display_id: Option<DisplayId> = get_display_id_for_cursor();
+        let mut logged_linux_force_interactive = false;
 
         loop {
             sleep(Duration::from_millis(1000 / 20)).await;
@@ -100,6 +112,23 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
                     current_display_id = Some(cursor_display_id);
                 }
+            }
+
+            #[cfg(target_os = "linux")]
+            if is_recording_controls {
+                if !logged_linux_force_interactive {
+                    // #region agent log
+                    crate::write_debug_log(
+                        "H3",
+                        "apps/desktop/src-tauri/src/fake_window.rs:spawn_fake_window_listener",
+                        "forcing recording-controls to stay interactive on linux",
+                        serde_json::json!({}),
+                    );
+                    // #endregion
+                    logged_linux_force_interactive = true;
+                }
+                window.set_ignore_cursor_events(false).ok();
+                continue;
             }
 
             let map = state.0.read().await;
@@ -137,18 +166,26 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             let mut ignore = true;
 
             for bounds in windows.values() {
-                let x_min = (window_position.x as f64) + bounds.position().x() * scale_factor;
-                let x_max = (window_position.x as f64)
-                    + (bounds.position().x() + bounds.size().width()) * scale_factor;
-                let y_min = (window_position.y as f64) + bounds.position().y() * scale_factor;
-                let y_max = (window_position.y as f64)
-                    + (bounds.position().y() + bounds.size().height()) * scale_factor;
+                let local_x_min = bounds.position().x() * scale_factor;
+                let local_x_max = (bounds.position().x() + bounds.size().width()) * scale_factor;
+                let local_y_min = bounds.position().y() * scale_factor;
+                let local_y_max = (bounds.position().y() + bounds.size().height()) * scale_factor;
 
-                if mouse_position.x >= x_min
-                    && mouse_position.x <= x_max
-                    && mouse_position.y >= y_min
-                    && mouse_position.y <= y_max
-                {
+                let global_x_min = (window_position.x as f64) + local_x_min;
+                let global_x_max = (window_position.x as f64) + local_x_max;
+                let global_y_min = (window_position.y as f64) + local_y_min;
+                let global_y_max = (window_position.y as f64) + local_y_max;
+
+                let in_local_bounds = mouse_position.x >= local_x_min
+                    && mouse_position.x <= local_x_max
+                    && mouse_position.y >= local_y_min
+                    && mouse_position.y <= local_y_max;
+                let in_global_bounds = mouse_position.x >= global_x_min
+                    && mouse_position.x <= global_x_max
+                    && mouse_position.y >= global_y_min
+                    && mouse_position.y <= global_y_max;
+
+                if in_local_bounds || in_global_bounds {
                     ignore = false;
                     break;
                 }

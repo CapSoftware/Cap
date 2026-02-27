@@ -1236,7 +1236,18 @@ fn mic_actor_not_running(err: &anyhow::Error) -> bool {
 #[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
-    let Some(current_recording) = state.clear_current_recording() else {
+    let current_recording = state.clear_current_recording();
+    // #region agent log
+    crate::write_debug_log(
+        "H2",
+        "apps/desktop/src-tauri/src/recording.rs:stop_recording",
+        "stop_recording command invoked",
+        serde_json::json!({
+            "hadCurrentRecording": current_recording.is_some()
+        }),
+    );
+    // #endregion
+    let Some(current_recording) = current_recording else {
         return Err("Recording not in progress".to_string())?;
     };
 
@@ -1635,11 +1646,22 @@ async fn handle_recording_finish(
 
                 match post_behaviour {
                     PostStudioRecordingBehaviour::OpenEditor => {
-                        let _ = ShowCapWindow::Editor {
+                        let open_editor_result = ShowCapWindow::Editor {
                             project_path: recording_dir.clone(),
                         }
                         .show(app)
                         .await;
+                        // #region agent log
+                        crate::write_debug_log(
+                            "H5",
+                            "apps/desktop/src-tauri/src/recording.rs:handle_recording_finish",
+                            "attempted to open editor after stop",
+                            serde_json::json!({
+                                "resultOk": open_editor_result.is_ok(),
+                                "recordingDir": recording_dir.display().to_string()
+                            }),
+                        );
+                        // #endregion
                     }
                     PostStudioRecordingBehaviour::ShowOverlay => {
                         let _ = ShowCapWindow::RecordingsOverlay.show(app).await;

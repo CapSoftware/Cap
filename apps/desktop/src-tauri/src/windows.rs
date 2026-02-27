@@ -877,6 +877,13 @@ impl ShowCapWindow {
             let recording_monitor = CursorMonitorInfo::get();
             let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
             let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+            #[cfg(target_os = "linux")]
+            if let Err(error) = window.set_ignore_cursor_events(false) {
+                warn!(
+                    %error,
+                    "Failed to make reused recording controls interactive on linux"
+                );
+            }
             window.show().ok();
             window.set_focus().ok();
             return Ok(window);
@@ -1944,6 +1951,12 @@ impl ShowCapWindow {
                 #[cfg(target_os = "linux")]
                 {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if let Err(error) = window.set_ignore_cursor_events(false) {
+                        warn!(
+                            %error,
+                            "Failed to make new recording controls interactive on linux"
+                        );
+                    }
                     window.show().ok();
                     window.set_focus().ok();
                     fake_window::spawn_fake_window_listener(app.clone(), window.clone());

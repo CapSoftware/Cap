@@ -1,5 +1,5 @@
 use crate::{
-    NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
+    App, NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
     RequestOpenSettings, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     windows::ShowCapWindow,
@@ -817,12 +817,31 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let app_handle = app.clone();
             move |tray, event| {
                 if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                    if is_recording.load(Ordering::Relaxed) {
+                    let is_recording_now = is_recording.load(Ordering::Relaxed);
+                    // #region agent log
+                    crate::write_debug_log(
+                        "H4",
+                        "apps/desktop/src-tauri/src/tray.rs:on_tray_icon_event",
+                        "tray icon clicked",
+                        serde_json::json!({
+                            "isRecording": is_recording_now
+                        }),
+                    );
+                    // #endregion
+                    if is_recording_now {
                         let app = app_handle.clone();
                         tokio::spawn(async move {
                             let _ = recording::stop_recording(app.clone(), app.state()).await;
                         });
                     } else {
+                        let app = app_handle.clone();
+                        tokio::spawn(async move {
+                            let state =
+                                app.state::<Arc<tokio::sync::RwLock<App>>>().inner().clone();
+                            if state.read().await.is_recording_active_or_pending() {
+                                let _ = recording::stop_recording(app.clone(), app.state()).await;
+                            }
+                        });
                         let _ = tray.set_visible(true);
                     }
                 }
