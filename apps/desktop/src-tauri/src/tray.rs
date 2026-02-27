@@ -818,16 +818,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |tray, event| {
                 if let tauri::tray::TrayIconEvent::Click { .. } = event {
                     let is_recording_now = is_recording.load(Ordering::Relaxed);
-                    // #region agent log
-                    crate::write_debug_log(
-                        "H4",
-                        "apps/desktop/src-tauri/src/tray.rs:on_tray_icon_event",
-                        "tray icon clicked",
-                        serde_json::json!({
-                            "isRecording": is_recording_now
-                        }),
-                    );
-                    // #endregion
                     if is_recording_now {
                         let app = app_handle.clone();
                         tokio::spawn(async move {

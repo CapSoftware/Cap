@@ -72,17 +72,6 @@ fn calculate_bottom_center_position(display: &Display) -> Option<(f64, f64)> {
 
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     let is_recording_controls = window.label() == RECORDING_CONTROLS_LABEL;
-    // #region agent log
-    crate::write_debug_log(
-        "H3",
-        "apps/desktop/src-tauri/src/fake_window.rs:spawn_fake_window_listener",
-        "fake-window listener started",
-        serde_json::json!({
-            "label": window.label(),
-            "isRecordingControls": is_recording_controls
-        }),
-    );
-    // #endregion
 
     #[cfg(target_os = "linux")]
     if is_recording_controls {
@@ -97,7 +86,6 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
         let mut current_display_id: Option<DisplayId> = get_display_id_for_cursor();
-        let mut logged_linux_force_interactive = false;
 
         loop {
             sleep(Duration::from_millis(1000 / 20)).await;
@@ -116,17 +104,6 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
 
             #[cfg(target_os = "linux")]
             if is_recording_controls {
-                if !logged_linux_force_interactive {
-                    // #region agent log
-                    crate::write_debug_log(
-                        "H3",
-                        "apps/desktop/src-tauri/src/fake_window.rs:spawn_fake_window_listener",
-                        "forcing recording-controls to stay interactive on linux",
-                        serde_json::json!({}),
-                    );
-                    // #endregion
-                    logged_linux_force_interactive = true;
-                }
                 window.set_ignore_cursor_events(false).ok();
                 continue;
             }
