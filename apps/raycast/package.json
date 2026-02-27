@@ -7,6 +7,16 @@
   "author": "cap",
   "categories": ["Productivity", "Applications"],
   "license": "MIT",
+  "preferences": [
+    {
+      "name": "displayName",
+      "title": "Display Name",
+      "description": "Name of the display to capture (leave empty to use the main display)",
+      "type": "textfield",
+      "required": false,
+      "default": ""
+    }
+  ],
   "commands": [
     {
       "name": "start-instant-recording",

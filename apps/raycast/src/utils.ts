@@ -1,20 +1,21 @@
-import { open, showToast, Toast } from "@raycast/api";
+import { getPreferenceValues, open, showToast, Toast } from "@raycast/api";
 
 const DEEPLINK_SCHEME = "cap-desktop";
 
-/**
- * Build a Cap deeplink URL for the given action.
- *
- * Format: cap-desktop://action?value=<json-encoded action>
- */
+interface Preferences {
+  displayName: string;
+}
+
+export function getDisplayName(): string {
+  const { displayName } = getPreferenceValues<Preferences>();
+  return displayName || "Main Display";
+}
+
 export function buildDeepLink(action: Record<string, unknown>): string {
   const json = JSON.stringify(action);
   return `${DEEPLINK_SCHEME}://action?value=${encodeURIComponent(json)}`;
 }
 
-/**
- * Open a Cap deeplink and show appropriate toast feedback.
- */
 export async function executeDeepLink(
   action: Record<string, unknown>,
   successMessage: string,

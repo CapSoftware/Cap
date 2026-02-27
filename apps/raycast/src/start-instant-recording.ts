@@ -1,10 +1,10 @@
-import { executeDeepLink } from "./utils";
+import { executeDeepLink, getDisplayName } from "./utils";
 
 export default async function command() {
   await executeDeepLink(
     {
       start_recording: {
-        capture_mode: { screen: "Main Display" },
+        capture_mode: { screen: getDisplayName() },
         camera: null,
         mic_label: null,
         capture_system_audio: false,

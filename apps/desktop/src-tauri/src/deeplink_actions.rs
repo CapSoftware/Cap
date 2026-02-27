@@ -116,6 +116,21 @@ impl TryFrom<&Url> for DeepLinkAction {
     }
 }
 
+fn resolve_capture_target(capture_mode: CaptureMode) -> Result<ScreenCaptureTarget, String> {
+    match capture_mode {
+        CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
+            .into_iter()
+            .find(|(s, _)| s.name == name)
+            .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+            .ok_or_else(|| format!("No screen with name \"{}\"", &name)),
+        CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
+            .into_iter()
+            .find(|(w, _)| w.name == name)
+            .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+            .ok_or_else(|| format!("No window with name \"{}\"", &name)),
+    }
+}
+
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
@@ -131,18 +146,7 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                let capture_target = resolve_capture_target(capture_mode)?;
 
                 let inputs = StartRecordingInputs {
                     mode,
@@ -168,18 +172,7 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::TakeScreenshot { capture_mode } => {
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                let capture_target = resolve_capture_target(capture_mode)?;
 
                 crate::recording::take_screenshot(app.clone(), capture_target)
                     .await

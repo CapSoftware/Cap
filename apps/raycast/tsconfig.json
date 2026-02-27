@@ -1,5 +1,5 @@
 {
-  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "allowJs": true,
     "checkJs": false,
