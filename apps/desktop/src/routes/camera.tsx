@@ -550,8 +550,18 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	}
 
 	const { cameraWsPort } = window.__CAP__;
+	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
 	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
+	let reconnectInterval: ReturnType<typeof setInterval> | undefined;
+
+	onMount(() => {
+		const handleVisibilityChange = () => setIsWindowVisible(!document.hidden);
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		onCleanup(() =>
+			document.removeEventListener("visibilitychange", handleVisibilityChange),
+		);
+	});
 
 	const createSocket = () => {
 		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
@@ -570,6 +580,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		});
 
 		socket.onmessage = (event) => {
+			if (!isWindowVisible()) return;
+
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) {
@@ -634,18 +646,43 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		return socket;
 	};
 
-	ws = createSocket();
-
-	const reconnectInterval = setInterval(() => {
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			if (ws) ws.close();
-			ws = createSocket();
+	const stopSocket = () => {
+		if (reconnectInterval) {
+			clearInterval(reconnectInterval);
+			reconnectInterval = undefined;
 		}
-	}, 5000);
+
+		if (ws) {
+			ws.close();
+			ws = undefined;
+		}
+
+		setIsConnected(false);
+	};
+
+	const startSocket = () => {
+		if (ws || !isWindowVisible()) return;
+
+		ws = createSocket();
+
+		reconnectInterval = setInterval(() => {
+			if (!ws || ws.readyState !== WebSocket.OPEN) {
+				if (ws) ws.close();
+				ws = createSocket();
+			}
+		}, 5000);
+	};
+
+	createEffect(() => {
+		if (isWindowVisible()) {
+			startSocket();
+		} else {
+			stopSocket();
+		}
+	});
 
 	onCleanup(() => {
-		clearInterval(reconnectInterval);
-		ws?.close();
+		stopSocket();
 	});
 
 	const scale = () => {
