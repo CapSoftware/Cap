@@ -1236,7 +1236,8 @@ fn mic_actor_not_running(err: &anyhow::Error) -> bool {
 #[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
-    let Some(current_recording) = state.clear_current_recording() else {
+    let current_recording = state.clear_current_recording();
+    let Some(current_recording) = current_recording else {
         return Err("Recording not in progress".to_string())?;
     };
 

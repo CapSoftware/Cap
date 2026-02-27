@@ -71,9 +71,17 @@ fn calculate_bottom_center_position(display: &Display) -> Option<(f64, f64)> {
 }
 
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
-    window.set_ignore_cursor_events(true).ok();
-
     let is_recording_controls = window.label() == RECORDING_CONTROLS_LABEL;
+
+    #[cfg(target_os = "linux")]
+    if is_recording_controls {
+        window.set_ignore_cursor_events(false).ok();
+    } else {
+        window.set_ignore_cursor_events(true).ok();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    window.set_ignore_cursor_events(true).ok();
 
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
@@ -94,9 +102,23 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 }
             }
 
+            #[cfg(target_os = "linux")]
+            if is_recording_controls {
+                window.set_ignore_cursor_events(false).ok();
+                continue;
+            }
+
             let map = state.0.read().await;
 
             let Some(windows) = map.get(window.label()) else {
+                #[cfg(target_os = "linux")]
+                if is_recording_controls {
+                    window.set_ignore_cursor_events(false).ok();
+                } else {
+                    window.set_ignore_cursor_events(true).ok();
+                }
+
+                #[cfg(not(target_os = "linux"))]
                 window.set_ignore_cursor_events(true).ok();
                 continue;
             };
@@ -106,6 +128,14 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 window.cursor_position(),
                 window.scale_factor(),
             ) else {
+                #[cfg(target_os = "linux")]
+                if is_recording_controls {
+                    let _ = window.set_ignore_cursor_events(false);
+                } else {
+                    let _ = window.set_ignore_cursor_events(true);
+                }
+
+                #[cfg(not(target_os = "linux"))]
                 let _ = window.set_ignore_cursor_events(true);
                 continue;
             };
@@ -113,18 +143,26 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             let mut ignore = true;
 
             for bounds in windows.values() {
-                let x_min = (window_position.x as f64) + bounds.position().x() * scale_factor;
-                let x_max = (window_position.x as f64)
-                    + (bounds.position().x() + bounds.size().width()) * scale_factor;
-                let y_min = (window_position.y as f64) + bounds.position().y() * scale_factor;
-                let y_max = (window_position.y as f64)
-                    + (bounds.position().y() + bounds.size().height()) * scale_factor;
+                let local_x_min = bounds.position().x() * scale_factor;
+                let local_x_max = (bounds.position().x() + bounds.size().width()) * scale_factor;
+                let local_y_min = bounds.position().y() * scale_factor;
+                let local_y_max = (bounds.position().y() + bounds.size().height()) * scale_factor;
 
-                if mouse_position.x >= x_min
-                    && mouse_position.x <= x_max
-                    && mouse_position.y >= y_min
-                    && mouse_position.y <= y_max
-                {
+                let global_x_min = (window_position.x as f64) + local_x_min;
+                let global_x_max = (window_position.x as f64) + local_x_max;
+                let global_y_min = (window_position.y as f64) + local_y_min;
+                let global_y_max = (window_position.y as f64) + local_y_max;
+
+                let in_local_bounds = mouse_position.x >= local_x_min
+                    && mouse_position.x <= local_x_max
+                    && mouse_position.y >= local_y_min
+                    && mouse_position.y <= local_y_max;
+                let in_global_bounds = mouse_position.x >= global_x_min
+                    && mouse_position.x <= global_x_max
+                    && mouse_position.y >= global_y_min
+                    && mouse_position.y <= global_y_max;
+
+                if in_local_bounds || in_global_bounds {
                     ignore = false;
                     break;
                 }
