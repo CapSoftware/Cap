@@ -2054,7 +2054,7 @@ async fn get_keyboard_events(
     };
 
     let events = match &meta.inner {
-        RecordingMetaInner::Studio(ref meta) => match meta.as_ref() {
+        RecordingMetaInner::Studio(meta) => match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => segment
                 .cursor
                 .as_ref()

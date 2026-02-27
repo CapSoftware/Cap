@@ -404,15 +404,24 @@ impl KeyboardLayer {
             });
         }
 
-        let _ = self.text_renderer.prepare(
-            device,
-            queue,
-            &mut self.font_system,
-            &mut self.text_atlas,
-            &self.viewport,
-            text_areas,
-            &mut self.swash_cache,
-        );
+        if self
+            .text_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.text_atlas,
+                &self.viewport,
+                text_areas,
+                &mut self.swash_cache,
+            )
+            .is_err()
+        {
+            self.visible = false;
+            self.current_label = None;
+            self.overlays.clear();
+            return;
+        }
     }
 
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
@@ -540,6 +549,13 @@ fn active_shortcut_label(cursor: &CursorEvents, now_ms: f64) -> Option<ShortcutP
         mods.dedup();
 
         if is_modifier_key(&event.key) {
+            continue;
+        }
+
+        let has_shortcut_modifier = mods
+            .iter()
+            .any(|symbol| symbol == "⌘" || symbol == "⌃" || symbol == "⌥");
+        if event.down && !has_shortcut_modifier {
             continue;
         }
 

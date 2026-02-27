@@ -38,10 +38,7 @@ fn keycode_to_label(key: &device_query::Keycode) -> String {
         Keycode::LShift | Keycode::RShift => "Shift".to_string(),
         Keycode::LControl | Keycode::RControl => "Ctrl".to_string(),
         Keycode::LAlt | Keycode::RAlt => "Alt".to_string(),
-        _ if format!("{key:?}").contains("Meta")
-            || format!("{key:?}").contains("Win")
-            || format!("{key:?}").contains("Command") =>
-        {
+        Keycode::LMeta | Keycode::RMeta | Keycode::Command | Keycode::RCommand => {
             "Meta".to_string()
         }
         Keycode::Enter | Keycode::NumpadEnter => "Enter".to_string(),
@@ -58,21 +55,34 @@ fn keycode_to_label(key: &device_query::Keycode) -> String {
 }
 
 fn is_modifier(key: &device_query::Keycode) -> bool {
-    let label = format!("{key:?}");
-    label.contains("Shift")
-        || label.contains("Control")
-        || label.contains("Alt")
-        || label.contains("Meta")
-        || label.contains("Win")
-        || label.contains("Command")
+    matches!(
+        key,
+        device_query::Keycode::LShift
+            | device_query::Keycode::RShift
+            | device_query::Keycode::LControl
+            | device_query::Keycode::RControl
+            | device_query::Keycode::LAlt
+            | device_query::Keycode::RAlt
+            | device_query::Keycode::LOption
+            | device_query::Keycode::ROption
+            | device_query::Keycode::LMeta
+            | device_query::Keycode::RMeta
+            | device_query::Keycode::Command
+            | device_query::Keycode::RCommand
+    )
 }
 
 fn active_modifiers(keys: &HashSet<device_query::Keycode>) -> Vec<String> {
     let mut modifiers = Vec::new();
 
     if keys.iter().any(|key| {
-        let label = format!("{key:?}");
-        label.contains("Meta") || label.contains("Win") || label.contains("Command")
+        matches!(
+            key,
+            device_query::Keycode::LMeta
+                | device_query::Keycode::RMeta
+                | device_query::Keycode::Command
+                | device_query::Keycode::RCommand
+        )
     }) {
         modifiers.push("Meta".to_string());
     }

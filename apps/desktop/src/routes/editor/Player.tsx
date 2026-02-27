@@ -667,6 +667,10 @@ function PreviewCanvas() {
 						(modifierOrder.get(a) ?? Number.POSITIVE_INFINITY) -
 						(modifierOrder.get(b) ?? Number.POSITIVE_INFINITY),
 				);
+			const hasShortcutModifier = normalizedModifiers.some(
+				(modifier) => modifier === "⌘" || modifier === "⌃" || modifier === "⌥",
+			);
+			if (event.down && !hasShortcutModifier) continue;
 			const label = [...normalizedModifiers, normalizeKey(event.key)].join(
 				" + ",
 			);
