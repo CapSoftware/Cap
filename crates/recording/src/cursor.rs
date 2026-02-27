@@ -1,10 +1,10 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
+use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, KeyboardEvent, XY};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -28,6 +28,96 @@ pub struct CursorActorResponse {
     pub next_cursor_id: u32,
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
+    pub keyboard: Vec<KeyboardEvent>,
+}
+
+fn keycode_to_label(key: &device_query::Keycode) -> String {
+    use device_query::Keycode;
+
+    match key {
+        Keycode::LShift | Keycode::RShift => "Shift".to_string(),
+        Keycode::LControl | Keycode::RControl => "Ctrl".to_string(),
+        Keycode::LAlt | Keycode::RAlt => "Alt".to_string(),
+        Keycode::LMeta | Keycode::RMeta | Keycode::Command | Keycode::RCommand => {
+            "Meta".to_string()
+        }
+        Keycode::Enter | Keycode::NumpadEnter => "Enter".to_string(),
+        Keycode::Space => "Space".to_string(),
+        Keycode::Escape => "Esc".to_string(),
+        Keycode::Backspace => "Backspace".to_string(),
+        Keycode::Tab => "Tab".to_string(),
+        Keycode::Up => "Up".to_string(),
+        Keycode::Down => "Down".to_string(),
+        Keycode::Left => "Left".to_string(),
+        Keycode::Right => "Right".to_string(),
+        _ => format!("{key:?}"),
+    }
+}
+
+fn is_modifier(key: &device_query::Keycode) -> bool {
+    matches!(
+        key,
+        device_query::Keycode::LShift
+            | device_query::Keycode::RShift
+            | device_query::Keycode::LControl
+            | device_query::Keycode::RControl
+            | device_query::Keycode::LAlt
+            | device_query::Keycode::RAlt
+            | device_query::Keycode::LOption
+            | device_query::Keycode::ROption
+            | device_query::Keycode::LMeta
+            | device_query::Keycode::RMeta
+            | device_query::Keycode::Command
+            | device_query::Keycode::RCommand
+    )
+}
+
+fn active_modifiers(keys: &HashSet<device_query::Keycode>) -> Vec<String> {
+    let mut modifiers = Vec::new();
+
+    if keys.iter().any(|key| {
+        matches!(
+            key,
+            device_query::Keycode::LMeta
+                | device_query::Keycode::RMeta
+                | device_query::Keycode::Command
+                | device_query::Keycode::RCommand
+        )
+    }) {
+        modifiers.push("Meta".to_string());
+    }
+
+    if keys.iter().any(|key| {
+        matches!(
+            key,
+            device_query::Keycode::LControl | device_query::Keycode::RControl
+        )
+    }) {
+        modifiers.push("Ctrl".to_string());
+    }
+
+    if keys.iter().any(|key| {
+        matches!(
+            key,
+            device_query::Keycode::LAlt
+                | device_query::Keycode::RAlt
+                | device_query::Keycode::LOption
+                | device_query::Keycode::ROption
+        )
+    }) {
+        modifiers.push("Alt".to_string());
+    }
+
+    if keys.iter().any(|key| {
+        matches!(
+            key,
+            device_query::Keycode::LShift | device_query::Keycode::RShift
+        )
+    }) {
+        modifiers.push("Shift".to_string());
+    }
+
+    modifiers
 }
 
 pub struct CursorActor {
@@ -43,10 +133,16 @@ impl CursorActor {
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
 
-fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[CursorClickEvent]) {
+fn flush_cursor_data(
+    output_path: &Path,
+    moves: &[CursorMoveEvent],
+    clicks: &[CursorClickEvent],
+    keyboard: &[KeyboardEvent],
+) {
     let events = CursorEvents {
         clicks: clicks.to_vec(),
         moves: moves.to_vec(),
+        keyboard: keyboard.to_vec(),
     };
     if let Ok(json) = serde_json::to_string_pretty(&events)
         && let Err(e) = std::fs::write(output_path, json)
@@ -93,11 +189,13 @@ pub fn spawn_cursor_recorder(
             next_cursor_id,
             moves: vec![],
             clicks: vec![],
+            keyboard: vec![],
         };
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
+        let mut last_keys: HashSet<device_query::Keycode> = HashSet::new();
 
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(16));
@@ -201,12 +299,55 @@ pub fn spawn_cursor_recorder(
                 response.clicks.push(mouse_event);
             }
 
+            let current_keys: HashSet<device_query::Keycode> =
+                device_state.get_keys().into_iter().collect();
+
+            let mut pressed_keys = current_keys
+                .difference(&last_keys)
+                .copied()
+                .collect::<Vec<_>>();
+            pressed_keys.sort_by_key(|k| format!("{k:?}"));
+
+            let mut released_keys = last_keys
+                .difference(&current_keys)
+                .copied()
+                .collect::<Vec<_>>();
+            released_keys.sort_by_key(|k| format!("{k:?}"));
+
+            for key in pressed_keys {
+                if is_modifier(&key) {
+                    continue;
+                }
+
+                response.keyboard.push(KeyboardEvent {
+                    active_modifiers: active_modifiers(&current_keys),
+                    key: keycode_to_label(&key),
+                    time_ms: elapsed,
+                    down: true,
+                });
+            }
+
+            for key in released_keys {
+                if is_modifier(&key) {
+                    continue;
+                }
+
+                response.keyboard.push(KeyboardEvent {
+                    active_modifiers: active_modifiers(&last_keys),
+                    key: keycode_to_label(&key),
+                    time_ms: elapsed,
+                    down: false,
+                });
+            }
+
+            last_keys = current_keys;
+
             last_mouse_state = mouse_state;
 
             if let Some(ref path) = output_path
                 && last_flush.elapsed() >= flush_interval
             {
-                flush_cursor_data(path, &response.moves, &response.clicks);
+                flush_cursor_data(path, &response.moves, &response.clicks, &response.keyboard);
                 last_flush = Instant::now();
             }
         }
@@ -214,7 +355,7 @@ pub fn spawn_cursor_recorder(
         info!("cursor recorder done");
 
         if let Some(ref path) = output_path {
-            flush_cursor_data(path, &response.moves, &response.clicks);
+            flush_cursor_data(path, &response.moves, &response.clicks, &response.keyboard);
         }
 
         let _ = tx.send(response);
