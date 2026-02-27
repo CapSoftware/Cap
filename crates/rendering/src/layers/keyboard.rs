@@ -526,14 +526,7 @@ fn active_shortcut_label(cursor: &CursorEvents, now_ms: f64) -> Option<ShortcutP
     let mut active = HashMap::<String, ShortcutState>::new();
     let mut last_recent: Option<ShortcutState> = None;
 
-    let mut events = cursor.keyboard.iter().collect::<Vec<_>>();
-    events.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    for event in events {
+    for event in cursor.keyboard.iter() {
         if event.time_ms > now_ms {
             break;
         }
