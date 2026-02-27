@@ -99,7 +99,10 @@ fn active_modifiers(keys: &HashSet<device_query::Keycode>) -> Vec<String> {
     if keys.iter().any(|key| {
         matches!(
             key,
-            device_query::Keycode::LAlt | device_query::Keycode::RAlt
+            device_query::Keycode::LAlt
+                | device_query::Keycode::RAlt
+                | device_query::Keycode::LOption
+                | device_query::Keycode::ROption
         )
     }) {
         modifiers.push("Alt".to_string());

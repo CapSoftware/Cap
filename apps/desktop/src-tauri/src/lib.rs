@@ -2050,7 +2050,14 @@ async fn get_keyboard_events(
         let full_path = meta.path(path);
         CursorEvents::load_from_file(&full_path)
             .map(|events| events.keyboard)
-            .unwrap_or_default()
+            .unwrap_or_else(|error| {
+                warn!(
+                    path = %full_path.display(),
+                    %error,
+                    "Failed to load cursor events"
+                );
+                Vec::new()
+            })
     };
 
     let events = match &meta.inner {
