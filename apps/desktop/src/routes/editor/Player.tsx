@@ -470,7 +470,7 @@ function PreviewCanvas() {
 	};
 
 	type SegmentKeyboardEvents = {
-		segment_index: number;
+		segmentIndex: number;
 		events: KeyboardOverlayEvent[];
 	};
 
