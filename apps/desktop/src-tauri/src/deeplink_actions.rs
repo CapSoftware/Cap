@@ -26,6 +26,18 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePause,
+    TakeScreenshot {
+        capture_mode: CaptureMode,
+    },
+    SetCamera {
+        camera: Option<DeviceOrModelID>,
+    },
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +157,41 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePause => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TakeScreenshot { capture_mode } => {
+                let capture_target: ScreenCaptureTarget = match capture_mode {
+                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
+                        .into_iter()
+                        .find(|(s, _)| s.name == name)
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                        .ok_or(format!("No screen with name \"{}\"", &name))?,
+                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
+                        .into_iter()
+                        .find(|(w, _)| w.name == name)
+                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                };
+
+                crate::recording::take_screenshot(app.clone(), capture_target)
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::SetCamera { camera } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, camera, None).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, mic_label).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
