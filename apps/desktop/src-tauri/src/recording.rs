@@ -1078,7 +1078,12 @@ pub async fn start_recording(
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        error,
+                    if let Some(window) = CapWindowId::Main
+                        .get(&app)
+                        .or_else(|| CapWindowId::RecordingControls.get(&app))
+                    {
+                        dialog = dialog.parent(&window);
+                    }
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
