@@ -26,6 +26,16 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    RestartRecording,
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
+    SwitchCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -146,6 +156,42 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                if state.read().await.current_recording().is_none() {
+                    return Err("Recording not in progress".to_string());
+                }
+                crate::recording::pause_recording(app.clone(), state).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                if state.read().await.current_recording().is_none() {
+                    return Err("Recording not in progress".to_string());
+                }
+                crate::recording::resume_recording(app.clone(), state).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                if state.read().await.current_recording().is_none() {
+                    return Err("Recording not in progress".to_string());
+                }
+                crate::recording::toggle_pause_recording(app.clone(), state).await
+            }
+            DeepLinkAction::RestartRecording => {
+                crate::recording::restart_recording(app.clone(), app.state())
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                crate::set_mic_input(
+                    app.state::<ArcLock<App>>(),
+                    mic_label.filter(|label| !label.trim().is_empty()),
+                )
+                .await
+            }
+            DeepLinkAction::SwitchCamera { camera } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, None).await
+            }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
@@ -153,5 +199,48 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionParseFromUrlError, DeepLinkAction};
+    use tauri::Url;
+
+    fn action_url(payload: &str) -> Url {
+        let mut url = Url::parse("cap-desktop://action").expect("valid action url");
+        url.query_pairs_mut().append_pair("value", payload);
+        url
+    }
+
+    #[test]
+    fn parses_pause_recording_action() {
+        let url = action_url(r#""pause_recording""#);
+
+        let action = DeepLinkAction::try_from(&url).expect("parse pause action");
+        assert!(matches!(action, DeepLinkAction::PauseRecording));
+    }
+
+    #[test]
+    fn parses_switch_microphone_action() {
+        let url = action_url(r#"{"switch_microphone":{"mic_label":"Studio Mic"}}"#);
+
+        let action = DeepLinkAction::try_from(&url).expect("parse switch microphone action");
+        match action {
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                assert_eq!(mic_label.as_deref(), Some("Studio Mic"));
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_non_action_domain() {
+        let mut url = Url::parse("cap-desktop://signin").expect("valid signin url");
+        url.query_pairs_mut()
+            .append_pair("value", r#""stop_recording""#);
+
+        let error = DeepLinkAction::try_from(&url).expect_err("signin deeplink is not action");
+        assert!(matches!(error, ActionParseFromUrlError::NotAction));
     }
 }
