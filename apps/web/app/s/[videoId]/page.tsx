@@ -669,6 +669,7 @@ async function AuthorizedContent({
 					sharedSpaces={sharedSpaces}
 					userOrganizations={userOrganizations}
 					spacesData={spacesData}
+					videoSettings={videoWithOrganizationInfo.settings}
 				/>
 
 				<Share

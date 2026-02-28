@@ -3,12 +3,12 @@
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
-	faChartSimple,
 	faChevronDown,
 	faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
+import { CapOptionsDropdown } from "./CapOptionsDropdown";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -23,6 +23,7 @@ import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 import type { VideoData } from "../types";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 
 export const ShareHeader = ({
 	data,
@@ -31,6 +32,7 @@ export const ShareHeader = ({
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	spacesData = null,
+	videoSettings,
 }: {
 	data: VideoData;
 	customDomain?: string | null;
@@ -50,6 +52,7 @@ export const ShareHeader = ({
 		organizationId: string;
 	}[];
 	spacesData?: Spaces[] | null;
+		videoSettings?: OrganizationSettings | null;
 }) => {
 	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
@@ -179,6 +182,7 @@ export const ShareHeader = ({
 	};
 
 	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+	const userIsOwnerAndPro = user?.id === data.owner.id && data.owner.isPro;
 
 	return (
 		<>
@@ -300,24 +304,13 @@ export const ShareHeader = ({
 							{user !== null && (
 								<div className="hidden md:flex gap-2">
 									{isOwner && (
-										<Tooltip
-											content="View analytics"
-											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-											delayDuration={100}
-										>
-											<Button
-												variant="gray"
-												className="rounded-full flex items-center justify-center"
-												onClick={() => {
-													push(`/dashboard/analytics?capId=${data.id}`);
-												}}
-											>
-												<FontAwesomeIcon
-													className="size-4 text-gray-12"
-													icon={faChartSimple}
-												/>
-											</Button>
-										</Tooltip>
+										<CapOptionsDropdown
+											videoId={data.id}
+											videoName={data.name}
+											hasPassword={data.hasPassword || false}
+											isOwnerPro={userIsOwnerAndPro}
+											settingsData={videoSettings || undefined}
+										/>
 									)}
 									<Button
 										onClick={() => {
