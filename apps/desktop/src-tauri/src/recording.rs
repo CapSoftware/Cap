@@ -1057,12 +1057,22 @@ pub async fn start_recording(
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
                 Err(e) => {
-                    let mut state = state_mtx.write().await;
-
                     let _ = RecordingEvent::Failed {
                         error: e.to_string(),
                     }
                     .emit(&app);
+
+                    {
+                        let mut state = state_mtx.write().await;
+                        handle_recording_end(
+                            app.clone(),
+                            Err(e.to_string()),
+                            &mut state,
+                            project_file_path,
+                        )
+                        .await
+                        .ok();
+                    }
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
@@ -1076,10 +1086,6 @@ pub async fn start_recording(
                     }
 
                     dialog.blocking_show();
-
-                    handle_recording_end(app, Err(e.to_string()), &mut state, project_file_path)
-                        .await
-                        .ok();
                 }
             }
         }
