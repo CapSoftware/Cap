@@ -1057,29 +1057,39 @@ pub async fn start_recording(
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
                 Err(e) => {
-                    let mut state = state_mtx.write().await;
-
+                    let error = e.to_string();
                     let _ = RecordingEvent::Failed {
-                        error: e.to_string(),
+                        error: error.clone(),
                     }
                     .emit(&app);
+
+                    {
+                        let mut state = state_mtx.write().await;
+                        handle_recording_end(
+                            app.clone(),
+                            Err(error.clone()),
+                            &mut state,
+                            project_file_path,
+                        )
+                        .await
+                        .ok();
+                    }
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        e.to_string(),
+                        error,
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-                    if let Some(window) = CapWindowId::RecordingControls.get(&app) {
+                    if let Some(window) = CapWindowId::Main
+                        .get(&app)
+                        .or_else(|| CapWindowId::RecordingControls.get(&app))
+                    {
                         dialog = dialog.parent(&window);
                     }
 
                     dialog.blocking_show();
-
-                    handle_recording_end(app, Err(e.to_string()), &mut state, project_file_path)
-                        .await
-                        .ok();
                 }
             }
         }
