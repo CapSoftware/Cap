@@ -14,37 +14,42 @@ Actions are sent as JSON in the `value` query parameter:
 cap-desktop://action?value=<URL-encoded JSON>
 ```
 
+**Important:** The JSON value MUST be URL-encoded!
+
 ## Available Actions
 
 ### Recording Controls
 
+Unit variants are serialized as JSON strings (not objects):
+
 #### Stop Recording
 ```json
-{"stop_recording":{}}
+"stop_recording"
 ```
 
 #### Pause Recording
 ```json
-{"pause_recording":{}}
+"pause_recording"
 ```
 
 #### Resume Recording
 ```json
-{"resume_recording":{}}
+"resume_recording"
 ```
 
 #### Toggle Pause/Resume
 ```json
-{"toggle_pause_recording":{}}
+"toggle_pause_recording"
 ```
 
 #### Restart Recording
 Stops and immediately restarts with the same settings:
 ```json
-{"restart_recording":{}}
+"restart_recording"
 ```
 
 #### Start Recording
+Struct variant (serialized as object):
 ```json
 {
   "start_recording": {
@@ -111,18 +116,21 @@ Open a specific settings page:
 ```bash
 #!/bin/bash
 
-# Stop recording
-open "cap-desktop://action?value=%7B%22stop_recording%22%3A%7B%7D%7D"
+# Stop recording (note: unit variant is a string, not object)
+open "cap-desktop://action?value=%22stop_recording%22"
 
 # Toggle pause
-open "cap-desktop://action?value=%7B%22toggle_pause_recording%22%3A%7B%7D%7D"
+open "cap-desktop://action?value=%22toggle_pause_recording%22"
+
+# Set microphone (struct variant)
+open "cap-desktop://action?value=%7B%22set_microphone%22%3A%7B%22label%22%3A%22MacBook%20Pro%20Microphone%22%7D%7D"
 ```
 
 ### AppleScript
 
 ```applescript
 tell application "System Events"
-    open location "cap-desktop://action?value=%7B%22stop_recording%22%3A%7B%7D%7D"
+    open location "cap-desktop://action?value=%22stop_recording%22"
 end tell
 ```
 
@@ -138,11 +146,14 @@ function capAction(action) {
   exec(`open "${url}"`);
 }
 
-// Stop recording
-capAction({ stop_recording: {} });
+// Stop recording (unit variant = string)
+capAction("stop_recording");
 
-// Toggle pause
-capAction({ toggle_pause_recording: {} });
+// Toggle pause (unit variant = string)
+capAction("toggle_pause_recording");
+
+// Set microphone (struct variant = object)
+capAction({ set_microphone: { label: "MacBook Pro Microphone" } });
 ```
 
 ### Python
@@ -158,11 +169,14 @@ def cap_action(action):
     url = f"cap-desktop://action?value={encoded}"
     subprocess.run(["open", url])
 
-# Stop recording
-cap_action({"stop_recording": {}})
+# Stop recording (unit variant = string)
+cap_action("stop_recording")
 
-# Toggle pause
-cap_action({"toggle_pause_recording": {}})
+# Toggle pause (unit variant = string)
+cap_action("toggle_pause_recording")
+
+# Set microphone (struct variant = dict)
+cap_action({"set_microphone": {"label": "MacBook Pro Microphone"}})
 ```
 
 ## Raycast Extension
@@ -173,4 +187,5 @@ A full Raycast extension is included in `extensions/raycast/`. See its README fo
 
 1. **Cap must be running** - Deeplinks only work when Cap is open
 2. **URL encoding** - Make sure the JSON is properly URL-encoded
-3. **Permissions** - Some actions require an active recording session
+3. **Unit vs Struct variants** - Unit actions (stop, pause, etc.) are JSON strings like `"stop_recording"`, not objects like `{"stop_recording": {}}`
+4. **Permissions** - Some actions require an active recording session
