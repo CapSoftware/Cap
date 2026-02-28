@@ -31,7 +31,7 @@ export default async function Command() {
 			camera: null,
 			mic_label: null,
 			capture_system_audio: prefs.captureSystemAudio ?? false,
-			mode: prefs.recordingMode ?? "instant",
+			mode: prefs.recordingMode ?? "studio",
 		},
 	};
 
