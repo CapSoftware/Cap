@@ -1,0 +1,67 @@
+{
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recording from Raycast",
+  "icon": "cap-icon.png",
+  "author": "divol89",
+  "categories": ["Productivity", "Media"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a new screen recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume the paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "description": "Toggle pause/resume recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "description": "Switch to a different microphone",
+      "mode": "view"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch to a different camera",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.64.0",
+    "@raycast/utils": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.10",
+    "typescript": "^5.2.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray fix-lint",
+    "lint": "ray lint"
+  }
+}
