@@ -1,0 +1,81 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recorder — start, stop, pause recordings, switch devices, and take screenshots.",
+  "icon": "command-icon.png",
+  "author": "cap",
+  "categories": ["Productivity", "Applications"],
+  "license": "AGPL-3.0-or-later",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording with Cap",
+      "mode": "view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "subtitle": "Cap",
+      "description": "Pause or resume the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "subtitle": "Cap",
+      "description": "Take a screenshot with Cap",
+      "mode": "view"
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "subtitle": "Cap",
+      "description": "Change the active microphone or disable it",
+      "mode": "view"
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "subtitle": "Cap",
+      "description": "Change the active camera or disable it",
+      "mode": "view"
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "subtitle": "Cap",
+      "description": "Open Cap settings",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.93.3",
+    "@raycast/utils": "^1.19.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "22.13.4",
+    "@types/react": "19.0.10",
+    "eslint": "^9.20.1",
+    "prettier": "^3.5.1",
+    "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "prepublishOnly": "echo \"Error: no publish\" && exit 1",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
