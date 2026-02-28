@@ -2,7 +2,6 @@ import { open, showHUD } from "@raycast/api";
 
 const DEEPLINK_SCHEME = "cap-desktop://action";
 
-// Unit variants serialize as strings in serde
 type UnitAction =
   | "stop_recording"
   | "pause_recording"
@@ -10,7 +9,6 @@ type UnitAction =
   | "toggle_pause_recording"
   | "restart_recording";
 
-// Struct variants serialize as objects
 type StructAction =
   | {
       start_recording: {

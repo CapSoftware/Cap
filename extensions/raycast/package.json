@@ -11,7 +11,7 @@
     {
       "name": "displayName",
       "title": "Display Name",
-      "description": "Name of the display to record. Leave empty to record the primary/main display.",
+      "description": "Name of the display to record (defaults to 'Main Display')",
       "type": "textfield",
       "required": false,
       "placeholder": "Main Display"
