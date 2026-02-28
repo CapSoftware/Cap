@@ -37,8 +37,8 @@ export default function Command() {
 		>
 			<Form.TextField
 				id="id"
-				title="Camera ID"
-				placeholder="e.g. FaceTime HD Camera (leave blank to disable)"
+				title="Camera Device ID"
+				placeholder="Paste the camera device_id (leave blank to disable)"
 				autoFocus
 			/>
 		</Form>
