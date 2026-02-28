@@ -29,6 +29,9 @@ export const metadata: Metadata = {
 			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/screen-recorder-windows",
+	},
 };
 
 export default function Page() {

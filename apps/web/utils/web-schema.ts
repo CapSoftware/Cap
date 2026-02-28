@@ -252,6 +252,25 @@ export const createComparisonTableSchema = () => ({
 	},
 });
 
+export const createHowToSchema = (params: {
+	name: string;
+	description: string;
+	totalTime?: string;
+	steps: Array<{ name: string; text: string }>;
+}) => ({
+	"@context": "https://schema.org",
+	"@type": "HowTo",
+	name: params.name,
+	description: params.description,
+	totalTime: params.totalTime || "PT2M",
+	step: params.steps.map((step, index) => ({
+		"@type": "HowToStep",
+		position: index + 1,
+		name: step.name,
+		text: step.text,
+	})),
+});
+
 export const createLocalBusinessSchema = () => ({
 	"@context": "https://schema.org",
 	"@type": "LocalBusiness",

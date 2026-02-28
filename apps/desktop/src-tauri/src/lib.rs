@@ -136,6 +136,26 @@ impl CameraWindowCloseGate {
     }
 }
 
+pub struct AppExitState(AtomicBool);
+
+impl Default for AppExitState {
+    fn default() -> Self {
+        Self(AtomicBool::new(false))
+    }
+}
+
+impl AppExitState {
+    pub fn begin(&self) -> bool {
+        self.0
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn is_exiting(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -980,6 +1000,45 @@ async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id:
 
     let mut app_state = state.write().await;
     app_state.camera_in_use = false;
+}
+
+async fn cleanup_app_resources_for_exit(app: &AppHandle) {
+    let (mic_feed, camera_feed, camera_shutdown) = {
+        let state = app.state::<ArcLock<App>>();
+        let mut app_state = state.write().await;
+        let camera_shutdown = app_state.camera_preview.begin_shutdown();
+        app_state.camera_in_use = false;
+        app_state.selected_camera_id = None;
+        (
+            app_state.mic_feed.clone(),
+            app_state.camera_feed.clone(),
+            camera_shutdown,
+        )
+    };
+
+    let _ = mic_feed.ask(microphone::RemoveInput).await;
+    let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
+
+    #[cfg(target_os = "macos")]
+    {
+        app.state::<CameraWindowCloseGate>().set_allow_close(true);
+        if let Some(camera_window) = CapWindowId::Camera.get(app) {
+            let _ = camera_window.close();
+        }
+    }
+
+    if let Some(rx) = camera_shutdown {
+        let _ = tokio::time::timeout(Duration::from_secs(2), rx).await;
+    }
+}
+
+pub async fn request_app_exit(app: AppHandle) {
+    if !app.state::<AppExitState>().begin() {
+        return;
+    }
+
+    cleanup_app_resources_for_exit(&app).await;
+    app.exit(0);
 }
 
 fn find_mic_by_label_or_fuzzy(
@@ -3290,6 +3349,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowCloseGate::default());
                 app.manage(CameraWindowPositionGuard::default());
                 app.manage(CameraWindowOperationLock::default());
+                app.manage(AppExitState::default());
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -3704,21 +3764,26 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 }
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {
-                if code.is_none() {
-                    api.prevent_exit();
+                if _handle.state::<AppExitState>().is_exiting() {
+                    return;
                 }
+
+                api.prevent_exit();
+
+                let _ = code;
+                let handle = _handle.clone();
+                tokio::spawn(async move {
+                    request_app_exit(handle).await;
+                });
             }
             tauri::RunEvent::Exit => {
                 let handle = _handle.clone();
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let state = handle.state::<ArcLock<App>>();
                     let _ = tauri::async_runtime::block_on(async {
-                        tokio::time::timeout(Duration::from_secs(2), async {
-                            let app_state = &mut *state.write().await;
-                            let _ = app_state.mic_feed.ask(microphone::RemoveInput).await;
-                            let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-                            app_state.camera_in_use = false;
-                        })
+                        tokio::time::timeout(
+                            Duration::from_secs(2),
+                            cleanup_app_resources_for_exit(&handle),
+                        )
                         .await
                     });
                 }));

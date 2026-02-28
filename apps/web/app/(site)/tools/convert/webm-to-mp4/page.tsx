@@ -2,15 +2,26 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "WebM to MP4 Converter — Free Online Video Converter | Cap",
 	description:
-		"Convert WebM to MP4 online free — no upload, no install, 100% in-browser. Fast, private WebM to MP4 conversion with quality preservation.",
+		"Convert WebM videos to MP4 format directly in your browser. Free, private, no upload needed. Works with browser screen recordings, OBS exports, and any WebM video file.",
+	keywords: [
+		"webm to mp4 converter",
+		"convert webm to mp4 online",
+		"free webm to mp4",
+		"webm to mp4 no upload",
+		"browser webm converter",
+		"webm to mp4 free online",
+		"convert webm video online",
+		"screen recording webm to mp4",
+	],
 	openGraph: {
 		title: "WebM to MP4 Converter — Free Online Video Converter | Cap",
 		description:
-			"Convert WebM to MP4 directly in your browser. No uploads, no installs, no quality loss. Free and private.",
+			"Convert WebM videos to the universally compatible MP4 format directly in your browser. No uploads, no installs, 100% private. Works with browser screen recordings and any WebM file.",
 		url: "https://cap.so/tools/convert/webm-to-mp4",
 		siteName: "Cap",
 		images: [
@@ -28,7 +39,7 @@ export const metadata: Metadata = {
 		card: "summary_large_image",
 		title: "WebM to MP4 Converter — Free Online Video Converter | Cap",
 		description:
-			"Convert WebM to MP4 directly in your browser. No uploads, no installs, no quality loss. Free and private.",
+			"Convert WebM to MP4 directly in your browser. No uploads, no installs, 100% private.",
 		images: ["https://cap.so/og.png"],
 	},
 	alternates: {
@@ -38,59 +49,59 @@ export const metadata: Metadata = {
 
 const faqs = [
 	{
-		question: "How do I convert WebM to MP4?",
+		question: "How do I convert WebM to MP4 online?",
 		answer:
-			"Open the Cap WebM to MP4 converter, drag and drop your WebM file (or click to browse), then hit Convert. The entire process runs in your browser using WebCodecs — your file never leaves your device. Once complete, download the MP4 instantly.",
+			"Open Cap's WebM to MP4 converter, drag and drop your WebM file (or click to browse), then click Convert. The entire process runs in your browser — your file never leaves your device. Once complete, click Download to save the MP4 file.",
 	},
 	{
-		question: "Is WebM to MP4 conversion free?",
+		question: "Is the WebM to MP4 converter free?",
 		answer:
 			"Yes, completely free with no limits on the number of conversions. There are no watermarks, no sign-up required, and no hidden fees. The converter runs entirely in your browser at zero cost.",
 	},
 	{
-		question: "Can I convert WebM to MP4 without losing quality?",
-		answer:
-			"Yes. The converter uses browser-native WebCodecs to re-encode the video, preserving the original resolution, frame rate, and audio quality. The output MP4 uses the widely supported H.264 codec for maximum compatibility.",
-	},
-	{
-		question: "What is the difference between WebM and MP4?",
-		answer:
-			"WebM is an open-source format developed by Google, primarily used for web video with VP8/VP9 codecs. MP4 is the most universally supported video format, using H.264/H.265 codecs. While WebM offers good compression for the web, MP4 is compatible with virtually every device, media player, and social media platform.",
-	},
-	{
 		question: "Why convert WebM to MP4?",
 		answer:
-			"WebM files are not supported by many devices, video editors, and social media platforms. Converting to MP4 ensures your video plays on iPhones, Android phones, Windows, macOS, smart TVs, and can be uploaded to platforms like Instagram, TikTok, and WhatsApp without issues.",
+			"WebM is an open-source format developed by Google using VP8 or VP9 video codecs — it's the default output of browser-based screen recorders, Chrome MediaRecorder, and many web-based tools. However, WebM files are not supported by iPhones, many Android video editors, Windows Media Player, or social platforms like Instagram and TikTok. MP4 (H.264) is the universal standard supported by virtually every device, platform, browser, and video hosting service. Converting to MP4 ensures your video plays anywhere without compatibility issues.",
+	},
+	{
+		question: "Will converting WebM to MP4 reduce video quality?",
+		answer:
+			"Quality is preserved as closely as possible during conversion. The converter re-encodes to H.264 MP4 at high quality settings, which is visually lossless for most use cases. For sharing, uploading, or playing on other devices, the output quality will look identical to the original.",
 	},
 	{
 		question: "Is there a file size limit?",
 		answer:
-			"The converter supports files up to 500 MB to ensure smooth in-browser performance. For larger files, consider using a desktop application like Cap for screen recording and exporting directly to MP4.",
+			"The converter supports WebM files up to 500 MB. For smooth in-browser performance, files under 200 MB convert fastest. For very large WebM files, consider trimming the video first to keep only the section you need.",
 	},
 	{
-		question: "Does this converter work on mobile?",
+		question: "Does this work with screen recording WebM files?",
 		answer:
-			"The converter works best on desktop browsers (Chrome, Edge, Brave) that support WebCodecs. Mobile browser support for WebCodecs is still limited, so desktop is recommended for reliable conversions.",
+			"Yes. Browser-based screen recorders, Chrome extensions, and tools using the MediaRecorder API typically produce VP8 or VP9 WebM files. Cap's converter handles both VP8 and VP9 WebM files and outputs a universally compatible H.264 MP4.",
+	},
+	{
+		question: "Does the converter work on mobile?",
+		answer:
+			"The converter works best on desktop browsers (Chrome, Edge, Brave). Mobile browser support for the underlying video processing APIs is still limited, so desktop is recommended for the most reliable results.",
 	},
 	{
 		question: "Do I need to install any software?",
 		answer:
-			"No. The converter runs entirely in your browser — no downloads, no plugins, no extensions. Just open the page and start converting. Your files are processed locally on your device for maximum privacy.",
+			"No. The converter runs entirely in your browser — no downloads, no plugins, no extensions required. Just open the page and start converting. All processing happens locally on your device for complete privacy.",
 	},
 ];
 
 const howToSteps = [
 	{
 		name: "Upload your WebM file",
-		text: "Open the Cap WebM to MP4 converter and drag and drop your WebM file into the upload area, or click to browse your files.",
+		text: "Open Cap's WebM to MP4 converter and drag and drop your WebM file into the upload area, or click to browse your files. Supports WebM files up to 500 MB, including VP8 and VP9 encoded files from screen recorders.",
 	},
 	{
 		name: "Start the conversion",
-		text: "Click the Convert button. The file is processed entirely in your browser using WebCodecs — nothing is uploaded to any server.",
+		text: "Click Convert. The file is processed entirely in your browser using local compute — nothing is uploaded to any server. Conversion time depends on file size and your device speed.",
 	},
 	{
 		name: "Download your MP4",
-		text: "Once the conversion finishes, click Download to save the MP4 file to your device. The output preserves the original video quality.",
+		text: "Once conversion is complete, click Download to save the MP4 file to your device. The output is a standard H.264 MP4 compatible with every device, platform, and video hosting service.",
 	},
 ];
 
@@ -125,57 +136,73 @@ const howToStructuredData = {
 	},
 };
 
+const breadcrumbSchema = createBreadcrumbSchema([
+	{ name: "Home", url: "https://cap.so" },
+	{ name: "Tools", url: "https://cap.so/tools" },
+	{ name: "Convert", url: "https://cap.so/tools/convert" },
+	{
+		name: "WebM to MP4 Converter",
+		url: "https://cap.so/tools/convert/webm-to-mp4",
+	},
+]);
+
 export default function WebmToMp4Page() {
 	const pageContent: ToolPageContent = {
 		title: "WebM to MP4 Converter",
 		description:
-			"Convert WebM to MP4 directly in your browser — free, private, and no installation required",
+			"Convert WebM videos — including browser screen recordings and VP9 files — to the universally compatible MP4 format directly in your browser — free, private, and no installation required",
 		featuresTitle: "Why Use This WebM to MP4 Converter",
 		featuresDescription:
-			"A fast, free, and private way to convert WebM videos to MP4 format — entirely in your browser.",
+			"A fast, free, and private way to convert WebM videos to MP4 — entirely in your browser with no uploads and no quality loss.",
 		features: [
 			{
 				title: "100% Browser-Based",
 				description:
-					"The entire conversion runs locally in your browser using WebCodecs. No server uploads, no waiting for processing queues — just instant conversion on your device.",
+					"The entire conversion runs locally in your browser. No server uploads, no processing queues — your files stay on your device at all times.",
+			},
+			{
+				title: "Works with Screen Recording Output",
+				description:
+					"Most browser-based screen recorders, Chrome extensions, and MediaRecorder tools output WebM files. Cap's converter handles VP8 and VP9 WebM files and turns them into shareable MP4s.",
+			},
+			{
+				title: "Universal MP4 Output",
+				description:
+					"The output is a standard H.264 MP4 file that plays on iPhones, Android phones, smart TVs, and every video hosting platform including YouTube, Vimeo, and Google Drive.",
 			},
 			{
 				title: "Complete Privacy",
 				description:
-					"Your files never leave your device. Unlike other online converters that upload your video to their servers, this tool processes everything client-side for maximum privacy and security.",
+					"Your video files never leave your device. Unlike other online converters that upload your content to remote servers, all processing happens client-side.",
 			},
 			{
-				title: "Quality Preservation",
+				title: "No Sign-Up or Installation",
 				description:
-					"The converter maintains the original resolution, frame rate, and audio quality of your WebM file. The output uses H.264 encoding for broad compatibility without sacrificing clarity.",
+					"No software downloads, browser extensions, or accounts required. Just open the page and start converting — works instantly in Chrome, Edge, and Brave.",
 			},
 			{
-				title: "No Installation Needed",
+				title: "Unlimited Free Conversions",
 				description:
-					"No software downloads, browser extensions, or plugins required. Just open the page and start converting — works instantly on Chrome, Edge, and Brave.",
-			},
-			{
-				title: "Universal Compatibility",
-				description:
-					"MP4 with H.264 is the most widely supported video format. Your converted file will play on iPhones, Android, Windows, macOS, smart TVs, and every major social media platform.",
-			},
-			{
-				title: "Fast Conversion Speed",
-				description:
-					"Leverages hardware-accelerated WebCodecs for fast encoding. Most files convert in seconds, not minutes — without the bottleneck of uploading and downloading from a server.",
+					"Convert as many WebM files to MP4 as you need with no daily limits, no watermarks, and no hidden fees.",
 			},
 		],
 		faqs,
 		cta: {
 			title: "Cap is the open source Loom alternative",
 			description:
-				"Record, edit, and share video messages with Cap. 100% open source and privacy focused. Export directly to MP4 — no conversion needed.",
+				"Record, edit, and share video messages with Cap. 100% open source and privacy focused. Records directly to MP4 — no conversion needed.",
 			buttonText: "Download Cap Free",
 		},
 	};
 
 	return (
 		<>
+			<script
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(breadcrumbSchema),
+				}}
+			/>
 			<script
 				type="application/ld+json"
 				dangerouslySetInnerHTML={{

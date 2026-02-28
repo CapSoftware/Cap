@@ -1,6 +1,5 @@
 "use client";
 
-import Script from "next/script";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -227,76 +226,6 @@ export const howToScreenRecordContent: SeoPageContent = {
 	},
 };
 
-const createFaqStructuredData = () => {
-	const faqStructuredData = {
-		"@context": "https://schema.org",
-		"@type": "FAQPage",
-		mainEntity: howToScreenRecordContent.faqs.map((faq) => ({
-			"@type": "Question",
-			name: faq.question,
-			acceptedAnswer: {
-				"@type": "Answer",
-				text: faq.answer.replace(/<\/?[^>]+(>|$)/g, ""),
-			},
-		})),
-	};
-
-	return JSON.stringify(faqStructuredData);
-};
-
-const createHowToStructuredData = () => {
-	const howToStructuredData = {
-		"@context": "https://schema.org",
-		"@type": "HowTo",
-		name: "How to Screen Record on Mac, Windows & Chrome",
-		description:
-			"Learn how to screen record with audio on Mac, Windows, or in your browser using Cap, the free open-source screen recorder.",
-		totalTime: "PT2M",
-		step: [
-			{
-				"@type": "HowToStep",
-				position: 1,
-				name: "Download and install Cap",
-				text: "Download Cap for free from cap.so/download for Mac or Windows, or use Instant Mode in your browser for quick recordings without any installation.",
-			},
-			{
-				"@type": "HowToStep",
-				position: 2,
-				name: "Choose your recording settings",
-				text: "Open Cap and select your recording source. Choose between full screen, specific window, or custom region capture. Toggle microphone and system audio on or off based on your needs.",
-			},
-			{
-				"@type": "HowToStep",
-				position: 3,
-				name: "Start recording your screen",
-				text: "Click the record button to begin capturing your screen. Cap records in high definition with minimal system impact so you can present, demo, or teach without lag.",
-			},
-			{
-				"@type": "HowToStep",
-				position: 4,
-				name: "Share or export your recording",
-				text: "Stop the recording when finished. Cap generates an instant shareable link, or you can export the video locally in your preferred format. Share your recording with anyone in seconds.",
-			},
-		],
-	};
-
-	return JSON.stringify(howToStructuredData);
-};
-
 export const HowToScreenRecordPage = () => {
-	return (
-		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{ __html: createFaqStructuredData() }}
-			/>
-			<Script
-				id="howto-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{ __html: createHowToStructuredData() }}
-			/>
-			<SeoPageTemplate content={howToScreenRecordContent} />
-		</>
-	);
+	return <SeoPageTemplate content={howToScreenRecordContent} />;
 };

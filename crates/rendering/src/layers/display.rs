@@ -273,20 +273,22 @@ impl DisplayLayer {
                     {
                         let mut d3d11_succeeded = false;
 
-                        if let (Some(y_handle), Some(uv_handle)) = (
-                            screen_frame.d3d11_y_handle(),
-                            screen_frame.d3d11_uv_handle(),
-                        ) && self
-                            .yuv_converter
-                            .convert_nv12_from_d3d11_shared_handles(
-                                device,
-                                queue,
-                                y_handle,
-                                uv_handle,
-                                actual_width,
-                                actual_height,
+                        if self.yuv_converter.is_using_zero_copy()
+                            && let (Some(y_handle), Some(uv_handle)) = (
+                                screen_frame.d3d11_y_handle(),
+                                screen_frame.d3d11_uv_handle(),
                             )
-                            .is_ok()
+                            && self
+                                .yuv_converter
+                                .convert_nv12_from_d3d11_shared_handles(
+                                    device,
+                                    queue,
+                                    y_handle,
+                                    uv_handle,
+                                    actual_width,
+                                    actual_height,
+                                )
+                                .is_ok()
                             && self.yuv_converter.output_texture().is_some()
                         {
                             self.pending_copy = Some(PendingTextureCopy {
@@ -547,6 +549,7 @@ impl DisplayLayer {
                     let d3d11_zero_copy_succeeded = {
                         let mut succeeded = false;
                         if !self.prefer_cpu_conversion
+                            && self.yuv_converter.is_using_zero_copy()
                             && let (Some(y_handle), Some(uv_handle)) = (
                                 screen_frame.d3d11_y_handle(),
                                 screen_frame.d3d11_uv_handle(),
