@@ -1057,8 +1057,9 @@ pub async fn start_recording(
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
                 Err(e) => {
+                    let error = e.to_string();
                     let _ = RecordingEvent::Failed {
-                        error: e.to_string(),
+                        error: error.clone(),
                     }
                     .emit(&app);
 
@@ -1066,7 +1067,7 @@ pub async fn start_recording(
                         let mut state = state_mtx.write().await;
                         handle_recording_end(
                             app.clone(),
-                            Err(e.to_string()),
+                            Err(error.clone()),
                             &mut state,
                             project_file_path,
                         )
@@ -1077,7 +1078,7 @@ pub async fn start_recording(
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        e.to_string(),
+                        error,
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
