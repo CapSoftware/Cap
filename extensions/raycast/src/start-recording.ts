@@ -1,6 +1,12 @@
-import { showHUD, open } from "@raycast/api";
+import { showHUD, open, getPreferenceValues } from "@raycast/api";
 
 const DEEPLINK_SCHEME = "cap-desktop://action";
+
+interface Preferences {
+  displayName?: string;
+  recordingMode?: "instant" | "studio";
+  captureSystemAudio?: boolean;
+}
 
 interface StartRecordingAction {
   start_recording: {
@@ -13,13 +19,21 @@ interface StartRecordingAction {
 }
 
 export default async function Command() {
+  const preferences = getPreferenceValues<Preferences>();
+
+  // Use configured display name or fall back to empty string
+  // Empty string will let Cap use the primary/default display
+  const displayName = preferences.displayName?.trim() || "Main Display";
+  const recordingMode = preferences.recordingMode || "instant";
+  const captureSystemAudio = preferences.captureSystemAudio || false;
+
   const action: StartRecordingAction = {
     start_recording: {
-      capture_mode: { screen: "Main Display" },
+      capture_mode: { screen: displayName },
       camera: null,
       mic_label: null,
-      capture_system_audio: false,
-      mode: "instant",
+      capture_system_audio: captureSystemAudio,
+      mode: recordingMode,
     },
   };
 

@@ -7,6 +7,37 @@
   "author": "cap",
   "categories": ["Productivity", "Media"],
   "license": "MIT",
+  "preferences": [
+    {
+      "name": "displayName",
+      "title": "Display Name",
+      "description": "Name of the display to record. Leave empty to record the primary/main display.",
+      "type": "textfield",
+      "required": false,
+      "placeholder": "Main Display"
+    },
+    {
+      "name": "recordingMode",
+      "title": "Recording Mode",
+      "description": "Default recording mode",
+      "type": "dropdown",
+      "required": false,
+      "default": "instant",
+      "data": [
+        { "title": "Instant", "value": "instant" },
+        { "title": "Studio", "value": "studio" }
+      ]
+    },
+    {
+      "name": "captureSystemAudio",
+      "title": "Capture System Audio",
+      "description": "Whether to capture system audio by default",
+      "type": "checkbox",
+      "required": false,
+      "default": false,
+      "label": "Capture system audio"
+    }
+  ],
   "commands": [
     {
       "name": "start-recording",
