@@ -26,6 +26,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    TakeScreenshot,
+    ListDisplays,
+    ListWindows,
+    ListCameras,
+    ListMicrophones,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +153,44 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TakeScreenshot => {
+                crate::recording::take_screenshot(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ListDisplays => {
+                let displays = crate::recording::list_capture_displays().await;
+                let json = serde_json::to_string(&displays).map_err(|e| e.to_string())?;
+                println!("{json}");
+                Ok(())
+            }
+            DeepLinkAction::ListWindows => {
+                let windows = crate::recording::list_capture_windows().await;
+                let json = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
+                println!("{json}");
+                Ok(())
+            }
+            DeepLinkAction::ListCameras => {
+                let cameras = crate::recording::list_cameras();
+                let json = serde_json::to_string(&cameras).map_err(|e| e.to_string())?;
+                println!("{json}");
+                Ok(())
+            }
+            DeepLinkAction::ListMicrophones => {
+                let mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
+                let mut mic_names: Vec<_> = mics.keys().cloned().collect();
+                mic_names.sort();
+                let json = serde_json::to_string(&mic_names).map_err(|e| e.to_string())?;
+                println!("{json}");
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())

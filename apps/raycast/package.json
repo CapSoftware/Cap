@@ -1,0 +1,85 @@
+{
+  "name": "cap-raycast",
+  "title": "Cap",
+  "description": "Control Cap screen recording from Raycast",
+  "icon": "cap-icon.png",
+  "author": "cap",
+  "license": "MIT",
+  "version": "1.0.0",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new screen recording",
+      "mode": "no-view",
+      "preferences": [
+        {
+          "name": "defaultDisplay",
+          "title": "Default Display",
+          "description": "Name of the display to record (e.g., 'Main Display', 'Built-in Retina Display')",
+          "type": "textfield",
+          "required": false,
+          "default": "Main Display"
+        }
+      ]
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "subtitle": "Cap",
+      "description": "Resume the paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "subtitle": "Cap",
+      "description": "Toggle pause/resume recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "subtitle": "Cap",
+      "description": "Take a screenshot",
+      "mode": "no-view"
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "subtitle": "Cap",
+      "description": "Open Cap settings",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.64.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.8",
+    "@types/node": "~20.10.0",
+    "typescript": "^5.3.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
