@@ -90,6 +90,9 @@ export const SubfolderDialog: React.FC<Props> = ({
 		if (!open) {
 			setSelectedColor(null);
 			setFolderName("");
+			Object.values(folderRefs.current).forEach((ref) => {
+				ref.current?.stop();
+			});
 		}
 	}, [open]);
 
@@ -162,21 +165,27 @@ export const SubfolderDialog: React.FC<Props> = ({
 										setSelectedColor(option.value);
 									}}
 									onMouseEnter={() => {
+										if (!riveFile) return;
 										const folderRef = folderRefs.current[option.value]?.current;
 										if (!folderRef) return;
 										folderRef.stop();
 										folderRef.play("folder-open");
 									}}
 									onMouseLeave={() => {
+										if (!riveFile) return;
 										const folderRef = folderRefs.current[option.value]?.current;
 										if (!folderRef) return;
 										folderRef.stop();
 										folderRef.play("folder-close");
 									}}
 								>
-									{option.component(
-										riveFile as RiveFile,
-										folderRefs.current[option.value],
+									{riveFile &&
+										option.component(
+											riveFile as RiveFile,
+											folderRefs.current[option.value],
+										)}
+									{!riveFile && (
+										<div className="w-[50px] h-[50px] rounded bg-gray-4 animate-pulse" />
 									)}
 									<p className="text-xs text-gray-10">{option.label}</p>
 								</div>
