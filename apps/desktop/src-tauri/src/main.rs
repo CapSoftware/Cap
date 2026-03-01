@@ -19,6 +19,9 @@ fn main() {
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 debug: cfg!(debug_assertions),
+                // Disable backtrace capture to prevent secondary panics during backtrace collection
+                // on Windows, which can cause "panic in a function that cannot unwind" errors
+                attach_stacktrace: false,
                 before_send: Some(Arc::new(|mut event| {
                     // this is irrelevant to us + users probably don't want us knowing their computer names
                     event.server_name = None;
@@ -43,7 +46,14 @@ fn main() {
         ));
 
         // Caution! Everything before here runs in both app and crash reporter processes
-        let _guard = tauri_plugin_sentry::minidump::init(&sentry_client);
+        // Wrap minidump initialization in catch_unwind to prevent panics from propagating
+        let _guard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tauri_plugin_sentry::minidump::init(&sentry_client)
+        }))
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to initialize Sentry minidump handler: {:?}", e);
+            None
+        });
 
         (sentry_client, _guard)
     });
