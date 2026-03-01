@@ -60,7 +60,15 @@ export default $config({
 
 		const recordingsBucket = new aws.s3.BucketV2(
 			"RecordingsBucket",
-			{},
+			{
+				lifecycleRules: [
+					{
+						id: "cleanupMultipleUploads",
+						enabled: true,
+						abortIncompleteMultipartUploadDays: 7,
+					},
+				],
+			},
 			{ retainOnDelete: true },
 		);
 
