@@ -130,6 +130,7 @@ export function getDocSearchIndex(
 			.replace(/```[\s\S]*?```/g, "")
 			.replace(/<[^>]+>/g, "")
 			.replace(/[#*`[\]()]/g, "")
+			.replace(/[<>]/g, "")
 			.replace(/\n+/g, " ")
 			.trim()
 			.slice(0, 500);
