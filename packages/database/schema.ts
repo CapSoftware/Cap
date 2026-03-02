@@ -15,6 +15,7 @@ import {
 	customType,
 	datetime,
 	float,
+	foreignKey,
 	index,
 	int,
 	json,
@@ -884,4 +885,276 @@ export const importedVideos = mysqlTable(
 	(table) => [
 		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
 	],
+);
+
+export const developerApps = mysqlTable(
+	"developer_apps",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		name: varchar("name", { length: 255 }).notNull(),
+		environment: varchar("environment", {
+			length: 16,
+			enum: ["development", "production"],
+		}).notNull(),
+		logoUrl: varchar("logoUrl", { length: 1024 }),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [index("owner_deleted_idx").on(table.ownerId, table.deletedAt)],
+);
+
+export const developerAppDomains = mysqlTable(
+	"developer_app_domains",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		domain: varchar("domain", { length: 253 }).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [unique("app_domain_unique").on(table.appId, table.domain)],
+);
+
+export const developerApiKeys = mysqlTable(
+	"developer_api_keys",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		keyType: varchar("keyType", {
+			length: 8,
+			enum: ["public", "secret"],
+		}).notNull(),
+		keyPrefix: varchar("keyPrefix", { length: 12 }).notNull(),
+		keyHash: varchar("keyHash", { length: 64 }).notNull(),
+		encryptedKey: encryptedText("encryptedKey").notNull(),
+		lastUsedAt: timestamp("lastUsedAt"),
+		revokedAt: timestamp("revokedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("key_hash_idx").on(table.keyHash),
+		index("app_key_type_idx").on(table.appId, table.keyType),
+	],
+);
+
+export const developerVideos = mysqlTable(
+	"developer_videos",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		externalUserId: varchar("externalUserId", { length: 255 }),
+		name: varchar("name", { length: 255 }).notNull().default("Untitled"),
+		duration: float("duration"),
+		width: int("width"),
+		height: int("height"),
+		fps: int("fps"),
+		s3Key: varchar("s3Key", { length: 512 }),
+		transcriptionStatus: varchar("transcriptionStatus", {
+			length: 16,
+			enum: ["PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"],
+		}),
+		metadata: json("metadata"),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("app_created_idx").on(table.appId, table.createdAt),
+		index("app_user_idx").on(table.appId, table.externalUserId),
+		index("app_deleted_idx").on(table.appId, table.deletedAt),
+	],
+);
+
+export const developerCreditAccounts = mysqlTable(
+	"developer_credit_accounts",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		balanceMicroCredits: bigint("balanceMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
+		stripePaymentMethodId: varchar("stripePaymentMethodId", { length: 255 }),
+		autoTopUpEnabled: boolean("autoTopUpEnabled").notNull().default(false),
+		autoTopUpThresholdMicroCredits: bigint("autoTopUpThresholdMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		autoTopUpAmountCents: int("autoTopUpAmountCents").notNull().default(0),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [uniqueIndex("app_id_unique").on(table.appId)],
+);
+
+export type DeveloperCreditTransactionType =
+	| "topup"
+	| "video_create"
+	| "storage_daily"
+	| "refund"
+	| "adjustment";
+
+export type DeveloperCreditReferenceType =
+	| "developer_video"
+	| "stripe_payment_intent"
+	| "manual";
+
+export const developerCreditTransactions = mysqlTable(
+	"developer_credit_transactions",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		accountId: nanoId("accountId").notNull(),
+		type: varchar("type", {
+			length: 16,
+			enum: ["topup", "video_create", "storage_daily", "refund", "adjustment"],
+		})
+			.notNull()
+			.$type<DeveloperCreditTransactionType>(),
+		amountMicroCredits: bigint("amountMicroCredits", {
+			mode: "number",
+		}).notNull(),
+		balanceAfterMicroCredits: bigint("balanceAfterMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		}).notNull(),
+		referenceId: varchar("referenceId", { length: 255 }),
+		referenceType: varchar("referenceType", {
+			length: 32,
+			enum: ["developer_video", "stripe_payment_intent", "manual"],
+		}).$type<DeveloperCreditReferenceType>(),
+		metadata: json("metadata"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			name: "dev_credit_txn_account_fk",
+			columns: [table.accountId],
+			foreignColumns: [developerCreditAccounts.id],
+		}),
+		index("account_type_created_idx").on(
+			table.accountId,
+			table.type,
+			table.createdAt,
+		),
+	],
+);
+
+export const developerDailyStorageSnapshots = mysqlTable(
+	"developer_daily_storage_snapshots",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		snapshotDate: varchar("snapshotDate", { length: 10 }).notNull(),
+		totalDurationMinutes: float("totalDurationMinutes").notNull().default(0),
+		videoCount: int("videoCount").notNull().default(0),
+		microCreditsCharged: bigint("microCreditsCharged", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		processedAt: timestamp("processedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [unique("app_date_unique").on(table.appId, table.snapshotDate)],
+);
+
+export const developerAppsRelations = relations(
+	developerApps,
+	({ one, many }) => ({
+		owner: one(users, {
+			fields: [developerApps.ownerId],
+			references: [users.id],
+		}),
+		domains: many(developerAppDomains),
+		apiKeys: many(developerApiKeys),
+		videos: many(developerVideos),
+		creditAccount: one(developerCreditAccounts, {
+			fields: [developerApps.id],
+			references: [developerCreditAccounts.appId],
+		}),
+		storageSnapshots: many(developerDailyStorageSnapshots),
+	}),
+);
+
+export const developerAppDomainsRelations = relations(
+	developerAppDomains,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerAppDomains.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerApiKeysRelations = relations(
+	developerApiKeys,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerApiKeys.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerVideosRelations = relations(
+	developerVideos,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerVideos.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerCreditAccountsRelations = relations(
+	developerCreditAccounts,
+	({ one, many }) => ({
+		app: one(developerApps, {
+			fields: [developerCreditAccounts.appId],
+			references: [developerApps.id],
+		}),
+		owner: one(users, {
+			fields: [developerCreditAccounts.ownerId],
+			references: [users.id],
+		}),
+		transactions: many(developerCreditTransactions),
+	}),
+);
+
+export const developerCreditTransactionsRelations = relations(
+	developerCreditTransactions,
+	({ one }) => ({
+		account: one(developerCreditAccounts, {
+			fields: [developerCreditTransactions.accountId],
+			references: [developerCreditAccounts.id],
+		}),
+	}),
+);
+
+export const developerDailyStorageSnapshotsRelations = relations(
+	developerDailyStorageSnapshots,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerDailyStorageSnapshots.appId],
+			references: [developerApps.id],
+		}),
+	}),
 );
