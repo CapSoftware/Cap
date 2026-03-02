@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { cache } from "react";
 
 export interface DocMetadata {
 	title: string;
@@ -66,7 +67,7 @@ function getMDXFiles(dir: string): string[] {
 
 const docsDir = path.join(process.cwd(), "content/docs");
 
-export function getAllDocs(): Doc[] {
+export const getAllDocs = cache(function getAllDocs(): Doc[] {
 	const mdxFiles = getMDXFiles(docsDir);
 	return mdxFiles.map((relativePath) => {
 		const fullPath = path.join(docsDir, relativePath);
@@ -79,10 +80,15 @@ export function getAllDocs(): Doc[] {
 			.join("/");
 		return { metadata, slug, content };
 	});
-}
+});
 
 export function getDocBySlug(slug: string): Doc | undefined {
-	return getAllDocs().find((doc) => doc.slug === slug);
+	const filePath = path.join(docsDir, `${slug}.mdx`);
+	if (!fs.existsSync(filePath)) return undefined;
+	const { metadata, content } = parseFrontmatter(
+		fs.readFileSync(filePath, "utf-8"),
+	);
+	return { metadata, slug, content };
 }
 
 export function extractHeadings(content: string): DocHeading[] {
