@@ -22,9 +22,15 @@ app.post(
 	zValidator(
 		"json",
 		z.object({
-			name: z.string().optional(),
-			userId: z.string().optional(),
-			metadata: z.record(z.unknown()).optional(),
+			name: z.string().max(255).optional(),
+			userId: z.string().max(255).optional(),
+			metadata: z
+				.record(z.unknown())
+				.optional()
+				.refine(
+					(val) => val === undefined || JSON.stringify(val).length <= 8192,
+					{ message: "Metadata must be under 8KB" },
+				),
 		}),
 	),
 	async (c) => {
