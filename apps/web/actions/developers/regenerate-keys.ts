@@ -27,31 +27,32 @@ export async function regenerateDeveloperKeys(appId: string) {
 
 	if (!app) throw new Error("App not found");
 
-	await db()
-		.update(developerApiKeys)
-		.set({ revokedAt: new Date() })
-		.where(
-			and(
-				eq(developerApiKeys.appId, appId),
-				isNull(developerApiKeys.revokedAt),
-			),
-		);
-
 	const publicKeyRaw = `cpk_${nanoIdLong()}`;
 	const secretKeyRaw = `csk_${nanoIdLong()}`;
 	const publicKeyHash = await hashKey(publicKeyRaw);
 	const secretKeyHash = await hashKey(secretKeyRaw);
+	const encryptedPublicKey = await encrypt(publicKeyRaw);
+	const encryptedSecretKey = await encrypt(secretKeyRaw);
 
-	await db()
-		.insert(developerApiKeys)
-		.values([
+	await db().transaction(async (tx) => {
+		await tx
+			.update(developerApiKeys)
+			.set({ revokedAt: new Date() })
+			.where(
+				and(
+					eq(developerApiKeys.appId, appId),
+					isNull(developerApiKeys.revokedAt),
+				),
+			);
+
+		await tx.insert(developerApiKeys).values([
 			{
 				id: nanoId(),
 				appId,
 				keyType: "public",
 				keyPrefix: publicKeyRaw.slice(0, 12),
 				keyHash: publicKeyHash,
-				encryptedKey: await encrypt(publicKeyRaw),
+				encryptedKey: encryptedPublicKey,
 			},
 			{
 				id: nanoId(),
@@ -59,9 +60,10 @@ export async function regenerateDeveloperKeys(appId: string) {
 				keyType: "secret",
 				keyPrefix: secretKeyRaw.slice(0, 12),
 				keyHash: secretKeyHash,
-				encryptedKey: await encrypt(secretKeyRaw),
+				encryptedKey: encryptedSecretKey,
 			},
 		]);
+	});
 
 	revalidatePath("/dashboard/developers");
 	return {
