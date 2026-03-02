@@ -52,11 +52,25 @@ app.post(
 
 		const s3Key = video.s3Key;
 
+		const ALLOWED_CONTENT_TYPES = [
+			"video/mp4",
+			"video/webm",
+			"video/quicktime",
+			"video/x-matroska",
+			"video/avi",
+			"application/octet-stream",
+		];
+
+		const resolvedContentType =
+			contentType && ALLOWED_CONTENT_TYPES.includes(contentType)
+				? contentType
+				: "video/mp4";
+
 		try {
 			const uploadId = await Effect.gen(function* () {
 				const [bucket] = yield* S3Buckets.getBucketAccess();
 				const { UploadId } = yield* bucket.multipart.create(s3Key, {
-					ContentType: contentType ?? "video/mp4",
+					ContentType: resolvedContentType,
 					CacheControl: "max-age=31536000",
 				});
 				if (!UploadId) throw new Error("No UploadId returned");
