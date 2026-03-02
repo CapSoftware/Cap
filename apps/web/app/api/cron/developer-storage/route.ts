@@ -85,103 +85,115 @@ export async function GET(request: Request) {
 
 	const accountsByApp = new Map(accounts.map((a) => [a.appId, a]));
 
-	let processed = 0;
-
-	for (const app of apps) {
+	const appsToProcess = apps.filter((app) => {
 		const existing = snapshotsByApp.get(app.id);
-		if (existing?.processedAt) continue;
+		if (existing?.processedAt) return false;
 
 		const stats = statsByApp.get(app.id);
 		const totalMinutes = stats?.totalDurationMinutes ?? 0;
-		const videoCount = Number(stats?.videoCount ?? 0);
-
-		if (totalMinutes <= 0) continue;
+		if (totalMinutes <= 0) return false;
 
 		const microCreditsToCharge = Math.floor(
 			totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY,
 		);
-
-		if (microCreditsToCharge <= 0) continue;
+		if (microCreditsToCharge <= 0) return false;
 
 		const account = accountsByApp.get(app.id);
-		if (!account) continue;
+		return !!account;
+	});
 
-		await db().transaction(async (tx) => {
-			const [current] = await tx
-				.select({
-					balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-				})
-				.from(developerCreditAccounts)
-				.where(eq(developerCreditAccounts.id, account.id))
-				.limit(1);
+	const BATCH_SIZE = 10;
+	let processed = 0;
 
-			if (!current || current.balanceMicroCredits < microCreditsToCharge) {
-				return;
-			}
-
-			await tx
-				.update(developerCreditAccounts)
-				.set({
-					balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToCharge}`,
-				})
-				.where(
-					and(
-						eq(developerCreditAccounts.id, account.id),
-						sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsToCharge}`,
-					),
+	for (let i = 0; i < appsToProcess.length; i += BATCH_SIZE) {
+		const batch = appsToProcess.slice(i, i + BATCH_SIZE);
+		const results = await Promise.allSettled(
+			batch.map(async (app) => {
+				const existing = snapshotsByApp.get(app.id);
+				const stats = statsByApp.get(app.id);
+				const totalMinutes = stats?.totalDurationMinutes ?? 0;
+				const videoCount = Number(stats?.videoCount ?? 0);
+				const microCreditsToCharge = Math.floor(
+					totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY,
 				);
+				const account = accountsByApp.get(app.id);
+				if (!account) return;
 
-			const [updated] = await tx
-				.select({
-					balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-				})
-				.from(developerCreditAccounts)
-				.where(eq(developerCreditAccounts.id, account.id))
-				.limit(1);
+				await db().transaction(async (tx) => {
+					await tx
+						.update(developerCreditAccounts)
+						.set({
+							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToCharge}`,
+						})
+						.where(
+							and(
+								eq(developerCreditAccounts.id, account.id),
+								sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsToCharge}`,
+							),
+						);
 
-			if (updated.balanceMicroCredits === current.balanceMicroCredits) {
-				return;
-			}
+					const [updated] = await tx
+						.select({
+							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+						})
+						.from(developerCreditAccounts)
+						.where(eq(developerCreditAccounts.id, account.id))
+						.limit(1);
 
-			await tx.insert(developerCreditTransactions).values({
-				id: nanoId(),
-				accountId: account.id,
-				type: "storage_daily",
-				amountMicroCredits: -microCreditsToCharge,
-				balanceAfterMicroCredits: updated.balanceMicroCredits,
-				referenceType: "manual",
-				metadata: {
-					snapshotDate: today,
-					totalDurationMinutes: totalMinutes,
-					videoCount,
-				},
-			});
+					if (
+						!updated ||
+						updated.balanceMicroCredits === account.balanceMicroCredits
+					) {
+						return;
+					}
 
-			const snapshotId = existing?.id ?? nanoId();
-			if (existing) {
-				await tx
-					.update(developerDailyStorageSnapshots)
-					.set({
-						totalDurationMinutes: totalMinutes,
-						videoCount,
-						microCreditsCharged: microCreditsToCharge,
-						processedAt: new Date(),
-					})
-					.where(eq(developerDailyStorageSnapshots.id, snapshotId));
-			} else {
-				await tx.insert(developerDailyStorageSnapshots).values({
-					id: snapshotId,
-					appId: app.id,
-					snapshotDate: today,
-					totalDurationMinutes: totalMinutes,
-					videoCount,
-					microCreditsCharged: microCreditsToCharge,
-					processedAt: new Date(),
+					await tx.insert(developerCreditTransactions).values({
+						id: nanoId(),
+						accountId: account.id,
+						type: "storage_daily",
+						amountMicroCredits: -microCreditsToCharge,
+						balanceAfterMicroCredits: updated.balanceMicroCredits,
+						referenceType: "manual",
+						metadata: {
+							snapshotDate: today,
+							totalDurationMinutes: totalMinutes,
+							videoCount,
+						},
+					});
+
+					const snapshotId = existing?.id ?? nanoId();
+					if (existing) {
+						await tx
+							.update(developerDailyStorageSnapshots)
+							.set({
+								totalDurationMinutes: totalMinutes,
+								videoCount,
+								microCreditsCharged: microCreditsToCharge,
+								processedAt: new Date(),
+							})
+							.where(eq(developerDailyStorageSnapshots.id, snapshotId));
+					} else {
+						await tx.insert(developerDailyStorageSnapshots).values({
+							id: snapshotId,
+							appId: app.id,
+							snapshotDate: today,
+							totalDurationMinutes: totalMinutes,
+							videoCount,
+							microCreditsCharged: microCreditsToCharge,
+							processedAt: new Date(),
+						});
+					}
 				});
-			}
-		});
+			}),
+		);
 
-		processed++;
+		for (const result of results) {
+			if (result.status === "fulfilled") {
+				processed++;
+			} else {
+				console.error("Failed to process app in cron:", result.reason);
+			}
+		}
 	}
 
 	return NextResponse.json({
