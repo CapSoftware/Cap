@@ -218,6 +218,19 @@ app.post(
 
 				if (account && microCreditsToDebit > 0) {
 					await db().transaction(async (tx) => {
+						const [current] = await tx
+							.select({
+								balanceMicroCredits:
+									developerCreditAccounts.balanceMicroCredits,
+							})
+							.from(developerCreditAccounts)
+							.where(eq(developerCreditAccounts.id, account.id))
+							.limit(1);
+
+						if (!current || current.balanceMicroCredits < microCreditsToDebit) {
+							return;
+						}
+
 						await tx
 							.update(developerCreditAccounts)
 							.set({
@@ -238,6 +251,10 @@ app.post(
 							.from(developerCreditAccounts)
 							.where(eq(developerCreditAccounts.id, account.id))
 							.limit(1);
+
+						if (updated.balanceMicroCredits === current.balanceMicroCredits) {
+							return;
+						}
 
 						await tx.insert(developerCreditTransactions).values({
 							id: nanoId(),

@@ -107,6 +107,18 @@ export async function GET(request: Request) {
 		if (!account) continue;
 
 		await db().transaction(async (tx) => {
+			const [current] = await tx
+				.select({
+					balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+				})
+				.from(developerCreditAccounts)
+				.where(eq(developerCreditAccounts.id, account.id))
+				.limit(1);
+
+			if (!current || current.balanceMicroCredits < microCreditsToCharge) {
+				return;
+			}
+
 			await tx
 				.update(developerCreditAccounts)
 				.set({
@@ -126,6 +138,10 @@ export async function GET(request: Request) {
 				.from(developerCreditAccounts)
 				.where(eq(developerCreditAccounts.id, account.id))
 				.limit(1);
+
+			if (updated.balanceMicroCredits === current.balanceMicroCredits) {
+				return;
+			}
 
 			await tx.insert(developerCreditTransactions).values({
 				id: nanoId(),
