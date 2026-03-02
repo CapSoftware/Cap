@@ -19,6 +19,7 @@ export interface RecorderOptions {
 	camera?: { deviceId?: string; enabled?: boolean };
 	microphone?: { deviceId?: string; enabled?: boolean };
 	systemAudio?: boolean;
+	maxDurationMs?: number;
 }
 
 export interface RecordingResult {

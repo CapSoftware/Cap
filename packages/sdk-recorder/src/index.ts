@@ -41,6 +41,8 @@ export class CapRecorder {
 	private accumulatedMs = 0;
 	private lastResumeTime = 0;
 	private selectedMimeType = "";
+	private maxDurationMs: number;
+	private maxDurationTimeout: ReturnType<typeof setTimeout> | null = null;
 	private client: MultipartClient;
 	private listeners = new Map<
 		string,
@@ -53,6 +55,7 @@ export class CapRecorder {
 			mode: "fullscreen",
 			...options,
 		};
+		this.maxDurationMs = options.maxDurationMs ?? 4 * 60 * 60 * 1000;
 		this.client = new MultipartClient(
 			this.options.apiBase,
 			this.options.publicKey,
@@ -152,6 +155,9 @@ export class CapRecorder {
 			this.accumulatedMs = 0;
 			this.lastResumeTime = Date.now();
 			this.startDurationTimer();
+			this.maxDurationTimeout = setTimeout(() => {
+				this.stop();
+			}, this.maxDurationMs);
 			this.setPhase("recording");
 		} catch (error) {
 			this.setPhase("error");
@@ -226,7 +232,11 @@ export class CapRecorder {
 
 			this._videoId = videoId;
 
-			await this.client.uploadBlob(videoId, blob);
+			this._durationMs =
+				this.accumulatedMs + (Date.now() - this.lastResumeTime);
+			await this.client.uploadBlob(videoId, blob, {
+				durationMs: this._durationMs,
+			});
 
 			const result: RecordingResult = {
 				videoId,
@@ -265,6 +275,10 @@ export class CapRecorder {
 
 	private cleanup() {
 		this.stopDurationTimer();
+		if (this.maxDurationTimeout) {
+			clearTimeout(this.maxDurationTimeout);
+			this.maxDurationTimeout = null;
+		}
 		if (this.streams) {
 			releaseStreams(this.streams);
 			this.streams = null;
