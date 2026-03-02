@@ -148,7 +148,7 @@ export const withDeveloperPublicAuth = createMiddleware<{
 		.update(developerApiKeys)
 		.set({ lastUsedAt: new Date() })
 		.where(eq(developerApiKeys.keyHash, keyHash))
-		.catch(() => {});
+		.catch((err) => console.error("Failed to update lastUsedAt:", err));
 
 	c.set("developerAppId", row.appId);
 	c.set("developerKeyType", "public" as const);
@@ -194,7 +194,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		.update(developerApiKeys)
 		.set({ lastUsedAt: new Date() })
 		.where(eq(developerApiKeys.keyHash, keyHash))
-		.catch(() => {});
+		.catch((err) => console.error("Failed to update lastUsedAt:", err));
 
 	c.set("developerAppId", row.appId);
 	c.set("developerKeyType", "secret" as const);
