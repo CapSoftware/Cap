@@ -12,7 +12,6 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
-import { cookies } from "next/headers";
 import { hashKey } from "@/lib/developer-key-hash";
 
 async function getAuth(c: Context) {
@@ -28,16 +27,6 @@ async function getAuth(c: Context) {
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
 	} else {
-		if (authHeader && /^[a-zA-Z0-9._-]+$/.test(authHeader))
-			(await cookies()).set({
-				name: "next-auth.session-token",
-				value: authHeader,
-				path: "/",
-				sameSite: "none",
-				secure: true,
-				httpOnly: true,
-			});
-
 		user = await getCurrentUser();
 	}
 
