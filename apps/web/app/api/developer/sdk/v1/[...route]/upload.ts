@@ -15,6 +15,7 @@ import { runPromise } from "@/lib/server";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
 const MICRO_CREDITS_PER_MINUTE = 5_000;
+const MAX_DURATION_SECS = 4 * 60 * 60;
 
 export const app = new Hono<{
 	Variables: {
@@ -158,6 +159,8 @@ app.post(
 		const { videoId, uploadId, parts, durationInSecs, width, height, fps } =
 			c.req.valid("json");
 
+		const clampedDuration = Math.min(durationInSecs, MAX_DURATION_SECS);
+
 		const [video] = await db()
 			.select()
 			.from(developerVideos)
@@ -175,6 +178,70 @@ app.post(
 		const s3Key = video.s3Key;
 
 		try {
+			const durationMinutes = clampedDuration / 60;
+			const microCreditsToDebit = Math.floor(
+				durationMinutes * MICRO_CREDITS_PER_MINUTE,
+			);
+
+			if (microCreditsToDebit > 0) {
+				const [account] = await db()
+					.select()
+					.from(developerCreditAccounts)
+					.where(eq(developerCreditAccounts.appId, appId))
+					.limit(1);
+
+				if (!account) {
+					return c.json({ error: "Credit account not found" }, 402);
+				}
+
+				const debited = await db().transaction(async (tx) => {
+					const [result] = await tx
+						.update(developerCreditAccounts)
+						.set({
+							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToDebit}`,
+						})
+						.where(
+							and(
+								eq(developerCreditAccounts.id, account.id),
+								sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsToDebit}`,
+							),
+						);
+
+					const affectedRows =
+						(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
+					if (affectedRows === 0) {
+						return false;
+					}
+
+					const [updated] = await tx
+						.select({
+							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+						})
+						.from(developerCreditAccounts)
+						.where(eq(developerCreditAccounts.id, account.id))
+						.limit(1);
+
+					if (!updated) return false;
+
+					await tx.insert(developerCreditTransactions).values({
+						id: nanoId(),
+						accountId: account.id,
+						type: "video_create",
+						amountMicroCredits: -microCreditsToDebit,
+						balanceAfterMicroCredits: updated.balanceMicroCredits,
+						referenceId: videoId,
+						referenceType: "developer_video",
+						metadata: { durationSeconds: clampedDuration },
+					});
+
+					return true;
+				});
+
+				if (!debited) {
+					return c.json({ error: "Insufficient credits" }, 402);
+				}
+			}
+
 			await Effect.gen(function* () {
 				const [bucket] = yield* S3Buckets.getBucketAccess();
 
@@ -192,7 +259,7 @@ app.post(
 			}).pipe(provideOptionalAuth, runPromise);
 
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
-				duration: durationInSecs,
+				duration: clampedDuration,
 			};
 			if (width !== undefined) updates.width = width;
 			if (height !== undefined) updates.height = height;
@@ -202,69 +269,6 @@ app.post(
 				.update(developerVideos)
 				.set(updates)
 				.where(eq(developerVideos.id, videoId));
-
-			const durationMinutes = durationInSecs / 60;
-			const microCreditsToDebit = Math.floor(
-				durationMinutes * MICRO_CREDITS_PER_MINUTE,
-			);
-
-			if (microCreditsToDebit > 0) {
-				const [account] = await db()
-					.select()
-					.from(developerCreditAccounts)
-					.where(eq(developerCreditAccounts.appId, appId))
-					.limit(1);
-
-				if (!account) {
-					return c.json({ error: "Credit account not found" }, 402);
-				}
-
-				const debited = await db().transaction(async (tx) => {
-					await tx
-						.update(developerCreditAccounts)
-						.set({
-							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToDebit}`,
-						})
-						.where(
-							and(
-								eq(developerCreditAccounts.id, account.id),
-								sql`${developerCreditAccounts.balanceMicroCredits} >= ${microCreditsToDebit}`,
-							),
-						);
-
-					const [updated] = await tx
-						.select({
-							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-						})
-						.from(developerCreditAccounts)
-						.where(eq(developerCreditAccounts.id, account.id))
-						.limit(1);
-
-					if (
-						!updated ||
-						updated.balanceMicroCredits === account.balanceMicroCredits
-					) {
-						return false;
-					}
-
-					await tx.insert(developerCreditTransactions).values({
-						id: nanoId(),
-						accountId: account.id,
-						type: "video_create",
-						amountMicroCredits: -microCreditsToDebit,
-						balanceAfterMicroCredits: updated.balanceMicroCredits,
-						referenceId: videoId,
-						referenceType: "developer_video",
-						metadata: { durationSeconds: durationInSecs },
-					});
-
-					return true;
-				});
-
-				if (!debited) {
-					return c.json({ error: "Insufficient credits" }, 402);
-				}
-			}
 
 			return c.json({ success: true });
 		} catch (error) {
