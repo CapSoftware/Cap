@@ -1051,6 +1051,11 @@ export const developerCreditTransactions = mysqlTable(
 			table.type,
 			table.createdAt,
 		),
+		index("account_ref_dedup_idx").on(
+			table.accountId,
+			table.referenceId,
+			table.referenceType,
+		),
 	],
 );
 
