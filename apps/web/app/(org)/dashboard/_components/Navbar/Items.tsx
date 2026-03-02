@@ -38,6 +38,7 @@ import { useDashboardContext } from "../../Contexts";
 import {
 	CapIcon,
 	ChartLineIcon,
+	CodeIcon,
 	CogIcon,
 	ImportIcon,
 	RecordIcon,
@@ -90,6 +91,18 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
+		...(buildEnv.NEXT_PUBLIC_IS_CAP
+			? [
+					{
+						name: "Developers",
+						href: `/dashboard/developers`,
+						ownerOnly: true,
+						matchChildren: true,
+						icon: <CodeIcon />,
+						subNav: [] as { name: string; href: string }[],
+					},
+				]
+			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
