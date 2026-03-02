@@ -11,7 +11,8 @@ import {
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-const MICRO_CREDITS_PER_MINUTE_PER_DAY = 3.33;
+const MICRO_CREDITS_PER_MINUTE_PER_DAY_NUMERATOR = 333;
+const MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR = 100;
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -94,7 +95,8 @@ export async function GET(request: Request) {
 		if (totalMinutes <= 0) return false;
 
 		const microCreditsToCharge = Math.floor(
-			totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY,
+			(totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY_NUMERATOR) /
+				MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR,
 		);
 		if (microCreditsToCharge <= 0) return false;
 
@@ -114,13 +116,14 @@ export async function GET(request: Request) {
 				const totalMinutes = stats?.totalDurationMinutes ?? 0;
 				const videoCount = Number(stats?.videoCount ?? 0);
 				const microCreditsToCharge = Math.floor(
-					totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY,
+					(totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY_NUMERATOR) /
+						MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR,
 				);
 				const account = accountsByApp.get(app.id);
 				if (!account) return;
 
 				await db().transaction(async (tx) => {
-					await tx
+					const [result] = await tx
 						.update(developerCreditAccounts)
 						.set({
 							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToCharge}`,
@@ -132,6 +135,12 @@ export async function GET(request: Request) {
 							),
 						);
 
+					const affectedRows =
+						(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
+					if (affectedRows === 0) {
+						return;
+					}
+
 					const [updated] = await tx
 						.select({
 							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
@@ -140,12 +149,7 @@ export async function GET(request: Request) {
 						.where(eq(developerCreditAccounts.id, account.id))
 						.limit(1);
 
-					if (
-						!updated ||
-						updated.balanceMicroCredits === account.balanceMicroCredits
-					) {
-						return;
-					}
+					if (!updated) return;
 
 					await tx.insert(developerCreditTransactions).values({
 						id: nanoId(),
