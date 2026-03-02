@@ -8,7 +8,7 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
-import { addCreditsToAccount } from "@/actions/developers/purchase-credits";
+import { addCreditsToAccount } from "@/lib/developer-credits";
 
 const relevantEvents = new Set([
 	"checkout.session.completed",

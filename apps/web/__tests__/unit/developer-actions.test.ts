@@ -524,12 +524,12 @@ describe("regenerateDeveloperKeys", () => {
 });
 
 describe("addCreditsToAccount", () => {
-	let addCreditsToAccount: typeof import("@/actions/developers/purchase-credits").addCreditsToAccount;
+	let addCreditsToAccount: typeof import("@/lib/developer-credits").addCreditsToAccount;
 
 	beforeEach(async () => {
 		vi.clearAllMocks();
 		resetMockDb();
-		const mod = await import("@/actions/developers/purchase-credits");
+		const mod = await import("@/lib/developer-credits");
 		addCreditsToAccount = mod.addCreditsToAccount;
 	});
 

@@ -55,7 +55,7 @@ vi.mock("@cap/env", () => ({
 }));
 
 const mockAddCredits = vi.fn();
-vi.mock("@/actions/developers/purchase-credits", () => ({
+vi.mock("@/lib/developer-credits", () => ({
 	addCreditsToAccount: (...args: unknown[]) => mockAddCredits(...args),
 }));
 

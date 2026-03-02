@@ -1,5 +1,3 @@
-"use server";
-
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import {
