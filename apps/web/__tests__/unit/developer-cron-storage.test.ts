@@ -39,7 +39,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 let capturedJsonBody: any = null;
-let capturedStatus: number | undefined = undefined;
+let capturedStatus: number | undefined;
 
 vi.mock("next/server", () => ({
 	NextResponse: {
@@ -71,9 +71,7 @@ function makeChain(
 				select: vi.fn(() => txChain),
 				from: vi.fn(() => txChain),
 				where: vi.fn(() => txChain),
-				limit: vi.fn(() =>
-					Promise.resolve([{ balanceMicroCredits: 0 }]),
-				),
+				limit: vi.fn(() => Promise.resolve([{ balanceMicroCredits: 0 }])),
 				insert: vi.fn(() => txChain),
 				values: vi.fn(() => Promise.resolve()),
 				update: vi.fn(() => txChain),

@@ -45,9 +45,7 @@ describe("Purchase Credits Conversion", () => {
 	});
 
 	it("converts $5.99 (599 cents) to 599,000 micro-credits using Math.floor", () => {
-		expect(purchaseCreditsFormula(599)).toBe(
-			Math.floor(5.99 * 100_000),
-		);
+		expect(purchaseCreditsFormula(599)).toBe(Math.floor(5.99 * 100_000));
 		expect(purchaseCreditsFormula(599)).toBe(599_000);
 	});
 

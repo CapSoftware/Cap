@@ -153,10 +153,11 @@ export const POST = async (req: Request) => {
 							: null;
 
 					if (!accountId || !amountCents || !paymentIntentId) {
-						console.error(
-							"Missing required metadata for developer credits:",
-							{ accountId, amountCents, paymentIntentId },
-						);
+						console.error("Missing required metadata for developer credits:", {
+							accountId,
+							amountCents,
+							paymentIntentId,
+						});
 						return new Response("Missing metadata", { status: 400 });
 					}
 

@@ -1,5 +1,5 @@
-import { hashKey } from "@/lib/developer-key-hash";
 import { describe, expect, it, vi } from "vitest";
+import { hashKey } from "@/lib/developer-key-hash";
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
