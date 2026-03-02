@@ -26,23 +26,25 @@ export async function createDeveloperApp(data: {
 	const publicKeyHash = await hashKey(publicKeyRaw);
 	const secretKeyHash = await hashKey(secretKeyRaw);
 
-	await db().insert(developerApps).values({
-		id: appId,
-		ownerId: user.id,
-		name: data.name.trim(),
-		environment: data.environment,
-	});
+	const encryptedPublicKey = await encrypt(publicKeyRaw);
+	const encryptedSecretKey = await encrypt(secretKeyRaw);
 
-	await db()
-		.insert(developerApiKeys)
-		.values([
+	await db().transaction(async (tx) => {
+		await tx.insert(developerApps).values({
+			id: appId,
+			ownerId: user.id,
+			name: data.name.trim(),
+			environment: data.environment,
+		});
+
+		await tx.insert(developerApiKeys).values([
 			{
 				id: nanoId(),
 				appId,
 				keyType: "public",
 				keyPrefix: publicKeyRaw.slice(0, 12),
 				keyHash: publicKeyHash,
-				encryptedKey: await encrypt(publicKeyRaw),
+				encryptedKey: encryptedPublicKey,
 			},
 			{
 				id: nanoId(),
@@ -50,14 +52,15 @@ export async function createDeveloperApp(data: {
 				keyType: "secret",
 				keyPrefix: secretKeyRaw.slice(0, 12),
 				keyHash: secretKeyHash,
-				encryptedKey: await encrypt(secretKeyRaw),
+				encryptedKey: encryptedSecretKey,
 			},
 		]);
 
-	await db().insert(developerCreditAccounts).values({
-		id: nanoId(),
-		appId,
-		ownerId: user.id,
+		await tx.insert(developerCreditAccounts).values({
+			id: nanoId(),
+			appId,
+			ownerId: user.id,
+		});
 	});
 
 	return {
