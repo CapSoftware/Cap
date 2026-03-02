@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import type { userSelectProps } from "@cap/database/auth/session";
+import { decrypt } from "@cap/database/crypto";
 import {
 	developerApiKeys,
 	developerAppDomains,
@@ -84,6 +85,17 @@ export async function getDeveloperApps(
 				.groupBy(developerVideos.appId),
 		]);
 
+	const decryptedPublicKeys = new Map<string, string>();
+	for (const k of allApiKeys) {
+		if (k.keyType === "public" && k.encryptedKey) {
+			try {
+				decryptedPublicKeys.set(k.id, await decrypt(k.encryptedKey));
+			} catch {
+				decryptedPublicKeys.set(k.id, `${k.keyPrefix}...`);
+			}
+		}
+	}
+
 	return apps.map((app) => ({
 		...app,
 		domains: allDomains.filter((d) => d.appId === app.id),
@@ -95,7 +107,10 @@ export async function getDeveloperApps(
 				keyPrefix: k.keyPrefix,
 				createdAt: k.createdAt,
 				revokedAt: k.revokedAt,
-				fullKey: k.keyType === "public" ? k.encryptedKey : undefined,
+				fullKey:
+					k.keyType === "public"
+						? (decryptedPublicKeys.get(k.id) ?? `${k.keyPrefix}...`)
+						: undefined,
 			})),
 		creditAccount: allCreditAccounts.find((c) => c.appId === app.id) ?? null,
 		videoCount: allVideoCounts.find((v) => v.appId === app.id)?.count ?? 0,
