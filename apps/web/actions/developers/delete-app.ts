@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { developerApps } from "@cap/database/schema";
+import { developerApiKeys, developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -24,10 +24,22 @@ export async function deleteDeveloperApp(appId: string) {
 
 	if (!app) throw new Error("App not found");
 
-	await db()
-		.update(developerApps)
-		.set({ deletedAt: new Date() })
-		.where(eq(developerApps.id, appId));
+	await db().transaction(async (tx) => {
+		await tx
+			.update(developerApiKeys)
+			.set({ revokedAt: new Date() })
+			.where(
+				and(
+					eq(developerApiKeys.appId, appId),
+					isNull(developerApiKeys.revokedAt),
+				),
+			);
+
+		await tx
+			.update(developerApps)
+			.set({ deletedAt: new Date() })
+			.where(eq(developerApps.id, appId));
+	});
 
 	revalidatePath("/dashboard/developers");
 	return { success: true };
