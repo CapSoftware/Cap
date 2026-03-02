@@ -14,8 +14,16 @@ import { NextResponse } from "next/server";
 const MICRO_CREDITS_PER_MINUTE_PER_DAY = 3.33;
 
 export async function GET(request: Request) {
+	const cronSecret = process.env.CRON_SECRET;
+	if (!cronSecret) {
+		return NextResponse.json(
+			{ error: "Server misconfiguration" },
+			{ status: 500 },
+		);
+	}
+
 	const authHeader = request.headers.get("authorization");
-	const expected = `Bearer ${process.env.CRON_SECRET}`;
+	const expected = `Bearer ${cronSecret}`;
 	if (
 		!authHeader ||
 		authHeader.length !== expected.length ||
