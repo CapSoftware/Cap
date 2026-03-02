@@ -157,10 +157,11 @@ export const withDeveloperPublicAuth = createMiddleware<{
 		}
 	}
 
-	await db()
+	db()
 		.update(developerApiKeys)
 		.set({ lastUsedAt: new Date() })
-		.where(eq(developerApiKeys.keyHash, keyHash));
+		.where(eq(developerApiKeys.keyHash, keyHash))
+		.catch(() => {});
 
 	c.set("developerAppId", app.id);
 	c.set("developerKeyType", "public" as const);
@@ -207,10 +208,11 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		return c.json({ error: "App not found" }, 401);
 	}
 
-	await db()
+	db()
 		.update(developerApiKeys)
 		.set({ lastUsedAt: new Date() })
-		.where(eq(developerApiKeys.keyHash, keyHash));
+		.where(eq(developerApiKeys.keyHash, keyHash))
+		.catch(() => {});
 
 	c.set("developerAppId", app.id);
 	c.set("developerKeyType", "secret" as const);
