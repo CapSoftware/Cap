@@ -38,7 +38,12 @@ export function DocsHeader() {
 	}, []);
 
 	return (
-		<header className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200">
+		<header
+			className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200"
+			style={{
+				paddingRight: "calc(1rem + var(--scrollbar-compensation, 0px))",
+			}}
+		>
 			<div className="flex items-center gap-3">
 				<button
 					type="button"

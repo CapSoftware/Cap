@@ -167,12 +167,23 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 
 	useEffect(() => {
 		if (isOpen) {
+			const scrollbarWidth =
+				window.innerWidth - document.documentElement.clientWidth;
+			document.documentElement.style.setProperty(
+				"--scrollbar-compensation",
+				`${scrollbarWidth}px`,
+			);
+			document.body.style.paddingRight = `${scrollbarWidth}px`;
 			document.body.style.overflow = "hidden";
 		} else {
 			document.body.style.overflow = "";
+			document.body.style.paddingRight = "";
+			document.documentElement.style.removeProperty("--scrollbar-compensation");
 		}
 		return () => {
 			document.body.style.overflow = "";
+			document.body.style.paddingRight = "";
+			document.documentElement.style.removeProperty("--scrollbar-compensation");
 		};
 	}, [isOpen]);
 
@@ -210,6 +221,7 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 						placeholder="Search documentation..."
+						autoFocus
 						className="flex-1 h-14 text-base text-gray-900 placeholder-gray-400 outline-none bg-transparent"
 						aria-label="Search documentation"
 						aria-autocomplete="list"
