@@ -49,7 +49,7 @@ async function createGuestUser(
 async function findUserWithRetry(
 	email: string,
 	userId?: User.UserId,
-	maxRetries = 2,
+	maxRetries = 3,
 ): Promise<typeof users.$inferSelect | null> {
 	for (let i = 0; i < maxRetries; i++) {
 		console.log(`[Attempt ${i + 1}/${maxRetries}] Looking for user:`, {
@@ -91,7 +91,7 @@ async function findUserWithRetry(
 			}
 
 			if (i < maxRetries - 1) {
-				const delay = 2 ** i * 500;
+				const delay = 2 ** i * 1000;
 				console.log(
 					`No user found on attempt ${
 						i + 1
@@ -102,7 +102,7 @@ async function findUserWithRetry(
 		} catch (error) {
 			console.error(`Error during attempt ${i + 1}:`, error);
 			if (i < maxRetries - 1) {
-				const delay = 2 ** i * 500;
+				const delay = 2 ** i * 1000;
 				await new Promise((resolve) => setTimeout(resolve, delay));
 			}
 		}
