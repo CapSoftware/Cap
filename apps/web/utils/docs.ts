@@ -83,7 +83,8 @@ export const getAllDocs = cache(function getAllDocs(): Doc[] {
 });
 
 export function getDocBySlug(slug: string): Doc | undefined {
-	const filePath = path.join(docsDir, `${slug}.mdx`);
+	const filePath = path.resolve(docsDir, `${slug}.mdx`);
+	if (!filePath.startsWith(docsDir)) return undefined;
 	if (!fs.existsSync(filePath)) return undefined;
 	const { metadata, content } = parseFrontmatter(
 		fs.readFileSync(filePath, "utf-8"),
