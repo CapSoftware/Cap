@@ -96,24 +96,39 @@ export async function getDeveloperApps(
 		}
 	}
 
+	const domainsByApp = new Map<string, (typeof allDomains)[number][]>();
+	for (const d of allDomains) {
+		const list = domainsByApp.get(d.appId) ?? [];
+		list.push(d);
+		domainsByApp.set(d.appId, list);
+	}
+
+	const keysByApp = new Map<string, (typeof allApiKeys)[number][]>();
+	for (const k of allApiKeys) {
+		const list = keysByApp.get(k.appId) ?? [];
+		list.push(k);
+		keysByApp.set(k.appId, list);
+	}
+
+	const accountsByApp = new Map(allCreditAccounts.map((c) => [c.appId, c]));
+	const countsByApp = new Map(allVideoCounts.map((v) => [v.appId, v.count]));
+
 	return apps.map((app) => ({
 		...app,
-		domains: allDomains.filter((d) => d.appId === app.id),
-		apiKeys: allApiKeys
-			.filter((k) => k.appId === app.id)
-			.map((k) => ({
-				id: k.id,
-				keyType: k.keyType,
-				keyPrefix: k.keyPrefix,
-				createdAt: k.createdAt,
-				revokedAt: k.revokedAt,
-				fullKey:
-					k.keyType === "public"
-						? (decryptedPublicKeys.get(k.id) ?? `${k.keyPrefix}...`)
-						: undefined,
-			})),
-		creditAccount: allCreditAccounts.find((c) => c.appId === app.id) ?? null,
-		videoCount: allVideoCounts.find((v) => v.appId === app.id)?.count ?? 0,
+		domains: domainsByApp.get(app.id) ?? [],
+		apiKeys: (keysByApp.get(app.id) ?? []).map((k) => ({
+			id: k.id,
+			keyType: k.keyType,
+			keyPrefix: k.keyPrefix,
+			createdAt: k.createdAt,
+			revokedAt: k.revokedAt,
+			fullKey:
+				k.keyType === "public"
+					? (decryptedPublicKeys.get(k.id) ?? `${k.keyPrefix}...`)
+					: undefined,
+		})),
+		creditAccount: accountsByApp.get(app.id) ?? null,
+		videoCount: countsByApp.get(app.id) ?? 0,
 	}));
 }
 
