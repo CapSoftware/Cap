@@ -28,7 +28,7 @@ async function getAuth(c: Context) {
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
 	} else {
-		if (authHeader)
+		if (authHeader && /^[a-zA-Z0-9._-]+$/.test(authHeader))
 			(await cookies()).set({
 				name: "next-auth.session-token",
 				value: authHeader,
