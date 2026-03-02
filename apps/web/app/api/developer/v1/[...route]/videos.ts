@@ -14,8 +14,8 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 	const userId = c.req.query("userId");
-	const limit = Math.min(Number(c.req.query("limit") ?? 50), 100);
-	const offset = Number(c.req.query("offset") ?? 0);
+	const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 100);
+	const offset = Math.max(0, Number(c.req.query("offset") ?? 0) || 0);
 
 	const conditions = [
 		eq(developerVideos.appId, appId),
