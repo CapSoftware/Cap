@@ -1,13 +1,14 @@
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import { users } from "@cap/database/schema";
+import { developerCreditTransactions, users } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
+import { addCreditsToAccount } from "@/actions/developers/purchase-credits";
 
 const relevantEvents = new Set([
 	"checkout.session.completed",
@@ -143,6 +144,65 @@ export const POST = async (req: Request) => {
 					customerId: session.customer,
 					subscriptionId: session.subscription,
 				});
+
+				if (session.metadata?.type === "developer_credits") {
+					const { accountId, amountCents } = session.metadata;
+					const paymentIntentId =
+						typeof session.payment_intent === "string"
+							? session.payment_intent
+							: null;
+
+					if (!accountId || !amountCents || !paymentIntentId) {
+						console.error(
+							"Missing required metadata for developer credits:",
+							{ accountId, amountCents, paymentIntentId },
+						);
+						return new Response("Missing metadata", { status: 400 });
+					}
+
+					console.log("Processing developer credits purchase:", {
+						accountId,
+						amountCents,
+						paymentIntentId,
+					});
+
+					const [existingTxn] = await db()
+						.select({ id: developerCreditTransactions.id })
+						.from(developerCreditTransactions)
+						.where(
+							and(
+								eq(developerCreditTransactions.accountId, accountId),
+								eq(developerCreditTransactions.referenceId, paymentIntentId),
+								eq(
+									developerCreditTransactions.referenceType,
+									"stripe_payment_intent",
+								),
+							),
+						)
+						.limit(1);
+
+					if (existingTxn) {
+						console.log(
+							"Duplicate webhook delivery — transaction already exists:",
+							existingTxn.id,
+						);
+						return NextResponse.json({ received: true });
+					}
+
+					await addCreditsToAccount({
+						accountId,
+						amountCents: Number(amountCents),
+						referenceId: paymentIntentId,
+						referenceType: "stripe_payment_intent",
+						metadata: {
+							amountCents: Number(amountCents),
+							stripeSessionId: session.id,
+						},
+					});
+
+					console.log("Developer credits added successfully");
+					return NextResponse.json({ received: true });
+				}
 
 				const customer = await stripe().customers.retrieve(
 					session.customer as string,
