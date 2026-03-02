@@ -94,7 +94,9 @@ export class CapRecorder {
 			for (const handler of handlers) {
 				try {
 					handler(data);
-				} catch {}
+				} catch (err) {
+					console.error(`CapRecorder: error in "${event}" handler:`, err);
+				}
 			}
 		}
 	}
