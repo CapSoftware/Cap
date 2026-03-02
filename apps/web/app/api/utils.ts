@@ -105,9 +105,19 @@ export const withDeveloperPublicAuth = createMiddleware<{
 	}
 
 	const keyHash = await hashKey(authHeader);
-	const [keyRow] = await db()
-		.select({ appId: developerApiKeys.appId })
+	const [row] = await db()
+		.select({
+			appId: developerApps.id,
+			environment: developerApps.environment,
+		})
 		.from(developerApiKeys)
+		.innerJoin(
+			developerApps,
+			and(
+				eq(developerApiKeys.appId, developerApps.id),
+				isNull(developerApps.deletedAt),
+			),
+		)
 		.where(
 			and(
 				eq(developerApiKeys.keyHash, keyHash),
@@ -117,24 +127,12 @@ export const withDeveloperPublicAuth = createMiddleware<{
 		)
 		.limit(1);
 
-	if (!keyRow) {
+	if (!row) {
 		return c.json({ error: "Invalid or revoked public key" }, 401);
 	}
 
-	const [app] = await db()
-		.select()
-		.from(developerApps)
-		.where(
-			and(eq(developerApps.id, keyRow.appId), isNull(developerApps.deletedAt)),
-		)
-		.limit(1);
-
-	if (!app) {
-		return c.json({ error: "App not found" }, 401);
-	}
-
 	const origin = c.req.header("origin");
-	if (app.environment === "production") {
+	if (row.environment === "production") {
 		if (!origin) {
 			return c.json(
 				{ error: "Origin header required for production apps" },
@@ -142,11 +140,11 @@ export const withDeveloperPublicAuth = createMiddleware<{
 			);
 		}
 		const [allowedDomain] = await db()
-			.select()
+			.select({ id: developerAppDomains.id })
 			.from(developerAppDomains)
 			.where(
 				and(
-					eq(developerAppDomains.appId, app.id),
+					eq(developerAppDomains.appId, row.appId),
 					eq(developerAppDomains.domain, origin),
 				),
 			)
@@ -163,7 +161,7 @@ export const withDeveloperPublicAuth = createMiddleware<{
 		.where(eq(developerApiKeys.keyHash, keyHash))
 		.catch(() => {});
 
-	c.set("developerAppId", app.id);
+	c.set("developerAppId", row.appId);
 	c.set("developerKeyType", "public" as const);
 	await next();
 });
@@ -180,9 +178,16 @@ export const withDeveloperSecretAuth = createMiddleware<{
 	}
 
 	const keyHash = await hashKey(authHeader);
-	const [keyRow] = await db()
-		.select({ appId: developerApiKeys.appId })
+	const [row] = await db()
+		.select({ appId: developerApps.id })
 		.from(developerApiKeys)
+		.innerJoin(
+			developerApps,
+			and(
+				eq(developerApiKeys.appId, developerApps.id),
+				isNull(developerApps.deletedAt),
+			),
+		)
 		.where(
 			and(
 				eq(developerApiKeys.keyHash, keyHash),
@@ -192,20 +197,8 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		)
 		.limit(1);
 
-	if (!keyRow) {
+	if (!row) {
 		return c.json({ error: "Invalid or revoked secret key" }, 401);
-	}
-
-	const [app] = await db()
-		.select()
-		.from(developerApps)
-		.where(
-			and(eq(developerApps.id, keyRow.appId), isNull(developerApps.deletedAt)),
-		)
-		.limit(1);
-
-	if (!app) {
-		return c.json({ error: "App not found" }, 401);
 	}
 
 	db()
@@ -214,7 +207,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		.where(eq(developerApiKeys.keyHash, keyHash))
 		.catch(() => {});
 
-	c.set("developerAppId", app.id);
+	c.set("developerAppId", row.appId);
 	c.set("developerKeyType", "secret" as const);
 	await next();
 });
