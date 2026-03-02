@@ -44,7 +44,10 @@ export class MultipartClient {
 	async uploadBlob(
 		videoId: string,
 		blob: Blob,
-		onProgress?: (progress: number) => void,
+		options?: {
+			durationMs?: number;
+			onProgress?: (progress: number) => void;
+		},
 	): Promise<void> {
 		const { uploadId } = await this.request("/upload/multipart/initiate", {
 			videoId,
@@ -93,13 +96,16 @@ export class MultipartClient {
 				size: end - start,
 			});
 
-			onProgress?.(completedParts.length / totalParts);
+			options?.onProgress?.(completedParts.length / totalParts);
 		}
+
+		const durationInSecs = options?.durationMs ? options.durationMs / 1000 : 1;
 
 		await this.request("/upload/multipart/complete", {
 			videoId,
 			uploadId,
 			parts: completedParts,
+			durationInSecs,
 		});
 	}
 }
