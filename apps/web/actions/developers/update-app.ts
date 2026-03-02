@@ -30,7 +30,11 @@ export async function updateDeveloperApp(data: {
 	if (!app) throw new Error("App not found");
 
 	const updates: Partial<typeof developerApps.$inferInsert> = {};
-	if (data.name !== undefined) updates.name = data.name.trim();
+	if (data.name !== undefined) {
+		const trimmed = data.name.trim();
+		if (!trimmed) throw new Error("App name cannot be empty");
+		updates.name = trimmed;
+	}
 	if (data.environment !== undefined) updates.environment = data.environment;
 	if (data.logoUrl !== undefined) updates.logoUrl = data.logoUrl;
 
