@@ -310,10 +310,7 @@ app.post(
 		try {
 			await Effect.gen(function* () {
 				const [bucket] = yield* S3Buckets.getBucketAccess();
-				const multipart = bucket.multipart as typeof bucket.multipart & {
-					abort: (key: string, uploadId: string) => Effect.Effect<void>;
-				};
-				yield* multipart.abort(s3Key, uploadId);
+				yield* bucket.multipart.abort(s3Key, uploadId);
 			}).pipe(provideOptionalAuth, runPromise);
 
 			return c.json({ success: true });
