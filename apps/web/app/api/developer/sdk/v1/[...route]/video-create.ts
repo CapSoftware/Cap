@@ -3,7 +3,7 @@ import { nanoId } from "@cap/database/helpers";
 import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withDeveloperPublicAuth } from "../../../../utils";
@@ -37,18 +37,26 @@ app.post(
 		const appId = c.get("developerAppId");
 		const body = c.req.valid("json");
 
-		const [account] = await db()
-			.select()
-			.from(developerCreditAccounts)
-			.where(eq(developerCreditAccounts.appId, appId))
-			.limit(1);
+		const [result] = await db()
+			.update(developerCreditAccounts)
+			.set({
+				balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${MIN_BALANCE_MICRO_CREDITS}`,
+			})
+			.where(
+				and(
+					eq(developerCreditAccounts.appId, appId),
+					sql`${developerCreditAccounts.balanceMicroCredits} >= ${MIN_BALANCE_MICRO_CREDITS}`,
+				),
+			);
 
-		if (!account || account.balanceMicroCredits < MIN_BALANCE_MICRO_CREDITS) {
+		const affectedRows =
+			(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
+		if (affectedRows === 0) {
 			return c.json({ error: "Insufficient credits" }, 402);
 		}
 
 		const videoId = nanoId();
-		const s3Key = `developer/${appId}/${videoId}/result.mp4`;
+		const s3Key = `developer/${appId}/${videoId}/video`;
 
 		await db()
 			.insert(developerVideos)
