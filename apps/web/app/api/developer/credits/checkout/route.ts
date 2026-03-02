@@ -17,7 +17,14 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const { appId, amountCents } = await request.json();
+	let body: { appId?: string; amountCents?: number };
+	try {
+		body = await request.json();
+	} catch {
+		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+	}
+
+	const { appId, amountCents } = body;
 
 	if (
 		!appId ||
