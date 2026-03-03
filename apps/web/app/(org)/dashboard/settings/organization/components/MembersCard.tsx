@@ -30,13 +30,13 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { calculateSeats } from "@/utils/organization";
 
 interface MembersCardProps {
-	isOwner: boolean;
+	canManageMembers: boolean;
 	showOwnerToast: () => void;
 	setIsInviteDialogOpen: (isOpen: boolean) => void;
 }
 
 export const MembersCard = ({
-	isOwner,
+	canManageMembers,
 	showOwnerToast,
 	setIsInviteDialogOpen,
 }: MembersCardProps) => {
@@ -179,13 +179,13 @@ export const MembersCard = ({
 						variant="dark"
 						className="px-6 min-w-auto"
 						onClick={() => {
-							if (!isOwner) {
+							if (!canManageMembers) {
 								showOwnerToast();
 								return;
 							}
 							setIsInviteDialogOpen(true);
 						}}
-						disabled={!isOwner}
+						disabled={!canManageMembers}
 					>
 						+ Invite users
 					</Button>
@@ -224,7 +224,7 @@ export const MembersCard = ({
 														})
 													}
 													disabled={
-														!isOwner ||
+														!canManageMembers ||
 														(toggleProSeatMutation.isPending &&
 															toggleProSeatMutation.variables?.memberId ===
 																member.id) ||
@@ -246,7 +246,7 @@ export const MembersCard = ({
 												variant="destructive"
 												className="min-w-[unset] h-[28px]"
 												onClick={() => {
-													if (isOwner) {
+													if (canManageMembers) {
 														handleRemoveMember({
 															id: member.id,
 															user: {
@@ -258,7 +258,7 @@ export const MembersCard = ({
 														showOwnerToast();
 													}
 												}}
-												disabled={!isOwner}
+												disabled={!canManageMembers}
 											>
 												Remove
 											</Button>
@@ -283,13 +283,15 @@ export const MembersCard = ({
 										size="xs"
 										variant="destructive"
 										onClick={() => {
-											if (isOwner) {
+											if (canManageMembers) {
 												deleteInviteMutation.mutate(invite.id);
 											} else {
 												showOwnerToast();
 											}
 										}}
-										disabled={!isOwner || deletingInviteId === invite.id}
+										disabled={
+											!canManageMembers || deletingInviteId === invite.id
+										}
 									>
 										{deletingInviteId === invite.id
 											? "Deleting..."
