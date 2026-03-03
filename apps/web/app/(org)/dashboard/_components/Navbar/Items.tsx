@@ -44,6 +44,7 @@ import {
 	RecordIcon,
 } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
+import { MemberAvatars } from "./MemberAvatars";
 import SpacesList from "./SpacesList";
 import { updateActiveOrganization } from "./server";
 
@@ -94,6 +95,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			name: "Organization Settings",
 			href: `/dashboard/settings/organization`,
 			ownerOnly: true,
+			matchChildren: true,
 			icon: <CogIcon />,
 			subNav: [],
 		},
@@ -300,6 +302,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					</PopoverTrigger>
 				</Tooltip>
 			</Popover>
+			<MemberAvatars />
 			<nav
 				className="flex flex-col justify-between w-full h-full"
 				aria-label="Sidebar"
