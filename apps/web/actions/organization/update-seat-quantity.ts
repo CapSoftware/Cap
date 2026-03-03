@@ -102,7 +102,7 @@ export async function previewSeatChange(
 		subscription_proration_behavior: "create_prorations",
 	});
 
-	const currentQuantity = subscriptionItem.quantity || 1;
+	const currentQuantity = subscriptionItem.quantity ?? 1;
 	const proratedAmount = preview.amount_due;
 	const nextPaymentDate = preview.period_end;
 
