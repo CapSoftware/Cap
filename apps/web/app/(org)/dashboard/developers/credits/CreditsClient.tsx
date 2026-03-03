@@ -12,7 +12,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
+
 import { CreditTransactionTable } from "../_components/CreditTransactionTable";
 import { StatBox } from "../_components/StatBox";
 import { useDevelopersContext } from "../DevelopersContext";
@@ -37,7 +37,6 @@ export function CreditsClient({
 
 	const app = apps.find((a) => a.id === selectedApp);
 	const balance = app?.creditAccount?.balanceMicroCredits ?? 0;
-	const autoTopUp = app?.creditAccount?.autoTopUpEnabled ?? false;
 
 	useEffect(() => {
 		if (searchParams.get("purchase") === "success") {
@@ -67,21 +66,6 @@ export function CreditsClient({
 				error instanceof Error ? error.message : "Failed to purchase credits",
 			);
 		},
-	});
-
-	const autoTopUpMutation = useMutation({
-		mutationFn: (enabled: boolean) =>
-			updateDeveloperAutoTopUp({
-				appId: selectedApp,
-				enabled,
-				thresholdMicroCredits: 500_000,
-				amountCents: 2500,
-			}),
-		onSuccess: () => {
-			toast.success("Auto top-up updated");
-			router.refresh();
-		},
-		onError: () => toast.error("Failed to update auto top-up"),
 	});
 
 	return (
@@ -161,20 +145,19 @@ export function CreditsClient({
 
 				<Card>
 					<CardHeader>
-						<CardTitle>Auto Top-Up</CardTitle>
+						<CardTitle className="flex items-center gap-2">
+							Auto Top-Up
+							<span className="text-xs font-normal px-2 py-0.5 rounded-full bg-gray-3 text-gray-11">
+								Coming soon
+							</span>
+						</CardTitle>
 						<CardDescription>
 							Automatically add $25 when balance drops below $5.
 						</CardDescription>
 					</CardHeader>
 					<div className="mt-4">
-						<Button
-							variant={autoTopUp ? "dark" : "gray"}
-							size="sm"
-							spinner={autoTopUpMutation.isPending}
-							disabled={autoTopUpMutation.isPending || !selectedApp}
-							onClick={() => autoTopUpMutation.mutate(!autoTopUp)}
-						>
-							{autoTopUp ? "Disable Auto Top-Up" : "Enable Auto Top-Up"}
+						<Button variant="gray" size="sm" disabled>
+							Enable Auto Top-Up
 						</Button>
 					</div>
 				</Card>
