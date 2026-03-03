@@ -38,9 +38,10 @@ export const NotificationItem = ({
 	};
 
 	const isAnonView = notification.type === "anon_view";
-	const displayName = isAnonView
-		? notification.anonName
-		: notification.author.name;
+	const displayName =
+		notification.type === "anon_view"
+			? notification.anonName
+			: notification.author.name;
 
 	return (
 		<Link
@@ -52,18 +53,16 @@ export const NotificationItem = ({
 			)}
 		>
 			<div className="relative flex-shrink-0">
-				{isAnonView ? (
-					<div className="relative flex-shrink-0 size-7 rounded-full bg-gray-3 flex items-center justify-center text-sm">
-						🐾
-					</div>
-				) : (
-					<SignedImageUrl
-						image={notification.author.avatar as ImageUpload.ImageUrl | null}
-						name={notification.author.name}
-						className="relative flex-shrink-0 size-7"
-						letterClass="text-sm"
-					/>
-				)}
+				<SignedImageUrl
+					image={
+						isAnonView
+							? null
+							: (notification.author.avatar as ImageUpload.ImageUrl | null)
+					}
+					name={displayName}
+					className="relative flex-shrink-0 size-7"
+					letterClass="text-sm"
+				/>
 				{notification.readAt === null && (
 					<div className="absolute top-0 right-0 size-2.5 rounded-full bg-red-500 border-2 border-gray-1"></div>
 				)}
