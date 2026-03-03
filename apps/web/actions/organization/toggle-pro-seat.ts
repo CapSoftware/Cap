@@ -65,7 +65,8 @@ export async function toggleProSeat(
 					hasProSeat: organizationMembers.hasProSeat,
 				})
 				.from(organizationMembers)
-				.where(eq(organizationMembers.organizationId, organizationId));
+				.where(eq(organizationMembers.organizationId, organizationId))
+				.for("update");
 
 			const [owner] = await tx
 				.select({
