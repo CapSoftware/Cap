@@ -96,7 +96,7 @@ export async function previewSeatChange(
 		);
 	}
 
-	const preview = await stripe().invoices.retrieveUpcoming({
+	const previewParams = {
 		customer: customerId,
 		subscription: subscriptionId,
 		subscription_items: [
@@ -105,11 +105,21 @@ export async function previewSeatChange(
 				quantity: newQuantity,
 			},
 		],
-		subscription_proration_behavior: "create_prorations",
-	});
+		subscription_proration_behavior: "create_prorations" as const,
+	};
+
+	const preview = await stripe().invoices.retrieveUpcoming(previewParams);
+	const previewLines = preview.lines.has_more
+		? await stripe()
+				.invoices.listUpcomingLines(previewParams)
+				.autoPagingToArray({ limit: 1000 })
+		: preview.lines.data;
 
 	const currentQuantity = subscriptionItem.quantity ?? 1;
-	const proratedAmount = preview.amount_due;
+	const proratedAmount = previewLines.reduce((total, line) => {
+		if (!line.proration) return total;
+		return total + line.amount;
+	}, 0);
 	const nextPaymentDate = preview.period_end;
 
 	return {
