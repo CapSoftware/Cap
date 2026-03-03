@@ -99,18 +99,18 @@ export async function POST(request: NextRequest) {
 					return currentUser.id;
 				},
 			});
-			const ownerId = userId
-				? yield* Effect.tryPromise(() =>
-						db()
-							.select({ ownerId: videos.ownerId })
-							.from(videos)
-							.where(eq(videos.id, Video.VideoId.make(body.videoId)))
-							.limit(1)
-							.then((rows) => rows[0]?.ownerId ?? null),
-					).pipe(Effect.orElseSucceed(() => body.ownerId ?? null))
-				: (body.ownerId ?? null);
-			if (userId && ownerId && userId === ownerId) {
-				return;
+			if (userId && body.ownerId && userId === body.ownerId) {
+				const ownerIdResult = yield* Effect.tryPromise(() =>
+					db()
+						.select({ ownerId: videos.ownerId })
+						.from(videos)
+						.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+						.limit(1)
+						.then((rows) => rows[0]?.ownerId ?? null),
+				).pipe(Effect.orElseSucceed(() => null as string | null));
+				if (ownerIdResult && userId === ownerIdResult) {
+					return;
+				}
 			}
 
 			const tinybird = yield* Tinybird;
