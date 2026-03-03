@@ -22,7 +22,7 @@ export async function removeOrganizationInvite(
 	}
 
 	const [organization] = await db()
-		.select()
+		.select({ id: organizations.id })
 		.from(organizations)
 		.where(eq(organizations.id, organizationId))
 		.limit(1);

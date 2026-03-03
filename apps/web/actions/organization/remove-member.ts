@@ -14,7 +14,7 @@ export async function removeOrganizationMember(
 	if (!user) throw new Error("Unauthorized");
 
 	const [organization] = await db()
-		.select()
+		.select({ id: organizations.id })
 		.from(organizations)
 		.where(eq(organizations.id, organizationId))
 		.limit(1);
