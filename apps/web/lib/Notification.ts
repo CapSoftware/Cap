@@ -1,6 +1,3 @@
-// Ideally all the Notification-related types would be in @cap/web-domain
-// but @cap/web-api-contract is the closest we have right now
-
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
@@ -13,7 +10,6 @@ import { getSessionHash } from "@/lib/anonymous-names";
 
 export type NotificationType = Notification["type"];
 
-// Notification daata without id, readTime, etc
 type NotificationSpecificData = DistributiveOmit<
 	Notification,
 	keyof NotificationBase
@@ -76,7 +72,6 @@ export async function createNotification(
 
 		const { type, ...data } = notification;
 
-		// Handle replies: notify the parent comment's author
 		if (type === "reply" && notification.parentCommentId) {
 			const [parentComment] = await db()
 				.select({ authorId: comments.authorId })
@@ -135,13 +130,10 @@ export async function createNotification(
 			return { success: true, notificationId };
 		}
 
-		// Skip notification if the video owner is the current user
-		// (this only applies to non-reply types)
 		if (videoResult.ownerId === notification.authorId) {
 			return;
 		}
 
-		// Check user preferences
 		const preferences = videoResult.preferences as UserPreferences;
 		if (preferences?.notifications) {
 			const notificationPrefs = preferences.notifications;
@@ -156,7 +148,6 @@ export async function createNotification(
 			}
 		}
 
-		// Check for existing notification to prevent duplicates
 		let hasExistingNotification = false;
 		if (type === "view") {
 			const [existingNotification] = await db()
