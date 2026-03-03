@@ -221,57 +221,36 @@ export async function createAnonymousViewNotification({
 	anonName: string;
 	location: string | null;
 }) {
-	try {
-		const sessionHash = getSessionHash(sessionId);
+	const sessionHash = getSessionHash(sessionId);
 
-		const [videoExists] = await db()
-			.select({ id: videos.id, ownerId: videos.ownerId })
-			.from(videos)
-			.where(eq(videos.id, Video.VideoId.make(videoId)))
-			.limit(1);
+	const [videoWithOwner] = await db()
+		.select({
+			videoId: videos.id,
+			ownerId: users.id,
+			activeOrganizationId: users.activeOrganizationId,
+			preferences: users.preferences,
+		})
+		.from(videos)
+		.innerJoin(users, eq(users.id, videos.ownerId))
+		.where(eq(videos.id, Video.VideoId.make(videoId)))
+		.limit(1);
 
-		if (!videoExists) return;
+	if (!videoWithOwner?.activeOrganizationId) return;
 
-		const [ownerResult] = await db()
-			.select({
-				id: users.id,
-				activeOrganizationId: users.activeOrganizationId,
-				preferences: users.preferences,
-			})
-			.from(users)
-			.where(eq(users.id, videoExists.ownerId))
-			.limit(1);
+	const preferences = videoWithOwner.preferences as UserPreferences;
+	if (preferences?.notifications?.pauseViews) return;
 
-		if (!ownerResult?.activeOrganizationId) return;
+	const dedupKey = `anon_view:${videoId}:${sessionHash}`;
 
-		const preferences = ownerResult.preferences as UserPreferences;
-		if (preferences?.notifications?.pauseViews) return;
-
-		const [existing] = await db()
-			.select({ id: notifications.id })
-			.from(notifications)
-			.where(
-				and(
-					eq(notifications.type, "anon_view"),
-					eq(notifications.recipientId, ownerResult.id),
-					sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${videoId}`,
-					sql`JSON_EXTRACT(${notifications.data}, '$.sessionHash') = ${sessionHash}`,
-				),
-			)
-			.limit(1);
-
-		if (existing) return;
-
-		await db().insert(notifications).values({
+	await db()
+		.insert(notifications)
+		.values({
 			id: nanoId(),
-			orgId: ownerResult.activeOrganizationId,
-			recipientId: ownerResult.id,
+			orgId: videoWithOwner.activeOrganizationId,
+			recipientId: videoWithOwner.ownerId,
 			type: "anon_view",
 			data: { videoId, sessionHash, anonName, location },
-		});
-
-		revalidatePath("/dashboard");
-	} catch (error) {
-		console.error("Error creating anonymous view notification:", error);
-	}
+			dedupKey,
+		})
+		.onDuplicateKeyUpdate({ set: { id: sql`id` } });
 }
