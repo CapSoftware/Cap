@@ -83,6 +83,12 @@ export async function previewSeatChange(
 	validateQuantity(newQuantity);
 	const { owner, subscriptionItem, proSeatsUsed } =
 		await getOwnerSubscription(organizationId);
+	const customerId = owner.stripeCustomerId;
+	const subscriptionId = owner.stripeSubscriptionId;
+
+	if (!customerId || !subscriptionId) {
+		throw new Error("No active subscription found");
+	}
 
 	if (newQuantity < proSeatsUsed) {
 		throw new Error(
@@ -91,8 +97,8 @@ export async function previewSeatChange(
 	}
 
 	const preview = await stripe().invoices.retrieveUpcoming({
-		customer: owner.stripeCustomerId,
-		subscription: owner.stripeSubscriptionId,
+		customer: customerId,
+		subscription: subscriptionId,
 		subscription_items: [
 			{
 				id: subscriptionItem.id,
