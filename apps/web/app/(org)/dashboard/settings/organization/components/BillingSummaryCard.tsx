@@ -19,16 +19,19 @@ export function BillingSummaryCard() {
 	const [billingLoading, setBillingLoading] = useState(false);
 	const organizationId = activeOrganization?.organization.id;
 
-	const { data: subscription, isLoading } =
-		useQuery<SubscriptionDetails | null>({
-			queryKey: ["subscription-details", organizationId],
-			queryFn: () => {
-				if (!organizationId) return null;
-				return getSubscriptionDetails(organizationId);
-			},
-			enabled: !!organizationId,
-			staleTime: 60 * 1000,
-		});
+	const {
+		data: subscription,
+		isLoading,
+		isError,
+	} = useQuery<SubscriptionDetails | null>({
+		queryKey: ["subscription-details", organizationId],
+		queryFn: () => {
+			if (!organizationId) return null;
+			return getSubscriptionDetails(organizationId);
+		},
+		enabled: !!organizationId,
+		staleTime: 60 * 1000,
+	});
 
 	const handleManageBilling = useCallback(async () => {
 		setBillingLoading(true);
@@ -50,6 +53,16 @@ export function BillingSummaryCard() {
 					<div className="h-4 w-48 bg-gray-4 rounded" />
 					<div className="h-4 w-40 bg-gray-4 rounded" />
 				</div>
+			</Card>
+		);
+	}
+
+	if (isError) {
+		return (
+			<Card>
+				<p className="text-sm text-gray-10">
+					Unable to load billing details. Please try again later.
+				</p>
 			</Card>
 		);
 	}
