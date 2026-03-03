@@ -223,6 +223,7 @@ export const organizationMembers = mysqlTable(
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.$type<OrganisationMemberRole>(),
+		hasProSeat: boolean("hasProSeat").default(false).notNull(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
