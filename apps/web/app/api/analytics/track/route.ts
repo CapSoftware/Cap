@@ -22,10 +22,10 @@ interface TrackPayload {
 	occurredAt?: string;
 }
 
-const sanitizeString = (value?: string | null) =>
-	value?.trim() && value.trim() !== "unknown"
-		? value.trim().slice(0, 256)
-		: undefined;
+const sanitizeString = (value?: string | null) => {
+	const trimmed = value?.trim();
+	return trimmed && trimmed !== "unknown" ? trimmed.slice(0, 256) : undefined;
+};
 
 const decodeUrlEncodedHeaderValue = (value?: string | null) => {
 	if (!value) return value;
