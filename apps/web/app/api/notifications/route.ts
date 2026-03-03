@@ -3,9 +3,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { notifications, users } from "@cap/database/schema";
 import { Notification as APINotification } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
+import type { NotificationType } from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 import { jsonExtractString } from "@/utils/sql";
 
@@ -38,7 +39,10 @@ export async function GET() {
 			.from(notifications)
 			.leftJoin(
 				users,
-				and(eq(jsonExtractString(notifications.data, "authorId"), users.id)),
+				and(
+					ne(notifications.type, "anon_view"),
+					eq(jsonExtractString(notifications.data, "authorId"), users.id),
+				),
 			)
 			.where(
 				and(
@@ -65,7 +69,8 @@ export async function GET() {
 			)
 			.groupBy(notifications.type);
 
-		const formattedCountResults: Record<string, number> = {
+		type NotificationCountKey = Exclude<NotificationType, "anon_view">;
+		const formattedCountResults: Record<NotificationCountKey, number> = {
 			view: 0,
 			comment: 0,
 			reply: 0,
@@ -74,11 +79,9 @@ export async function GET() {
 
 		for (const { type, count } of countResults) {
 			if (type === "anon_view") {
-				formattedCountResults.view =
-					(formattedCountResults.view ?? 0) + Number(count);
-			} else {
-				formattedCountResults[type] =
-					(formattedCountResults[type] ?? 0) + Number(count);
+				formattedCountResults.view += Number(count);
+			} else if (type in formattedCountResults) {
+				formattedCountResults[type as NotificationCountKey] += Number(count);
 			}
 		}
 
