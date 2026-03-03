@@ -1,3 +1,4 @@
+import "server-only";
 import { createHash } from "node:crypto";
 
 const ANIMALS = [
@@ -35,21 +36,16 @@ const ANIMALS = [
 	"Bison",
 ] as const;
 
-function hashSessionId(sessionId: string): number {
-	let hash = 0;
-	for (let i = 0; i < sessionId.length; i++) {
-		const char = sessionId.charCodeAt(i);
-		hash = (hash << 5) - hash + char;
-		hash |= 0;
-	}
-	return hash >>> 0;
+function getSessionDigest(sessionId: string): string {
+	return createHash("sha256").update(sessionId).digest("hex");
 }
 
 export function getAnonymousName(sessionId: string): string {
-	const index = hashSessionId(sessionId) % ANIMALS.length;
+	const digest = getSessionDigest(sessionId);
+	const index = Number.parseInt(digest.slice(0, 8), 16) % ANIMALS.length;
 	return `Anonymous ${ANIMALS[index]}`;
 }
 
 export function getSessionHash(sessionId: string): string {
-	return createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
+	return getSessionDigest(sessionId);
 }
