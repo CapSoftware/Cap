@@ -81,7 +81,7 @@ export async function previewSeatChange(
 	newQuantity: number,
 ) {
 	validateQuantity(newQuantity);
-	const { owner, subscriptionItem, proSeatsUsed } =
+	const { owner, subscription, subscriptionItem, proSeatsUsed } =
 		await getOwnerSubscription(organizationId);
 	const customerId = owner.stripeCustomerId;
 	const subscriptionId = owner.stripeSubscriptionId;
@@ -95,6 +95,8 @@ export async function previewSeatChange(
 			`Cannot reduce below ${proSeatsUsed} seats (currently assigned)`,
 		);
 	}
+
+	const currentQuantity = subscriptionItem.quantity ?? 1;
 
 	const previewParams = {
 		customer: customerId,
@@ -115,11 +117,21 @@ export async function previewSeatChange(
 				.autoPagingToArray({ limit: 1000 })
 		: preview.lines.data;
 
-	const currentQuantity = subscriptionItem.quantity ?? 1;
-	const proratedAmount = previewLines.reduce((total, line) => {
+	let proratedAmount = previewLines.reduce((total, line) => {
 		if (!line.proration) return total;
 		return total + line.amount;
 	}, 0);
+
+	if (proratedAmount === 0 && newQuantity !== currentQuantity) {
+		const currentPeriodEnd = subscription.current_period_end;
+		proratedAmount = previewLines.reduce((total, line) => {
+			if (line.period.end <= currentPeriodEnd) {
+				return total + line.amount;
+			}
+			return total;
+		}, 0);
+	}
+
 	const nextPaymentDate = preview.period_end;
 
 	return {
