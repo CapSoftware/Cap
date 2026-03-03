@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
 				.where(eq(organizations.id, invite.organizationId))
 				.limit(1);
 
-			if (org && memberId) {
+			if (org && memberId && !existingMembership) {
 				const [owner] = await tx
 					.select({
 						inviteQuota: users.inviteQuota,
