@@ -129,10 +129,8 @@ export async function POST(request: NextRequest) {
 
 			const userUpdate: Partial<typeof users.$inferInsert> = {
 				onboardingSteps,
+				activeOrganizationId: invite.organizationId,
 			};
-			if (!user.activeOrganizationId) {
-				userUpdate.activeOrganizationId = invite.organizationId;
-			}
 			if (!user.defaultOrgId) {
 				userUpdate.defaultOrgId = invite.organizationId;
 			}
