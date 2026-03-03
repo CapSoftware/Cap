@@ -159,8 +159,9 @@ export function SeatManagementCard() {
 								</span>
 							) : preview ? (
 								<span className="text-sm text-gray-11">
-									Prorated charge: ${(preview.proratedAmount / 100).toFixed(2)}{" "}
-									{preview.currency.toUpperCase()}
+									{preview.proratedAmount === 0
+										? "No prorated adjustment"
+										: `${preview.proratedAmount > 0 ? "Prorated charge" : "Prorated credit"}: $${Math.abs(preview.proratedAmount / 100).toFixed(2)} ${preview.currency.toUpperCase()}`}
 								</span>
 							) : null}
 							<Button
