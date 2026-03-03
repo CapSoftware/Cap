@@ -48,9 +48,10 @@ export const FilterTabs = ({
 		>
 			{Filters.map((filter) => (
 				<div key={filter} className="relative min-w-fit">
-					<div
+					<button
+						type="button"
 						onClick={() => setActiveFilter(filter)}
-						className="flex relative gap-2 items-center py-4 cursor-pointer group"
+						className="flex relative gap-2 items-center py-4 cursor-pointer group bg-transparent border-0"
 					>
 						<p
 							className={clsx(
@@ -78,7 +79,7 @@ export const FilterTabs = ({
 								</p>
 							)}
 						</div>
-					</div>
+					</button>
 
 					{/* Indicator */}
 					{activeFilter === filter && (
