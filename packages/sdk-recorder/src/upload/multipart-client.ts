@@ -61,41 +61,52 @@ export class MultipartClient {
 			size: number;
 		}> = [];
 
-		for (let i = 0; i < totalParts; i++) {
-			const start = i * CHUNK_SIZE;
-			const end = Math.min(start + CHUNK_SIZE, blob.size);
-			const chunk = blob.slice(start, end);
-			const partNumber = i + 1;
-
-			const { presignedUrl } = await this.request(
-				"/upload/multipart/presign-part",
-				{
-					videoId,
-					uploadId,
-					partNumber,
-				},
+		const CONCURRENCY = 3;
+		for (let i = 0; i < totalParts; i += CONCURRENCY) {
+			const batch = Array.from(
+				{ length: Math.min(CONCURRENCY, totalParts - i) },
+				(_, j) => i + j,
 			);
 
-			const uploadResponse = await fetch(presignedUrl, {
-				method: "PUT",
-				body: chunk,
-			});
+			const results = await Promise.all(
+				batch.map(async (idx) => {
+					const start = idx * CHUNK_SIZE;
+					const end = Math.min(start + CHUNK_SIZE, blob.size);
+					const chunk = blob.slice(start, end);
+					const partNumber = idx + 1;
 
-			if (!uploadResponse.ok) {
-				await this.request("/upload/multipart/abort", {
-					videoId,
-					uploadId,
-				});
-				throw new Error(`Failed to upload part ${partNumber}`);
-			}
+					const { presignedUrl } = await this.request(
+						"/upload/multipart/presign-part",
+						{
+							videoId,
+							uploadId,
+							partNumber,
+						},
+					);
 
-			const etag = uploadResponse.headers.get("ETag") ?? "";
-			completedParts.push({
-				partNumber,
-				etag,
-				size: end - start,
-			});
+					const uploadResponse = await fetch(presignedUrl, {
+						method: "PUT",
+						body: chunk,
+					});
 
+					if (!uploadResponse.ok) {
+						await this.request("/upload/multipart/abort", {
+							videoId,
+							uploadId,
+						});
+						throw new Error(`Failed to upload part ${partNumber}`);
+					}
+
+					const etag = uploadResponse.headers.get("ETag") ?? "";
+					return {
+						partNumber,
+						etag,
+						size: end - start,
+					};
+				}),
+			);
+
+			completedParts.push(...results);
 			options?.onProgress?.(completedParts.length / totalParts);
 		}
 
