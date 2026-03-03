@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const ANIMALS = [
 	"Walrus",
 	"Capybara",
@@ -49,5 +51,5 @@ export function getAnonymousName(sessionId: string): string {
 }
 
 export function getSessionHash(sessionId: string): string {
-	return hashSessionId(sessionId).toString(36);
+	return createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
 }
