@@ -428,9 +428,11 @@ export const notifications = mysqlTable(
 		id: nanoId("id").notNull().primaryKey(),
 		orgId: nanoId("orgId").notNull().$type<Organisation.OrganisationId>(),
 		recipientId: nanoId("recipientId").notNull().$type<User.UserId>(),
-		type: varchar("type", { length: 10 })
+		type: varchar("type", { length: 16 })
 			.notNull()
-			.$type<"view" | "comment" | "reply" | "reaction" /*| "mention"*/>(),
+			.$type<
+				"view" | "comment" | "reply" | "reaction" | "anon_view" /*| "mention"*/
+			>(),
 		data: json("data")
 			.$type<{
 				videoId?: string;
@@ -439,6 +441,9 @@ export const notifications = mysqlTable(
 					id: string;
 					content: string;
 				};
+				sessionHash?: string;
+				anonName?: string;
+				location?: string | null;
 			}>()
 			.notNull(),
 		readAt: timestamp("readAt"),
