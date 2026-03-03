@@ -1,24 +1,24 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const tabs = [
-	{ label: "General", href: "/dashboard/settings/organization" },
-	{
-		label: "Preferences",
-		href: "/dashboard/settings/organization/preferences",
-	},
-	{
-		label: "Billing & Members",
-		href: "/dashboard/settings/organization/billing",
-	},
-] as const;
-
 export function SettingsNav() {
 	const pathname = usePathname();
+	const tabs = [
+		{ label: "General", href: "/dashboard/settings/organization" },
+		{
+			label: "Preferences",
+			href: "/dashboard/settings/organization/preferences",
+		},
+		{
+			label: buildEnv.NEXT_PUBLIC_IS_CAP ? "Billing & Members" : "Members",
+			href: "/dashboard/settings/organization/billing",
+		},
+	] as const;
 
 	return (
 		<div className="flex gap-4 items-center border-b border-gray-4">
