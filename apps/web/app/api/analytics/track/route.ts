@@ -8,40 +8,6 @@ import { getAnonymousName } from "@/lib/anonymous-names";
 import { createAnonymousViewNotification } from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 
-const anonNotifRateLimit = new Map<
-	string,
-	{ count: number; resetAt: number }
->();
-const ANON_NOTIF_WINDOW_MS = 5 * 60 * 1000;
-const ANON_NOTIF_MAX_PER_VIDEO = 50;
-const ANON_NOTIF_MAX_ENTRIES = 10_000;
-let anonNotifCleanupCounter = 0;
-
-function checkAnonNotifRateLimit(videoId: string): boolean {
-	anonNotifCleanupCounter++;
-	if (anonNotifCleanupCounter % 100 === 0) {
-		const now = Date.now();
-		for (const [k, v] of anonNotifRateLimit) {
-			if (v.resetAt < now) anonNotifRateLimit.delete(k);
-		}
-		if (anonNotifRateLimit.size > ANON_NOTIF_MAX_ENTRIES)
-			anonNotifRateLimit.clear();
-	}
-
-	const now = Date.now();
-	const entry = anonNotifRateLimit.get(videoId);
-	if (!entry || entry.resetAt < now) {
-		anonNotifRateLimit.set(videoId, {
-			count: 1,
-			resetAt: now + ANON_NOTIF_WINDOW_MS,
-		});
-		return true;
-	}
-	if (entry.count >= ANON_NOTIF_MAX_PER_VIDEO) return false;
-	entry.count++;
-	return true;
-}
-
 interface TrackPayload {
 	videoId: string;
 	orgId?: string | null;
@@ -70,7 +36,10 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: "videoId is required" }, { status: 400 });
 	}
 
-	const sessionId = body.sessionId?.slice(0, 128) ?? "anon";
+	const sessionId =
+		typeof body.sessionId === "string"
+			? body.sessionId.trim().slice(0, 128) || null
+			: null;
 	const userAgent =
 		sanitizeString(request.headers.get("user-agent")) ||
 		sanitizeString(body.userAgent) ||
@@ -121,7 +90,7 @@ export async function POST(request: NextRequest) {
 			yield* tinybird.appendEvents([
 				{
 					timestamp: timestamp.toISOString(),
-					session_id: sessionId,
+					session_id: sessionId ?? "anon",
 					action: "page_hit",
 					version: "1.0",
 					tenant_id: tenantId,
@@ -137,11 +106,7 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
-			if (
-				!userId &&
-				sessionId !== "anon" &&
-				checkAnonNotifRateLimit(body.videoId)
-			) {
+			if (!userId && sessionId) {
 				const anonName = getAnonymousName(sessionId);
 				const locationParts = [city, country].filter(Boolean);
 				const location =
