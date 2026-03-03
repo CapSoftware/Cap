@@ -38,7 +38,11 @@ app.post(
 		const { videoId, contentType } = c.req.valid("json");
 
 		const [video] = await db()
-			.select()
+			.select({
+				id: developerVideos.id,
+				appId: developerVideos.appId,
+				s3Key: developerVideos.s3Key,
+			})
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
@@ -101,7 +105,11 @@ app.post(
 		const { videoId, uploadId, partNumber } = c.req.valid("json");
 
 		const [video] = await db()
-			.select()
+			.select({
+				id: developerVideos.id,
+				appId: developerVideos.appId,
+				s3Key: developerVideos.s3Key,
+			})
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
@@ -162,7 +170,11 @@ app.post(
 		const clampedDuration = Math.min(durationInSecs, MAX_DURATION_SECS);
 
 		const [video] = await db()
-			.select()
+			.select({
+				id: developerVideos.id,
+				appId: developerVideos.appId,
+				s3Key: developerVideos.s3Key,
+			})
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
@@ -292,7 +304,11 @@ app.post(
 		const { videoId, uploadId } = c.req.valid("json");
 
 		const [video] = await db()
-			.select()
+			.select({
+				id: developerVideos.id,
+				appId: developerVideos.appId,
+				s3Key: developerVideos.s3Key,
+			})
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
