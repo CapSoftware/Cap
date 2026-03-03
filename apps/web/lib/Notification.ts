@@ -3,7 +3,7 @@ import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { type Comment, Video } from "@cap/web-domain";
-import { and, eq, gte, like, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
@@ -29,6 +29,26 @@ type CreateNotificationInput<D = AuthoredNotificationData> =
 
 const ANON_NOTIF_WINDOW_MS = 5 * 60 * 1000;
 const ANON_NOTIF_MAX_PER_VIDEO = 50;
+
+const escapeLikePattern = (value: string) =>
+	value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+
+const isDuplicateEntryError = (error: unknown) => {
+	if (!error || typeof error !== "object") return false;
+	const duplicateEntryError = error as {
+		code?: string;
+		errno?: number;
+		message?: string;
+		sqlMessage?: string;
+	};
+	if (
+		duplicateEntryError.code !== "ER_DUP_ENTRY" &&
+		duplicateEntryError.errno !== 1062
+	)
+		return false;
+	const message = `${duplicateEntryError.sqlMessage ?? ""} ${duplicateEntryError.message ?? ""}`;
+	return message.length === 0 || message.includes("dedup_key_idx");
+};
 
 export async function createNotification(
 	notification: CreateNotificationInput,
