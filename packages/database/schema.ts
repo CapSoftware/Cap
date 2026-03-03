@@ -446,6 +446,7 @@ export const notifications = mysqlTable(
 				location?: string | null;
 			}>()
 			.notNull(),
+		dedupKey: varchar("dedupKey", { length: 128 }),
 		readAt: timestamp("readAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 	},
@@ -462,6 +463,7 @@ export const notifications = mysqlTable(
 			table.recipientId,
 			table.createdAt,
 		),
+		dedupKeyUnique: uniqueIndex("dedup_key_idx").on(table.dedupKey),
 	}),
 );
 
