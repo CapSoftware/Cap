@@ -29,14 +29,23 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 	const [inviteEmails, setInviteEmails] = useState<string[]>([]);
 	const [emailInput, setEmailInput] = useState("");
 	const emailInputId = useId();
+	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 	const handleAddEmails = () => {
 		const newEmails = emailInput
 			.split(",")
-			.map((email) => email.trim())
+			.map((email) => email.trim().toLowerCase())
 			.filter((email) => email !== "");
 
-		setInviteEmails([...new Set([...inviteEmails, ...newEmails])]);
+		const invalidEmails = newEmails.filter((email) => !emailRegex.test(email));
+		if (invalidEmails.length > 0) {
+			toast.error(
+				`Invalid email${invalidEmails.length > 1 ? "s" : ""}: ${invalidEmails.join(", ")}`,
+			);
+		}
+
+		const validEmails = newEmails.filter((email) => emailRegex.test(email));
+		setInviteEmails([...new Set([...inviteEmails, ...validEmails])]);
 		setEmailInput("");
 	};
 
@@ -54,8 +63,14 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 				activeOrganization.organization.id,
 			);
 		},
-		onSuccess: () => {
-			toast.success("Invites sent successfully");
+		onSuccess: (result) => {
+			if (result.failedEmails.length > 0) {
+				toast.warning(
+					`Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`,
+				);
+			} else {
+				toast.success("Invites sent successfully");
+			}
 			setInviteEmails([]);
 			setIsOpen(false);
 			router.refresh();
