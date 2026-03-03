@@ -11,7 +11,10 @@ import { SeatManagementCard } from "../components/SeatManagementCard";
 export default function BillingAndMembersPage() {
 	const { activeOrganization, user, setInviteDialogOpen } =
 		useDashboardContext();
-	const isOwner = user?.id === activeOrganization?.organization.ownerId;
+	const isOwner =
+		activeOrganization?.members?.some(
+			(member) => member.userId === user?.id && member.role === "owner",
+		) ?? false;
 	const ownerToastShown = useRef(false);
 
 	const showOwnerToast = useCallback(() => {

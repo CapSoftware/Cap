@@ -139,8 +139,8 @@ export const MembersCard = ({
 		setConfirmOpen(true);
 	};
 
-	const isMemberOwner = (id: string) => {
-		return id === activeOrganization?.organization.ownerId;
+	const isMemberOwner = (role: string) => {
+		return role === "owner";
 	};
 
 	return (
@@ -204,7 +204,7 @@ export const MembersCard = ({
 					</TableHeader>
 					<TableBody>
 						{activeOrganization?.members?.map((member) => {
-							const memberIsOwner = isMemberOwner(member.user.id);
+							const memberIsOwner = isMemberOwner(member.role);
 							return (
 								<TableRow key={member.id}>
 									<TableCell>{member.user.name}</TableCell>
