@@ -14,6 +14,59 @@ import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { hashKey } from "@/lib/developer-key-hash";
 
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 60;
+const RATE_LIMIT_MAX_ENTRIES = 10_000;
+
+const requestCounts = new Map<string, { count: number; resetAt: number }>();
+let rateLimitRequestCounter = 0;
+
+export const developerRateLimiter = createMiddleware(async (c, next) => {
+	const key =
+		c.req.header("authorization") ??
+		c.req.header("x-forwarded-for") ??
+		"unknown";
+	const now = Date.now();
+
+	rateLimitRequestCounter++;
+	if (rateLimitRequestCounter % 100 === 0) {
+		for (const [k, v] of requestCounts) {
+			if (now > v.resetAt) requestCounts.delete(k);
+		}
+		if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
+			requestCounts.clear();
+		}
+	}
+
+	const entry = requestCounts.get(key);
+
+	if (!entry || now > entry.resetAt) {
+		requestCounts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+	} else {
+		entry.count++;
+		if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+			return c.json({ error: "Rate limit exceeded" }, 429);
+		}
+	}
+
+	await next();
+});
+
+const LAST_USED_DEBOUNCE_MS = 5 * 60 * 1000;
+const lastUsedWriteTimes = new Map<string, number>();
+
+function debouncedLastUsedUpdate(keyHash: string) {
+	const now = Date.now();
+	const lastWrite = lastUsedWriteTimes.get(keyHash);
+	if (lastWrite && now - lastWrite < LAST_USED_DEBOUNCE_MS) return;
+	lastUsedWriteTimes.set(keyHash, now);
+	db()
+		.update(developerApiKeys)
+		.set({ lastUsedAt: new Date() })
+		.where(eq(developerApiKeys.keyHash, keyHash))
+		.catch((err) => console.error("Failed to update lastUsedAt:", err));
+}
+
 async function getAuth(c: Context) {
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 
@@ -144,11 +197,7 @@ export const withDeveloperPublicAuth = createMiddleware<{
 		}
 	}
 
-	db()
-		.update(developerApiKeys)
-		.set({ lastUsedAt: new Date() })
-		.where(eq(developerApiKeys.keyHash, keyHash))
-		.catch((err) => console.error("Failed to update lastUsedAt:", err));
+	debouncedLastUsedUpdate(keyHash);
 
 	c.set("developerAppId", row.appId);
 	c.set("developerKeyType", "public" as const);
@@ -190,11 +239,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		return c.json({ error: "Invalid or revoked secret key" }, 401);
 	}
 
-	db()
-		.update(developerApiKeys)
-		.set({ lastUsedAt: new Date() })
-		.where(eq(developerApiKeys.keyHash, keyHash))
-		.catch((err) => console.error("Failed to update lastUsedAt:", err));
+	debouncedLastUsedUpdate(keyHash);
 
 	c.set("developerAppId", row.appId);
 	c.set("developerKeyType", "secret" as const);
