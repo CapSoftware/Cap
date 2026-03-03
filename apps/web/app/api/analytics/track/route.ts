@@ -1,5 +1,8 @@
+import { db } from "@cap/database";
+import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
-import { CurrentUser } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
@@ -45,10 +48,12 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: "videoId is required" }, { status: 400 });
 	}
 
-	const sessionId =
+	const parsedSessionId =
 		typeof body.sessionId === "string"
 			? body.sessionId.trim().slice(0, 128) || null
 			: null;
+	const sessionId =
+		parsedSessionId && parsedSessionId !== "anonymous" ? parsedSessionId : null;
 	const userAgent =
 		sanitizeString(request.headers.get("user-agent")) ||
 		sanitizeString(body.userAgent) ||
@@ -94,7 +99,17 @@ export async function POST(request: NextRequest) {
 					return currentUser.id;
 				},
 			});
-			if (userId && body.ownerId && userId === body.ownerId) {
+			const ownerId = userId
+				? yield* Effect.tryPromise(() =>
+						db()
+							.select({ ownerId: videos.ownerId })
+							.from(videos)
+							.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+							.limit(1)
+							.then((rows) => rows[0]?.ownerId ?? null),
+					).pipe(Effect.orElseSucceed(() => body.ownerId ?? null))
+				: (body.ownerId ?? null);
+			if (userId && ownerId && userId === ownerId) {
 				return;
 			}
 
