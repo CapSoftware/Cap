@@ -36,7 +36,6 @@ export async function getSubscriptionDetails(
 	const [owner] = await db()
 		.select({
 			stripeSubscriptionId: users.stripeSubscriptionId,
-			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 		})
 		.from(users)
 		.where(eq(users.id, user.id))
@@ -68,7 +67,7 @@ export async function getSubscriptionDetails(
 		status: subscription.status,
 		billingInterval: interval,
 		pricePerSeat,
-		currentQuantity: item.quantity || 1,
+		currentQuantity: item.quantity ?? 1,
 		currentPeriodEnd: subscription.current_period_end,
 		currency: price.currency,
 	};
