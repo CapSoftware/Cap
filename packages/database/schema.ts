@@ -441,7 +441,6 @@ export const notifications = mysqlTable(
 					id: string;
 					content: string;
 				};
-				sessionHash?: string;
 				anonName?: string;
 				location?: string | null;
 			}>()
