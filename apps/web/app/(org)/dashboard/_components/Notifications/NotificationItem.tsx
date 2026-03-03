@@ -7,12 +7,13 @@ import moment from "moment";
 import Link from "next/link";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import type { NotificationType } from "@/lib/Notification";
 
 type NotificationItemProps = {
 	notification: APINotification;
 	className?: string;
 };
+
+type NotificationType = APINotification["type"];
 
 const descriptionMap: Record<NotificationType, string> = {
 	comment: `commented on your video`,
