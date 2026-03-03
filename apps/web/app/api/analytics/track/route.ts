@@ -135,25 +135,26 @@ export async function POST(request: NextRequest) {
 
 			if (!userId && sessionId) {
 				const anonName = getAnonymousName(sessionId);
-				const locationParts = [city, country].filter(Boolean);
 				const location =
-					locationParts.length > 0 ? locationParts.join(", ") : null;
+					city && country ? `${city}, ${country}` : city || country || null;
 
-				yield* Effect.tryPromise(() =>
-					createAnonymousViewNotification({
-						videoId: body.videoId,
-						sessionId,
-						anonName,
-						location,
-					}),
-				).pipe(
-					Effect.catchAll((error) => {
-						console.error(
-							"Failed to create anonymous view notification:",
-							error,
-						);
-						return Effect.void;
-					}),
+				yield* Effect.forkDaemon(
+					Effect.tryPromise(() =>
+						createAnonymousViewNotification({
+							videoId: body.videoId,
+							sessionId,
+							anonName,
+							location,
+						}),
+					).pipe(
+						Effect.catchAll((error) => {
+							console.error(
+								"Failed to create anonymous view notification:",
+								error,
+							);
+							return Effect.void;
+						}),
+					),
 				);
 			}
 		}).pipe(provideOptionalAuth),
