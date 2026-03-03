@@ -1,6 +1,8 @@
-import type { NotificationType } from "@/lib/Notification";
+import type { Notification } from "@cap/web-api-contract";
 
-export type FilterType = "all" | NotificationType;
+type NotificationType = Notification["type"];
+
+export type FilterType = "all" | Exclude<NotificationType, "anon_view">;
 
 export const Filters: Array<FilterType> = [
 	"all",
@@ -16,7 +18,6 @@ export const FilterLabels: Record<FilterType, string> = {
 	reply: "Replies",
 	view: "Views",
 	reaction: "Reactions",
-	anon_view: "Views",
 };
 
 export const matchNotificationFilter = (
