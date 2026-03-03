@@ -94,7 +94,9 @@ export function SeatManagementCard() {
 		},
 	});
 
+	const MAX_SEATS = 500;
 	const canDecrease = desiredQuantity > Math.max(1, proSeatsUsed);
+	const canIncrease = desiredQuantity < MAX_SEATS;
 
 	return (
 		<Card>
@@ -132,8 +134,11 @@ export function SeatManagementCard() {
 						/>
 						<button
 							type="button"
-							onClick={() => updateDesiredQuantity(desiredQuantity + 1)}
-							className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5"
+							onClick={() =>
+								canIncrease && updateDesiredQuantity(desiredQuantity + 1)
+							}
+							className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5 disabled:opacity-50 disabled:cursor-not-allowed"
+							disabled={!canIncrease}
 						>
 							<Plus className="w-4 h-4 text-gray-12" />
 						</button>
