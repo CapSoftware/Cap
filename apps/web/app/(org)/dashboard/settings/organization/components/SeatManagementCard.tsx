@@ -64,7 +64,11 @@ export function SeatManagementCard() {
 	const hasChanges = desiredQuantity !== proSeatsTotal;
 	const debouncedHasChanges = debouncedQuantity !== proSeatsTotal;
 
-	const { data: preview, isFetching: previewLoading } = useQuery({
+	const {
+		data: preview,
+		isFetching: previewLoading,
+		isError: previewError,
+	} = useQuery({
 		queryKey: ["seat-preview", organizationId, debouncedQuantity],
 		queryFn: () => {
 			if (!organizationId) return null;
@@ -148,6 +152,10 @@ export function SeatManagementCard() {
 						<div className="flex items-center gap-3">
 							{previewLoading ? (
 								<span className="text-sm text-gray-10">Calculating...</span>
+							) : previewError ? (
+								<span className="text-sm text-red-500">
+									Unable to calculate preview
+								</span>
 							) : preview ? (
 								<span className="text-sm text-gray-11">
 									Prorated charge: ${(preview.proratedAmount / 100).toFixed(2)}{" "}
@@ -159,7 +167,9 @@ export function SeatManagementCard() {
 								size="sm"
 								variant="primary"
 								onClick={() => updateMutation.mutate()}
-								disabled={updateMutation.isPending || previewLoading}
+								disabled={
+									updateMutation.isPending || previewLoading || previewError
+								}
 								spinner={updateMutation.isPending}
 							>
 								{updateMutation.isPending ? "Updating..." : "Confirm"}
