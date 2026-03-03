@@ -17,7 +17,15 @@ export async function POST(request: NextRequest) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const { inviteId } = await request.json();
+	let inviteId: unknown;
+	try {
+		({ inviteId } = await request.json());
+	} catch {
+		return NextResponse.json(
+			{ error: "Invalid request body" },
+			{ status: 400 },
+		);
+	}
 
 	if (typeof inviteId !== "string" || !inviteId) {
 		return NextResponse.json({ error: "Invalid invite ID" }, { status: 400 });
