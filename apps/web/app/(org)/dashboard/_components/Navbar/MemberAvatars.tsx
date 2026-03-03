@@ -8,8 +8,10 @@ import { useDashboardContext } from "../../Contexts";
 const MAX_VISIBLE = 4;
 
 export function MemberAvatars() {
-	const { activeOrganization, sidebarCollapsed, setInviteDialogOpen } =
+	const { activeOrganization, sidebarCollapsed, setInviteDialogOpen, user } =
 		useDashboardContext();
+
+	const isOwner = user?.id === activeOrganization?.organization.ownerId;
 
 	if (sidebarCollapsed) return null;
 
@@ -46,22 +48,23 @@ export function MemberAvatars() {
 				</div>
 			)}
 
-			{Array.from({ length: emptySlots }).map((_, i) => (
-				<Tooltip
-					key={`empty-${i}`}
-					content="Invite to your organization"
-					position="bottom"
-					delayDuration={0}
-				>
-					<button
-						type="button"
-						onClick={() => setInviteDialogOpen(true)}
-						className="-ml-1.5 flex items-center justify-center size-6 rounded-full border border-dashed border-gray-8 bg-gray-3 hover:bg-gray-4 hover:border-gray-9 transition-colors"
+			{isOwner &&
+				Array.from({ length: emptySlots }).map((_, i) => (
+					<Tooltip
+						key={`empty-${i}`}
+						content="Invite to your organization"
+						position="bottom"
+						delayDuration={0}
 					>
-						<Plus className="size-3 text-gray-10" />
-					</button>
-				</Tooltip>
-			))}
+						<button
+							type="button"
+							onClick={() => setInviteDialogOpen(true)}
+							className="-ml-1.5 flex items-center justify-center size-6 rounded-full border border-dashed border-gray-8 bg-gray-3 hover:bg-gray-4 hover:border-gray-9 transition-colors"
+						>
+							<Plus className="size-3 text-gray-10" />
+						</button>
+					</Tooltip>
+				))}
 		</div>
 	);
 }
