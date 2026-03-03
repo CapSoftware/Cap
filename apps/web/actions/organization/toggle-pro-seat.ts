@@ -54,6 +54,10 @@ export async function toggleProSeat(
 			throw new Error("Cannot toggle Pro seat for the organization owner");
 		}
 
+		if (member.hasProSeat === enable) {
+			return { success: true };
+		}
+
 		if (enable) {
 			const allMembers = await tx
 				.select({
