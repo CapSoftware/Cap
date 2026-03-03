@@ -1,14 +1,13 @@
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useEffect, useMemo, useRef } from "react";
-import type { NotificationType } from "@/lib/Notification";
 import { FilterLabels, Filters, type FilterType } from "./Filter";
 
 type FilterTabsProps = {
 	activeFilter: FilterType;
 	setActiveFilter: (filter: FilterType) => void;
 	loading: boolean;
-	count?: Record<NotificationType, number>;
+	count?: Record<Exclude<FilterType, "all">, number>;
 };
 
 export const FilterTabs = ({
