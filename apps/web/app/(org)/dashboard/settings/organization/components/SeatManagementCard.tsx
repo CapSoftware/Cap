@@ -63,6 +63,7 @@ export function SeatManagementCard() {
 
 	const hasChanges = desiredQuantity !== proSeatsTotal;
 	const debouncedHasChanges = debouncedQuantity !== proSeatsTotal;
+	const debounceInFlight = desiredQuantity !== debouncedQuantity;
 
 	const {
 		data: preview,
@@ -150,7 +151,7 @@ export function SeatManagementCard() {
 
 					{hasChanges && (
 						<div className="flex items-center gap-3">
-							{previewLoading ? (
+							{debounceInFlight || previewLoading ? (
 								<span className="text-sm text-gray-10">Calculating...</span>
 							) : previewError ? (
 								<span className="text-sm text-red-500">
@@ -168,7 +169,10 @@ export function SeatManagementCard() {
 								variant="primary"
 								onClick={() => updateMutation.mutate()}
 								disabled={
-									updateMutation.isPending || previewLoading || previewError
+									updateMutation.isPending ||
+									previewLoading ||
+									previewError ||
+									debounceInFlight
 								}
 								spinner={updateMutation.isPending}
 							>
