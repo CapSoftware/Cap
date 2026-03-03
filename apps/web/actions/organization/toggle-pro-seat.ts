@@ -145,6 +145,11 @@ export async function toggleProSeat(
 							thirdPartyStripeSubscriptionId: remainingOrg.stripeSubscriptionId,
 						})
 						.where(eq(users.id, member.userId));
+				} else {
+					await tx
+						.update(users)
+						.set({ thirdPartyStripeSubscriptionId: null })
+						.where(eq(users.id, member.userId));
 				}
 			}
 		}
