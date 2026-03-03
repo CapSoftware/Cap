@@ -19,7 +19,9 @@
 			"import": "./dist/vanilla/cap-embed-loader.js"
 		}
 	},
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"scripts": {
 		"build": "tsup",
 		"typecheck": "tsc --noEmit"

@@ -15,7 +15,9 @@
 			"import": "./dist/react/index.js"
 		}
 	},
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"scripts": {
 		"build": "tsup",
 		"typecheck": "tsc --noEmit"

@@ -56,6 +56,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [open, setOpen] = useState(false);
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
+	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
+
+	const showDeveloperDashboard =
+		buildEnv.NEXT_PUBLIC_IS_CAP &&
+		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
+
 	const manageNavigation = [
 		{
 			name: "My Caps",
@@ -91,7 +97,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
-		...(buildEnv.NEXT_PUBLIC_IS_CAP
+		...(showDeveloperDashboard
 			? [
 					{
 						name: "Developers",
