@@ -9,6 +9,7 @@ import { type Comment, Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
+import { getSessionHash } from "@/lib/anonymous-names";
 
 export type NotificationType = Notification["type"];
 
@@ -18,16 +19,16 @@ type NotificationSpecificData = DistributiveOmit<
 	keyof NotificationBase
 >;
 
-// Replaces author object with authorId since we query for that info.
-// If we add more notifications this would probably be better done manually
-// Type is weird since we need to operate on each member of the NotificationSpecificData union
-type CreateNotificationInput<D = NotificationSpecificData> =
-	D extends NotificationSpecificData
-		? D["author"] extends never
-			? D
-			: Omit<D, "author"> & { authorId: string } & {
-					parentCommentId?: Comment.CommentId;
-				}
+type AuthoredNotificationData = Exclude<
+	NotificationSpecificData,
+	{ type: "anon_view" }
+>;
+
+type CreateNotificationInput<D = AuthoredNotificationData> =
+	D extends AuthoredNotificationData
+		? Omit<D, "author"> & { authorId: string } & {
+				parentCommentId?: Comment.CommentId;
+			}
 		: never;
 
 export async function createNotification(
@@ -215,5 +216,71 @@ export async function createNotification(
 	} catch (error) {
 		console.error("Error creating notification:", error);
 		throw error;
+	}
+}
+
+export async function createAnonymousViewNotification({
+	videoId,
+	sessionId,
+	anonName,
+	location,
+}: {
+	videoId: string;
+	sessionId: string;
+	anonName: string;
+	location: string | null;
+}) {
+	try {
+		const sessionHash = getSessionHash(sessionId);
+
+		const [videoExists] = await db()
+			.select({ id: videos.id, ownerId: videos.ownerId })
+			.from(videos)
+			.where(eq(videos.id, Video.VideoId.make(videoId)))
+			.limit(1);
+
+		if (!videoExists) return;
+
+		const [ownerResult] = await db()
+			.select({
+				id: users.id,
+				activeOrganizationId: users.activeOrganizationId,
+				preferences: users.preferences,
+			})
+			.from(users)
+			.where(eq(users.id, videoExists.ownerId))
+			.limit(1);
+
+		if (!ownerResult?.activeOrganizationId) return;
+
+		const preferences = ownerResult.preferences as UserPreferences;
+		if (preferences?.notifications?.pauseViews) return;
+
+		const [existing] = await db()
+			.select({ id: notifications.id })
+			.from(notifications)
+			.where(
+				and(
+					eq(notifications.type, "anon_view"),
+					eq(notifications.recipientId, ownerResult.id),
+					sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${videoId}`,
+					sql`JSON_EXTRACT(${notifications.data}, '$.sessionHash') = ${sessionHash}`,
+				),
+			)
+			.limit(1);
+
+		if (existing) return;
+
+		await db().insert(notifications).values({
+			id: nanoId(),
+			orgId: ownerResult.activeOrganizationId,
+			recipientId: ownerResult.id,
+			type: "anon_view",
+			data: { videoId, sessionHash, anonName, location },
+		});
+
+		revalidatePath("/dashboard");
+	} catch (error) {
+		console.error("Error creating anonymous view notification:", error);
 	}
 }
