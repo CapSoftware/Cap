@@ -121,6 +121,31 @@ export async function toggleProSeat(
 					.update(users)
 					.set({ thirdPartyStripeSubscriptionId: null })
 					.where(eq(users.id, member.userId));
+			} else {
+				const [remainingOrg] = await tx
+					.select({ stripeSubscriptionId: users.stripeSubscriptionId })
+					.from(organizationMembers)
+					.innerJoin(
+						organizations,
+						eq(organizationMembers.organizationId, organizations.id),
+					)
+					.innerJoin(users, eq(organizations.ownerId, users.id))
+					.where(
+						and(
+							eq(organizationMembers.userId, member.userId),
+							eq(organizationMembers.hasProSeat, true),
+						),
+					)
+					.limit(1);
+
+				if (remainingOrg?.stripeSubscriptionId) {
+					await tx
+						.update(users)
+						.set({
+							thirdPartyStripeSubscriptionId: remainingOrg.stripeSubscriptionId,
+						})
+						.where(eq(users.id, member.userId));
+				}
 			}
 		}
 	});
