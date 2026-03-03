@@ -134,14 +134,25 @@ export async function sendOrganizationInvites(
 	const failedEmails = failedInvites.map((r) => r.email);
 
 	if (failedInvites.length > 0) {
-		await db()
-			.delete(organizationInvites)
-			.where(
-				inArray(
-					organizationInvites.id,
-					failedInvites.map((r) => r.id),
-				),
+		try {
+			await db()
+				.delete(organizationInvites)
+				.where(
+					inArray(
+						organizationInvites.id,
+						failedInvites.map((r) => r.id),
+					),
+				);
+		} catch (cleanupError) {
+			console.error(
+				"Failed to clean up invite records after email delivery failure:",
+				{
+					failedInviteIds: failedInvites.map((r) => r.id),
+					failedEmails,
+					error: cleanupError,
+				},
 			);
+		}
 	}
 
 	revalidatePath("/dashboard/settings/organization");
