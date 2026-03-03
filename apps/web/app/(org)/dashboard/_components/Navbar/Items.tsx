@@ -38,6 +38,7 @@ import { useDashboardContext } from "../../Contexts";
 import {
 	CapIcon,
 	ChartLineIcon,
+	CodeIcon,
 	CogIcon,
 	ImportIcon,
 	RecordIcon,
@@ -54,6 +55,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
+
+	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
+
+	const showDeveloperDashboard =
+		buildEnv.NEXT_PUBLIC_IS_CAP &&
+		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
 
 	const manageNavigation = [
 		{
@@ -90,6 +97,18 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
+		...(showDeveloperDashboard
+			? [
+					{
+						name: "Developers",
+						href: `/dashboard/developers`,
+						ownerOnly: true,
+						matchChildren: true,
+						icon: <CodeIcon />,
+						subNav: [] as { name: string; href: string }[],
+					},
+				]
+			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);

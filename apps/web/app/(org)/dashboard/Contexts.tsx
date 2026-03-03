@@ -12,6 +12,7 @@ import type {
 	Spaces,
 	UserPreferences,
 } from "./dashboard-data";
+import type { DeveloperApp } from "./developers/developer-data";
 
 type SharedContext = {
 	organizationData: Organization[] | null;
@@ -31,6 +32,9 @@ type SharedContext = {
 	setUpgradeModalOpen: (open: boolean) => void;
 	referClickedState: boolean;
 	setReferClickedStateHandler: (referClicked: boolean) => void;
+	isDeveloperSection: boolean;
+	developerApps: DeveloperApp[] | null;
+	setDeveloperApps: (apps: DeveloperApp[] | null) => void;
 };
 
 type ITheme = "light" | "dark";
@@ -83,7 +87,11 @@ export function DashboardContexts({
 	);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [referClickedState, setReferClickedState] = useState(referClicked);
+	const [developerApps, setDeveloperApps] = useState<DeveloperApp[] | null>(
+		null,
+	);
 	const pathname = usePathname();
+	const isDeveloperSection = pathname.startsWith("/dashboard/developers");
 
 	// Calculate user's spaces (both owned and member of)
 	const userSpaces =
@@ -176,6 +184,9 @@ export function DashboardContexts({
 					setUpgradeModalOpen,
 					referClickedState,
 					setReferClickedStateHandler,
+					isDeveloperSection,
+					developerApps,
+					setDeveloperApps,
 				}}
 			>
 				{children}

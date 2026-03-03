@@ -14,7 +14,7 @@
 		"db:generate": "dotenv -e .env -- pnpm --filter @cap/database db:generate",
 		"db:push": "dotenv -e .env -- pnpm --filter @cap/database db:push",
 		"db:studio": "dotenv -e .env -- pnpm --filter @cap/database db:studio",
-		"dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
 		"dev:desktop": "pnpm run --filter=@cap/desktop dev",
 		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
 		"dev:web": "pnpm dev --filter=!@cap/desktop",
