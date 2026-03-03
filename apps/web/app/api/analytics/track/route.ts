@@ -4,6 +4,8 @@ import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
 
+import { getAnonymousName } from "@/lib/anonymous-names";
+import { createAnonymousViewNotification } from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
@@ -100,6 +102,22 @@ export async function POST(request: NextRequest) {
 					user_id: userId,
 				},
 			]);
+
+			if (!userId) {
+				const anonName = getAnonymousName(sessionId);
+				const locationParts = [city, country].filter(Boolean);
+				const location =
+					locationParts.length > 0 ? locationParts.join(", ") : null;
+
+				yield* Effect.tryPromise(() =>
+					createAnonymousViewNotification({
+						videoId: body.videoId,
+						sessionId,
+						anonName,
+						location,
+					}),
+				).pipe(Effect.catchAll(() => Effect.void));
+			}
 		}).pipe(provideOptionalAuth),
 	);
 
