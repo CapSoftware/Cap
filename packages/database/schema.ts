@@ -463,6 +463,11 @@ export const notifications = mysqlTable(
 			table.createdAt,
 		),
 		dedupKeyUnique: uniqueIndex("dedup_key_idx").on(table.dedupKey),
+		typeRecipientCreatedIndex: index("type_recipient_created_idx").on(
+			table.type,
+			table.recipientId,
+			table.createdAt,
+		),
 	}),
 );
 
