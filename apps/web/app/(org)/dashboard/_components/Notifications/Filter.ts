@@ -16,6 +16,7 @@ export const FilterLabels: Record<FilterType, string> = {
 	reply: "Replies",
 	view: "Views",
 	reaction: "Reactions",
+	anon_view: "Views",
 };
 
 export const matchNotificationFilter = (
@@ -23,5 +24,6 @@ export const matchNotificationFilter = (
 	type: NotificationType,
 ): boolean => {
 	if (filter === "all") return true;
+	if (filter === "view") return type === "view" || type === "anon_view";
 	return type === filter;
 };
