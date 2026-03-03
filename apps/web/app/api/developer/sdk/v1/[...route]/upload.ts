@@ -190,23 +190,30 @@ app.post(
 		const s3Key = video.s3Key;
 
 		try {
-			const durationMinutes = clampedDuration / 60;
+			const totalBytes = parts.reduce((sum, p) => sum + p.size, 0);
+			const sizeBasedMinDuration = totalBytes / 2_500_000;
+			const billingDuration = Math.min(
+				Math.max(clampedDuration, sizeBasedMinDuration),
+				MAX_DURATION_SECS,
+			);
+			const durationMinutes = billingDuration / 60;
 			const microCreditsToDebit = Math.floor(
 				durationMinutes * MICRO_CREDITS_PER_MINUTE,
 			);
 
 			if (microCreditsToDebit > 0) {
-				const [account] = await db()
-					.select()
-					.from(developerCreditAccounts)
-					.where(eq(developerCreditAccounts.appId, appId))
-					.limit(1);
-
-				if (!account) {
-					return c.json({ error: "Credit account not found" }, 402);
-				}
-
 				const debited = await db().transaction(async (tx) => {
+					const [account] = await tx
+						.select({
+							id: developerCreditAccounts.id,
+							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+						})
+						.from(developerCreditAccounts)
+						.where(eq(developerCreditAccounts.appId, appId))
+						.limit(1);
+
+					if (!account) return null;
+
 					const [result] = await tx
 						.update(developerCreditAccounts)
 						.set({
@@ -243,12 +250,18 @@ app.post(
 						balanceAfterMicroCredits: updated.balanceMicroCredits,
 						referenceId: videoId,
 						referenceType: "developer_video",
-						metadata: { durationSeconds: clampedDuration },
+						metadata: {
+							durationSeconds: billingDuration,
+							totalBytes,
+						},
 					});
 
 					return true;
 				});
 
+				if (debited === null) {
+					return c.json({ error: "Credit account not found" }, 402);
+				}
 				if (!debited) {
 					return c.json({ error: "Insufficient credits" }, 402);
 				}
