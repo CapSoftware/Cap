@@ -13,7 +13,7 @@ import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
 import { useDashboardContext } from "../../../Contexts";
@@ -30,6 +30,13 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 	const [emailInput, setEmailInput] = useState("");
 	const emailInputId = useId();
 	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+	useEffect(() => {
+		if (!isOpen) {
+			setInviteEmails([]);
+			setEmailInput("");
+		}
+	}, [isOpen]);
 
 	const handleAddEmails = () => {
 		const newEmails = emailInput
@@ -71,7 +78,6 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			} else {
 				toast.success("Invites sent successfully");
 			}
-			setInviteEmails([]);
 			setIsOpen(false);
 			router.refresh();
 		},
