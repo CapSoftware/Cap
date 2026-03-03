@@ -45,9 +45,13 @@ export async function sendOrganizationInvites(
 	}
 
 	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-	const validEmails = invitedEmails
-		.map((email) => email.trim().toLowerCase())
-		.filter((email) => emailRegex.test(email));
+	const validEmails = Array.from(
+		new Set(
+			invitedEmails
+				.map((email) => email.trim().toLowerCase())
+				.filter((email) => emailRegex.test(email)),
+		),
+	);
 
 	if (validEmails.length === 0) {
 		return { success: true, failedEmails: [] as string[] };
@@ -124,9 +128,21 @@ export async function sendOrganizationInvites(
 		}),
 	);
 
-	const failedEmails = inviteRecords
-		.filter((_, i) => emailResults[i]?.status === "rejected")
-		.map((r) => r.email);
+	const failedInvites = inviteRecords.filter(
+		(_, i) => emailResults[i]?.status === "rejected",
+	);
+	const failedEmails = failedInvites.map((r) => r.email);
+
+	if (failedInvites.length > 0) {
+		await db()
+			.delete(organizationInvites)
+			.where(
+				inArray(
+					organizationInvites.id,
+					failedInvites.map((r) => r.id),
+				),
+			);
+	}
 
 	revalidatePath("/dashboard/settings/organization");
 
