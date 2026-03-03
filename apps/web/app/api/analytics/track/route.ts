@@ -24,6 +24,15 @@ const sanitizeString = (value?: string | null) =>
 		? value.trim().slice(0, 256)
 		: undefined;
 
+const decodeUrlEncodedHeaderValue = (value?: string | null) => {
+	if (!value) return value;
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+};
+
 export async function POST(request: NextRequest) {
 	let body: TrackPayload;
 	try {
@@ -55,7 +64,10 @@ export async function POST(request: NextRequest) {
 		sanitizeString(request.headers.get("x-vercel-ip-country")) || "";
 	const region =
 		sanitizeString(request.headers.get("x-vercel-ip-country-region")) || "";
-	const city = sanitizeString(request.headers.get("x-vercel-ip-city")) || "";
+	const city =
+		sanitizeString(
+			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
+		) || "";
 
 	const hostname =
 		sanitizeString(body.hostname) ||
