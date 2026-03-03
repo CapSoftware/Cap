@@ -120,7 +120,7 @@ export async function GET(request: Request) {
 						MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR,
 				);
 				const account = accountsByApp.get(app.id);
-				if (!account) return;
+				if (!account) return false;
 
 				await db().transaction(async (tx) => {
 					const [result] = await tx
@@ -188,13 +188,15 @@ export async function GET(request: Request) {
 						});
 					}
 				});
+
+				return true;
 			}),
 		);
 
 		for (const result of results) {
-			if (result.status === "fulfilled") {
+			if (result.status === "fulfilled" && result.value === true) {
 				processed++;
-			} else {
+			} else if (result.status === "rejected") {
 				console.error("Failed to process app in cron:", result.reason);
 			}
 		}
