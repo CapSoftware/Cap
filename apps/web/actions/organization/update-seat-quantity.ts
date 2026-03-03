@@ -139,10 +139,23 @@ export async function updateSeatQuantity(
 		proration_behavior: "create_prorations",
 	});
 
-	await db()
-		.update(users)
-		.set({ inviteQuota: newQuantity })
-		.where(eq(users.id, user.id));
+	try {
+		await db()
+			.update(users)
+			.set({ inviteQuota: newQuantity })
+			.where(eq(users.id, user.id));
+	} catch (dbError) {
+		console.error(
+			"CRITICAL: Stripe updated to quantity",
+			newQuantity,
+			"but DB update failed for user",
+			user.id,
+			dbError,
+		);
+		throw new Error(
+			"Billing update succeeded but local state could not be saved. Please contact support.",
+		);
+	}
 
 	revalidatePath("/dashboard/settings/organization");
 
