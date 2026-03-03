@@ -45,6 +45,12 @@ export const Notification = z
 			author: NotificationAuthor,
 			comment: CommentData,
 		}),
+		z.object({
+			type: z.literal("anon_view"),
+			videoId: z.string(),
+			anonName: z.string(),
+			location: z.string().nullable(),
+		}),
 		// z.object({
 		//   type: z.literal("mention"),
 		//   videoId: z.string(),
