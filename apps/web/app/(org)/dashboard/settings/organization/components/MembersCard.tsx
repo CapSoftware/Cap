@@ -139,9 +139,7 @@ export const MembersCard = ({
 		setConfirmOpen(true);
 	};
 
-	const isMemberOwner = (role: string) => {
-		return role === "owner";
-	};
+	const isMemberOwner = (role: string) => role === "owner";
 
 	return (
 		<>
