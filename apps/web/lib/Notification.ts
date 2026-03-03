@@ -3,7 +3,7 @@ import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { type Comment, Video } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, like, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
@@ -26,6 +26,9 @@ type CreateNotificationInput<D = AuthoredNotificationData> =
 				parentCommentId?: Comment.CommentId;
 			}
 		: never;
+
+const ANON_NOTIF_WINDOW_MS = 5 * 60 * 1000;
+const ANON_NOTIF_MAX_PER_VIDEO = 50;
 
 export async function createNotification(
 	notification: CreateNotificationInput,
@@ -222,35 +225,64 @@ export async function createAnonymousViewNotification({
 	location: string | null;
 }) {
 	const sessionHash = getSessionHash(sessionId);
-
-	const [videoWithOwner] = await db()
-		.select({
-			videoId: videos.id,
-			ownerId: users.id,
-			activeOrganizationId: users.activeOrganizationId,
-			preferences: users.preferences,
-		})
-		.from(videos)
-		.innerJoin(users, eq(users.id, videos.ownerId))
-		.where(eq(videos.id, Video.VideoId.make(videoId)))
-		.limit(1);
-
-	if (!videoWithOwner?.activeOrganizationId) return;
-
-	const preferences = videoWithOwner.preferences as UserPreferences;
-	if (preferences?.notifications?.pauseViews) return;
-
 	const dedupKey = `anon_view:${videoId}:${sessionHash}`;
+	const rateWindowStart = new Date(Date.now() - ANON_NOTIF_WINDOW_MS);
+	const dedupPrefix = `anon_view:${videoId}:%`;
+	let created = false;
 
-	await db()
-		.insert(notifications)
-		.values({
+	await db().transaction(async (tx) => {
+		const [videoWithOwner] = await tx
+			.select({
+				videoId: videos.id,
+				ownerId: users.id,
+				activeOrganizationId: users.activeOrganizationId,
+				preferences: users.preferences,
+			})
+			.from(videos)
+			.innerJoin(users, eq(users.id, videos.ownerId))
+			.where(eq(videos.id, Video.VideoId.make(videoId)))
+			.limit(1)
+			.for("update");
+
+		if (!videoWithOwner?.activeOrganizationId) return;
+
+		const preferences = videoWithOwner.preferences as UserPreferences;
+		if (preferences?.notifications?.pauseViews) return;
+
+		const [existingNotification] = await tx
+			.select({ id: notifications.id })
+			.from(notifications)
+			.where(eq(notifications.dedupKey, dedupKey))
+			.limit(1);
+
+		if (existingNotification) return;
+
+		const [recentNotificationCount] = await tx
+			.select({ count: sql<number>`COUNT(*)` })
+			.from(notifications)
+			.where(
+				and(
+					eq(notifications.type, "anon_view"),
+					eq(notifications.recipientId, videoWithOwner.ownerId),
+					gte(notifications.createdAt, rateWindowStart),
+					like(notifications.dedupKey, dedupPrefix),
+				),
+			)
+			.limit(1);
+
+		if (Number(recentNotificationCount?.count ?? 0) >= ANON_NOTIF_MAX_PER_VIDEO)
+			return;
+
+		await tx.insert(notifications).values({
 			id: nanoId(),
 			orgId: videoWithOwner.activeOrganizationId,
 			recipientId: videoWithOwner.ownerId,
 			type: "anon_view",
 			data: { videoId, sessionHash, anonName, location },
 			dedupKey,
-		})
-		.onDuplicateKeyUpdate({ set: { id: sql`id` } });
+		});
+		created = true;
+	});
+
+	if (created) revalidatePath("/dashboard");
 }
