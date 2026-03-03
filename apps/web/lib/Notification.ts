@@ -46,7 +46,8 @@ const isDuplicateEntryError = (error: unknown) => {
 		duplicateEntryError.errno !== 1062
 	)
 		return false;
-	const message = `${duplicateEntryError.sqlMessage ?? ""} ${duplicateEntryError.message ?? ""}`;
+	const message =
+		`${duplicateEntryError.sqlMessage ?? ""} ${duplicateEntryError.message ?? ""}`.trim();
 	return message.length === 0 || message.includes("dedup_key_idx");
 };
 
