@@ -1,6 +1,7 @@
 use cap_recording::{
     RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
 };
+use scap_targets::Display;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
@@ -153,12 +154,9 @@ impl DeepLinkAction {
 
                 let capture_target = match capture_mode {
                     Some(mode) => Self::resolve_capture_target(&mode)?,
-                    None => {
-                        let displays = cap_recording::screen_capture::list_displays();
-                        let (display, _) =
-                            displays.into_iter().next().ok_or("No displays available")?;
-                        ScreenCaptureTarget::Display { id: display.id }
-                    }
+                    None => ScreenCaptureTarget::Display {
+                        id: Display::primary().id(),
+                    },
                 };
 
                 let inputs = StartRecordingInputs {
@@ -192,12 +190,9 @@ impl DeepLinkAction {
             DeepLinkAction::TakeScreenshot { capture_mode } => {
                 let target = match capture_mode {
                     Some(mode) => Self::resolve_capture_target(&mode)?,
-                    None => {
-                        let displays = cap_recording::screen_capture::list_displays();
-                        let (display, _) =
-                            displays.into_iter().next().ok_or("No displays available")?;
-                        ScreenCaptureTarget::Display { id: display.id }
-                    }
+                    None => ScreenCaptureTarget::Display {
+                        id: Display::primary().id(),
+                    },
                 };
 
                 crate::recording::take_screenshot(app.clone(), target)
