@@ -31,7 +31,7 @@ cap-desktop://action?value="stop_recording"
 Actions with parameters:
 
 ```
-cap-desktop://action?value={"start_recording":{"capture_mode":{"screen":"Built-in Retina Display"},"camera":null,"mic_label":null,"capture_system_audio":false,"mode":"studio"}}
+cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null,"mic_label":null,"capture_system_audio":false,"mode":"studio"}}
 ```
 
 ### Available Deeplink Actions
@@ -63,6 +63,6 @@ cap-desktop://action?value={"start_recording":{"capture_mode":{"screen":"Built-i
 
 ```bash
 cd apps/raycast
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
