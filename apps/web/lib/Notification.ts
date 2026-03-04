@@ -148,6 +148,7 @@ export async function createNotification(
 				recipientId,
 				type,
 				data,
+				videoId: notification.videoId,
 			});
 
 			revalidatePath("/dashboard");
@@ -181,7 +182,7 @@ export async function createNotification(
 					and(
 						eq(notifications.type, "view"),
 						eq(notifications.recipientId, videoResult.ownerId),
-						sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${notification.videoId}`,
+						eq(notifications.videoId, notification.videoId),
 						sql`JSON_EXTRACT(${notifications.data}, '$.authorId') = ${notification.authorId}`,
 					),
 				)
@@ -223,6 +224,7 @@ export async function createNotification(
 			recipientId: videoResult.ownerId,
 			type,
 			data,
+			videoId: notification.videoId,
 		});
 
 		revalidatePath("/dashboard");
@@ -285,7 +287,7 @@ export async function createAnonymousViewNotification({
 					eq(notifications.type, "anon_view"),
 					eq(notifications.recipientId, videoWithOwner.ownerId),
 					gte(notifications.createdAt, rateWindowStart),
-					sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${videoId}`,
+					eq(notifications.videoId, videoId),
 				),
 			)
 			.limit(1);
@@ -299,6 +301,7 @@ export async function createAnonymousViewNotification({
 			recipientId: videoWithOwner.ownerId,
 			type: "anon_view",
 			data: { videoId, anonName, location },
+			videoId,
 			dedupKey,
 		});
 		revalidatePath("/dashboard");
@@ -316,16 +319,9 @@ export async function sendFirstViewEmail(
 	try {
 		const database = db();
 
-		const [video] = await database
-			.select({ firstViewEmailSentAt: videos.firstViewEmailSentAt })
-			.from(videos)
-			.where(eq(videos.id, Video.VideoId.make(params.videoId)))
-			.limit(1);
-
-		if (!video || video.firstViewEmailSentAt) return;
-
-		const [videoWithOwner] = await database
+		const videoWithOwner = await database
 			.select({
+				firstViewEmailSentAt: videos.firstViewEmailSentAt,
 				videoName: videos.name,
 				ownerId: videos.ownerId,
 				ownerEmail: users.email,
@@ -334,7 +330,12 @@ export async function sendFirstViewEmail(
 			.from(videos)
 			.innerJoin(users, eq(users.id, videos.ownerId))
 			.where(eq(videos.id, Video.VideoId.make(params.videoId)))
-			.limit(1);
+			.limit(1)
+			.then((rows) => {
+				const row = rows[0];
+				if (!row || row.firstViewEmailSentAt) return null;
+				return row;
+			});
 
 		if (!videoWithOwner?.ownerEmail) return;
 
