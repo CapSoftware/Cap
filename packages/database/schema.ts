@@ -444,6 +444,7 @@ export const notifications = mysqlTable(
 				location?: string | null;
 			}>()
 			.notNull(),
+		videoId: varchar("videoId", { length: 50 }),
 		dedupKey: varchar("dedupKey", { length: 128 }),
 		readAt: timestamp("readAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -467,6 +468,9 @@ export const notifications = mysqlTable(
 			table.recipientId,
 			table.createdAt,
 		),
+		typeRecipientVideoCreatedIndex: index(
+			"type_recipient_video_created_idx",
+		).on(table.type, table.recipientId, table.videoId, table.createdAt),
 	}),
 );
 
