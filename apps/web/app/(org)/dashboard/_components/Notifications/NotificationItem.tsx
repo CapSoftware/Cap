@@ -7,19 +7,20 @@ import moment from "moment";
 import Link from "next/link";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import type { NotificationType } from "@/lib/Notification";
 
 type NotificationItemProps = {
 	notification: APINotification;
 	className?: string;
 };
 
+type NotificationType = APINotification["type"];
+
 const descriptionMap: Record<NotificationType, string> = {
 	comment: `commented on your video`,
 	reply: `replied to your comment`,
 	view: `viewed your video`,
 	reaction: `reacted to your video`,
-	// mention: `mentioned you in a comment`,
+	anon_view: `viewed your video`,
 };
 
 export const NotificationItem = ({
@@ -36,6 +37,12 @@ export const NotificationItem = ({
 		}
 	};
 
+	const isAnonView = notification.type === "anon_view";
+	const displayName =
+		notification.type === "anon_view"
+			? notification.anonName
+			: notification.author.name;
+
 	return (
 		<Link
 			href={link}
@@ -45,11 +52,14 @@ export const NotificationItem = ({
 				className,
 			)}
 		>
-			{/* Avatar */}
 			<div className="relative flex-shrink-0">
 				<SignedImageUrl
-					image={notification.author.avatar as ImageUpload.ImageUrl | null}
-					name={notification.author.name}
+					image={
+						isAnonView
+							? null
+							: (notification.author.avatar as ImageUpload.ImageUrl | null)
+					}
+					name={displayName}
 					className="relative flex-shrink-0 size-7"
 					letterClass="text-sm"
 				/>
@@ -58,17 +68,21 @@ export const NotificationItem = ({
 				)}
 			</div>
 
-			{/* Content */}
 			<div className="flex flex-col flex-1 justify-center">
 				<div className="flex gap-1 items-center">
 					<span className="font-medium text-gray-12 text-[13px]">
-						{notification.author.name}
+						{displayName}
 					</span>
 					<span className="text-gray-10 text-[13px]">
 						{descriptionMap[notification.type]}
 					</span>
 				</div>
 
+				{isAnonView && notification.location && (
+					<p className="text-[13px] leading-4 text-gray-11">
+						{notification.location}
+					</p>
+				)}
 				{(notification.type === "comment" || notification.type === "reply") && (
 					<p className="mb-2 text-[13px] h-fit italic leading-4 text-gray-11 line-clamp-2">
 						{notification.comment.content}
@@ -79,7 +93,6 @@ export const NotificationItem = ({
 				</p>
 			</div>
 
-			{/* Icon */}
 			<div className="flex flex-shrink-0 items-center mt-1">
 				{notification.type === "comment" && (
 					<FontAwesomeIcon icon={faComment} className="text-gray-10 size-4" />
@@ -87,7 +100,8 @@ export const NotificationItem = ({
 				{notification.type === "reply" && (
 					<FontAwesomeIcon icon={faReply} className="text-gray-10 size-4" />
 				)}
-				{notification.type === "view" && (
+				{(notification.type === "view" ||
+					notification.type === "anon_view") && (
 					<FontAwesomeIcon icon={faEye} className="text-gray-10 size-4" />
 				)}
 				{notification.type === "reaction" && (
@@ -104,8 +118,10 @@ function getLink(notification: APINotification) {
 			return `/s/${notification.videoId}/?reply=${notification.comment.id}`;
 		case "comment":
 		case "reaction":
-			// case "mention":
 			return `/s/${notification.videoId}/?comment=${notification.comment.id}`;
+		case "view":
+		case "anon_view":
+			return `/s/${notification.videoId}`;
 		default:
 			return `/s/${notification.videoId}`;
 	}

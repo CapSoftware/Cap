@@ -89,10 +89,8 @@ export const users = mysqlTable(
 					pauseReplies: boolean;
 					pauseViews: boolean;
 					pauseReactions: boolean;
+					pauseAnonViews?: boolean;
 				};
-				// For analytics.
-				// Adding in preferences so we don't have to
-				// add a new column and can be dynamic going forward.
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
@@ -339,6 +337,7 @@ export const videos = mysqlTable(
 		password: encryptedTextNullable("password"),
 		// LEGACY
 		xStreamInfo: text("xStreamInfo"),
+		firstViewEmailSentAt: timestamp("firstViewEmailSentAt"),
 		isScreenshot: boolean("isScreenshot").notNull().default(false),
 		// DEPRECATED
 		awsRegion: varchar("awsRegion", { length: 255 }),
@@ -428,9 +427,11 @@ export const notifications = mysqlTable(
 		id: nanoId("id").notNull().primaryKey(),
 		orgId: nanoId("orgId").notNull().$type<Organisation.OrganisationId>(),
 		recipientId: nanoId("recipientId").notNull().$type<User.UserId>(),
-		type: varchar("type", { length: 10 })
+		type: varchar("type", { length: 16 })
 			.notNull()
-			.$type<"view" | "comment" | "reply" | "reaction" /*| "mention"*/>(),
+			.$type<
+				"view" | "comment" | "reply" | "reaction" | "anon_view" /*| "mention"*/
+			>(),
 		data: json("data")
 			.$type<{
 				videoId?: string;
@@ -439,8 +440,12 @@ export const notifications = mysqlTable(
 					id: string;
 					content: string;
 				};
+				anonName?: string;
+				location?: string | null;
 			}>()
 			.notNull(),
+		videoId: varchar("videoId", { length: 50 }),
+		dedupKey: varchar("dedupKey", { length: 128 }),
 		readAt: timestamp("readAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 	},
@@ -457,6 +462,15 @@ export const notifications = mysqlTable(
 			table.recipientId,
 			table.createdAt,
 		),
+		dedupKeyUnique: uniqueIndex("dedup_key_idx").on(table.dedupKey),
+		typeRecipientCreatedIndex: index("type_recipient_created_idx").on(
+			table.type,
+			table.recipientId,
+			table.createdAt,
+		),
+		typeRecipientVideoCreatedIndex: index(
+			"type_recipient_video_created_idx",
+		).on(table.type, table.recipientId, table.videoId, table.createdAt),
 	}),
 );
 

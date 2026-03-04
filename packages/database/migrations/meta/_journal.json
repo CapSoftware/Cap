@@ -92,6 +92,34 @@
 			"when": 1772534950328,
 			"tag": "0012_lethal_lilith",
 			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "5",
+			"when": 1772573402457,
+			"tag": "0013_faithful_marvex",
+			"breakpoints": true
+		},
+		{
+			"idx": 14,
+			"version": "5",
+			"when": 1772576220593,
+			"tag": "0014_modern_triton",
+			"breakpoints": true
+		},
+		{
+			"idx": 15,
+			"version": "5",
+			"when": 1772582468257,
+			"tag": "0015_closed_tigra",
+			"breakpoints": true
+		},
+		{
+			"idx": 16,
+			"version": "5",
+			"when": 1772641549840,
+			"tag": "0016_bouncy_hellcat",
+			"breakpoints": true
 		}
 	]
 }
