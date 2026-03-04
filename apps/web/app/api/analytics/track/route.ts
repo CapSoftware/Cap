@@ -136,30 +136,22 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
-			yield* Effect.forkDaemon(
-				Effect.tryPromise(() =>
-					sendFirstViewEmail(
-						userId
-							? {
-									videoId: body.videoId,
-									viewerUserId: userId,
-									isAnonymous: false,
-								}
-							: {
-									videoId: body.videoId,
-									viewerName: sessionId
-										? getAnonymousName(sessionId)
-										: "Someone",
-									isAnonymous: true,
-								},
+			if (userId) {
+				yield* Effect.forkDaemon(
+					Effect.tryPromise(() =>
+						sendFirstViewEmail({
+							videoId: body.videoId,
+							viewerUserId: userId,
+							isAnonymous: false,
+						}),
+					).pipe(
+						Effect.catchAll((error) => {
+							console.error("Failed to send first view email:", error);
+							return Effect.void;
+						}),
 					),
-				).pipe(
-					Effect.catchAll((error) => {
-						console.error("Failed to send first view email:", error);
-						return Effect.void;
-					}),
-				),
-			);
+				);
+			}
 
 			if (!userId && sessionId) {
 				const anonName = getAnonymousName(sessionId);
