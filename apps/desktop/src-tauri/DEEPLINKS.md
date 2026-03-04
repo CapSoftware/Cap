@@ -20,7 +20,7 @@ cap-desktop://action?value=%22stop_recording%22
 
 ### Parameterized actions
 
-The JSON value is an object keyed by the action name:
+The JSON value is an object keyed by the action name (shown unencoded for readability; URL-encode the JSON in actual deeplinks):
 
 ```
 cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null,"mic_label":null,"capture_system_audio":false,"mode":"studio"}}
@@ -30,87 +30,87 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 
 ### Recording Controls
 
-| Action | Type | Description |
-|---|---|---|
-| `start_recording` | Parameterized | Start a new recording with explicit settings |
+| Action                    | Type          | Description                                         |
+| ------------------------- | ------------- | --------------------------------------------------- |
+| `start_recording`         | Parameterized | Start a new recording with explicit settings        |
 | `start_current_recording` | Parameterized | Start a recording using saved settings from the app |
-| `stop_recording` | Unit | Stop the current recording |
-| `pause_recording` | Unit | Pause the current recording |
-| `resume_recording` | Unit | Resume a paused recording |
-| `toggle_pause_recording` | Unit | Toggle pause/resume on the current recording |
-| `restart_recording` | Unit | Restart the current recording |
+| `stop_recording`          | Unit          | Stop the current recording                          |
+| `pause_recording`         | Unit          | Pause the current recording                         |
+| `resume_recording`        | Unit          | Resume a paused recording                           |
+| `toggle_pause_recording`  | Unit          | Toggle pause/resume on the current recording        |
+| `restart_recording`       | Unit          | Restart the current recording                       |
 
 ### Screenshots
 
-| Action | Type | Description |
-|---|---|---|
+| Action            | Type          | Description          |
+| ----------------- | ------------- | -------------------- |
 | `take_screenshot` | Parameterized | Capture a screenshot |
 
 ### Device Management
 
-| Action | Type | Description |
-|---|---|---|
-| `list_cameras` | Unit | Copy available cameras as JSON to clipboard |
-| `set_camera` | Parameterized | Set the active camera |
-| `list_microphones` | Unit | Copy available microphones as JSON to clipboard |
-| `set_microphone` | Parameterized | Set the active microphone |
-| `list_displays` | Unit | Copy available displays as JSON to clipboard |
-| `list_windows` | Unit | Copy available windows as JSON to clipboard |
+| Action             | Type          | Description                                     |
+| ------------------ | ------------- | ----------------------------------------------- |
+| `list_cameras`     | Unit          | Copy available cameras as JSON to clipboard     |
+| `set_camera`       | Parameterized | Set the active camera                           |
+| `list_microphones` | Unit          | Copy available microphones as JSON to clipboard |
+| `set_microphone`   | Parameterized | Set the active microphone                       |
+| `list_displays`    | Unit          | Copy available displays as JSON to clipboard    |
+| `list_windows`     | Unit          | Copy available windows as JSON to clipboard     |
 
 ### Other
 
-| Action | Type | Description |
-|---|---|---|
-| `open_editor` | Parameterized | Open a project in the editor |
-| `open_settings` | Parameterized | Open the settings window |
+| Action          | Type          | Description                  |
+| --------------- | ------------- | ---------------------------- |
+| `open_editor`   | Parameterized | Open a project in the editor |
+| `open_settings` | Parameterized | Open the settings window     |
 
 ## Action Parameters
 
 ### `start_recording`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `capture_mode` | `null` \| `{"screen":"<name>"}` \| `{"window":"<name>"}` | Yes | Target to capture. `null` uses the primary display. |
-| `camera` | `null` \| device ID object | Yes | Camera device. `null` disables the camera. |
-| `mic_label` | `null` \| `string` | Yes | Microphone label. `null` disables the microphone. |
-| `capture_system_audio` | `boolean` | Yes | Whether to capture system audio. |
-| `mode` | `"studio"` \| `"instant"` | Yes | Recording mode. |
+| Field                  | Type                                                     | Required | Description                                                            |
+| ---------------------- | -------------------------------------------------------- | -------- | ---------------------------------------------------------------------- |
+| `capture_mode`         | `null` \| `{"screen":"<name>"}` \| `{"window":"<name>"}` | No       | Target to capture. Defaults to primary display when omitted or `null`. |
+| `camera`               | `null` \| device ID object                               | No       | Camera device. Defaults to no camera when omitted or `null`.           |
+| `mic_label`            | `null` \| `string`                                       | No       | Microphone label. Defaults to no microphone when omitted or `null`.    |
+| `capture_system_audio` | `boolean`                                                | Yes      | Whether to capture system audio.                                       |
+| `mode`                 | `"studio"` \| `"instant"`                                | Yes      | Recording mode.                                                        |
 
 ### `start_current_recording`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `mode` | `null` \| `"studio"` \| `"instant"` | Yes | Override the saved recording mode. `null` uses the saved mode (defaults to studio). |
+| Field  | Type                                | Required | Description                                                                         |
+| ------ | ----------------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| `mode` | `null` \| `"studio"` \| `"instant"` | Yes      | Override the saved recording mode. `null` uses the saved mode (defaults to studio). |
 
 ### `take_screenshot`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `capture_mode` | `null` \| `{"screen":"<name>"}` \| `{"window":"<name>"}` | Yes | Target to capture. `null` uses the primary display. |
+| Field          | Type                                                     | Required | Description                                         |
+| -------------- | -------------------------------------------------------- | -------- | --------------------------------------------------- |
+| `capture_mode` | `null` \| `{"screen":"<name>"}` \| `{"window":"<name>"}` | Yes      | Target to capture. `null` uses the primary display. |
 
 ### `set_camera`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `id` | `null` \| device ID object | Yes | Camera to activate. `null` disables the camera. |
+| Field | Type                       | Required | Description                                     |
+| ----- | -------------------------- | -------- | ----------------------------------------------- |
+| `id`  | `null` \| device ID object | Yes      | Camera to activate. `null` disables the camera. |
 
 ### `set_microphone`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `label` | `null` \| `string` | Yes | Microphone label. `null` disables the microphone. |
+| Field   | Type               | Required | Description                                       |
+| ------- | ------------------ | -------- | ------------------------------------------------- |
+| `label` | `null` \| `string` | Yes      | Microphone label. `null` disables the microphone. |
 
 ### `open_editor`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `project_path` | `string` | Yes | Absolute path to the project directory. |
+| Field          | Type     | Required | Description                             |
+| -------------- | -------- | -------- | --------------------------------------- |
+| `project_path` | `string` | Yes      | Absolute path to the project directory. |
 
 ### `open_settings`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `page` | `null` \| `string` | Yes | Settings page to open. `null` opens the default page. |
+| Field  | Type               | Required | Description                                           |
+| ------ | ------------------ | -------- | ----------------------------------------------------- |
+| `page` | `null` \| `string` | Yes      | Settings page to open. `null` opens the default page. |
 
 ## Examples
 

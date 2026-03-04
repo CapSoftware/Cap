@@ -5,7 +5,10 @@
   "description": "Control Cap screen recorder — start, stop, pause, resume recordings, take screenshots, and manage devices.",
   "icon": "cap-icon.png",
   "author": "capsoftware",
-  "categories": ["Productivity", "Developer Tools"],
+  "categories": [
+    "Productivity",
+    "Developer Tools"
+  ],
   "license": "MIT",
   "commands": [
     {
@@ -70,8 +73,7 @@
     }
   ],
   "dependencies": {
-    "@raycast/api": "^1.93.3",
-    "@raycast/utils": "^1.19.1"
+    "@raycast/api": "^1.93.3"
   },
   "devDependencies": {
     "@raycast/eslint-config": "^1.0.11",

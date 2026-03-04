@@ -1,8 +1,5 @@
-import { runDeepLinkAction } from "./lib/deeplink";
+import { runDeepLinkAction } from './lib/deeplink';
 
 export default async function openSettings() {
-  await runDeepLinkAction(
-    { open_settings: { page: null } },
-    "Settings opened",
-  );
+  await runDeepLinkAction({ open_settings: { page: null } }, 'Open settings dispatched');
 }
