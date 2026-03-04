@@ -26,6 +26,23 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    RestartRecording,
+    TakeScreenshot {
+        capture_mode: Option<CaptureMode>,
+    },
+    ListCameras,
+    SetCamera {
+        id: Option<DeviceOrModelID>,
+    },
+    ListMicrophones,
+    SetMicrophone {
+        label: Option<String>,
+    },
+    ListDisplays,
+    ListWindows,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -49,7 +66,6 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
                     ActionParseFromUrlError::Invalid => {
                         eprintln!("Invalid deep link format \"{}\"", &url)
                     }
-                    // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
                 })
                 .ok()
@@ -105,6 +121,21 @@ impl TryFrom<&Url> for DeepLinkAction {
 }
 
 impl DeepLinkAction {
+    fn resolve_capture_target(capture_mode: &CaptureMode) -> Result<ScreenCaptureTarget, String> {
+        match capture_mode {
+            CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
+                .into_iter()
+                .find(|(s, _)| s.name == *name)
+                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                .ok_or(format!("No screen with name \"{}\"", name)),
+            CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
+                .into_iter()
+                .find(|(w, _)| w.name == *name)
+                .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+                .ok_or(format!("No window with name \"{}\"", name)),
+        }
+    }
+
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
             DeepLinkAction::StartRecording {
@@ -119,18 +150,7 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                let capture_target = Self::resolve_capture_target(&capture_mode)?;
 
                 let inputs = StartRecordingInputs {
                     mode,
@@ -145,6 +165,68 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::RestartRecording => {
+                crate::recording::restart_recording(app.clone(), app.state())
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::TakeScreenshot { capture_mode } => {
+                let target = match capture_mode {
+                    Some(mode) => Self::resolve_capture_target(&mode)?,
+                    None => {
+                        let displays = cap_recording::screen_capture::list_displays();
+                        let (display, _) =
+                            displays.into_iter().next().ok_or("No displays available")?;
+                        ScreenCaptureTarget::Display { id: display.id }
+                    }
+                };
+
+                crate::recording::take_screenshot(app.clone(), target)
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::ListCameras => {
+                let cameras = crate::recording::list_cameras();
+                let json = serde_json::to_string(&cameras).map_err(|e| e.to_string())?;
+                tracing::info!("Available cameras: {}", json);
+                Ok(())
+            }
+            DeepLinkAction::SetCamera { id } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state, id, None).await
+            }
+            DeepLinkAction::ListMicrophones => {
+                let mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
+                let labels: Vec<String> = mics.keys().cloned().collect();
+                let json = serde_json::to_string(&labels).map_err(|e| e.to_string())?;
+                tracing::info!("Available microphones: {}", json);
+                Ok(())
+            }
+            DeepLinkAction::SetMicrophone { label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, label).await
+            }
+            DeepLinkAction::ListDisplays => {
+                let displays = crate::recording::list_capture_displays().await;
+                let json = serde_json::to_string(&displays).map_err(|e| e.to_string())?;
+                tracing::info!("Available displays: {}", json);
+                Ok(())
+            }
+            DeepLinkAction::ListWindows => {
+                let windows = crate::recording::list_capture_windows().await;
+                let json = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
+                tracing::info!("Available windows: {}", json);
+                Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
