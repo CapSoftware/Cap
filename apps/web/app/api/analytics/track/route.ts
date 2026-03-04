@@ -82,8 +82,6 @@ export async function POST(request: NextRequest) {
 		sanitizeString(request.nextUrl.hostname) ||
 		"";
 
-	const tenantId = body.orgId || (hostname ? `domain:${hostname}` : "public");
-
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
 
 	await runPromise(
@@ -101,18 +99,23 @@ export async function POST(request: NextRequest) {
 					return currentUser.id;
 				},
 			});
-			if (userId) {
-				const [videoRecord] = yield* Effect.tryPromise(() =>
-					db()
-						.select({ ownerId: videos.ownerId })
-						.from(videos)
-						.where(eq(videos.id, Video.VideoId.make(body.videoId)))
-						.limit(1),
-				).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
-				if (videoRecord && userId === videoRecord.ownerId) {
-					return;
-				}
+
+			const [videoRecord] = yield* Effect.tryPromise(() =>
+				db()
+					.select({ ownerId: videos.ownerId })
+					.from(videos)
+					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+					.limit(1),
+			).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
+
+			if (userId && videoRecord && userId === videoRecord.ownerId) {
+				return;
 			}
+
+			const tenantId =
+				body.orgId ||
+				videoRecord?.ownerId ||
+				(hostname ? `domain:${hostname}` : "public");
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
