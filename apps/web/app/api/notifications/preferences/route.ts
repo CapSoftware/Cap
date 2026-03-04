@@ -11,6 +11,7 @@ const PreferencesSchema = z.object({
 		pauseReplies: z.boolean(),
 		pauseViews: z.boolean(),
 		pauseReactions: z.boolean(),
+		pauseAnonViews: z.boolean().optional().default(false),
 	}),
 });
 
