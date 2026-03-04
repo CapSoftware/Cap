@@ -341,9 +341,11 @@ export async function sendFirstViewEmail(
 		if (!params.isAnonymous && params.viewerUserId === videoWithOwner.ownerId)
 			return;
 
+		const preferences = videoWithOwner.preferences as UserPreferences;
 		if (params.isAnonymous) {
-			const preferences = videoWithOwner.preferences as UserPreferences;
 			if (preferences?.notifications?.pauseAnonViews) return;
+		} else {
+			if (preferences?.notifications?.pauseViews) return;
 		}
 
 		const [result] = await database
