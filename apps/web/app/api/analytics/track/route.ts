@@ -8,7 +8,10 @@ import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
 
 import { getAnonymousName } from "@/lib/anonymous-names";
-import { createAnonymousViewNotification } from "@/lib/Notification";
+import {
+	createAnonymousViewNotification,
+	sendFirstViewEmail,
+} from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
@@ -132,6 +135,31 @@ export async function POST(request: NextRequest) {
 					user_id: userId,
 				},
 			]);
+
+			yield* Effect.forkDaemon(
+				Effect.tryPromise(() =>
+					sendFirstViewEmail(
+						userId
+							? {
+									videoId: body.videoId,
+									viewerUserId: userId,
+									isAnonymous: false,
+								}
+							: {
+									videoId: body.videoId,
+									viewerName: sessionId
+										? getAnonymousName(sessionId)
+										: "Someone",
+									isAnonymous: true,
+								},
+					),
+				).pipe(
+					Effect.catchAll((error) => {
+						console.error("Failed to send first view email:", error);
+						return Effect.void;
+					}),
+				),
+			);
 
 			if (!userId && sessionId) {
 				const anonName = getAnonymousName(sessionId);
