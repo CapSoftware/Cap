@@ -89,10 +89,8 @@ export const users = mysqlTable(
 					pauseReplies: boolean;
 					pauseViews: boolean;
 					pauseReactions: boolean;
+					pauseAnonViews?: boolean;
 				};
-				// For analytics.
-				// Adding in preferences so we don't have to
-				// add a new column and can be dynamic going forward.
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
@@ -339,6 +337,7 @@ export const videos = mysqlTable(
 		password: encryptedTextNullable("password"),
 		// LEGACY
 		xStreamInfo: text("xStreamInfo"),
+		firstViewEmailSentAt: timestamp("firstViewEmailSentAt"),
 		isScreenshot: boolean("isScreenshot").notNull().default(false),
 		// DEPRECATED
 		awsRegion: varchar("awsRegion", { length: 255 }),
