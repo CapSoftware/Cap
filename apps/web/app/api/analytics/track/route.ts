@@ -192,6 +192,23 @@ export async function POST(request: NextRequest) {
 					]),
 				);
 			}
+
+			if (!userId && !sessionId) {
+				yield* Effect.forkDaemon(
+					Effect.tryPromise(() =>
+						sendFirstViewEmail({
+							videoId: body.videoId,
+							viewerName: "Anonymous Viewer",
+							isAnonymous: true,
+						}),
+					).pipe(
+						Effect.catchAll((error) => {
+							console.error("Failed to send first view email:", error);
+							return Effect.void;
+						}),
+					),
+				);
+			}
 		}).pipe(provideOptionalAuth),
 	);
 
