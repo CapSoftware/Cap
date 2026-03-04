@@ -6,7 +6,7 @@ export default async function startStudioRecording() {
 
   await dispatchAction({
     start_recording: {
-      capture_mode: { screen: 'Built-in Retina Display' },
+      capture_mode: null,
       camera: null,
       mic_label: null,
       capture_system_audio: false,

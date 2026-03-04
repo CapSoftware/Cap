@@ -3,11 +3,16 @@ import { open, showToast, Toast } from '@raycast/api';
 const DEEPLINK_SCHEME = 'cap-desktop://action';
 
 export async function dispatchAction(action: string | Record<string, unknown>) {
-  const valueJson = typeof action === 'string' ? JSON.stringify(action) : JSON.stringify(action);
+  const valueJson = JSON.stringify(action);
   const url = `${DEEPLINK_SCHEME}?value=${encodeURIComponent(valueJson)}`;
+  await open(url);
+}
 
+export async function fireSimpleAction(action: string, label: string) {
+  await showToast({ style: Toast.Style.Animated, title: `${label}...` });
   try {
-    await open(url);
+    await dispatchAction(action);
+    await showToast({ style: Toast.Style.Success, title: label });
   } catch {
     await showToast({
       style: Toast.Style.Failure,
@@ -15,10 +20,4 @@ export async function dispatchAction(action: string | Record<string, unknown>) {
       message: 'Make sure Cap is running.',
     });
   }
-}
-
-export async function fireSimpleAction(action: string, label: string) {
-  await showToast({ style: Toast.Style.Animated, title: `${label}...` });
-  await dispatchAction(action);
-  await showToast({ style: Toast.Style.Success, title: label });
 }

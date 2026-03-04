@@ -4,6 +4,7 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tracing::trace;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
@@ -19,7 +20,7 @@ pub enum CaptureMode {
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
     StartRecording {
-        capture_mode: CaptureMode,
+        capture_mode: Option<CaptureMode>,
         camera: Option<DeviceOrModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
@@ -125,12 +126,12 @@ impl DeepLinkAction {
         match capture_mode {
             CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                 .into_iter()
-                .find(|(s, _)| s.name == *name)
+                .find(|(s, _)| s.name == name)
                 .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                 .ok_or(format!("No screen with name \"{}\"", name)),
             CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                 .into_iter()
-                .find(|(w, _)| w.name == *name)
+                .find(|(w, _)| w.name == name)
                 .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
                 .ok_or(format!("No window with name \"{}\"", name)),
         }
@@ -150,7 +151,15 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                let capture_target = Self::resolve_capture_target(&capture_mode)?;
+                let capture_target = match capture_mode {
+                    Some(mode) => Self::resolve_capture_target(&mode)?,
+                    None => {
+                        let displays = cap_recording::screen_capture::list_displays();
+                        let (display, _) =
+                            displays.into_iter().next().ok_or("No displays available")?;
+                        ScreenCaptureTarget::Display { id: display.id }
+                    }
+                };
 
                 let inputs = StartRecordingInputs {
                     mode,
@@ -198,7 +207,9 @@ impl DeepLinkAction {
             DeepLinkAction::ListCameras => {
                 let cameras = crate::recording::list_cameras();
                 let json = serde_json::to_string(&cameras).map_err(|e| e.to_string())?;
-                tracing::info!("Available cameras: {}", json);
+                app.clipboard()
+                    .write_text(&json)
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             }
             DeepLinkAction::SetCamera { id } => {
@@ -209,7 +220,9 @@ impl DeepLinkAction {
                 let mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
                 let labels: Vec<String> = mics.keys().cloned().collect();
                 let json = serde_json::to_string(&labels).map_err(|e| e.to_string())?;
-                tracing::info!("Available microphones: {}", json);
+                app.clipboard()
+                    .write_text(&json)
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             }
             DeepLinkAction::SetMicrophone { label } => {
@@ -219,13 +232,17 @@ impl DeepLinkAction {
             DeepLinkAction::ListDisplays => {
                 let displays = crate::recording::list_capture_displays().await;
                 let json = serde_json::to_string(&displays).map_err(|e| e.to_string())?;
-                tracing::info!("Available displays: {}", json);
+                app.clipboard()
+                    .write_text(&json)
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             }
             DeepLinkAction::ListWindows => {
                 let windows = crate::recording::list_capture_windows().await;
                 let json = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
-                tracing::info!("Available windows: {}", json);
+                app.clipboard()
+                    .write_text(&json)
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
