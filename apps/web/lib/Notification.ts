@@ -329,6 +329,7 @@ export async function sendFirstViewEmail(
 				videoName: videos.name,
 				ownerId: videos.ownerId,
 				ownerEmail: users.email,
+				preferences: users.preferences,
 			})
 			.from(videos)
 			.innerJoin(users, eq(users.id, videos.ownerId))
@@ -339,6 +340,11 @@ export async function sendFirstViewEmail(
 
 		if (!params.isAnonymous && params.viewerUserId === videoWithOwner.ownerId)
 			return;
+
+		if (params.isAnonymous) {
+			const preferences = videoWithOwner.preferences as UserPreferences;
+			if (preferences?.notifications?.pauseAnonViews) return;
+		}
 
 		const [result] = await database
 			.update(videos)
