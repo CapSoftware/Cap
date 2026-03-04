@@ -183,21 +183,27 @@ impl DeepLinkAction {
                     .flatten()
                     .unwrap_or_default();
 
+                let RecordingSettingsStore {
+                    target,
+                    mic_name,
+                    camera_id,
+                    mode: saved_mode,
+                    system_audio,
+                    organization_id,
+                } = settings;
+
                 let state = app.state::<ArcLock<App>>();
 
-                crate::set_mic_input(state.clone(), settings.mic_name).await?;
-                crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
-                    .await?;
+                crate::set_mic_input(state.clone(), mic_name).await?;
+                crate::set_camera_input(app.clone(), state.clone(), camera_id, None).await?;
 
                 let inputs = StartRecordingInputs {
-                    mode: mode.or(settings.mode).unwrap_or(RecordingMode::Studio),
-                    capture_target: settings.target.unwrap_or_else(|| {
-                        ScreenCaptureTarget::Display {
-                            id: Display::primary().id(),
-                        }
+                    mode: mode.or(saved_mode).unwrap_or(RecordingMode::Studio),
+                    capture_target: target.unwrap_or_else(|| ScreenCaptureTarget::Display {
+                        id: Display::primary().id(),
                     }),
-                    capture_system_audio: settings.system_audio,
-                    organization_id: settings.organization_id,
+                    capture_system_audio: system_audio,
+                    organization_id,
                 };
 
                 crate::recording::start_recording(app.clone(), state, inputs)
