@@ -1,9 +1,12 @@
 import { db } from "@cap/database";
+import { sendEmail } from "@cap/database/emails/config";
+import { FirstView } from "@cap/database/emails/first-view";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
+import { buildEnv, serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { type Comment, Video } from "@cap/web-domain";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
@@ -29,9 +32,6 @@ type CreateNotificationInput<D = AuthoredNotificationData> =
 
 const ANON_NOTIF_WINDOW_MS = 5 * 60 * 1000;
 const ANON_NOTIF_MAX_PER_VIDEO = 50;
-
-const escapeLikePattern = (value: string) =>
-	value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 
 const isDuplicateEntryError = (error: unknown) => {
 	if (!error || typeof error !== "object") return false;
@@ -248,7 +248,6 @@ export async function createAnonymousViewNotification({
 	const sessionHash = getSessionHash(sessionId);
 	const dedupKey = `anon_view:${videoId}:${sessionHash}`;
 	const rateWindowStart = new Date(Date.now() - ANON_NOTIF_WINDOW_MS);
-	const dedupPrefix = `anon_view:${escapeLikePattern(videoId)}:%`;
 
 	try {
 		const database = db();
@@ -286,7 +285,7 @@ export async function createAnonymousViewNotification({
 					eq(notifications.type, "anon_view"),
 					eq(notifications.recipientId, videoWithOwner.ownerId),
 					gte(notifications.createdAt, rateWindowStart),
-					sql`${notifications.dedupKey} LIKE ${dedupPrefix} ESCAPE '\\\\'`,
+					sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${videoId}`,
 				),
 			)
 			.limit(1);
@@ -306,5 +305,81 @@ export async function createAnonymousViewNotification({
 	} catch (error) {
 		if (isDuplicateEntryError(error)) return;
 		throw error;
+	}
+}
+
+export async function sendFirstViewEmail(
+	params:
+		| { videoId: string; viewerName: string; isAnonymous: true }
+		| { videoId: string; viewerUserId: string; isAnonymous: false },
+) {
+	try {
+		const database = db();
+
+		const [video] = await database
+			.select({ firstViewEmailSentAt: videos.firstViewEmailSentAt })
+			.from(videos)
+			.where(eq(videos.id, Video.VideoId.make(params.videoId)))
+			.limit(1);
+
+		if (!video || video.firstViewEmailSentAt) return;
+
+		const [videoWithOwner] = await database
+			.select({
+				videoName: videos.name,
+				ownerId: videos.ownerId,
+				ownerEmail: users.email,
+			})
+			.from(videos)
+			.innerJoin(users, eq(users.id, videos.ownerId))
+			.where(eq(videos.id, Video.VideoId.make(params.videoId)))
+			.limit(1);
+
+		if (!videoWithOwner?.ownerEmail) return;
+
+		if (!params.isAnonymous && params.viewerUserId === videoWithOwner.ownerId)
+			return;
+
+		const result = await database
+			.update(videos)
+			.set({ firstViewEmailSentAt: new Date() })
+			.where(
+				and(
+					eq(videos.id, Video.VideoId.make(params.videoId)),
+					isNull(videos.firstViewEmailSentAt),
+				),
+			);
+
+		if (result[0].affectedRows === 0) return;
+
+		let viewerName: string;
+		if (params.isAnonymous) {
+			viewerName = params.viewerName;
+		} else {
+			const [viewer] = await database
+				.select({ name: users.name, email: users.email })
+				.from(users)
+				.where(eq(users.id, params.viewerUserId))
+				.limit(1);
+			viewerName = viewer?.name || viewer?.email || "Someone";
+		}
+
+		const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
+			? `https://cap.link/${params.videoId}`
+			: `${serverEnv().WEB_URL}/s/${params.videoId}`;
+
+		await sendEmail({
+			email: videoWithOwner.ownerEmail,
+			subject: `Your Cap "${videoWithOwner.videoName}" just got its first view!`,
+			react: FirstView({
+				email: videoWithOwner.ownerEmail,
+				url: videoUrl,
+				videoName: videoWithOwner.videoName,
+				viewerName,
+				isAnonymous: params.isAnonymous,
+			}),
+		});
+	} catch (error) {
+		console.error("Failed to send first view email:", error);
 	}
 }
