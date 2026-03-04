@@ -100,22 +100,34 @@ export async function POST(request: NextRequest) {
 				},
 			});
 
-			if (userId && (!body.ownerId || userId === body.ownerId)) {
-				const [videoRecord] = yield* Effect.tryPromise(() =>
-					db()
-						.select({ ownerId: videos.ownerId })
-						.from(videos)
-						.where(eq(videos.id, Video.VideoId.make(body.videoId)))
-						.limit(1),
-				).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
+			const [videoRecord] = yield* Effect.tryPromise(() =>
+				db()
+					.select({
+						ownerId: videos.ownerId,
+						firstViewEmailSentAt: videos.firstViewEmailSentAt,
+						videoName: videos.name,
+					})
+					.from(videos)
+					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+					.limit(1),
+			).pipe(
+				Effect.orElseSucceed(
+					() =>
+						[] as {
+							ownerId: string;
+							firstViewEmailSentAt: Date | null;
+							videoName: string;
+						}[],
+				),
+			);
 
-				if (videoRecord && userId === videoRecord.ownerId) {
-					return;
-				}
+			if (videoRecord && userId === videoRecord.ownerId) {
+				return;
 			}
 
 			const tenantId =
 				body.orgId ||
+				videoRecord?.ownerId ||
 				body.ownerId ||
 				(hostname ? `domain:${hostname}` : "public");
 
@@ -139,21 +151,26 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
+			const shouldSendFirstViewEmail =
+				videoRecord && !videoRecord.firstViewEmailSentAt;
+
 			if (userId) {
-				yield* Effect.forkDaemon(
-					Effect.tryPromise(() =>
-						sendFirstViewEmail({
-							videoId: body.videoId,
-							viewerUserId: userId,
-							isAnonymous: false,
-						}),
-					).pipe(
-						Effect.catchAll((error) => {
-							console.error("Failed to send first view email:", error);
-							return Effect.void;
-						}),
-					),
-				);
+				if (shouldSendFirstViewEmail) {
+					yield* Effect.forkDaemon(
+						Effect.tryPromise(() =>
+							sendFirstViewEmail({
+								videoId: body.videoId,
+								viewerUserId: userId,
+								isAnonymous: false,
+							}),
+						).pipe(
+							Effect.catchAll((error) => {
+								console.error("Failed to send first view email:", error);
+								return Effect.void;
+							}),
+						),
+					);
+				}
 			}
 
 			if (!userId && sessionId) {
@@ -161,24 +178,27 @@ export async function POST(request: NextRequest) {
 				const location =
 					city && country ? `${city}, ${country}` : city || country || null;
 
-				yield* Effect.forkDaemon(
-					Effect.all([
-						Effect.tryPromise(() =>
-							createAnonymousViewNotification({
-								videoId: body.videoId,
-								sessionId,
-								anonName,
-								location,
-							}),
-						).pipe(
-							Effect.catchAll((error) => {
-								console.error(
-									"Failed to create anonymous view notification:",
-									error,
-								);
-								return Effect.void;
-							}),
-						),
+				const effects: Effect.Effect<void, never, never>[] = [
+					Effect.tryPromise(() =>
+						createAnonymousViewNotification({
+							videoId: body.videoId,
+							sessionId,
+							anonName,
+							location,
+						}),
+					).pipe(
+						Effect.catchAll((error) => {
+							console.error(
+								"Failed to create anonymous view notification:",
+								error,
+							);
+							return Effect.void;
+						}),
+					),
+				];
+
+				if (shouldSendFirstViewEmail) {
+					effects.push(
 						Effect.tryPromise(() =>
 							sendFirstViewEmail({
 								videoId: body.videoId,
@@ -191,11 +211,13 @@ export async function POST(request: NextRequest) {
 								return Effect.void;
 							}),
 						),
-					]),
-				);
+					);
+				}
+
+				yield* Effect.forkDaemon(Effect.all(effects));
 			}
 
-			if (!userId && !sessionId) {
+			if (!userId && !sessionId && shouldSendFirstViewEmail) {
 				yield* Effect.forkDaemon(
 					Effect.tryPromise(() =>
 						sendFirstViewEmail({
