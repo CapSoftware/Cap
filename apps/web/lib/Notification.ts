@@ -340,7 +340,7 @@ export async function sendFirstViewEmail(
 		if (!params.isAnonymous && params.viewerUserId === videoWithOwner.ownerId)
 			return;
 
-		const result = await database
+		const [result] = await database
 			.update(videos)
 			.set({ firstViewEmailSentAt: new Date() })
 			.where(
@@ -350,7 +350,7 @@ export async function sendFirstViewEmail(
 				),
 			);
 
-		if (result[0].affectedRows === 0) return;
+		if (result.affectedRows === 0) return;
 
 		let viewerName: string;
 		if (params.isAnonymous) {
