@@ -146,11 +146,9 @@ impl DeepLinkAction {
     }
 
     fn default_display_target() -> Result<ScreenCaptureTarget, String> {
-        let display = Display::list()
-            .into_iter()
-            .next()
-            .ok_or("No displays found")?;
-        Ok(ScreenCaptureTarget::Display { id: display.id() })
+        Ok(ScreenCaptureTarget::Display {
+            id: Display::primary().id(),
+        })
     }
 
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
