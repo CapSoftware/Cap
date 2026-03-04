@@ -143,9 +143,9 @@ export async function GET() {
 		});
 	} catch (error) {
 		console.error("Error fetching notifications:", error);
-		return NextResponse.json({
-			status: 500,
-			error: "Failed to fetch notifications",
-		});
+		return NextResponse.json(
+			{ error: "Failed to fetch notifications" },
+			{ status: 500 },
+		);
 	}
 }
