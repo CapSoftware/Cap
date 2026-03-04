@@ -376,13 +376,15 @@ export async function sendFirstViewEmail(
 			? `https://cap.link/${params.videoId}`
 			: `${serverEnv().WEB_URL}/s/${params.videoId}`;
 
+		const displayName = videoWithOwner.videoName || "Untitled Video";
+
 		await sendEmail({
 			email: videoWithOwner.ownerEmail,
-			subject: `Your Cap "${videoWithOwner.videoName}" just got its first view!`,
+			subject: `Your Cap "${displayName}" just got its first view!`,
 			react: FirstView({
 				email: videoWithOwner.ownerEmail,
 				url: videoUrl,
-				videoName: videoWithOwner.videoName,
+				videoName: displayName,
 				viewerName,
 			}),
 		});
