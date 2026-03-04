@@ -48,7 +48,7 @@ const isDuplicateEntryError = (error: unknown) => {
 		return false;
 	const message =
 		`${duplicateEntryError.sqlMessage ?? ""} ${duplicateEntryError.message ?? ""}`.trim();
-	return message.length === 0 || message.includes("dedup_key_idx");
+	return message.includes("dedup_key_idx");
 };
 
 export async function createNotification(
