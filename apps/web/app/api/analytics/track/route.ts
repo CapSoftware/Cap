@@ -1,8 +1,5 @@
-import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
-import { CurrentUser, Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { CurrentUser } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
@@ -103,17 +100,7 @@ export async function POST(request: NextRequest) {
 				},
 			});
 			if (userId && body.ownerId && userId === body.ownerId) {
-				const ownerIdResult = yield* Effect.tryPromise(() =>
-					db()
-						.select({ ownerId: videos.ownerId })
-						.from(videos)
-						.where(eq(videos.id, Video.VideoId.make(body.videoId)))
-						.limit(1)
-						.then((rows) => rows[0]?.ownerId ?? null),
-				).pipe(Effect.orElseSucceed(() => null as string | null));
-				if (ownerIdResult && userId === ownerIdResult) {
-					return;
-				}
+				return;
 			}
 
 			const tinybird = yield* Tinybird;
