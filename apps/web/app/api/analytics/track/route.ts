@@ -147,12 +147,19 @@ export async function POST(request: NextRequest) {
 
 				yield* Effect.forkDaemon(
 					Effect.tryPromise(() =>
-						createAnonymousViewNotification({
-							videoId: body.videoId,
-							sessionId,
-							anonName,
-							location,
-						}),
+						Promise.all([
+							createAnonymousViewNotification({
+								videoId: body.videoId,
+								sessionId,
+								anonName,
+								location,
+							}),
+							sendFirstViewEmail({
+								videoId: body.videoId,
+								viewerName: anonName,
+								isAnonymous: true,
+							}),
+						]),
 					).pipe(
 						Effect.catchAll((error) => {
 							console.error(
