@@ -36,11 +36,26 @@ export async function GET() {
 			.where(eq(users.id, currentUser.id))
 			.limit(1);
 
-		const parsedData = PreferencesSchema.parse(userPreferences?.preferences);
+		const defaultNotifications = {
+			notifications: {
+				pauseComments: false,
+				pauseReplies: false,
+				pauseViews: false,
+				pauseReactions: false,
+				pauseAnonViews: false,
+			},
+		};
 
-		return NextResponse.json(parsedData.notifications, {
-			status: 200,
-		});
+		const parsedData = PreferencesSchema.safeParse(
+			userPreferences?.preferences ?? defaultNotifications,
+		);
+
+		return NextResponse.json(
+			parsedData.success
+				? parsedData.data.notifications
+				: defaultNotifications.notifications,
+			{ status: 200 },
+		);
 	} catch (error) {
 		console.error("Error fetching user preferences:", error);
 		return NextResponse.json(
