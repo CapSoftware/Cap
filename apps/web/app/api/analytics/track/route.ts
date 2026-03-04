@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
 					return currentUser.id;
 				},
 			});
-			if (userId && body.ownerId && userId === body.ownerId) {
+			if (userId) {
 				const ownerIdResult = yield* Effect.tryPromise(() =>
 					db()
 						.select({ ownerId: videos.ownerId })
