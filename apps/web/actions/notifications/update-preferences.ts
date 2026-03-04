@@ -14,6 +14,7 @@ export const updatePreferences = async ({
 		pauseReplies: boolean;
 		pauseViews: boolean;
 		pauseReactions: boolean;
+		pauseAnonViews?: boolean;
 	};
 }) => {
 	const currentUser = await getCurrentUser();
