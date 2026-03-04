@@ -157,29 +157,36 @@ export async function POST(request: NextRequest) {
 					city && country ? `${city}, ${country}` : city || country || null;
 
 				yield* Effect.forkDaemon(
-					Effect.tryPromise(() =>
-						Promise.all([
+					Effect.all([
+						Effect.tryPromise(() =>
 							createAnonymousViewNotification({
 								videoId: body.videoId,
 								sessionId,
 								anonName,
 								location,
 							}),
+						).pipe(
+							Effect.catchAll((error) => {
+								console.error(
+									"Failed to create anonymous view notification:",
+									error,
+								);
+								return Effect.void;
+							}),
+						),
+						Effect.tryPromise(() =>
 							sendFirstViewEmail({
 								videoId: body.videoId,
 								viewerName: anonName,
 								isAnonymous: true,
 							}),
-						]),
-					).pipe(
-						Effect.catchAll((error) => {
-							console.error(
-								"Failed to create anonymous view notification:",
-								error,
-							);
-							return Effect.void;
-						}),
-					),
+						).pipe(
+							Effect.catchAll((error) => {
+								console.error("Failed to send first view email:", error);
+								return Effect.void;
+							}),
+						),
+					]),
 				);
 			}
 		}).pipe(provideOptionalAuth),
