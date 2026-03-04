@@ -218,7 +218,8 @@ impl DeepLinkAction {
             }
             DeepLinkAction::ListMicrophones => {
                 let mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
-                let labels: Vec<String> = mics.keys().cloned().collect();
+                let mut labels: Vec<String> = mics.keys().cloned().collect();
+                labels.sort();
                 let json = serde_json::to_string(&labels).map_err(|e| e.to_string())?;
                 app.clipboard()
                     .write_text(&json)
