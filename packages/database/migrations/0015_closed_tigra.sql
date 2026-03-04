@@ -1,1 +1,1 @@
-ALTER TABLE `videos` ADD `firstViewEmailSentAt` timestamp;
+ALTER TABLE `videos` ADD `firstViewEmailSentAt` timestamp NULL DEFAULT NULL;
