@@ -276,7 +276,7 @@ export async function createAnonymousViewNotification({
 		if (!videoWithOwner?.activeOrganizationId) return;
 
 		const preferences = videoWithOwner.preferences as UserPreferences;
-		if (preferences?.notifications?.pauseViews) return;
+		if (preferences?.notifications?.pauseAnonViews) return;
 
 		const [recentNotificationCount] = await database
 			.select({ count: sql<number>`COUNT(*)` })
