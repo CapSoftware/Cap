@@ -8,11 +8,15 @@ export async function dispatchAction(action: string | Record<string, unknown>) {
   await open(url);
 }
 
-export async function fireSimpleAction(action: string, label: string) {
-  await showToast({ style: Toast.Style.Animated, title: `${label}...` });
+export async function fireSimpleAction(
+  action: string,
+  inProgressLabel: string,
+  successLabel: string,
+) {
+  await showToast({ style: Toast.Style.Animated, title: inProgressLabel });
   try {
     await dispatchAction(action);
-    await showToast({ style: Toast.Style.Success, title: label });
+    await showToast({ style: Toast.Style.Success, title: successLabel });
   } catch {
     await showToast({
       style: Toast.Style.Failure,
