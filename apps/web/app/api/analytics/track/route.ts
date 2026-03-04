@@ -1,5 +1,8 @@
+import { db } from "@cap/database";
+import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
-import { CurrentUser } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
@@ -79,8 +82,7 @@ export async function POST(request: NextRequest) {
 		sanitizeString(request.nextUrl.hostname) ||
 		"";
 
-	const tenantId =
-		body.orgId || body.ownerId || (hostname ? `domain:${hostname}` : "public");
+	const tenantId = body.orgId || (hostname ? `domain:${hostname}` : "public");
 
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
 
@@ -99,8 +101,17 @@ export async function POST(request: NextRequest) {
 					return currentUser.id;
 				},
 			});
-			if (userId && body.ownerId && userId === body.ownerId) {
-				return;
+			if (userId) {
+				const [videoRecord] = yield* Effect.tryPromise(() =>
+					db()
+						.select({ ownerId: videos.ownerId })
+						.from(videos)
+						.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+						.limit(1),
+				).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
+				if (videoRecord && userId === videoRecord.ownerId) {
+					return;
+				}
 			}
 
 			const tinybird = yield* Tinybird;
