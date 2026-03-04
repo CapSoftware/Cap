@@ -100,12 +100,15 @@ export async function POST(request: NextRequest) {
 				},
 			});
 
+			const ANON_NOTIF_CUTOFF = new Date("2026-03-04T00:00:00Z");
+
 			const [videoRecord] = yield* Effect.tryPromise(() =>
 				db()
 					.select({
 						ownerId: videos.ownerId,
 						firstViewEmailSentAt: videos.firstViewEmailSentAt,
 						videoName: videos.name,
+						createdAt: videos.createdAt,
 					})
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
@@ -117,6 +120,7 @@ export async function POST(request: NextRequest) {
 							ownerId: string;
 							firstViewEmailSentAt: Date | null;
 							videoName: string;
+							createdAt: Date;
 						}[],
 				),
 			);
@@ -151,8 +155,10 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
+			const isNewVideo =
+				videoRecord && videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
 			const shouldSendFirstViewEmail =
-				videoRecord && !videoRecord.firstViewEmailSentAt;
+				isNewVideo && !videoRecord.firstViewEmailSentAt;
 
 			if (userId) {
 				if (shouldSendFirstViewEmail) {
@@ -173,7 +179,7 @@ export async function POST(request: NextRequest) {
 				}
 			}
 
-			if (!userId && sessionId) {
+			if (!userId && sessionId && isNewVideo) {
 				const anonName = getAnonymousName(sessionId);
 				const location =
 					city && country ? `${city}, ${country}` : city || country || null;
@@ -217,7 +223,7 @@ export async function POST(request: NextRequest) {
 				yield* Effect.forkDaemon(Effect.all(effects));
 			}
 
-			if (!userId && !sessionId && shouldSendFirstViewEmail) {
+			if (!userId && !sessionId && isNewVideo && shouldSendFirstViewEmail) {
 				yield* Effect.forkDaemon(
 					Effect.tryPromise(() =>
 						sendFirstViewEmail({
