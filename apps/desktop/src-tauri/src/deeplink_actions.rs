@@ -8,7 +8,10 @@ use tauri::{AppHandle, Manager, Url};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tracing::trace;
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock, recording::StartRecordingInputs, recording_settings::RecordingSettingsStore,
+    windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +29,9 @@ pub enum DeepLinkAction {
         mic_label: Option<String>,
         capture_system_audio: bool,
         mode: RecordingMode,
+    },
+    StartCurrentRecording {
+        mode: Option<RecordingMode>,
     },
     StopRecording,
     PauseRecording,
@@ -105,10 +111,11 @@ impl TryFrom<&Url> for DeepLinkAction {
             });
         }
 
-        match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
-        }?;
+        match url.host_str() {
+            Some("action") => {}
+            Some(_) => return Err(ActionParseFromUrlError::NotAction),
+            None => return Err(ActionParseFromUrlError::Invalid),
+        }
 
         let params = url
             .query_pairs()
@@ -164,6 +171,33 @@ impl DeepLinkAction {
                     capture_target,
                     capture_system_audio,
                     organization_id: None,
+                };
+
+                crate::recording::start_recording(app.clone(), state, inputs)
+                    .await
+                    .map(|_| ())
+            }
+            DeepLinkAction::StartCurrentRecording { mode } => {
+                let settings = RecordingSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+
+                let state = app.state::<ArcLock<App>>();
+
+                crate::set_mic_input(state.clone(), settings.mic_name).await?;
+                crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None)
+                    .await?;
+
+                let inputs = StartRecordingInputs {
+                    mode: mode.or(settings.mode).unwrap_or(RecordingMode::Studio),
+                    capture_target: settings.target.unwrap_or_else(|| {
+                        ScreenCaptureTarget::Display {
+                            id: Display::primary().id(),
+                        }
+                    }),
+                    capture_system_audio: settings.system_audio,
+                    organization_id: settings.organization_id,
                 };
 
                 crate::recording::start_recording(app.clone(), state, inputs)
@@ -248,5 +282,222 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action_url(value: &str) -> String {
+        let mut url = Url::parse("cap-desktop://action").unwrap();
+        url.query_pairs_mut().append_pair("value", value);
+        url.to_string()
+    }
+
+    fn parse(url_str: &str) -> Result<DeepLinkAction, ActionParseFromUrlError> {
+        let url = Url::parse(url_str).unwrap();
+        DeepLinkAction::try_from(&url)
+    }
+
+    #[test]
+    fn parse_unit_variants() {
+        let cases = [
+            ("stop_recording", "StopRecording"),
+            ("pause_recording", "PauseRecording"),
+            ("resume_recording", "ResumeRecording"),
+            ("toggle_pause_recording", "TogglePauseRecording"),
+            ("restart_recording", "RestartRecording"),
+            ("list_cameras", "ListCameras"),
+            ("list_microphones", "ListMicrophones"),
+            ("list_displays", "ListDisplays"),
+            ("list_windows", "ListWindows"),
+        ];
+
+        for (action_str, label) in cases {
+            let url = action_url(&format!("\"{}\"", action_str));
+            let result = parse(&url);
+            assert!(
+                result.is_ok(),
+                "Failed to parse {label}: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_start_recording_studio() {
+        let json = serde_json::json!({
+            "start_recording": {
+                "capture_mode": null,
+                "camera": null,
+                "mic_label": null,
+                "capture_system_audio": false,
+                "mode": "studio"
+            }
+        });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::StartRecording {
+                mode: RecordingMode::Studio,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_start_recording_instant() {
+        let json = serde_json::json!({
+            "start_recording": {
+                "capture_mode": null,
+                "camera": null,
+                "mic_label": null,
+                "capture_system_audio": true,
+                "mode": "instant"
+            }
+        });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::StartRecording {
+                mode: RecordingMode::Instant,
+                capture_system_audio: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_start_current_recording() {
+        let json = serde_json::json!({ "start_current_recording": { "mode": null } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::StartCurrentRecording { mode: None }
+        ));
+    }
+
+    #[test]
+    fn parse_start_current_recording_with_mode() {
+        let json = serde_json::json!({ "start_current_recording": { "mode": "instant" } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::StartCurrentRecording {
+                mode: Some(RecordingMode::Instant)
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_take_screenshot() {
+        let json = serde_json::json!({ "take_screenshot": { "capture_mode": null } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::TakeScreenshot { capture_mode: None }
+        ));
+    }
+
+    #[test]
+    fn parse_set_camera() {
+        let json = serde_json::json!({ "set_camera": { "id": null } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(action, DeepLinkAction::SetCamera { id: None }));
+    }
+
+    #[test]
+    fn parse_set_microphone() {
+        let json = serde_json::json!({ "set_microphone": { "label": "Built-in Microphone" } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::SetMicrophone { label: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn parse_open_editor() {
+        let json = serde_json::json!({ "open_editor": { "project_path": "/tmp/test-project" } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(action, DeepLinkAction::OpenEditor { .. }));
+    }
+
+    #[test]
+    fn parse_open_settings() {
+        let json = serde_json::json!({ "open_settings": { "page": "general" } });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::OpenSettings { page: Some(_) }
+        ));
+    }
+
+    #[test]
+    fn parse_invalid_domain_returns_not_action() {
+        let url = "cap-desktop://something-else?value=%22stop_recording%22";
+        let result = parse(url);
+        assert!(matches!(result, Err(ActionParseFromUrlError::NotAction)));
+    }
+
+    #[test]
+    fn parse_missing_value_param_returns_invalid() {
+        let url = "cap-desktop://action?other=123";
+        let result = parse(url);
+        assert!(matches!(result, Err(ActionParseFromUrlError::Invalid)));
+    }
+
+    #[test]
+    fn parse_malformed_json_returns_parse_failed() {
+        let url = "cap-desktop://action?value=not-valid-json";
+        let result = parse(url);
+        assert!(matches!(
+            result,
+            Err(ActionParseFromUrlError::ParseFailed(_))
+        ));
+    }
+
+    #[test]
+    fn parse_capture_mode_screen() {
+        let json = serde_json::json!({
+            "take_screenshot": {
+                "capture_mode": { "screen": "Main Display" }
+            }
+        });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::TakeScreenshot {
+                capture_mode: Some(CaptureMode::Screen(_))
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_capture_mode_window() {
+        let json = serde_json::json!({
+            "take_screenshot": {
+                "capture_mode": { "window": "Safari" }
+            }
+        });
+        let url = action_url(&json.to_string());
+        let action = parse(&url).unwrap();
+        assert!(matches!(
+            action,
+            DeepLinkAction::TakeScreenshot {
+                capture_mode: Some(CaptureMode::Window(_))
+            }
+        ));
     }
 }
