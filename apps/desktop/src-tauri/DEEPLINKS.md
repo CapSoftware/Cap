@@ -15,7 +15,7 @@ cap-desktop://action?value=<url-encoded-json>
 The JSON value is a quoted string:
 
 ```
-cap-desktop://action?value="stop_recording"
+cap-desktop://action?value=%22stop_recording%22
 ```
 
 ### Parameterized actions
@@ -117,13 +117,13 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 Start a studio recording on the primary display:
 
 ```bash
-open "cap-desktop://action?value=$(python3 -c "import urllib.parse, json; print(urllib.parse.quote(json.dumps({'start_recording':{'capture_mode':None,'camera':None,'mic_label':None,'capture_system_audio':False,'mode':'studio'}})))")"
+open "cap-desktop://action?value=$(python3 -c 'import urllib.parse, json; print(urllib.parse.quote(json.dumps({"start_recording":{"capture_mode":None,"camera":None,"mic_label":None,"capture_system_audio":False,"mode":"studio"}})))')"
 ```
 
 Start a recording using saved app settings:
 
 ```bash
-open "cap-desktop://action?value=$(python3 -c "import urllib.parse, json; print(urllib.parse.quote(json.dumps({'start_current_recording':{'mode':None}})))")"
+open "cap-desktop://action?value=$(python3 -c 'import urllib.parse, json; print(urllib.parse.quote(json.dumps({"start_current_recording":{"mode":None}})))')"
 ```
 
 Stop a recording:
@@ -135,7 +135,7 @@ open "cap-desktop://action?value=%22stop_recording%22"
 Take a screenshot:
 
 ```bash
-open "cap-desktop://action?value=$(python3 -c "import urllib.parse, json; print(urllib.parse.quote(json.dumps({'take_screenshot':{'capture_mode':None}})))")"
+open "cap-desktop://action?value=$(python3 -c 'import urllib.parse, json; print(urllib.parse.quote(json.dumps({"take_screenshot":{"capture_mode":None}})))')"
 ```
 
 List available microphones (copies JSON to clipboard):

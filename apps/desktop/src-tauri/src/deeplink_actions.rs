@@ -9,8 +9,8 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tracing::trace;
 
 use crate::{
-    App, ArcLock, recording::StartRecordingInputs, recording_settings::RecordingSettingsStore,
-    windows::ShowCapWindow,
+    App, ArcLock, permissions, recording::StartRecordingInputs,
+    recording_settings::RecordingSettingsStore, windows::ShowCapWindow,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -134,15 +134,23 @@ impl DeepLinkAction {
         match capture_mode {
             CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                 .into_iter()
-                .find(|(s, _)| s.name == name)
+                .find(|(s, _)| s.name.eq_ignore_ascii_case(name))
                 .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                 .ok_or(format!("No screen with name \"{}\"", name)),
             CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                 .into_iter()
-                .find(|(w, _)| w.name == name)
+                .find(|(w, _)| w.name.eq_ignore_ascii_case(name))
                 .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
                 .ok_or(format!("No window with name \"{}\"", name)),
         }
+    }
+
+    fn default_display_target() -> Result<ScreenCaptureTarget, String> {
+        let display = Display::list()
+            .into_iter()
+            .next()
+            .ok_or("No displays found")?;
+        Ok(ScreenCaptureTarget::Display { id: display.id() })
     }
 
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
@@ -161,9 +169,7 @@ impl DeepLinkAction {
 
                 let capture_target = match capture_mode {
                     Some(mode) => Self::resolve_capture_target(&mode)?,
-                    None => ScreenCaptureTarget::Display {
-                        id: Display::primary().id(),
-                    },
+                    None => Self::default_display_target()?,
                 };
 
                 let inputs = StartRecordingInputs {
@@ -179,6 +185,7 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StartCurrentRecording { mode } => {
                 let settings = RecordingSettingsStore::get(app)
+                    .inspect_err(|e| eprintln!("Failed to read recording settings: {e}"))
                     .ok()
                     .flatten()
                     .unwrap_or_default();
@@ -199,9 +206,10 @@ impl DeepLinkAction {
 
                 let inputs = StartRecordingInputs {
                     mode: mode.or(saved_mode).unwrap_or(RecordingMode::Studio),
-                    capture_target: target.unwrap_or_else(|| ScreenCaptureTarget::Display {
-                        id: Display::primary().id(),
-                    }),
+                    capture_target: match target {
+                        Some(t) => t,
+                        None => Self::default_display_target()?,
+                    },
                     capture_system_audio: system_audio,
                     organization_id,
                 };
@@ -230,9 +238,7 @@ impl DeepLinkAction {
             DeepLinkAction::TakeScreenshot { capture_mode } => {
                 let target = match capture_mode {
                     Some(mode) => Self::resolve_capture_target(&mode)?,
-                    None => ScreenCaptureTarget::Display {
-                        id: Display::primary().id(),
-                    },
+                    None => Self::default_display_target()?,
                 };
 
                 crate::recording::take_screenshot(app.clone(), target)
@@ -240,6 +246,9 @@ impl DeepLinkAction {
                     .map(|_| ())
             }
             DeepLinkAction::ListCameras => {
+                if !permissions::do_permissions_check(false).camera.permitted() {
+                    return Err("Camera permission not granted".to_string());
+                }
                 let cameras = crate::recording::list_cameras();
                 let json = serde_json::to_string(&cameras).map_err(|e| e.to_string())?;
                 app.clipboard()

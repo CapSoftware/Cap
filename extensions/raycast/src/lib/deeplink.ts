@@ -8,9 +8,8 @@ export async function runDeepLinkAction(
 ) {
   const value = JSON.stringify(action);
   const deeplink = `cap-desktop://action?value=${encodeURIComponent(value)}`;
-  await closeMainWindow();
-
   try {
+    await closeMainWindow();
     await open(deeplink);
     await showHUD(successMessage);
   } catch {
