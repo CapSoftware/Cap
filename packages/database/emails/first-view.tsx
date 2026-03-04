@@ -24,7 +24,6 @@ export function FirstView({
 	url: string;
 	videoName: string;
 	viewerName: string;
-	isAnonymous: boolean;
 }) {
 	return (
 		<Html>

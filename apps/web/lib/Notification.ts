@@ -376,7 +376,6 @@ export async function sendFirstViewEmail(
 				url: videoUrl,
 				videoName: videoWithOwner.videoName,
 				viewerName,
-				isAnonymous: params.isAnonymous,
 			}),
 		});
 	} catch (error) {
