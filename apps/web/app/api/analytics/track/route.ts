@@ -100,21 +100,23 @@ export async function POST(request: NextRequest) {
 				},
 			});
 
-			const [videoRecord] = yield* Effect.tryPromise(() =>
-				db()
-					.select({ ownerId: videos.ownerId })
-					.from(videos)
-					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
-					.limit(1),
-			).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
+			if (userId && (!body.ownerId || userId === body.ownerId)) {
+				const [videoRecord] = yield* Effect.tryPromise(() =>
+					db()
+						.select({ ownerId: videos.ownerId })
+						.from(videos)
+						.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+						.limit(1),
+				).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
 
-			if (userId && videoRecord && userId === videoRecord.ownerId) {
-				return;
+				if (videoRecord && userId === videoRecord.ownerId) {
+					return;
+				}
 			}
 
 			const tenantId =
 				body.orgId ||
-				videoRecord?.ownerId ||
+				body.ownerId ||
 				(hostname ? `domain:${hostname}` : "public");
 
 			const tinybird = yield* Tinybird;
