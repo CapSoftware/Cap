@@ -243,6 +243,12 @@ impl DeepLinkAction {
                 {
                     return Err("Screen recording permission not granted".to_string());
                 }
+                if !permissions::do_permissions_check(false)
+                    .screen_recording
+                    .permitted()
+                {
+                    return Err("Screen recording permission not granted".to_string());
+                }
                 let target = match capture_mode {
                     Some(mode) => Self::resolve_capture_target(&mode)?,
                     None => Self::default_display_target()?,
