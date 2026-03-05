@@ -103,7 +103,11 @@ impl ZoomFocusInterpolator {
                 );
                 let dx = target.x - last_committed_target.x;
                 let dy = target.y - last_committed_target.y;
-                let dead_zone_radius = self.screen_spring.dead_zone_radius;
+                let dead_zone_radius = if self.screen_spring.dead_zone_radius.is_finite() && self.screen_spring.dead_zone_radius > 0.0 {
+                    self.screen_spring.dead_zone_radius
+                } else {
+                    0.0
+                };
                 if dx * dx + dy * dy > dead_zone_radius * dead_zone_radius {
                     last_committed_target = target;
                     sim.set_target_position(target);
