@@ -1,6 +1,7 @@
 use cap_recording::{
     RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
 };
+use scap_targets::Display;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
@@ -145,11 +146,12 @@ impl DeepLinkAction {
     }
 
     fn default_display_target() -> Result<ScreenCaptureTarget, String> {
-        cap_recording::screen_capture::list_displays()
-            .into_iter()
-            .next()
-            .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-            .ok_or_else(|| "No displays found".to_string())
+        if cap_recording::screen_capture::list_displays().is_empty() {
+            return Err("No displays found".to_string());
+        }
+        Ok(ScreenCaptureTarget::Display {
+            id: Display::primary().id(),
+        })
     }
 
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
