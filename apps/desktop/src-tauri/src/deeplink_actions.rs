@@ -268,6 +268,12 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state, id, None).await
             }
             DeepLinkAction::ListMicrophones => {
+                if !permissions::do_permissions_check(false)
+                    .microphone
+                    .permitted()
+                {
+                    return Err("Microphone permission not granted".to_string());
+                }
                 let mics = cap_recording::feeds::microphone::MicrophoneFeed::list();
                 let mut labels: Vec<String> = mics.keys().cloned().collect();
                 labels.sort();
@@ -278,6 +284,12 @@ impl DeepLinkAction {
                 Ok(())
             }
             DeepLinkAction::SetMicrophone { label } => {
+                if !permissions::do_permissions_check(false)
+                    .microphone
+                    .permitted()
+                {
+                    return Err("Microphone permission not granted".to_string());
+                }
                 let state = app.state::<ArcLock<App>>();
                 crate::set_mic_input(state, label).await
             }
