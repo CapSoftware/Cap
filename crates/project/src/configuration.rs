@@ -459,7 +459,7 @@ impl Default for ScreenMovementSpring {
             stiffness: 200.0,
             damping: 40.0,
             mass: 2.25,
-            dead_zone_radius: 0.03,
+            dead_zone_radius: Self::default_dead_zone_radius(),
         }
     }
 }

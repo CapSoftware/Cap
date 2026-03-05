@@ -1539,7 +1539,7 @@ function Page() {
 			<Show when={rawOptions.mode === "studio"}>
 				<button
 					type="button"
-					class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default bg-gray-3 KSelect"
+					class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-pointer bg-gray-3 KSelect"
 					onClick={() => {
 						const current = generalSettings.data?.autoZoomOnClicks ?? false;
 						generalSettingsStore.set({ autoZoomOnClicks: !current });
