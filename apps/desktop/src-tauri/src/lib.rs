@@ -2025,12 +2025,15 @@ async fn generate_zoom_segments_from_clicks(
 ) -> Result<Vec<ZoomSegment>, String> {
     let meta = editor_instance.meta();
     let recordings = &editor_instance.recordings;
+    let project_config = editor_instance.project_config.1.borrow().clone();
+    let timeline_segments = &project_config.timeline.as_ref().map(|t| t.segments.clone());
 
     let settings = GeneralSettingsStore::get(&app)?.unwrap_or_default();
 
     let zoom_segments = recording::generate_zoom_segments_for_project(
         meta,
         recordings,
+        timeline_segments.as_deref(),
         settings.auto_zoom_amount,
         settings.auto_zoom_sensitivity,
     );

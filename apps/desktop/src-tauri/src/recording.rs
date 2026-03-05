@@ -2178,12 +2178,13 @@ pub fn generate_zoom_segments_from_clicks(
         upload: None,
     };
 
-    generate_zoom_segments_for_project(&recording_meta, recordings, zoom_amount, zoom_sensitivity)
+    generate_zoom_segments_for_project(&recording_meta, recordings, None, zoom_amount, zoom_sensitivity)
 }
 
 pub fn generate_zoom_segments_for_project(
     recording_meta: &RecordingMeta,
     recordings: &ProjectRecordingsMeta,
+    timeline_segments: Option<&[TimelineSegment]>,
     zoom_amount: f64,
     zoom_sensitivity: f64,
 ) -> Vec<ZoomSegment> {
@@ -2215,6 +2216,56 @@ pub fn generate_zoom_segments_for_project(
                 all_clicks.extend(events.clicks);
                 all_moves.extend(events.moves);
             }
+        }
+    }
+
+    if let Some(segments) = timeline_segments {
+        if !segments.is_empty() {
+            let remap_time = |time_ms: f64| -> Option<f64> {
+                let mut timeline_offset_ms = 0.0_f64;
+                for seg in segments {
+                    let seg_start_ms = seg.start * 1000.0;
+                    let seg_end_ms = seg.end * 1000.0;
+                    if time_ms >= seg_start_ms && time_ms <= seg_end_ms {
+                        return Some(timeline_offset_ms + (time_ms - seg_start_ms) / seg.timescale);
+                    }
+                    timeline_offset_ms += (seg.end - seg.start) / seg.timescale * 1000.0;
+                }
+                None
+            };
+
+            let remapped_clicks: Vec<CursorClickEvent> = all_clicks
+                .into_iter()
+                .filter_map(|mut c| {
+                    remap_time(c.time_ms).map(|t| {
+                        c.time_ms = t;
+                        c
+                    })
+                })
+                .collect();
+
+            let remapped_moves: Vec<CursorMoveEvent> = all_moves
+                .into_iter()
+                .filter_map(|mut m| {
+                    remap_time(m.time_ms).map(|t| {
+                        m.time_ms = t;
+                        m
+                    })
+                })
+                .collect();
+
+            let trimmed_duration = segments
+                .iter()
+                .map(|s| (s.end - s.start) / s.timescale)
+                .sum();
+
+            return generate_zoom_segments_from_clicks_impl(
+                remapped_clicks,
+                remapped_moves,
+                trimmed_duration,
+                zoom_amount,
+                zoom_sensitivity,
+            );
         }
     }
 
