@@ -802,6 +802,27 @@ impl ShowCapWindow {
             }
         }
 
+        if matches!(self, Self::Settings { .. }) {
+            hide_recording_windows(app);
+
+            let is_recording = app
+                .state::<ArcLock<App>>()
+                .try_read()
+                .map(|state| state.is_recording_active_or_pending())
+                .unwrap_or(true);
+
+            if !is_recording {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let state = app.state::<ArcLock<App>>();
+                    let app_state = &mut *state.write().await;
+                    app_state.camera_preview.pause();
+                    let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+                    app_state.camera_in_use = false;
+                });
+            }
+        }
+
         #[cfg(target_os = "macos")]
         if let Self::InProgressRecording { .. } = self
             && let Some(window) = self.id(app).get(app)
@@ -1218,8 +1239,6 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                hide_recording_windows(app);
-
                 let window = self
                     .window_builder(
                         app,

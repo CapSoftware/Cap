@@ -1,0 +1,479 @@
+---
+title: "REST API"
+summary: "Programmatic access to Cap via the REST API"
+tags: "API, Integration"
+---
+
+The Cap Developer API provides programmatic access to videos created through your developer apps. It is designed for server-to-server integrations, automated workflows, and building custom recording experiences on top of Cap.
+
+There are two APIs:
+
+- **REST API** (`/api/developer/v1`) -- Server-side management of videos and usage, authenticated with secret keys (`csk_`).
+- **SDK API** (`/api/developer/sdk/v1`) -- Client-side video creation and uploads, authenticated with public keys (`cpk_`).
+
+## Authentication
+
+### Getting Your API Keys
+
+API keys are managed through the Developer dashboard, not the general Settings page.
+
+1. Go to [Cap.so/dashboard/developers](https://cap.so/dashboard/developers).
+2. Click **Create App** and give it a name and environment (development or production).
+3. Two keys are generated for each app:
+   - **Public key** (`cpk_...`) -- Safe to use in client-side code. Used with the SDK API.
+   - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API.
+4. Store both keys securely. You can regenerate them from the app settings, which revokes the previous pair.
+
+### Using Your Keys
+
+Include the appropriate key in the `Authorization` header as a Bearer token:
+
+```
+Authorization: Bearer csk_your_secret_key_here
+```
+
+For the SDK API, use the public key instead:
+
+```
+Authorization: Bearer cpk_your_public_key_here
+```
+
+Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly.
+
+## Base URL
+
+**REST API (secret key):**
+
+```
+https://cap.so/api/developer/v1
+```
+
+**SDK API (public key):**
+
+```
+https://cap.so/api/developer/sdk/v1
+```
+
+If you are self-hosting Cap, replace `Cap.so` with your custom domain.
+
+## Error Handling
+
+All error responses return a JSON object with an `error` string:
+
+```json
+{
+  "error": "Video not found"
+}
+```
+
+Standard HTTP status codes are used:
+
+| Status Code | Description |
+|-------------|-------------|
+| `200` | Success |
+| `400` | Bad request -- missing or invalid parameters |
+| `401` | Unauthorized -- invalid, missing, or revoked API key |
+| `402` | Payment required -- insufficient credits |
+| `403` | Forbidden -- origin not allowed (SDK API in production) |
+| `404` | Not found -- the requested resource does not exist |
+| `500` | Internal server error |
+
+## Pagination
+
+List endpoints support pagination via query parameters:
+
+| Parameter | Type | Default | Max | Description |
+|-----------|------|---------|-----|-------------|
+| `limit` | integer | 50 | 100 | Number of items to return |
+| `offset` | integer | 0 | -- | Number of items to skip |
+
+The response does not include pagination metadata. To paginate, increment `offset` by `limit` until the returned array has fewer items than `limit`.
+
+---
+
+## REST API Endpoints
+
+All REST API endpoints require a secret key (`csk_`) in the `Authorization` header.
+
+### List Videos
+
+Retrieve videos created by your app.
+
+```
+GET /api/developer/v1/videos
+```
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `userId` | string | No | Filter by external user ID |
+| `limit` | integer | No | Number of results (default 50, max 100) |
+| `offset` | integer | No | Number of results to skip (default 0) |
+
+**Example request:**
+
+```bash
+curl https://cap.so/api/developer/v1/videos?limit=10 \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "data": [
+    {
+      "id": "abc123def456",
+      "appId": "app_789",
+      "externalUserId": "user_42",
+      "name": "Product Demo",
+      "duration": 124.5,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "s3Key": "developer/app_789/abc123def456/result.mp4",
+      "transcriptionStatus": "COMPLETE",
+      "metadata": null,
+      "deletedAt": null,
+      "createdAt": "2025-06-15T10:30:00.000Z",
+      "updatedAt": "2025-06-15T10:32:00.000Z"
+    }
+  ]
+}
+```
+
+### Get Video
+
+Retrieve a single video by ID.
+
+```
+GET /api/developer/v1/videos/:id
+```
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | The video ID |
+
+**Example request:**
+
+```bash
+curl https://cap.so/api/developer/v1/videos/abc123def456 \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "data": {
+    "id": "abc123def456",
+    "appId": "app_789",
+    "externalUserId": "user_42",
+    "name": "Product Demo",
+    "duration": 124.5,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "s3Key": "developer/app_789/abc123def456/result.mp4",
+    "transcriptionStatus": "COMPLETE",
+    "metadata": null,
+    "deletedAt": null,
+    "createdAt": "2025-06-15T10:30:00.000Z",
+    "updatedAt": "2025-06-15T10:32:00.000Z"
+  }
+}
+```
+
+### Get Video Status
+
+Check whether a video is fully processed and ready for playback.
+
+```
+GET /api/developer/v1/videos/:id/status
+```
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | The video ID |
+
+**Example request:**
+
+```bash
+curl https://cap.so/api/developer/v1/videos/abc123def456/status \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "data": {
+    "id": "abc123def456",
+    "duration": 124.5,
+    "width": 1920,
+    "height": 1080,
+    "transcriptionStatus": "COMPLETE",
+    "ready": true
+  }
+}
+```
+
+The `ready` field is `true` when both `duration` and `width` are present, indicating the video has been fully uploaded and processed.
+
+The `transcriptionStatus` field can be one of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, or `NO_AUDIO`.
+
+### Delete Video
+
+Soft-delete a video. The video is marked as deleted and excluded from future queries.
+
+```
+DELETE /api/developer/v1/videos/:id
+```
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | The video ID |
+
+**Example request:**
+
+```bash
+curl -X DELETE https://cap.so/api/developer/v1/videos/abc123def456 \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "success": true
+}
+```
+
+### Get Usage
+
+Retrieve your app's credit balance and aggregate video statistics.
+
+```
+GET /api/developer/v1/usage
+```
+
+**Example request:**
+
+```bash
+curl https://cap.so/api/developer/v1/usage \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "data": {
+    "balanceMicroCredits": 500000,
+    "balanceDollars": "5.00",
+    "totalVideos": 23,
+    "totalDurationMinutes": 87.5
+  }
+}
+```
+
+Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). Video creation costs 5,000 micro-credits per minute of video duration.
+
+---
+
+## SDK API Endpoints
+
+The SDK API is designed for client-side use in browsers and apps. All SDK API endpoints require a public key (`cpk_`) in the `Authorization` header.
+
+For production apps, the `Origin` header must match one of the allowed domains configured in your app settings. Development apps skip origin validation.
+
+### Create Video
+
+Create a new video record and get URLs for sharing and embedding.
+
+```
+POST /api/developer/sdk/v1/videos/create
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | Video name (defaults to "Untitled") |
+| `userId` | string | No | Your external user ID for filtering |
+| `metadata` | object | No | Arbitrary metadata to store with the video |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
+  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "User Recording", "userId": "user_42"}'
+```
+
+**Example response:**
+
+```json
+{
+  "videoId": "abc123def456",
+  "s3Key": "developer/app_789/abc123def456/result.mp4",
+  "shareUrl": "https://cap.so/dev/abc123def456",
+  "embedUrl": "https://cap.so/embed/abc123def456?sdk=1"
+}
+```
+
+Returns a `402` error if the app has insufficient credits (minimum 5,000 micro-credits required).
+
+### Multipart Upload
+
+After creating a video, use multipart upload to upload the video file. This is a multi-step process.
+
+#### Initiate Upload
+
+```
+POST /api/developer/sdk/v1/upload/multipart/initiate
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `videoId` | string | Yes | The video ID from the create step |
+| `contentType` | string | No | MIME type (defaults to "video/mp4") |
+
+**Example response:**
+
+```json
+{
+  "uploadId": "multipart-upload-id"
+}
+```
+
+#### Get Presigned Part URL
+
+Get a presigned URL to upload a single part.
+
+```
+POST /api/developer/sdk/v1/upload/multipart/presign-part
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `videoId` | string | Yes | The video ID |
+| `uploadId` | string | Yes | The upload ID from the initiate step |
+| `partNumber` | number | Yes | Part number (starting from 1) |
+
+**Example response:**
+
+```json
+{
+  "presignedUrl": "https://s3.amazonaws.com/..."
+}
+```
+
+Upload the part data by sending a `PUT` request to the returned `presignedUrl`. Save the `ETag` header from the response for the completion step.
+
+#### Complete Upload
+
+Finalize the upload after all parts have been uploaded.
+
+```
+POST /api/developer/sdk/v1/upload/multipart/complete
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `videoId` | string | Yes | The video ID |
+| `uploadId` | string | Yes | The upload ID |
+| `parts` | array | Yes | Array of uploaded parts |
+| `parts[].partNumber` | number | Yes | The part number |
+| `parts[].etag` | string | Yes | The ETag returned when the part was uploaded |
+| `parts[].size` | number | Yes | The size of the part in bytes |
+| `durationInSecs` | number | No | Video duration in seconds (used for billing) |
+| `width` | number | No | Video width in pixels |
+| `height` | number | No | Video height in pixels |
+| `fps` | number | No | Video frame rate |
+
+**Example response:**
+
+```json
+{
+  "success": true
+}
+```
+
+When `durationInSecs` is provided, credits are debited at 5,000 micro-credits per minute.
+
+#### Abort Upload
+
+Cancel an in-progress multipart upload.
+
+```
+POST /api/developer/sdk/v1/upload/multipart/abort
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `videoId` | string | Yes | The video ID |
+| `uploadId` | string | Yes | The upload ID to abort |
+
+**Example response:**
+
+```json
+{
+  "success": true
+}
+```
+
+---
+
+## SDKs
+
+Cap provides official SDK packages to simplify integration:
+
+- **`@cap/sdk-recorder`** -- Recording SDK for capturing video in web applications. Includes React bindings.
+- **`@cap/sdk-embed`** -- Embedding SDK for displaying Cap videos. Available for React and vanilla JavaScript.
+
+## Video Object Reference
+
+The full video object returned by list and get endpoints:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique video identifier |
+| `appId` | string | The developer app that owns this video |
+| `externalUserId` | string \| null | Your external user identifier |
+| `name` | string | Video display name |
+| `duration` | number \| null | Duration in seconds (null until upload completes) |
+| `width` | number \| null | Video width in pixels (null until upload completes) |
+| `height` | number \| null | Video height in pixels (null until upload completes) |
+| `fps` | number \| null | Frames per second (null until upload completes) |
+| `s3Key` | string \| null | Storage key for the video file |
+| `transcriptionStatus` | string \| null | One of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, `NO_AUDIO` |
+| `metadata` | object \| null | Custom metadata provided during creation |
+| `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
+| `createdAt` | string | Creation timestamp (ISO 8601) |
+| `updatedAt` | string | Last update timestamp (ISO 8601) |
+
+## Best Practices
+
+- **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
+- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true` before displaying the video.
+- **Store your keys securely.** Use environment variables or a secrets manager.
+- **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in the Developer dashboard.
+- **Monitor your credit balance.** Use the usage endpoint to track remaining credits and set up auto top-up in the Developer dashboard to avoid service interruptions.
+- **Paginate large result sets.** Use `limit` and `offset` to retrieve videos in batches. When the returned array length is less than `limit`, you have reached the end.

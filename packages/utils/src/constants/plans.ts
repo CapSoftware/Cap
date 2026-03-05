@@ -1,5 +1,10 @@
 import { buildEnv } from "@cap/env";
 
+export const STRIPE_DEVELOPER_CREDITS_PRODUCT_ID: Record<string, string> = {
+	development: "prod_U4mswfBp0bFc39",
+	production: "prod_REPLACE_BEFORE_PRODUCTION",
+};
+
 export const STRIPE_PLAN_IDS = {
 	development: {
 		yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",

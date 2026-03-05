@@ -114,15 +114,14 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         extern "C" fn on_window_did_resize<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    position_window_controls(
-                        UnsafeWindowHandle(
-                            state
-                                .window
-                                .ns_window()
-                                .expect("Failed to get handle to NSWindow"),
-                        ),
-                        &state.controls_inset,
-                    );
+                    if let Ok(window_handle) = state.window.ns_window() {
+                        position_window_controls(
+                            UnsafeWindowHandle(window_handle),
+                            &state.controls_inset,
+                        );
+                    } else {
+                        tracing::warn!("Failed to get handle to NSWindow during resize");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -209,10 +208,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("did-enter-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("did-enter-fullscreen", ()) {
+                        tracing::warn!("Failed to emit did-enter-fullscreen: {err}");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -226,10 +224,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("will-enter-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("will-enter-fullscreen", ()) {
+                        tracing::warn!("Failed to emit will-enter-fullscreen: {err}");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -243,20 +240,18 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("did-exit-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("did-exit-fullscreen", ()) {
+                        tracing::warn!("Failed to emit did-exit-fullscreen: {err}");
+                    }
 
-                    position_window_controls(
-                        UnsafeWindowHandle(
-                            state
-                                .window
-                                .ns_window()
-                                .expect("Failed to get handle to NSWindow"),
-                        ),
-                        &state.controls_inset,
-                    );
+                    if let Ok(window_handle) = state.window.ns_window() {
+                        position_window_controls(
+                            UnsafeWindowHandle(window_handle),
+                            &state.controls_inset,
+                        );
+                    } else {
+                        tracing::warn!("Failed to get handle to NSWindow after exiting fullscreen");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -270,10 +265,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("will-exit-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("will-exit-fullscreen", ()) {
+                        tracing::warn!("Failed to emit will-exit-fullscreen: {err}");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");

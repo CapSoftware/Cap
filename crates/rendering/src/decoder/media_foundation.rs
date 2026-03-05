@@ -176,12 +176,10 @@ impl MFDecoder {
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
     ) -> Result<(), String> {
-        let (continue_tx, continue_rx) = mpsc::channel();
-
         std::thread::spawn(move || {
             let mut decoder = match cap_video_decode::MediaFoundationDecoder::new(&path) {
                 Err(e) => {
-                    let _ = continue_tx.send(Err(e));
+                    let _ = ready_tx.send(Err(e));
                     return;
                 }
                 Ok(v) => {
@@ -196,7 +194,7 @@ impl MFDecoder {
                             "Video '{}' dimensions {}x{} exceed hardware decoder limits ({}x{})",
                             name, width, height, caps.max_width, caps.max_height
                         );
-                        let _ = continue_tx.send(Err(format!(
+                        let _ = ready_tx.send(Err(format!(
                             "Video dimensions {}x{} exceed hardware decoder limits {}x{}",
                             width, height, caps.max_width, caps.max_height
                         )));
@@ -212,7 +210,6 @@ impl MFDecoder {
                         caps.max_width,
                         caps.max_height
                     );
-                    let _ = continue_tx.send(Ok((width, height)));
                     v
                 }
             };
@@ -504,7 +501,7 @@ impl MFDecoder {
             }
         });
 
-        continue_rx.recv().map_err(|e| e.to_string())?.map(|_| ())
+        Ok(())
     }
 }
 

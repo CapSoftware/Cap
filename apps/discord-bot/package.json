@@ -5,7 +5,7 @@
 		"deploy": "wrangler deploy",
 		"bot-dev": "wrangler dev",
 		"start": "wrangler dev",
-		"test": "vitest",
+		"test": "vitest run",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {

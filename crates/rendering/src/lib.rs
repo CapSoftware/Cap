@@ -8,7 +8,6 @@ use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::{RenderSession, finish_encoder, finish_encoder_nv12, flush_pending_readback};
-use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
@@ -122,6 +121,11 @@ impl RecordingSegmentDecoders {
         segment_i: usize,
         force_ffmpeg: bool,
     ) -> Result<Self, String> {
+        let SegmentVideoPaths {
+            display: display_path,
+            camera: camera_path,
+        } = segment;
+
         let latest_start_time = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => None,
             StudioRecordingMeta::MultipleSegments { inner, .. } => {
@@ -129,59 +133,84 @@ impl RecordingSegmentDecoders {
             }
         };
 
-        let screen = spawn_decoder(
-            "screen",
-            recording_meta.project_path.join(segment.display),
-            match &meta {
-                StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-                StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                    inner.segments[segment_i].display.fps
-                }
-            },
-            match &meta {
-                StudioRecordingMeta::SingleSegment { .. } => 0.0,
-                StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                    let segment = &inner.segments[segment_i];
+        let screen_fps = match &meta {
+            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                inner.segments[segment_i].display.fps
+            }
+        };
 
-                    latest_start_time
-                        .zip(segment.display.start_time)
-                        .map(|(latest_start_time, display_time)| latest_start_time - display_time)
-                        .unwrap_or(0.0)
-                }
-            },
-            force_ffmpeg,
-        )
-        .await
-        .map_err(|e| format!("Screen:{e}"))?;
-        let camera = OptionFuture::from(segment.camera.map(|camera| {
+        let camera_fps = match &meta {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                segment.camera.as_ref().map(|camera| camera.fps)
+            }
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[segment_i]
+                .camera
+                .as_ref()
+                .map(|camera| camera.fps),
+        };
+
+        let screen_offset = match &meta {
+            StudioRecordingMeta::SingleSegment { .. } => 0.0,
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                let segment = &inner.segments[segment_i];
+
+                latest_start_time
+                    .zip(segment.display.start_time)
+                    .map(|(latest_start_time, display_time)| latest_start_time - display_time)
+                    .unwrap_or(0.0)
+            }
+        };
+
+        let camera_offset = match &meta {
+            StudioRecordingMeta::SingleSegment { .. } => 0.0,
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                let segment = &inner.segments[segment_i];
+
+                latest_start_time
+                    .zip(segment.camera.as_ref().and_then(|camera| camera.start_time))
+                    .map(|(latest_start_time, start_time)| latest_start_time - start_time)
+                    .unwrap_or(0.0)
+            }
+        };
+
+        let screen_future = async {
             spawn_decoder(
-                "camera",
-                recording_meta.project_path.join(camera),
-                match &meta {
-                    StudioRecordingMeta::SingleSegment { segment } => {
-                        segment.camera.as_ref().unwrap().fps
-                    }
-                    StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                        inner.segments[segment_i].camera.as_ref().unwrap().fps
-                    }
-                },
-                match &meta {
-                    StudioRecordingMeta::SingleSegment { .. } => 0.0,
-                    StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                        let segment = &inner.segments[segment_i];
-
-                        latest_start_time
-                            .zip(segment.camera.as_ref().and_then(|c| c.start_time))
-                            .map(|(latest_start_time, start_time)| latest_start_time - start_time)
-                            .unwrap_or(0.0)
-                    }
-                },
+                "screen",
+                recording_meta.project_path.join(display_path),
+                screen_fps,
+                screen_offset,
                 force_ffmpeg,
             )
-            .then(|r| async { r.map_err(|e| format!("Camera:{e}")) })
-        }))
-        .await
-        .transpose()?;
+            .await
+            .map_err(|e| format!("Screen:{e}"))
+        };
+
+        let camera_future = async {
+            let Some(camera_path) = camera_path else {
+                return Ok::<Option<AsyncVideoDecoderHandle>, String>(None);
+            };
+            let camera_fps = camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?;
+            let camera = spawn_decoder(
+                "camera",
+                recording_meta.project_path.join(camera_path),
+                camera_fps,
+                camera_offset,
+                force_ffmpeg,
+            )
+            .await
+            .map_err(|e| format!("Camera:{e}"))?;
+            Ok(Some(camera))
+        };
+
+        #[cfg(target_os = "windows")]
+        let (screen, camera) = tokio::try_join!(screen_future, camera_future)?;
+
+        #[cfg(not(target_os = "windows"))]
+        let screen = screen_future.await?;
+
+        #[cfg(not(target_os = "windows"))]
+        let camera = camera_future.await?;
 
         Ok(Self {
             screen,

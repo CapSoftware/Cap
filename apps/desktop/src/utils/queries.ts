@@ -240,8 +240,15 @@ export function createLicenseQuery() {
 		},
 	}));
 
-	generalSettingsStore.listen(() => query.refetch());
-	authStore.listen(() => query.refetch());
+	const generalSettingsCleanup = generalSettingsStore.listen(() =>
+		query.refetch(),
+	);
+	const authCleanup = authStore.listen(() => query.refetch());
+
+	onCleanup(() => {
+		generalSettingsCleanup.then((cleanup) => cleanup());
+		authCleanup.then((cleanup) => cleanup());
+	});
 
 	return query;
 }

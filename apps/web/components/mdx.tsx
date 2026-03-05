@@ -2,6 +2,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import React, { type ReactNode } from "react";
+import type { Options as RehypePrettyCodeOptions } from "rehype-pretty-code";
+import rehypePrettyCode from "rehype-pretty-code";
+import remarkGfm from "remark-gfm";
 
 interface TableData {
 	headers: string[];
@@ -105,6 +108,26 @@ function Warning(props: WarningProps) {
 	);
 }
 
+interface CapEmbedProps {
+	src: string;
+}
+
+function CapEmbed({ src }: CapEmbedProps) {
+	return (
+		<iframe
+			src={src}
+			frameBorder="0"
+			allowFullScreen
+			style={{
+				width: "100%",
+				aspectRatio: "16 / 9",
+				borderRadius: "15px",
+				display: "block",
+			}}
+		/>
+	);
+}
+
 function slugify(str: string) {
 	return str
 		.toString()
@@ -145,13 +168,25 @@ const components = {
 	a: CustomLink,
 	Callout,
 	Warning,
+	CapEmbed,
 	Table,
+};
+
+const rehypePrettyCodeOptions: RehypePrettyCodeOptions = {
+	theme: "github-dark",
+	keepBackground: true,
 };
 
 export function CustomMDX(props: any) {
 	return (
 		<MDXRemote
 			{...props}
+			options={{
+				mdxOptions: {
+					remarkPlugins: [remarkGfm],
+					rehypePlugins: [[rehypePrettyCode, rehypePrettyCodeOptions]],
+				},
+			}}
 			components={{ ...components, ...(props.components || {}) }}
 		/>
 	);

@@ -5,6 +5,7 @@ import {
 	faCog,
 	faComment,
 	faEye,
+	faEyeSlash,
 	faReply,
 	faThumbsUp,
 	type IconDefinition,
@@ -20,13 +21,19 @@ import { useDashboardContext } from "../../Contexts";
 type NotificationOption = {
 	icon: IconDefinition;
 	label: string;
-	value: "pauseComments" | "pauseViews" | "pauseReactions" | "pauseReplies";
+	value:
+		| "pauseComments"
+		| "pauseViews"
+		| "pauseReactions"
+		| "pauseReplies"
+		| "pauseAnonViews";
 };
 
 const notificationOptions: NotificationOption[] = [
 	{ icon: faComment, label: "Comments", value: "pauseComments" },
 	{ icon: faReply, label: "Replies", value: "pauseReplies" },
 	{ icon: faEye, label: "Views", value: "pauseViews" },
+	{ icon: faEyeSlash, label: "Anonymous views", value: "pauseAnonViews" },
 	{ icon: faThumbsUp, label: "Reactions", value: "pauseReactions" },
 ];
 
@@ -41,6 +48,7 @@ export const SettingsDropdown = () => {
 				pauseReplies: false,
 				pauseViews: false,
 				pauseReactions: false,
+				pauseAnonViews: false,
 			};
 
 			await updatePreferences({
@@ -131,7 +139,7 @@ export const SettingsDropdown = () => {
 											</p>
 										</div>
 
-										{userPreferences?.notifications[option.value] && (
+										{userPreferences?.notifications?.[option.value] && (
 											<FontAwesomeIcon
 												icon={faCheck}
 												className="text-gray-10 size-2.5 transition-colors group-hover:text-gray-12"

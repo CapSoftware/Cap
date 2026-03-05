@@ -338,19 +338,19 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 				.limit(1);
 			const row = rows[0];
 			if (!row) {
-				console.warn(
-					"[useVerificationToken] No token found for hash",
-					{ identifier, tokenPrefix: token.slice(0, 8) },
-				);
+				console.warn("[useVerificationToken] No token found for hash", {
+					identifier,
+					tokenPrefix: token.slice(0, 8),
+				});
 				return null;
 			}
 			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
 			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
 			if (normalizedIdentifier !== storedIdentifier) {
-				console.warn(
-					"[useVerificationToken] Identifier mismatch",
-					{ expected: normalizedIdentifier, stored: storedIdentifier },
-				);
+				console.warn("[useVerificationToken] Identifier mismatch", {
+					expected: normalizedIdentifier,
+					stored: storedIdentifier,
+				});
 				return null;
 			}
 			await db
