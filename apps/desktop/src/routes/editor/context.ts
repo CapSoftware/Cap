@@ -287,6 +287,23 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					}),
 				);
 			},
+			generateAutoZoom: async () => {
+				try {
+					const zoomSegments = await commands.generateZoomSegmentsFromClicks();
+					setProject("timeline", "zoomSegments", zoomSegments);
+					if (zoomSegments.length > 0) {
+						const currentSize = project.cursor?.size ?? 0;
+						if (currentSize < 200) {
+							setProject("cursor", "size", 200);
+						}
+					}
+				} catch (error) {
+					console.error("Failed to generate zoom segments:", error);
+				}
+			},
+			removeAllZoomSegments: () => {
+				setProject("timeline", "zoomSegments", []);
+			},
 			deleteZoomSegments: (segmentIndices: number[]) => {
 				batch(() => {
 					setProject(

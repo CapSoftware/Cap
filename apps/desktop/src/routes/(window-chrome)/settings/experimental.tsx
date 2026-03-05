@@ -25,7 +25,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			autoCreateShareableLink: false,
 			enableNotifications: true,
 			enableNativeCameraPreview: false,
-			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
 		},
 	);
@@ -82,18 +81,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								}
 							/>
 						)}
-						<ToggleSettingItem
-							label="Auto zoom on clicks"
-							description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
-							value={!!settings.autoZoomOnClicks}
-							onChange={(value) => {
-								handleChange("autoZoomOnClicks", value);
-								setTimeout(
-									() => window.scrollTo({ top: 0, behavior: "instant" }),
-									5,
-								);
-							}}
-						/>
 					</div>
 				</div>
 			</div>

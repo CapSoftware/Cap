@@ -1989,29 +1989,33 @@ async fn finalize_studio_recording(
     Ok(())
 }
 
-/// Core logic for generating zoom segments based on mouse click events.
-/// This is an experimental feature that automatically creates zoom effects
-/// around user interactions to highlight important moments.
 fn generate_zoom_segments_from_clicks_impl(
     mut clicks: Vec<CursorClickEvent>,
     mut moves: Vec<CursorMoveEvent>,
     max_duration: f64,
+    base_zoom_amount: f64,
+    sensitivity: f64,
 ) -> Vec<ZoomSegment> {
     const STOP_PADDING_SECONDS: f64 = 0.5;
     const CLICK_GROUP_TIME_THRESHOLD_SECS: f64 = 2.5;
-    const CLICK_GROUP_SPATIAL_THRESHOLD: f64 = 0.15;
+    const BASE_CLICK_GROUP_SPATIAL_THRESHOLD: f64 = 0.15;
     const CLICK_PRE_PADDING: f64 = 0.4;
     const CLICK_POST_PADDING: f64 = 1.8;
     const MOVEMENT_PRE_PADDING: f64 = 0.3;
     const MOVEMENT_POST_PADDING: f64 = 1.5;
     const MERGE_GAP_THRESHOLD: f64 = 0.8;
-    const MIN_SEGMENT_DURATION: f64 = 1.0;
+    const BASE_MIN_SEGMENT_DURATION: f64 = 1.0;
     const MOVEMENT_WINDOW_SECONDS: f64 = 1.5;
     const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.02;
-    const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.08;
-    const AUTO_ZOOM_AMOUNT: f64 = 1.5;
+    const BASE_MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.08;
     const SHAKE_FILTER_THRESHOLD: f64 = 0.33;
     const SHAKE_FILTER_WINDOW_MS: f64 = 150.0;
+
+    let sensitivity_scale = 1.5 - sensitivity;
+    let click_group_spatial_threshold = BASE_CLICK_GROUP_SPATIAL_THRESHOLD * sensitivity_scale;
+    let min_segment_duration = BASE_MIN_SEGMENT_DURATION * sensitivity_scale;
+    let movement_window_distance_threshold =
+        BASE_MOVEMENT_WINDOW_DISTANCE_THRESHOLD * sensitivity_scale;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -2082,7 +2086,7 @@ fn generate_zoom_segments_from_clicks_impl(
                     (Some((x1, y1)), Some((x2, y2))) => {
                         let dx = x1 - x2;
                         let dy = y1 - y2;
-                        (dx * dx + dy * dy).sqrt() < CLICK_GROUP_SPATIAL_THRESHOLD
+                        (dx * dx + dy * dy).sqrt() < click_group_spatial_threshold
                     }
                     _ => true,
                 };
@@ -2200,7 +2204,7 @@ fn generate_zoom_segments_from_clicks_impl(
         }
 
         let significant_movement = distance >= MOVEMENT_EVENT_DISTANCE_THRESHOLD
-            || window_distance >= MOVEMENT_WINDOW_DISTANCE_THRESHOLD;
+            || window_distance >= movement_window_distance_threshold;
 
         if !significant_movement {
             continue;
@@ -2235,14 +2239,14 @@ fn generate_zoom_segments_from_clicks_impl(
         .into_iter()
         .filter_map(|(start, end)| {
             let duration = end - start;
-            if duration < MIN_SEGMENT_DURATION {
+            if duration < min_segment_duration {
                 return None;
             }
 
             Some(ZoomSegment {
                 start,
                 end,
-                amount: AUTO_ZOOM_AMOUNT,
+                amount: base_zoom_amount,
                 mode: ZoomMode::Auto,
                 glide_direction: GlideDirection::None,
                 glide_speed: 0.5,
@@ -2253,13 +2257,12 @@ fn generate_zoom_segments_from_clicks_impl(
         .collect()
 }
 
-/// Generates zoom segments based on mouse click events during recording.
-/// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
     recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
+    zoom_amount: f64,
+    zoom_sensitivity: f64,
 ) -> Vec<ZoomSegment> {
-    // Build a temporary RecordingMeta so we can use the common implementation
     let recording_meta = RecordingMeta {
         platform: None,
         project_path: recording.project_path.clone(),
@@ -2269,14 +2272,14 @@ pub fn generate_zoom_segments_from_clicks(
         upload: None,
     };
 
-    generate_zoom_segments_for_project(&recording_meta, recordings)
+    generate_zoom_segments_for_project(&recording_meta, recordings, zoom_amount, zoom_sensitivity)
 }
 
-/// Generates zoom segments from clicks for an existing project.
-/// Used in the editor context where we have RecordingMeta.
 pub fn generate_zoom_segments_for_project(
     recording_meta: &RecordingMeta,
     recordings: &ProjectRecordingsMeta,
+    zoom_amount: f64,
+    zoom_sensitivity: f64,
 ) -> Vec<ZoomSegment> {
     let RecordingMetaInner::Studio(studio_meta) = &recording_meta.inner else {
         return Vec::new();
@@ -2309,7 +2312,13 @@ pub fn generate_zoom_segments_for_project(
         }
     }
 
-    generate_zoom_segments_from_clicks_impl(all_clicks, all_moves, recordings.duration())
+    generate_zoom_segments_from_clicks_impl(
+        all_clicks,
+        all_moves,
+        recordings.duration(),
+        zoom_amount,
+        zoom_sensitivity,
+    )
 }
 
 fn project_config_from_recording(
@@ -2355,7 +2364,12 @@ fn project_config_from_recording(
         .collect::<Vec<_>>();
 
     let zoom_segments = if settings.auto_zoom_on_clicks {
-        generate_zoom_segments_from_clicks(completed_recording, recordings)
+        generate_zoom_segments_from_clicks(
+            completed_recording,
+            recordings,
+            settings.auto_zoom_amount,
+            settings.auto_zoom_sensitivity,
+        )
     } else {
         Vec::new()
     };
@@ -2429,8 +2443,13 @@ mod tests {
 
     #[test]
     fn skips_trailing_stop_click() {
-        let segments =
-            generate_zoom_segments_from_clicks_impl(vec![click_event(11_900.0)], vec![], 12.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            vec![click_event(11_900.0)],
+            vec![],
+            12.0,
+            1.5,
+            0.5,
+        );
 
         assert!(
             segments.is_empty(),
@@ -2447,7 +2466,7 @@ mod tests {
             move_event(1_940.0, 0.74, 0.78),
         ];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0);
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, 1.5, 0.5);
 
         assert!(
             !segments.is_empty(),
@@ -2460,6 +2479,72 @@ mod tests {
     }
 
     #[test]
+    fn variable_zoom_from_settings() {
+        let clicks = vec![click_event(1_200.0), click_event(4_200.0)];
+        let moves = vec![
+            move_event(1_500.0, 0.10, 0.12),
+            move_event(1_720.0, 0.42, 0.45),
+            move_event(1_940.0, 0.74, 0.78),
+        ];
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, 2.0, 0.5);
+
+        assert!(!segments.is_empty());
+        for seg in &segments {
+            assert!((seg.amount - 2.0).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn sensitivity_affects_segment_count() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(2_500.0),
+            click_event(5_000.0),
+            click_event(7_500.0),
+        ];
+        let moves = vec![
+            move_event(1_200.0, 0.1, 0.1),
+            move_event(2_700.0, 0.5, 0.5),
+            move_event(5_200.0, 0.8, 0.2),
+            move_event(7_700.0, 0.2, 0.8),
+        ];
+
+        let low_sens =
+            generate_zoom_segments_from_clicks_impl(clicks.clone(), moves.clone(), 20.0, 1.5, 0.0);
+        let high_sens = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, 1.5, 1.0);
+
+        assert!(
+            high_sens.len() >= low_sens.len(),
+            "high sensitivity ({}) should produce >= segments than low ({})",
+            high_sens.len(),
+            low_sens.len()
+        );
+    }
+
+    #[test]
+    fn backward_compat_default_params() {
+        let clicks = vec![click_event(1_200.0), click_event(4_200.0)];
+        let moves = vec![
+            move_event(1_500.0, 0.10, 0.12),
+            move_event(1_720.0, 0.42, 0.45),
+            move_event(1_940.0, 0.74, 0.78),
+        ];
+
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks.clone(), moves.clone(), 20.0, 1.5, 0.5);
+
+        assert!(!segments.is_empty());
+        for seg in &segments {
+            assert!(
+                (seg.amount - 1.5).abs() < 0.01,
+                "default params should produce zoom near 1.5, got {}",
+                seg.amount
+            );
+        }
+    }
+
+    #[test]
     fn ignores_cursor_jitter() {
         let jitter_moves = (0..30)
             .map(|i| {
@@ -2469,7 +2554,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), jitter_moves, 15.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(Vec::new(), jitter_moves, 15.0, 1.5, 0.5);
 
         assert!(
             segments.is_empty(),

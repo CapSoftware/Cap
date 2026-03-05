@@ -321,6 +321,8 @@ export function ConfigSidebar() {
 		meta,
 	} = useEditorContext();
 
+	const autoZoomSettings = generalSettingsStore.createQuery();
+
 	const cursorIdleDelay = () =>
 		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ??
 			2) as number;
@@ -968,6 +970,53 @@ export function ConfigSidebar() {
 									</div>
 								)}
 							</Show>
+							<div class="space-y-4">
+								<Field name="Auto Zoom" icon={<IconLucideSearch />}>
+									<div class="flex flex-row gap-2">
+										<EditorButton
+											onClick={() => projectActions.generateAutoZoom()}
+											leftIcon={<IconLucideSparkles />}
+										>
+											Generate
+										</EditorButton>
+										<EditorButton
+											variant="danger"
+											onClick={() => projectActions.removeAllZoomSegments()}
+											leftIcon={<IconCapTrash />}
+										>
+											Remove all
+										</EditorButton>
+									</div>
+								</Field>
+								<Field name="Zoom Intensity" icon={<IconLucideZoomIn />}>
+									<Slider
+										value={[autoZoomSettings.data?.autoZoomAmount ?? 1.5]}
+										onChange={(v) =>
+											generalSettingsStore.set({
+												autoZoomAmount: v[0],
+											})
+										}
+										minValue={1.0}
+										maxValue={3.0}
+										step={0.1}
+										formatTooltip="x"
+									/>
+								</Field>
+								<Field name="Sensitivity" icon={<IconLucideGauge />}>
+									<Slider
+										value={[autoZoomSettings.data?.autoZoomSensitivity ?? 0.5]}
+										onChange={(v) =>
+											generalSettingsStore.set({
+												autoZoomSensitivity: v[0],
+											})
+										}
+										minValue={0.0}
+										maxValue={1.0}
+										step={0.05}
+										formatTooltip={(v) => `${Math.round(v * 100)}%`}
+									/>
+								</Field>
+							</div>
 							<Show
 								when={(() => {
 									const zoomSelection = selection();
@@ -3087,7 +3136,6 @@ function ZoomSegmentConfig(props: {
 						<KTabs.Trigger
 							value="auto"
 							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							disabled={!generalSettings.data?.custom_cursor_capture2}
 						>
 							Auto
 						</KTabs.Trigger>

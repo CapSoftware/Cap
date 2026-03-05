@@ -35,7 +35,7 @@ import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -86,6 +86,7 @@ import {
 } from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
+import InfoPill from "./InfoPill";
 import MicrophoneSelect from "./MicrophoneSelect";
 import ModeInfoPanel from "./ModeInfoPanel";
 import SystemAudio from "./SystemAudio";
@@ -95,7 +96,7 @@ import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import useRequestPermission from "./useRequestPermission";
 
-const WINDOW_SIZE = { width: 330, height: 395 } as const;
+const WINDOW_SIZE = { width: 330, height: 450 } as const;
 
 const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -1493,6 +1494,8 @@ function Page() {
 
 	const signIn = createSignInMutation();
 
+	const generalSettings = generalSettingsStore.createQuery();
+
 	const BaseControls = () => (
 		<div class="space-y-2">
 			<CameraSelect
@@ -1533,6 +1536,28 @@ function Page() {
 				}}
 			/>
 			<SystemAudio />
+			<Show when={rawOptions.mode === "studio"}>
+				<button
+					type="button"
+					class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default bg-gray-3 KSelect"
+					onClick={() => {
+						const current = generalSettings.data?.autoZoomOnClicks ?? false;
+						generalSettingsStore.set({ autoZoomOnClicks: !current });
+					}}
+				>
+					<IconLucideZoomIn class="text-gray-10 size-4" />
+					<p class="flex-1 text-sm text-left truncate">
+						{generalSettings.data?.autoZoomOnClicks
+							? "Auto Zoom"
+							: "No Auto Zoom"}
+					</p>
+					<InfoPill
+						variant={generalSettings.data?.autoZoomOnClicks ? "blue" : "red"}
+					>
+						{generalSettings.data?.autoZoomOnClicks ? "On" : "Off"}
+					</InfoPill>
+				</button>
+			</Show>
 		</div>
 	);
 

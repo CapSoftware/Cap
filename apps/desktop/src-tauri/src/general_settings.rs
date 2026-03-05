@@ -123,6 +123,10 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default)]
     pub auto_zoom_on_clicks: bool,
+    #[serde(default = "default_auto_zoom_amount")]
+    pub auto_zoom_amount: f64,
+    #[serde(default = "default_auto_zoom_sensitivity")]
+    pub auto_zoom_sensitivity: f64,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
     #[serde(default = "default_excluded_windows")]
@@ -167,6 +171,14 @@ fn default_max_fps() -> u32 {
     60
 }
 
+fn default_auto_zoom_amount() -> f64 {
+    1.5
+}
+
+fn default_auto_zoom_sensitivity() -> f64 {
+    0.5
+}
+
 fn default_server_url() -> String {
     std::option_env!("VITE_SERVER_URL")
         .unwrap_or("https://cap.so")
@@ -203,6 +215,8 @@ impl Default for GeneralSettingsStore {
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
             auto_zoom_on_clicks: false,
+            auto_zoom_amount: default_auto_zoom_amount(),
+            auto_zoom_sensitivity: default_auto_zoom_sensitivity(),
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
