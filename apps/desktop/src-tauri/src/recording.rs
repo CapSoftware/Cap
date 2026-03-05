@@ -37,7 +37,7 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::{
     any::Any,
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -2001,15 +2001,8 @@ fn generate_zoom_segments_from_clicks_impl(
     const BASE_CLICK_GROUP_SPATIAL_THRESHOLD: f64 = 0.15;
     const CLICK_PRE_PADDING: f64 = 0.4;
     const CLICK_POST_PADDING: f64 = 1.8;
-    const MOVEMENT_PRE_PADDING: f64 = 0.3;
-    const MOVEMENT_POST_PADDING: f64 = 1.5;
     const MERGE_GAP_THRESHOLD: f64 = 0.8;
     const BASE_MIN_SEGMENT_DURATION: f64 = 1.0;
-    const MOVEMENT_WINDOW_SECONDS: f64 = 1.5;
-    const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.02;
-    const BASE_MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.08;
-    const SHAKE_FILTER_THRESHOLD: f64 = 0.33;
-    const SHAKE_FILTER_WINDOW_MS: f64 = 150.0;
 
     let base_zoom_amount = if base_zoom_amount.is_finite() {
         base_zoom_amount.clamp(1.0, 3.0)
@@ -2020,9 +2013,6 @@ fn generate_zoom_segments_from_clicks_impl(
     let sensitivity_scale = 1.5 - sensitivity;
     let click_group_spatial_threshold = BASE_CLICK_GROUP_SPATIAL_THRESHOLD * sensitivity_scale;
     let min_segment_duration = BASE_MIN_SEGMENT_DURATION * sensitivity_scale;
-    let movement_window_distance_threshold =
-        BASE_MOVEMENT_WINDOW_DISTANCE_THRESHOLD * sensitivity_scale;
-
     if max_duration <= 0.0 {
         return Vec::new();
     }
@@ -2128,96 +2118,6 @@ fn generate_zoom_segments_from_clicks_impl(
 
         let start = (group_start - CLICK_PRE_PADDING).max(0.0);
         let end = (group_end + CLICK_POST_PADDING).min(activity_end_limit);
-
-        if end > start {
-            intervals.push((start, end));
-        }
-    }
-
-    let mut last_move_by_cursor: HashMap<String, (f64, f64, f64)> = HashMap::new();
-    let mut distance_window: VecDeque<(f64, f64)> = VecDeque::new();
-    let mut window_distance = 0.0_f64;
-    let mut shake_window: VecDeque<(f64, f64, f64)> = VecDeque::new();
-
-    for mv in moves.iter() {
-        let time = mv.time_ms / 1000.0;
-        if time >= activity_end_limit {
-            break;
-        }
-
-        let distance = if let Some((_, last_x, last_y)) = last_move_by_cursor.get(&mv.cursor_id) {
-            let dx = mv.x - last_x;
-            let dy = mv.y - last_y;
-            (dx * dx + dy * dy).sqrt()
-        } else {
-            0.0
-        };
-
-        last_move_by_cursor.insert(mv.cursor_id.clone(), (time, mv.x, mv.y));
-
-        if distance <= f64::EPSILON {
-            continue;
-        }
-
-        shake_window.push_back((mv.time_ms, mv.x, mv.y));
-        while let Some(&(old_time, _, _)) = shake_window.front() {
-            if mv.time_ms - old_time > SHAKE_FILTER_WINDOW_MS {
-                shake_window.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        if shake_window.len() >= 3 {
-            let positions: Vec<(f64, f64)> =
-                shake_window.iter().map(|(_, x, y)| (*x, *y)).collect();
-            let mut direction_changes = 0;
-            for i in 1..positions.len() - 1 {
-                let dx1 = positions[i].0 - positions[i - 1].0;
-                let dy1 = positions[i].1 - positions[i - 1].1;
-                let dx2 = positions[i + 1].0 - positions[i].0;
-                let dy2 = positions[i + 1].1 - positions[i].1;
-
-                if (dx1 * dx2 + dy1 * dy2) < 0.0 {
-                    direction_changes += 1;
-                }
-            }
-
-            let total_dist: f64 = positions
-                .windows(2)
-                .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
-                .sum();
-
-            if direction_changes >= 2 && total_dist < SHAKE_FILTER_THRESHOLD * 3.0 {
-                continue;
-            }
-        }
-
-        distance_window.push_back((time, distance));
-        window_distance += distance;
-
-        while let Some(&(old_time, old_distance)) = distance_window.front() {
-            if time - old_time > MOVEMENT_WINDOW_SECONDS {
-                distance_window.pop_front();
-                window_distance -= old_distance;
-            } else {
-                break;
-            }
-        }
-
-        if window_distance < 0.0 {
-            window_distance = 0.0;
-        }
-
-        let significant_movement = distance >= MOVEMENT_EVENT_DISTANCE_THRESHOLD
-            || window_distance >= movement_window_distance_threshold;
-
-        if !significant_movement {
-            continue;
-        }
-
-        let start = (time - MOVEMENT_PRE_PADDING).max(0.0);
-        let end = (time + MOVEMENT_POST_PADDING).min(activity_end_limit);
 
         if end > start {
             intervals.push((start, end));
