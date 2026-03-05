@@ -2221,15 +2221,20 @@ pub fn generate_zoom_segments_for_project(
 
     if let Some(segments) = timeline_segments {
         if !segments.is_empty() {
+            let safe_timescale = |ts: f64| -> f64 {
+                if ts.is_finite() && ts > 0.0 { ts } else { 1.0 }
+            };
+
             let remap_time = |time_ms: f64| -> Option<f64> {
                 let mut timeline_offset_ms = 0.0_f64;
                 for seg in segments {
+                    let ts = safe_timescale(seg.timescale);
                     let seg_start_ms = seg.start * 1000.0;
                     let seg_end_ms = seg.end * 1000.0;
                     if time_ms >= seg_start_ms && time_ms <= seg_end_ms {
-                        return Some(timeline_offset_ms + (time_ms - seg_start_ms) / seg.timescale);
+                        return Some(timeline_offset_ms + (time_ms - seg_start_ms) / ts);
                     }
-                    timeline_offset_ms += (seg.end - seg.start) / seg.timescale * 1000.0;
+                    timeline_offset_ms += (seg.end - seg.start) / ts * 1000.0;
                 }
                 None
             };
@@ -2256,7 +2261,10 @@ pub fn generate_zoom_segments_for_project(
 
             let trimmed_duration = segments
                 .iter()
-                .map(|s| (s.end - s.start) / s.timescale)
+                .map(|s| {
+                    let ts = safe_timescale(s.timescale);
+                    (s.end - s.start) / ts
+                })
                 .sum();
 
             return generate_zoom_segments_from_clicks_impl(

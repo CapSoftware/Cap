@@ -302,7 +302,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				}
 			},
 			removeAllZoomSegments: () => {
-				setProject("timeline", "zoomSegments", []);
+				batch(() => {
+					setProject("timeline", "zoomSegments", []);
+					if (editorState.timeline.selection?.type === "zoom") {
+						setEditorState("timeline", "selection", null);
+					}
+				});
 			},
 			deleteZoomSegments: (segmentIndices: number[]) => {
 				batch(() => {
