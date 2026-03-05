@@ -103,7 +103,8 @@ impl ZoomFocusInterpolator {
                 );
                 let dx = target.x - last_committed_target.x;
                 let dy = target.y - last_committed_target.y;
-                if (dx * dx + dy * dy).sqrt() > self.screen_spring.dead_zone_radius {
+                let dead_zone_radius = self.screen_spring.dead_zone_radius;
+                if dx * dx + dy * dy > dead_zone_radius * dead_zone_radius {
                     last_committed_target = target;
                     sim.set_target_position(target);
                 }
@@ -300,13 +301,19 @@ mod tests {
         let events = make_cursor_events(moves);
         let sample_times: Vec<f32> = (0..20).map(|i| i as f32 * 0.1).collect();
 
-        let result_a = run_interpolator(&events, 0.0, 2.0, &sample_times);
-        let result_b = run_interpolator(&events, 0.0, 2.0, &sample_times);
+        let result = run_interpolator(&events, 0.0, 2.0, &sample_times);
 
-        for (a, b) in result_a.iter().zip(result_b.iter()) {
-            assert!((a.0 - b.0).abs() < 1e-6);
-            assert!((a.1 - b.1).abs() < 1e-6);
-        }
+        let last = result.last().unwrap();
+        assert!(
+            (last.0 - 0.7).abs() < 0.05,
+            "with dead_zone=0, spring should track final cursor position, got {}",
+            last.0
+        );
+        assert!(
+            (last.1 - 0.7).abs() < 0.05,
+            "with dead_zone=0, spring should track final cursor position, got {}",
+            last.1
+        );
     }
 
     #[test]

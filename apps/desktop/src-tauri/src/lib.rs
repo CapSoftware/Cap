@@ -2026,9 +2026,7 @@ async fn generate_zoom_segments_from_clicks(
     let meta = editor_instance.meta();
     let recordings = &editor_instance.recordings;
 
-    let settings = GeneralSettingsStore::get(&app)
-        .unwrap_or(None)
-        .unwrap_or_default();
+    let settings = GeneralSettingsStore::get(&app)?.unwrap_or_default();
 
     let zoom_segments = recording::generate_zoom_segments_for_project(
         meta,

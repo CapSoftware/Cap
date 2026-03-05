@@ -2011,6 +2011,12 @@ fn generate_zoom_segments_from_clicks_impl(
     const SHAKE_FILTER_THRESHOLD: f64 = 0.33;
     const SHAKE_FILTER_WINDOW_MS: f64 = 150.0;
 
+    let base_zoom_amount = if base_zoom_amount.is_finite() {
+        base_zoom_amount.clamp(1.0, 3.0)
+    } else {
+        1.5
+    };
+    let sensitivity = sensitivity.clamp(0.0, 1.0);
     let sensitivity_scale = 1.5 - sensitivity;
     let click_group_spatial_threshold = BASE_CLICK_GROUP_SPATIAL_THRESHOLD * sensitivity_scale;
     let min_segment_duration = BASE_MIN_SEGMENT_DURATION * sensitivity_scale;
