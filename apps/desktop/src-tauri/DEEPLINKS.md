@@ -86,7 +86,7 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 
 | Field          | Type                                                     | Required | Description                                         |
 | -------------- | -------------------------------------------------------- | -------- | --------------------------------------------------- |
-| `capture_mode` | `null` \| `{"screen":"<name>"}` \| `{"window":"<name>"}` | Yes      | Target to capture. `null` uses the primary display. |
+| `capture_mode` | `null` \| `{"screen":"<name>"}` \| `{"window":"<name>"}` | No       | Target to capture. `null` uses the primary display. |
 
 ### `set_camera`
 
