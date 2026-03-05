@@ -80,7 +80,7 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 
 | Field  | Type                                | Required | Description                                                                         |
 | ------ | ----------------------------------- | -------- | ----------------------------------------------------------------------------------- |
-| `mode` | `null` \| `"studio"` \| `"instant"` | Yes      | Override the saved recording mode. `null` uses the saved mode (defaults to studio). |
+| `mode` | `null` \| `"studio"` \| `"instant"` | No       | Override the saved recording mode. `null` uses the saved mode (defaults to studio). |
 
 ### `take_screenshot`
 
@@ -110,7 +110,7 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 
 | Field  | Type               | Required | Description                                           |
 | ------ | ------------------ | -------- | ----------------------------------------------------- |
-| `page` | `null` \| `string` | Yes      | Settings page to open. `null` opens the default page. |
+| `page` | `null` \| `string` | No       | Settings page to open. `null` opens the default page. |
 
 ## Examples
 

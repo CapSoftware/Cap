@@ -1,6 +1,5 @@
-import { runDeepLinkAction } from './lib/deeplink';
+import { runDeepLinkAction } from "./lib/deeplink";
 
 export default async function pauseRecording() {
-  await runDeepLinkAction('pause_recording', 'Pause recording dispatched');
-}
+  await runDeepLinkAction("pause_recording", "Pause recording dispatched");
 }
