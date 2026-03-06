@@ -10,6 +10,6 @@ export async function runDeepLinkAction(action: DeepLinkAction, successMessage: 
     await open(deeplink);
     await showHUD(successMessage);
   } catch {
-    await showHUD('Failed to open Cap — make sure it is installed and running');
+    await showHUD("Failed to open Cap — make sure it is installed");
   }
 }

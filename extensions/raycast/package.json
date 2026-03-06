@@ -14,19 +14,19 @@
     {
       "name": "start-instant-recording",
       "title": "Start Instant Recording",
-      "description": "Start an instant screen recording using your saved Cap settings",
+      "description": "Start an instant recording using your saved Cap device and display settings",
       "mode": "no-view"
     },
     {
       "name": "start-studio-recording",
       "title": "Start Studio Recording",
-      "description": "Start a studio screen recording using your saved Cap settings",
+      "description": "Start a studio recording using your saved Cap device and display settings",
       "mode": "no-view"
     },
     {
       "name": "start-current-recording",
       "title": "Start Recording (Saved Settings)",
-      "description": "Start a recording using your saved Cap settings",
+      "description": "Start a recording using all of your saved Cap settings, including mode",
       "mode": "no-view"
     },
     {

@@ -950,7 +950,6 @@ pub async fn start_recording(
                                     e
                                 })?;
 
-
                             let progressive_upload = InstantMultipartUpload::spawn(
                                 app_handle.clone(),
                                 recording_dir.join("content/output.mp4"),

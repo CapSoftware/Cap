@@ -163,6 +163,17 @@ impl DeepLinkAction {
                 capture_system_audio,
                 mode,
             } => {
+                let perms = permissions::do_permissions_check(false);
+                if !perms.screen_recording.permitted() {
+                    return Err("Screen recording permission not granted".to_string());
+                }
+                if camera.is_some() && !perms.camera.permitted() {
+                    return Err("Camera permission not granted".to_string());
+                }
+                if mic_label.is_some() && !perms.microphone.permitted() {
+                    return Err("Microphone permission not granted".to_string());
+                }
+
                 let state = app.state::<ArcLock<App>>();
 
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
@@ -199,6 +210,17 @@ impl DeepLinkAction {
                     system_audio,
                     organization_id,
                 } = settings;
+
+                let perms = permissions::do_permissions_check(false);
+                if !perms.screen_recording.permitted() {
+                    return Err("Screen recording permission not granted".to_string());
+                }
+                if camera_id.is_some() && !perms.camera.permitted() {
+                    return Err("Camera permission not granted".to_string());
+                }
+                if mic_name.is_some() && !perms.microphone.permitted() {
+                    return Err("Microphone permission not granted".to_string());
+                }
 
                 let state = app.state::<ArcLock<App>>();
 
@@ -264,6 +286,9 @@ impl DeepLinkAction {
                 Ok(())
             }
             DeepLinkAction::SetCamera { id } => {
+                if !permissions::do_permissions_check(false).camera.permitted() {
+                    return Err("Camera permission not granted".to_string());
+                }
                 let state = app.state::<ArcLock<App>>();
                 crate::set_camera_input(app.clone(), state, id, None).await
             }
