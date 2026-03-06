@@ -286,7 +286,7 @@ impl DeepLinkAction {
                 Ok(())
             }
             DeepLinkAction::SetCamera { id } => {
-                if !permissions::do_permissions_check(false).camera.permitted() {
+                if id.is_some() && !permissions::do_permissions_check(false).camera.permitted() {
                     return Err("Camera permission not granted".to_string());
                 }
                 let state = app.state::<ArcLock<App>>();
@@ -309,9 +309,10 @@ impl DeepLinkAction {
                 Ok(())
             }
             DeepLinkAction::SetMicrophone { label } => {
-                if !permissions::do_permissions_check(false)
-                    .microphone
-                    .permitted()
+                if label.is_some()
+                    && !permissions::do_permissions_check(false)
+                        .microphone
+                        .permitted()
                 {
                     return Err("Microphone permission not granted".to_string());
                 }
