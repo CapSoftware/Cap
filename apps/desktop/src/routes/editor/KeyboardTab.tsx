@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import {
@@ -21,6 +21,12 @@ import {
 	Subfield,
 	topSlideAnimateClasses,
 } from "./ui";
+
+const FONT_FAMILY_OPTIONS = [
+	{ label: "Monospace", value: "System Monospace" },
+	{ label: "Sans-Serif", value: "System Sans-Serif" },
+	{ label: "Serif", value: "System Serif" },
+];
 
 const FONT_WEIGHT_OPTIONS = [
 	{ label: "Normal", value: 400 },
@@ -63,7 +69,7 @@ export function KeyboardTab() {
 		try {
 			const segments = await commands.generateKeyboardSegments(
 				getSetting("groupingThresholdMs"),
-				getSetting("lingerDurationSecs"),
+				getSetting("displayDurationSecs") * 1000,
 				getSetting("showModifiers"),
 				getSetting("showSpecialKeys"),
 			);
@@ -71,7 +77,6 @@ export function KeyboardTab() {
 			if (segments.length > 0) {
 				setProject("timeline", "keyboardSegments", segments);
 				setEditorState("timeline", "tracks", "keyboard", true);
-				toast.success("Keyboard segments generated successfully!");
 			}
 		} catch (e) {
 			console.error("Failed to generate keyboard segments:", e);
@@ -82,6 +87,25 @@ export function KeyboardTab() {
 			setIsGenerating(false);
 		}
 	};
+
+	const groupingParams = createMemo(() => ({
+		threshold: getSetting("groupingThresholdMs"),
+		display: getSetting("displayDurationSecs"),
+		modifiers: getSetting("showModifiers"),
+		special: getSetting("showSpecialKeys"),
+	}));
+
+	createEffect(
+		on(
+			groupingParams,
+			() => {
+				if (hasKeyboardSegments()) {
+					generateSegments();
+				}
+			},
+			{ defer: true },
+		),
+	);
 
 	const selectedSegment = createMemo(() => {
 		const selection = editorState.timeline.selection;
@@ -113,8 +137,108 @@ export function KeyboardTab() {
 						!getSetting("enabled") && "opacity-50 pointer-events-none",
 					)}
 				>
-					<Field name="Font Settings" icon={<IconLucideType />}>
+					<Field name="Font" icon={<IconLucideType />}>
 						<div class="space-y-3">
+							<Subfield name="Family">
+								<KSelect
+									options={FONT_FAMILY_OPTIONS}
+									optionValue="value"
+									optionTextValue="label"
+									value={
+										FONT_FAMILY_OPTIONS.find(
+											(o) => o.value === getSetting("font"),
+										) ?? FONT_FAMILY_OPTIONS[0]
+									}
+									onChange={(value) => {
+										if (!value) return;
+										updateSetting("font", value.value);
+									}}
+									itemComponent={(selectItemProps) => (
+										<MenuItem<typeof KSelect.Item>
+											as={KSelect.Item}
+											item={selectItemProps.item}
+										>
+											<KSelect.ItemLabel class="flex-1">
+												{selectItemProps.item.rawValue.label}
+											</KSelect.ItemLabel>
+										</MenuItem>
+									)}
+								>
+									<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-1.5 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+										<KSelect.Value<{
+											label: string;
+											value: string;
+										}> class="truncate">
+											{(state) => state.selectedOption()?.label ?? "Monospace"}
+										</KSelect.Value>
+										<KSelect.Icon>
+											<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+										</KSelect.Icon>
+									</KSelect.Trigger>
+									<KSelect.Portal>
+										<PopperContent<typeof KSelect.Content>
+											as={KSelect.Content}
+											class={cx(topSlideAnimateClasses, "z-50")}
+										>
+											<MenuItemList<typeof KSelect.Listbox>
+												class="overflow-y-auto max-h-40"
+												as={KSelect.Listbox}
+											/>
+										</PopperContent>
+									</KSelect.Portal>
+								</KSelect>
+							</Subfield>
+
+							<Subfield name="Weight">
+								<KSelect
+									options={FONT_WEIGHT_OPTIONS}
+									optionValue="value"
+									optionTextValue="label"
+									value={
+										FONT_WEIGHT_OPTIONS.find(
+											(o) => o.value === getSetting("fontWeight"),
+										) ?? FONT_WEIGHT_OPTIONS[1]
+									}
+									onChange={(value) => {
+										if (!value) return;
+										updateSetting("fontWeight", value.value);
+									}}
+									itemComponent={(selectItemProps) => (
+										<MenuItem<typeof KSelect.Item>
+											as={KSelect.Item}
+											item={selectItemProps.item}
+										>
+											<KSelect.ItemLabel class="flex-1">
+												{selectItemProps.item.rawValue.label}
+											</KSelect.ItemLabel>
+										</MenuItem>
+									)}
+								>
+									<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-1.5 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+										<KSelect.Value<{
+											label: string;
+											value: number;
+										}> class="truncate">
+											{(state) => state.selectedOption()?.label ?? "Medium"}
+										</KSelect.Value>
+										<KSelect.Icon>
+											<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+										</KSelect.Icon>
+									</KSelect.Trigger>
+									<KSelect.Portal>
+										<PopperContent<typeof KSelect.Content>
+											as={KSelect.Content}
+											class={cx(topSlideAnimateClasses, "z-50")}
+										>
+											<MenuItemList<typeof KSelect.Listbox>
+												class="overflow-y-auto max-h-40"
+												as={KSelect.Listbox}
+											/>
+										</PopperContent>
+									</KSelect.Portal>
+								</KSelect>
+							</Subfield>
+
 							<div class="flex flex-col gap-2">
 								<span class="text-gray-11 text-sm">Size</span>
 								<Slider
@@ -139,63 +263,6 @@ export function KeyboardTab() {
 						</div>
 					</Field>
 
-					<Field name="Font Weight" icon={<IconLucideBold />}>
-						<KSelect
-							options={FONT_WEIGHT_OPTIONS}
-							optionValue="value"
-							optionTextValue="label"
-							value={{
-								label: "Custom",
-								value: getSetting("fontWeight"),
-							}}
-							onChange={(value) => {
-								if (!value) return;
-								updateSetting("fontWeight", value.value);
-							}}
-							itemComponent={(selectItemProps) => (
-								<MenuItem<typeof KSelect.Item>
-									as={KSelect.Item}
-									item={selectItemProps.item}
-								>
-									<KSelect.ItemLabel class="flex-1">
-										{selectItemProps.item.rawValue.label}
-									</KSelect.ItemLabel>
-								</MenuItem>
-							)}
-						>
-							<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
-								<KSelect.Value<{
-									label: string;
-									value: number;
-								}> class="truncate">
-									{(state) => {
-										const selected = state.selectedOption();
-										if (selected) return selected.label;
-										const weight = getSetting("fontWeight");
-										const option = FONT_WEIGHT_OPTIONS.find(
-											(o) => o.value === weight,
-										);
-										return option ? option.label : "Medium";
-									}}
-								</KSelect.Value>
-								<KSelect.Icon>
-									<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-								</KSelect.Icon>
-							</KSelect.Trigger>
-							<KSelect.Portal>
-								<PopperContent<typeof KSelect.Content>
-									as={KSelect.Content}
-									class={cx(topSlideAnimateClasses, "z-50")}
-								>
-									<MenuItemList<typeof KSelect.Listbox>
-										class="overflow-y-auto max-h-40"
-										as={KSelect.Listbox}
-									/>
-								</PopperContent>
-							</KSelect.Portal>
-						</KSelect>
-					</Field>
-
 					<Field name="Animation" icon={<IconLucideTimer />}>
 						<div class="space-y-3">
 							<div class="flex flex-col gap-2">
@@ -215,18 +282,18 @@ export function KeyboardTab() {
 							</div>
 
 							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Linger Duration</span>
+								<span class="text-gray-11 text-sm">Display Duration</span>
 								<Slider
-									value={[getSetting("lingerDurationSecs") * 100]}
+									value={[getSetting("displayDurationSecs") * 100]}
 									onChange={(v) =>
-										updateSetting("lingerDurationSecs", v[0] / 100)
+										updateSetting("displayDurationSecs", v[0] / 100)
 									}
 									minValue={0}
 									maxValue={300}
 									step={5}
 								/>
 								<span class="text-xs text-gray-11 text-right">
-									{(getSetting("lingerDurationSecs") * 1000).toFixed(0)}ms
+									{(getSetting("displayDurationSecs") * 1000).toFixed(0)}ms
 								</span>
 							</div>
 

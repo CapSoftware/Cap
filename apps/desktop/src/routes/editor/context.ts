@@ -117,7 +117,7 @@ export type KeyboardTrackSegment = {
 	start: number;
 	end: number;
 	displayText: string;
-	keys?: Array<{ key: string; timeOffset: number }>;
+	keys?: Array<{ key: string; timeOffsetMs: number }>;
 	fadeDurationOverride?: number | null;
 	positionOverride?: string | null;
 	colorOverride?: string | null;
@@ -462,9 +462,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						)
 							return;
 
-						const charIndex = segment.keys
-							? segment.keys.findIndex((k) => k.timeOffset >= time)
-							: -1;
+						const timeMs = time * 1000;
+					const charIndex = segment.keys
+						? segment.keys.findIndex((k) => k.timeOffsetMs >= timeMs)
+						: -1;
 						const chars = [...segment.displayText];
 
 						const firstDisplayText =
@@ -481,7 +482,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							charIndex >= 0 && segment.keys
 								? segment.keys
 										.slice(charIndex)
-										.map((k) => ({ ...k, timeOffset: k.timeOffset - time }))
+										.map((k) => ({ ...k, timeOffsetMs: k.timeOffsetMs - timeMs }))
 								: [];
 
 						segments.splice(index + 1, 0, {

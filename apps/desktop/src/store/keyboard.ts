@@ -12,7 +12,7 @@ export type KeyboardSettings = {
 	position: KeyboardPosition;
 	fontWeight: number;
 	fadeDurationSecs: number;
-	lingerDurationSecs: number;
+	displayDurationSecs: number;
 	groupingThresholdMs: number;
 	showModifiers: boolean;
 	showSpecialKeys: boolean;
@@ -20,7 +20,7 @@ export type KeyboardSettings = {
 
 export const defaultKeyboardSettings: KeyboardSettings = {
 	enabled: false,
-	font: "System Sans-Serif",
+	font: "System Monospace",
 	size: 28,
 	color: "#FFFFFF",
 	backgroundColor: "#000000",
@@ -28,7 +28,7 @@ export const defaultKeyboardSettings: KeyboardSettings = {
 	position: "above-captions",
 	fontWeight: 500,
 	fadeDurationSecs: 0.15,
-	lingerDurationSecs: 0.8,
+	displayDurationSecs: 0.8,
 	groupingThresholdMs: 300,
 	showModifiers: true,
 	showSpecialKeys: true,

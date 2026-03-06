@@ -2052,7 +2052,7 @@ fn load_keyboard_events_from_display_path(
 async fn generate_keyboard_segments(
     editor_instance: WindowEditorInstance,
     grouping_threshold_ms: f64,
-    linger_duration_ms: f64,
+    display_duration_ms: f64,
     show_modifiers: bool,
     show_special_keys: bool,
 ) -> Result<Vec<cap_project::keyboard::KeyboardTrackSegment>, String> {
@@ -2069,7 +2069,7 @@ async fn generate_keyboard_segments(
             return Ok(cap_project::keyboard::group_key_events(
                 &events,
                 grouping_threshold_ms,
-                linger_duration_ms,
+                display_duration_ms,
                 show_modifiers,
                 show_special_keys,
             ));
@@ -2092,7 +2092,7 @@ async fn generate_keyboard_segments(
     let grouped = cap_project::keyboard::group_key_events(
         &all_events,
         grouping_threshold_ms,
-        linger_duration_ms,
+        display_duration_ms,
         show_modifiers,
         show_special_keys,
     );

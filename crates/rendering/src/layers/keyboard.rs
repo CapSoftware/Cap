@@ -225,7 +225,7 @@ impl KeyboardLayer {
         let active_segment = find_active_keyboard_segment(
             current_time,
             &timeline.keyboard_segments,
-            settings.fade_duration,
+            settings.fade_duration_secs,
         );
 
         let Some(active) = active_segment else {
@@ -235,7 +235,7 @@ impl KeyboardLayer {
         let segment_fade = active
             .segment
             .fade_duration_override
-            .unwrap_or(settings.fade_duration) as f64;
+            .unwrap_or(settings.fade_duration_secs) as f64;
 
         let visible_text = build_visible_text(active.segment, current_time);
 
@@ -532,7 +532,7 @@ fn build_visible_text(
     let mut visible = String::new();
 
     for (i, key) in segment.keys.iter().enumerate() {
-        if time_offset_from_start >= key.time_offset && i < chars.len() {
+        if time_offset_from_start >= key.time_offset_ms && i < chars.len() {
             visible.push(chars[i]);
         }
     }

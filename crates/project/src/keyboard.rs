@@ -106,7 +106,7 @@ fn modifier_prefix(active_modifiers: &[String]) -> String {
     if parts.is_empty() {
         String::new()
     } else {
-        parts.join("")
+        format!("{}+", parts.join("+"))
     }
 }
 
@@ -114,7 +114,7 @@ fn modifier_prefix(active_modifiers: &[String]) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct KeyPressDisplay {
     pub key: String,
-    pub time_offset: f64,
+    pub time_offset_ms: f64,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -141,7 +141,7 @@ pub struct KeyboardTrackSegment {
 pub fn group_key_events(
     events: &KeyboardEvents,
     grouping_threshold_ms: f64,
-    linger_duration_ms: f64,
+    display_duration_ms: f64,
     show_modifiers: bool,
     show_special_keys: bool,
 ) -> Vec<KeyboardTrackSegment> {
@@ -196,7 +196,7 @@ pub fn group_key_events(
             return;
         }
         *counter += 1;
-        let end = (end_key_time + linger_duration_ms) / 1000.0;
+        let end = (end_key_time + display_duration_ms) / 1000.0;
         let start_secs = start / 1000.0;
         let end_secs = end.max(start_secs + min_segment_ms / 1000.0);
         segments.push(KeyboardTrackSegment {
@@ -266,16 +266,22 @@ pub fn group_key_events(
 
             let prefix = modifier_prefix(&active_modifiers);
             let key_display = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
+            let has_shift = active_modifiers.iter().any(|m| is_shift_key(m));
+            let key_display = if has_shift && key_display.len() == 1 {
+                key_display.to_uppercase()
+            } else {
+                key_display
+            };
             let combo = format!("{prefix}{key_display}");
 
             if let Some(prev) = segments.last_mut() {
                 let prev_end_ms = prev.end * 1000.0;
                 if event.time_ms < prev_end_ms {
                     prev.display_text = format!("{}  {}", prev.display_text, combo);
-                    prev.end = (event.time_ms + linger_duration_ms) / 1000.0;
+                    prev.end = (event.time_ms + display_duration_ms) / 1000.0;
                     prev.keys.push(KeyPressDisplay {
                         key: event.key.clone(),
-                        time_offset: event.time_ms - prev.start * 1000.0,
+                        time_offset_ms: event.time_ms - prev.start * 1000.0,
                     });
                     last_key_time = event.time_ms;
                     continue;
@@ -284,7 +290,7 @@ pub fn group_key_events(
 
             segment_counter += 1;
             let start_secs = event.time_ms / 1000.0;
-            let end_secs = ((event.time_ms + linger_duration_ms) / 1000.0)
+            let end_secs = ((event.time_ms + display_duration_ms) / 1000.0)
                 .max(start_secs + min_segment_ms / 1000.0);
             segments.push(KeyboardTrackSegment {
                 id: format!("kb-{segment_counter}"),
@@ -293,7 +299,7 @@ pub fn group_key_events(
                 display_text: combo,
                 keys: vec![KeyPressDisplay {
                     key: event.key.clone(),
-                    time_offset: 0.0,
+                    time_offset_ms: 0.0,
                 }],
                 fade_duration_override: None,
                 position_override: None,
@@ -330,7 +336,7 @@ pub fn group_key_events(
             current_display.push_str(&display_char);
             current_keys.push(KeyPressDisplay {
                 key: event.key.clone(),
-                time_offset: offset,
+                time_offset_ms: offset,
             });
             last_key_time = event.time_ms;
         }
