@@ -100,6 +100,42 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 | ------- | ------------------ | -------- | ------------------------------------------------- |
 | `label` | `null` \| `string` | No       | Microphone label. `null` disables the microphone. |
 
+### `list_cameras` clipboard output
+
+JSON array of camera objects:
+
+```json
+[{ "device_id": "...", "model_id": "...", "display_name": "..." }]
+```
+
+Pass `device_id` or `model_id` as the `id` field of `set_camera`.
+
+### `list_microphones` clipboard output
+
+JSON array of label strings (sorted):
+
+```json
+["Built-in Microphone", "External Headset"]
+```
+
+Pass a label string directly as the `label` field of `set_microphone`.
+
+### `list_displays` clipboard output
+
+JSON array of display objects:
+
+```json
+[{ "id": 1, "name": "Built-in Retina Display", "refresh_rate": 60 }]
+```
+
+### `list_windows` clipboard output
+
+JSON array of window objects:
+
+```json
+[{ "id": 1, "owner_name": "Safari", "name": "Page Title", "bounds": { ... }, "refresh_rate": 60, "bundle_identifier": "com.apple.Safari" }]
+```
+
 ### `open_editor`
 
 | Field          | Type     | Required | Description                             |
