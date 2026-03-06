@@ -21,6 +21,7 @@ import {
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
+import { MIN_KEYBOARD_SEGMENT_SECS } from "~/store/keyboard";
 
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
@@ -86,7 +87,14 @@ export const getPreviewResolution = (
 	return { x: width, y: height };
 };
 
-export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask";
+export type TimelineTrackType =
+	| "clip"
+	| "text"
+	| "zoom"
+	| "scene"
+	| "mask"
+	| "caption"
+	| "keyboard";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -104,6 +112,19 @@ export type CornerRoundingType = "rounded" | "squircle";
 
 type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 
+export type KeyboardTrackSegment = {
+	id: string;
+	start: number;
+	end: number;
+	displayText: string;
+	keys?: Array<{ key: string; timeOffset: number }>;
+	fadeDurationOverride?: number | null;
+	positionOverride?: string | null;
+	colorOverride?: string | null;
+	backgroundColorOverride?: string | null;
+	fontSizeOverride?: number | null;
+};
+
 type EditorTimelineConfiguration = Omit<
 	TimelineConfiguration,
 	"sceneSegments" | "maskSegments"
@@ -111,6 +132,7 @@ type EditorTimelineConfiguration = Omit<
 	sceneSegments?: SceneSegment[];
 	maskSegments: MaskSegment[];
 	textSegments: TextSegment[];
+	keyboardSegments: KeyboardTrackSegment[];
 };
 
 export type EditorProjectConfiguration = Omit<
@@ -155,6 +177,12 @@ export function normalizeProject(
 							textSegments?: TextSegment[];
 						}
 					).textSegments ?? [],
+				keyboardSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							keyboardSegments?: KeyboardTrackSegment[];
+						}
+					).keyboardSegments ?? [],
 			}
 		: undefined;
 
@@ -179,6 +207,7 @@ export function serializeProjectConfiguration(
 				...project.timeline,
 				maskSegments: project.timeline.maskSegments ?? [],
 				textSegments: project.timeline.textSegments ?? [],
+				keyboardSegments: project.timeline.keyboardSegments ?? [],
 			}
 		: project.timeline;
 
@@ -417,6 +446,76 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitKeyboardSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"keyboardSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (
+							time < MIN_KEYBOARD_SEGMENT_SECS ||
+							remaining < MIN_KEYBOARD_SEGMENT_SECS
+						)
+							return;
+
+						const charIndex = segment.keys
+							? segment.keys.findIndex((k) => k.timeOffset >= time)
+							: -1;
+						const chars = [...segment.displayText];
+
+						const firstDisplayText =
+							charIndex >= 0
+								? chars.slice(0, charIndex).join("")
+								: segment.displayText;
+						const secondDisplayText =
+							charIndex >= 0 ? chars.slice(charIndex).join("") : "";
+						const firstKeys =
+							charIndex >= 0 && segment.keys
+								? segment.keys.slice(0, charIndex)
+								: (segment.keys ?? []);
+						const secondKeys =
+							charIndex >= 0 && segment.keys
+								? segment.keys
+										.slice(charIndex)
+										.map((k) => ({ ...k, timeOffset: k.timeOffset - time }))
+								: [];
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							id: crypto.randomUUID(),
+							start: segment.start + time,
+							end: segment.end,
+							displayText: secondDisplayText,
+							keys: secondKeys,
+						});
+						segments[index].end = segment.start + time;
+						segments[index].displayText = firstDisplayText;
+						segments[index].keys = firstKeys;
+					}),
+				);
+			},
+			deleteKeyboardSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"keyboardSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			setClipSegmentTimescale: (index: number, timescale: number) => {
 				setProject(
 					produce((project) => {
@@ -458,6 +557,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						for (const textSegment of timeline.textSegments) {
 							textSegment.start += diff(textSegment.start);
 							textSegment.end += diff(textSegment.end);
+						}
+
+						for (const keyboardSegment of timeline.keyboardSegments) {
+							keyboardSegment.start += diff(keyboardSegment.start);
+							keyboardSegment.end += diff(keyboardSegment.end);
 						}
 
 						segment.timescale = timescale;
@@ -633,6 +737,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			(project.timeline?.maskSegments?.length ?? 0) > 0;
 		const initialTextTrackEnabled =
 			(project.timeline?.textSegments?.length ?? 0) > 0;
+		const initialKeyboardTrackEnabled =
+			(project.timeline?.keyboardSegments?.length ?? 0) > 0;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -652,7 +758,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "clip"; indices: number[] }
 					| { type: "scene"; indices: number[] }
 					| { type: "mask"; indices: number[] }
-					| { type: "text"; indices: number[] },
+					| { type: "text"; indices: number[] }
+					| { type: "caption"; indices: number[] }
+					| { type: "keyboard"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -695,6 +803,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					scene: true,
 					mask: initialMaskTrackEnabled,
 					text: initialTextTrackEnabled,
+					keyboard: initialKeyboardTrackEnabled,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},

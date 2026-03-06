@@ -20,6 +20,7 @@ import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
+import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
@@ -36,6 +37,8 @@ const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	mask: <IconLucideBoxSelect class="size-4" />,
 	zoom: <IconLucideSearch class="size-4" />,
 	scene: <IconLucideVideo class="size-4" />,
+	caption: <IconLucideCaptions class="size-4" />,
+	keyboard: <IconLucideKeyboard class="size-4" />,
 };
 
 type TrackDefinition = {
@@ -51,6 +54,12 @@ const trackDefinitions: TrackDefinition[] = [
 		label: "Clip",
 		icon: trackIcons.clip,
 		locked: true,
+	},
+	{
+		type: "keyboard",
+		label: "Keyboard",
+		icon: trackIcons.keyboard,
+		locked: false,
 	},
 	{
 		type: "text",
@@ -112,7 +121,9 @@ export function Timeline() {
 						? trackState().mask
 						: definition.type === "text"
 							? trackState().text
-							: true,
+							: definition.type === "keyboard"
+								? trackState().keyboard
+								: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 		}));
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
@@ -120,6 +131,7 @@ export function Timeline() {
 		2 +
 		(trackState().text ? 1 : 0) +
 		(trackState().mask ? 1 : 0) +
+		(trackState().keyboard ? 1 : 0) +
 		(sceneTrackVisible() ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
@@ -142,6 +154,14 @@ export function Timeline() {
 			if (!next && editorState.timeline.selection?.type === "mask") {
 				setEditorState("timeline", "selection", null);
 			}
+			return;
+		}
+
+		if (type === "keyboard") {
+			setEditorState("timeline", "tracks", "keyboard", next);
+			if (!next && editorState.timeline.selection?.type === "keyboard") {
+				setEditorState("timeline", "selection", null);
+			}
 		}
 	}
 
@@ -160,6 +180,7 @@ export function Timeline() {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
+				keyboardSegments: [],
 			});
 			resume();
 		}
@@ -201,11 +222,13 @@ export function Timeline() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					keyboardSegments: [],
 				};
 				project.timeline.sceneSegments ??= [];
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
+				project.timeline.keyboardSegments ??= [];
 			}),
 		);
 	}
@@ -214,6 +237,7 @@ export function Timeline() {
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
+	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -272,7 +296,8 @@ export function Timeline() {
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
-			textSegmentDragState.type !== "moving"
+			textSegmentDragState.type !== "moving" &&
+			keyboardSegmentDragState.type !== "moving"
 		) {
 			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
 			if (left == null) return;
@@ -326,6 +351,8 @@ export function Timeline() {
 				projectActions.deleteMaskSegments(selection.indices);
 			} else if (selection.type === "text") {
 				projectActions.deleteTextSegments(selection.indices);
+			} else if (selection.type === "keyboard") {
+				projectActions.deleteKeyboardSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				// Delete all selected clips in reverse order
 				[...selection.indices]
@@ -535,6 +562,16 @@ export function Timeline() {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<Show when={trackState().keyboard}>
+								<TrackRow icon={trackIcons.keyboard}>
+									<KeyboardTrack
+										onDragStateChanged={(v) => {
+											keyboardSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={trackState().text}>
 								<TrackRow icon={trackIcons.text}>
 									<TextTrack

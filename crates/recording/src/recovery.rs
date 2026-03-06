@@ -33,6 +33,7 @@ pub struct RecoverableSegment {
     pub mic_fragments: Option<Vec<PathBuf>>,
     pub system_audio_fragments: Option<Vec<PathBuf>>,
     pub cursor_path: Option<PathBuf>,
+    pub keyboard_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +215,7 @@ impl RecoveryManager {
             }
 
             let cursor_path = Self::probe_cursor(&segment_path.join("cursor.json"));
+            let keyboard_path = Self::probe_cursor(&segment_path.join("keyboard.json"));
 
             recoverable_segments.push(RecoverableSegment {
                 index,
@@ -224,6 +226,7 @@ impl RecoveryManager {
                 mic_fragments,
                 system_audio_fragments,
                 cursor_path,
+                keyboard_path,
             });
         }
 
@@ -884,6 +887,13 @@ impl RecoveryManager {
                     } else {
                         None
                     },
+                    keyboard: if seg.keyboard_path.is_some() {
+                        Some(RelativePathBuf::from(format!(
+                            "{segment_base}/keyboard.json"
+                        )))
+                    } else {
+                        None
+                    },
                 }
             })
             .collect();
@@ -952,6 +962,7 @@ impl RecoveryManager {
             scene_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
         });
 
         config
