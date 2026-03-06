@@ -1,6 +1,7 @@
 use cap_recording::{
     RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
 };
+use scap_targets::Display;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
@@ -137,20 +138,23 @@ impl DeepLinkAction {
                 .into_iter()
                 .find(|(s, _)| s.name.eq_ignore_ascii_case(name))
                 .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                .ok_or(format!("No screen with name \"{}\"", name)),
+                .ok_or_else(|| format!("No screen with name \"{}\"", name)),
             CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                 .into_iter()
                 .find(|(w, _)| w.name.eq_ignore_ascii_case(name))
                 .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                .ok_or(format!("No window with name \"{}\"", name)),
+                .ok_or_else(|| format!("No window with name \"{}\"", name)),
         }
     }
 
     fn default_display_target() -> Result<ScreenCaptureTarget, String> {
-        cap_recording::screen_capture::list_displays()
-            .into_iter()
-            .next()
-            .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+        let primary_id = Display::primary().id();
+        let displays = cap_recording::screen_capture::list_displays();
+        displays
+            .iter()
+            .find(|(s, _)| s.id == primary_id)
+            .or_else(|| displays.first())
+            .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id.clone() })
             .ok_or_else(|| "No displays found".to_string())
     }
 

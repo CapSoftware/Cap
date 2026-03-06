@@ -108,7 +108,7 @@ JSON array of camera objects:
 [{ "device_id": "...", "model_id": "...", "display_name": "..." }]
 ```
 
-Pass `device_id` or `model_id` as the `id` field of `set_camera`.
+Pass `{ "DeviceID": "<device_id>" }` or `{ "ModelID": "<model_id>" }` as the `id` field of `set_camera`.
 
 ### `list_microphones` clipboard output
 
