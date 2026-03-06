@@ -92,13 +92,13 @@ cap-desktop://action?value={"start_recording":{"capture_mode":null,"camera":null
 
 | Field | Type                       | Required | Description                                     |
 | ----- | -------------------------- | -------- | ----------------------------------------------- |
-| `id`  | `null` \| device ID object | Yes      | Camera to activate. `null` disables the camera. |
+| `id`  | `null` \| device ID object | No       | Camera to activate. `null` disables the camera. |
 
 ### `set_microphone`
 
 | Field   | Type               | Required | Description                                       |
 | ------- | ------------------ | -------- | ------------------------------------------------- |
-| `label` | `null` \| `string` | Yes      | Microphone label. `null` disables the microphone. |
+| `label` | `null` \| `string` | No       | Microphone label. `null` disables the microphone. |
 
 ### `open_editor`
 
