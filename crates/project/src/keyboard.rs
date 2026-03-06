@@ -184,6 +184,37 @@ pub fn group_key_events(
     let mut last_key_time: f64 = 0.0;
     let mut segment_counter: u64 = 0;
 
+    let min_segment_ms = 300.0_f64;
+
+    let flush_group = |segments: &mut Vec<KeyboardTrackSegment>,
+                       counter: &mut u64,
+                       start: f64,
+                       end_key_time: f64,
+                       display: &mut String,
+                       keys: &mut Vec<KeyPressDisplay>| {
+        if display.is_empty() {
+            return;
+        }
+        *counter += 1;
+        let end = (end_key_time + linger_duration_ms) / 1000.0;
+        let start_secs = start / 1000.0;
+        let end_secs = end.max(start_secs + min_segment_ms / 1000.0);
+        segments.push(KeyboardTrackSegment {
+            id: format!("kb-{counter}"),
+            start: start_secs,
+            end: end_secs,
+            display_text: display.clone(),
+            keys: keys.clone(),
+            fade_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+        });
+        display.clear();
+        keys.clear();
+    };
+
     for event in &down_events {
         advance_modifiers_to(
             event.time_ms,
@@ -199,48 +230,13 @@ pub fn group_key_events(
             continue;
         }
 
-        let is_special = special_key_symbol(&event.key).is_some() && event.key != "Space";
-
-        if is_special && !show_special_keys && !is_modifier && event.key != "Backspace" {
+        if is_modifier && !is_shift {
             continue;
         }
 
-        let should_start_new_group = current_group_start.is_none()
-            || (event.time_ms - last_key_time) > grouping_threshold_ms
-            || (is_modifier && !is_shift);
+        let is_special = special_key_symbol(&event.key).is_some() && event.key != "Space";
 
-        if should_start_new_group && current_group_start.is_some() {
-            let start = current_group_start.unwrap();
-            segment_counter += 1;
-            segments.push(KeyboardTrackSegment {
-                id: format!("kb-{segment_counter}"),
-                start: start / 1000.0,
-                end: (last_key_time + linger_duration_ms) / 1000.0,
-                display_text: current_display.clone(),
-                keys: current_keys.clone(),
-                fade_duration_override: None,
-                position_override: None,
-                color_override: None,
-                background_color_override: None,
-                font_size_override: None,
-            });
-            current_display.clear();
-            current_keys.clear();
-            current_group_start = None;
-        }
-
-        if is_modifier && !is_shift {
-            let prefix = modifier_prefix(&active_modifiers);
-            if !prefix.is_empty() {
-                current_group_start = Some(event.time_ms);
-                current_display = prefix;
-                current_keys.clear();
-                current_keys.push(KeyPressDisplay {
-                    key: event.key.clone(),
-                    time_offset: 0.0,
-                });
-                last_key_time = event.time_ms;
-            }
+        if is_special && !show_special_keys && event.key != "Backspace" {
             continue;
         }
 
@@ -258,15 +254,42 @@ pub fn group_key_events(
         });
 
         if has_command_mod && show_modifiers {
+            flush_group(
+                &mut segments,
+                &mut segment_counter,
+                current_group_start.unwrap_or(event.time_ms),
+                last_key_time,
+                &mut current_display,
+                &mut current_keys,
+            );
+            current_group_start = None;
+
             let prefix = modifier_prefix(&active_modifiers);
             let key_display = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
             let combo = format!("{prefix}{key_display}");
 
+            if let Some(prev) = segments.last_mut() {
+                let prev_end_ms = prev.end * 1000.0;
+                if event.time_ms < prev_end_ms {
+                    prev.display_text = format!("{}  {}", prev.display_text, combo);
+                    prev.end = (event.time_ms + linger_duration_ms) / 1000.0;
+                    prev.keys.push(KeyPressDisplay {
+                        key: event.key.clone(),
+                        time_offset: event.time_ms - prev.start * 1000.0,
+                    });
+                    last_key_time = event.time_ms;
+                    continue;
+                }
+            }
+
             segment_counter += 1;
+            let start_secs = event.time_ms / 1000.0;
+            let end_secs = ((event.time_ms + linger_duration_ms) / 1000.0)
+                .max(start_secs + min_segment_ms / 1000.0);
             segments.push(KeyboardTrackSegment {
                 id: format!("kb-{segment_counter}"),
-                start: event.time_ms / 1000.0,
-                end: (event.time_ms + linger_duration_ms) / 1000.0,
+                start: start_secs,
+                end: end_secs,
                 display_text: combo,
                 keys: vec![KeyPressDisplay {
                     key: event.key.clone(),
@@ -279,11 +302,23 @@ pub fn group_key_events(
                 font_size_override: None,
             });
 
-            current_display.clear();
-            current_keys.clear();
-            current_group_start = None;
             last_key_time = event.time_ms;
             continue;
+        }
+
+        let should_start_new_group = current_group_start.is_none()
+            || (event.time_ms - last_key_time) > grouping_threshold_ms;
+
+        if should_start_new_group && current_group_start.is_some() {
+            flush_group(
+                &mut segments,
+                &mut segment_counter,
+                current_group_start.unwrap(),
+                last_key_time,
+                &mut current_display,
+                &mut current_keys,
+            );
+            current_group_start = None;
         }
 
         if let Some(display_char) = display_char_for_key(&event.key) {
@@ -301,20 +336,15 @@ pub fn group_key_events(
         }
     }
 
-    if let Some(start) = current_group_start.filter(|_| !current_display.is_empty()) {
-        segment_counter += 1;
-        segments.push(KeyboardTrackSegment {
-            id: format!("kb-{segment_counter}"),
-            start: start / 1000.0,
-            end: (last_key_time + linger_duration_ms) / 1000.0,
-            display_text: current_display,
-            keys: current_keys,
-            fade_duration_override: None,
-            position_override: None,
-            color_override: None,
-            background_color_override: None,
-            font_size_override: None,
-        });
+    if let Some(start) = current_group_start {
+        flush_group(
+            &mut segments,
+            &mut segment_counter,
+            start,
+            last_key_time,
+            &mut current_display,
+            &mut current_keys,
+        );
     }
 
     segments
@@ -496,6 +526,40 @@ mod tests {
         for seg in &segments {
             assert!(!seg.display_text.contains('⏎'));
         }
+    }
+
+    #[test]
+    fn rapid_hotkeys_merge_into_single_segment() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("LMeta", 100.0),
+                key_down("c", 150.0),
+                key_up("c", 200.0),
+                key_down("v", 300.0),
+                key_up("v", 350.0),
+                key_down("z", 450.0),
+                key_up("z", 500.0),
+                key_up("LMeta", 550.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 800.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].display_text.contains('c'));
+        assert!(segments[0].display_text.contains('v'));
+        assert!(segments[0].display_text.contains('z'));
+    }
+
+    #[test]
+    fn segments_have_minimum_duration() {
+        let events = KeyboardEvents {
+            presses: vec![key_down("a", 100.0), key_up("a", 110.0)],
+        };
+
+        let segments = group_key_events(&events, 300.0, 50.0, true, true);
+        assert_eq!(segments.len(), 1);
+        let duration = segments[0].end - segments[0].start;
+        assert!(duration >= 0.3);
     }
 
     #[test]
