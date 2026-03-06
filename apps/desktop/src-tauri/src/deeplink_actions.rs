@@ -184,11 +184,16 @@ impl DeepLinkAction {
                     None => Self::default_display_target()?,
                 };
 
+                let organization_id = RecordingSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.organization_id);
+
                 let inputs = StartRecordingInputs {
                     mode,
                     capture_target,
                     capture_system_audio,
-                    organization_id: None,
+                    organization_id,
                 };
 
                 crate::recording::start_recording(app.clone(), state, inputs)
