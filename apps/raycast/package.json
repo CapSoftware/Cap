@@ -1,0 +1,68 @@
+{
+  "name": "@cap/raycast",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.83.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.9",
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.2.14",
+    "react": "^19.2.4",
+    "typescript": "^5.8.3"
+  },
+  "raycast": {
+    "schemaVersion": 1,
+    "title": "Cap",
+    "description": "Control Cap recording through deeplinks",
+    "author": "capsoftware",
+    "commands": [
+      {
+        "name": "start-recording",
+        "title": "Start Recording",
+        "description": "Start a Cap recording",
+        "mode": "view"
+      },
+      {
+        "name": "stop-recording",
+        "title": "Stop Recording",
+        "description": "Stop the current Cap recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "pause-recording",
+        "title": "Pause Recording",
+        "description": "Pause the current Cap recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "resume-recording",
+        "title": "Resume Recording",
+        "description": "Resume a paused Cap recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "toggle-pause-recording",
+        "title": "Toggle Pause Recording",
+        "description": "Toggle pause/resume for the current recording",
+        "mode": "no-view"
+      },
+      {
+        "name": "switch-microphone",
+        "title": "Switch Microphone",
+        "description": "Switch microphone by label",
+        "mode": "view"
+      },
+      {
+        "name": "switch-camera",
+        "title": "Switch Camera",
+        "description": "Switch camera by label",
+        "mode": "view"
+      }
+    ]
+  }
+}
