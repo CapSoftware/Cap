@@ -185,6 +185,7 @@ impl DeepLinkAction {
                 };
 
                 let organization_id = RecordingSettingsStore::get(app)
+                    .inspect_err(|e| eprintln!("Failed to read recording settings: {e}"))
                     .ok()
                     .flatten()
                     .and_then(|s| s.organization_id);
