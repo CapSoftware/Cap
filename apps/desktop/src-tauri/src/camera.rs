@@ -227,7 +227,7 @@ impl CameraPreviewManager {
             })
             .ok();
 
-        let rt = Runtime::new().expect("Failed to get Tokio runtime!");
+        let rt = Runtime::new().context("Failed to create camera preview runtime")?;
         let (shutdown_complete_tx, shutdown_complete_rx) = oneshot::channel();
 
         self.preview = Some(InitializedCameraPreview {
@@ -252,7 +252,7 @@ impl CameraPreviewManager {
                 })
                 .ok();
 
-            let _ = rt.block_on(drop_rx);
+            let _ = rt.block_on(tokio::time::timeout(Duration::from_millis(250), drop_rx));
 
             shutdown_complete_tx.send(()).ok();
             info!("DONE");
@@ -819,7 +819,7 @@ impl Renderer {
     async fn cleanup_for_shutdown(&mut self, window: &WebviewWindow) {
         info!("Camera preview shutdown requested. Cleaning up...");
 
-        let _ = self.device.poll(wgpu::PollType::Wait);
+        let _ = self.device.poll(wgpu::PollType::Poll);
 
         drop(std::mem::take(&mut self.texture));
         self.aspect_ratio = Cached::default();
@@ -832,11 +832,11 @@ impl Renderer {
                 let _ = drop_tx.send(());
             })
             .ok();
-        let _ = drop_rx.await;
+        let _ = tokio::time::timeout(Duration::from_millis(250), drop_rx).await;
 
         self.device.destroy();
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     fn reconfigure_gpu_surface(&mut self, window_width: u32, window_height: u32) {

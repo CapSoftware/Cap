@@ -5,8 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { start } from "workflow/api";
-import { processVideoWorkflow } from "@/workflows/process-video";
+import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export async function retryVideoProcessing({
 	videoId,
@@ -32,25 +31,14 @@ export async function retryVideoProcessing({
 	if (!upload) throw new Error("No upload record found");
 	if (!upload.rawFileKey) throw new Error("No raw file key found for retry");
 
-	await db()
-		.update(videoUploads)
-		.set({
-			phase: "processing",
-			processingProgress: 0,
-			processingMessage: "Retrying video processing...",
-			processingError: null,
-			updatedAt: new Date(),
-		})
-		.where(eq(videoUploads.videoId, videoId));
-
-	await start(processVideoWorkflow, [
-		{
-			videoId,
-			userId: user.id,
-			rawFileKey: upload.rawFileKey,
-			bucketId: video.bucket ?? null,
-		},
-	]);
+	await startVideoProcessingWorkflow({
+		videoId,
+		userId: user.id,
+		rawFileKey: upload.rawFileKey,
+		bucketId: video.bucket ?? null,
+		processingMessage: "Retrying video processing...",
+		startFailureMessage: "Video processing could not restart.",
+	});
 
 	return { success: true };
 }

@@ -5,8 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { start } from "workflow/api";
-import { processVideoWorkflow } from "@/workflows/process-video";
+import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export async function triggerVideoProcessing({
 	videoId,
@@ -28,25 +27,14 @@ export async function triggerVideoProcessing({
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
 
-	await db()
-		.update(videoUploads)
-		.set({
-			phase: "processing",
-			processingProgress: 0,
-			processingMessage: "Starting video processing...",
-			rawFileKey,
-			updatedAt: new Date(),
-		})
-		.where(eq(videoUploads.videoId, videoId));
-
-	await start(processVideoWorkflow, [
-		{
-			videoId,
-			userId: user.id,
-			rawFileKey,
-			bucketId,
-		},
-	]);
+	await startVideoProcessingWorkflow({
+		videoId,
+		userId: user.id,
+		rawFileKey,
+		bucketId,
+		processingMessage: "Starting video processing...",
+		startFailureMessage: "Video processing could not start.",
+	});
 
 	return { success: true };
 }

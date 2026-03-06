@@ -28,35 +28,37 @@ pub fn open_permission_settings(_permission: OSPermission) {
     {
         use std::process::Command;
 
-        let mut process = match _permission {
+        let process = match _permission {
             OSPermission::ScreenRecording => Command::new("open")
                 .arg(
                     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
                 )
-                .spawn()
-                .expect("Failed to open Screen Recording settings"),
+                .spawn(),
             OSPermission::Camera => Command::new("open")
                 .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
-                .spawn()
-                .expect("Failed to open Camera settings"),
+                .spawn(),
             OSPermission::Microphone => Command::new("open")
                 .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-                .spawn()
-                .expect("Failed to open Microphone settings"),
+                .spawn(),
             OSPermission::Accessibility => Command::new("open")
                 .arg(
                     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
                 )
-                .spawn()
-                .expect("Failed to open Accessibility settings"),
+                .spawn(),
         };
 
-        // https://doc.rust-lang.org/stable/std/process/struct.Child.html#warning
-        tokio::spawn(async move {
-            let _ = process.wait().map_err(|err| {
-                tracing::error!("Error waiting for accessibility child process: {err}")
-            });
-        });
+        match process {
+            Ok(mut process) => {
+                tokio::spawn(async move {
+                    let _ = process.wait().map_err(|err| {
+                        tracing::error!("Error waiting for permission settings process: {err}")
+                    });
+                });
+            }
+            Err(err) => {
+                tracing::error!("Failed to open permission settings: {err}");
+            }
+        }
     }
 }
 
@@ -153,12 +155,14 @@ pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
         use cidre::av::{AuthorizationStatus, CaptureDevice, MediaType};
 
         fn check_av_permission(media_type: &'static MediaType) -> OSPermissionStatus {
-            let status = CaptureDevice::authorization_status_for_media_type(media_type).unwrap();
-
-            match status {
-                AuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
-                AuthorizationStatus::Authorized => OSPermissionStatus::Granted,
-                _ => OSPermissionStatus::Denied,
+            match CaptureDevice::authorization_status_for_media_type(media_type) {
+                Ok(AuthorizationStatus::NotDetermined) => OSPermissionStatus::Empty,
+                Ok(AuthorizationStatus::Authorized) => OSPermissionStatus::Granted,
+                Ok(_) => OSPermissionStatus::Denied,
+                Err(err) => {
+                    tracing::error!("Failed to query AV permission status: {err}");
+                    OSPermissionStatus::Denied
+                }
             }
         }
 

@@ -156,6 +156,44 @@ impl AppExitState {
     }
 }
 
+const APP_EXIT_STEP_TIMEOUT: Duration = Duration::from_millis(750);
+const APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1200);
+const APP_EXIT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
+const APP_EXIT_FORCE_TIMEOUT: Duration = Duration::from_secs(8);
+
+async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
+where
+    E: std::fmt::Display,
+    F: Future<Output = Result<T, E>>,
+{
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(value)) => Some(value),
+        Ok(Err(err)) => {
+            warn!(step = name, error = %err, "Exit cleanup step failed");
+            None
+        }
+        Err(_) => {
+            warn!(
+                step = name,
+                timeout_ms = timeout.as_millis(),
+                "Exit cleanup step timed out"
+            );
+            None
+        }
+    }
+}
+
+fn spawn_exit_watchdog() {
+    std::thread::spawn(move || {
+        std::thread::sleep(APP_EXIT_FORCE_TIMEOUT);
+        error!(
+            timeout_ms = APP_EXIT_FORCE_TIMEOUT.as_millis(),
+            "Forcing process exit after shutdown deadline"
+        );
+        std::process::exit(0);
+    });
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1016,8 +1054,16 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
         )
     };
 
-    let _ = mic_feed.ask(microphone::RemoveInput).await;
-    let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
+    let _ = await_exit_step(
+        "remove_microphone_input",
+        APP_EXIT_STEP_TIMEOUT,
+        async move { mic_feed.ask(microphone::RemoveInput).await },
+    )
+    .await;
+    let _ = await_exit_step("remove_camera_input", APP_EXIT_STEP_TIMEOUT, async move {
+        camera_feed.ask(feeds::camera::RemoveInput).await
+    })
+    .await;
 
     #[cfg(target_os = "macos")]
     {
@@ -1028,7 +1074,12 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     }
 
     if let Some(rx) = camera_shutdown {
-        let _ = tokio::time::timeout(Duration::from_secs(2), rx).await;
+        let _ = await_exit_step(
+            "camera_preview_shutdown",
+            APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT,
+            rx,
+        )
+        .await;
     }
 }
 
@@ -1037,7 +1088,18 @@ pub async fn request_app_exit(app: AppHandle) {
         return;
     }
 
-    cleanup_app_resources_for_exit(&app).await;
+    spawn_exit_watchdog();
+
+    if tokio::time::timeout(APP_EXIT_TOTAL_TIMEOUT, cleanup_app_resources_for_exit(&app))
+        .await
+        .is_err()
+    {
+        error!(
+            timeout_ms = APP_EXIT_TOTAL_TIMEOUT.as_millis(),
+            "Timed out while cleaning up app resources for exit"
+        );
+    }
+
     app.exit(0);
 }
 
@@ -3394,7 +3456,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             audio_meter::spawn_event_emitter(app.clone(), mic_samples_rx);
 
-            tray::create_tray(&app).unwrap();
+            if let Err(err) = tray::create_tray(&app) {
+                error!("Failed to create tray: {err}");
+            }
 
             RequestStartRecording::listen_any_spawn(&app, async |event, app| {
                 let settings = RecordingSettingsStore::get(&app)
@@ -3492,13 +3556,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                         let _ = camera_window.hide();
                                     }
 
-                                    for (id, overlay_window) in app.webview_windows() {
-                                        if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
-                                            CapWindowId::from_str(&id)
-                                        {
-                                            let _ = overlay_window.hide();
-                                        }
-                                    }
+                                    close_target_select_overlays(app);
 
                                     let app = app.clone();
                                     tokio::spawn(async move {
@@ -3532,13 +3590,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             CapWindowId::Main => {
                                 let app = app.clone();
 
-                                for (id, window) in app.webview_windows() {
-                                    if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
-                                        CapWindowId::from_str(&id)
-                                    {
-                                        let _ = window.hide();
-                                    }
-                                }
+                                close_target_select_overlays(&app);
 
                                 if let Some(camera) = CapWindowId::Camera.get(&app) {
                                     let _ = camera.hide();
@@ -3777,16 +3829,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 });
             }
             tauri::RunEvent::Exit => {
+                if !_handle.state::<AppExitState>().begin() {
+                    return;
+                }
+
                 let handle = _handle.clone();
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = tauri::async_runtime::block_on(async {
-                        tokio::time::timeout(
-                            Duration::from_secs(2),
-                            cleanup_app_resources_for_exit(&handle),
-                        )
-                        .await
-                    });
-                }));
+                tokio::spawn(async move {
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        cleanup_app_resources_for_exit(&handle),
+                    )
+                    .await;
+                });
             }
             _ => {}
         });
@@ -3813,6 +3867,17 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
         }
         if let Some(camera) = CapWindowId::Camera.get(app) {
             let _ = camera.show();
+        }
+    }
+}
+
+fn close_target_select_overlays(app: &AppHandle) {
+    let focus_manager = app.state::<target_select_overlay::WindowFocusManager>();
+
+    for (label, window) in app.webview_windows() {
+        if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&label) {
+            let _ = window.hide();
+            focus_manager.destroy(&display_id, app.global_shortcut());
         }
     }
 }

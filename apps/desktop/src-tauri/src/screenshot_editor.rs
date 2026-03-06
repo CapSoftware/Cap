@@ -101,6 +101,9 @@ impl ScreenshotEditorInstances {
             Entry::Vacant(entry) => {
                 let (frame_tx, frame_rx) = watch::channel(None);
                 let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                if ws_port == 0 {
+                    return Err("Failed to start screenshot editor frame websocket".to_string());
+                }
 
                 let (data, width, height) = {
                     let key = path
