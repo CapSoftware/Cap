@@ -26,6 +26,15 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
+    SetMicrophone {
+        mic_label: Option<String>,
+    },
+    SetCamera {
+        camera_label: Option<String>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -145,6 +154,30 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SetMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SetCamera { camera_label } => {
+                let camera = match camera_label {
+                    Some(label) => crate::recording::list_cameras()
+                        .into_iter()
+                        .find(|camera| camera.display_name() == label)
+                        .map(|camera| DeviceOrModelID::from_info(&camera))
+                        .ok_or(format!("No camera with label \"{}\"", &label))?,
+                    None => return crate::set_camera_input(app.clone(), app.state(), None, None).await,
+                };
+
+                crate::set_camera_input(app.clone(), app.state(), Some(camera), None).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())
