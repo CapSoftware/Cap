@@ -7,8 +7,15 @@ import { processVideoWorkflow } from "@/workflows/process-video";
 
 export type VideoProcessingStartStatus = "started" | "already-processing";
 
-const getAffectedRows = (result: unknown) =>
-	(result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
 
 export async function setVideoProcessingError(
 	videoId: Video.VideoId,
@@ -32,11 +39,13 @@ export async function transitionVideoToProcessing({
 	rawFileKey,
 	processingMessage,
 	mode,
+	forceRestart,
 }: {
 	videoId: Video.VideoId;
 	rawFileKey: string;
 	processingMessage: string;
 	mode?: "singlepart" | "multipart";
+	forceRestart?: boolean;
 }): Promise<VideoProcessingStartStatus> {
 	const result = await db()
 		.update(videoUploads)
@@ -50,10 +59,12 @@ export async function transitionVideoToProcessing({
 			updatedAt: new Date(),
 		})
 		.where(
-			and(
-				eq(videoUploads.videoId, videoId),
-				ne(videoUploads.phase, "processing"),
-			),
+			forceRestart
+				? eq(videoUploads.videoId, videoId)
+				: and(
+						eq(videoUploads.videoId, videoId),
+						ne(videoUploads.phase, "processing"),
+					),
 		);
 
 	if (getAffectedRows(result) > 0) {
@@ -84,6 +95,7 @@ export async function startVideoProcessingWorkflow({
 	processingMessage,
 	startFailureMessage,
 	mode,
+	forceRestart,
 }: {
 	videoId: Video.VideoId;
 	userId: string;
@@ -92,12 +104,14 @@ export async function startVideoProcessingWorkflow({
 	processingMessage: string;
 	startFailureMessage: string;
 	mode?: "singlepart" | "multipart";
+	forceRestart?: boolean;
 }): Promise<VideoProcessingStartStatus> {
 	const status = await transitionVideoToProcessing({
 		videoId,
 		rawFileKey,
 		processingMessage,
 		mode,
+		forceRestart,
 	});
 
 	if (status === "already-processing") {
@@ -115,7 +129,15 @@ export async function startVideoProcessingWorkflow({
 		]);
 		return "started";
 	} catch (error) {
-		await setVideoProcessingError(videoId, startFailureMessage, error);
-		throw error;
+		const normalizedError =
+			error instanceof Error
+				? error
+				: new Error("Video processing could not start");
+		await setVideoProcessingError(
+			videoId,
+			startFailureMessage,
+			normalizedError,
+		);
+		throw normalizedError;
 	}
 }
