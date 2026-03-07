@@ -101,7 +101,8 @@ const RecordingModePicker = () => {
 		const interval = setInterval(() => {
 			setSelected((prev) => {
 				const currentIndex = modes.findIndex((m) => m.id === prev);
-				return modes[(currentIndex + 1) % modes.length].id;
+				const next = modes[(currentIndex + 1) % modes.length];
+				return next ? next.id : prev;
 			});
 		}, AUTO_CYCLE_INTERVAL);
 
@@ -113,8 +114,9 @@ const RecordingModePicker = () => {
 		if (!el) return;
 
 		const observer = new IntersectionObserver(
-			([entry]) => {
-				setIsInView(entry.isIntersecting);
+			(entries) => {
+				const entry = entries[0];
+				if (entry) setIsInView(entry.isIntersecting);
 			},
 			{ threshold: 0.3 },
 		);

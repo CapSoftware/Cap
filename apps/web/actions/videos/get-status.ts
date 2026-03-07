@@ -77,27 +77,37 @@ export async function getVideoStatus(
 		console.log(
 			`[Get Status] Transcription not started for video ${videoId}, triggering transcription`,
 		);
-		try {
-			transcribeVideo(videoId, video.ownerId).catch((error) => {
-				console.error(
-					`[Get Status] Error starting transcription for video ${videoId}:`,
-					error,
-				);
-			});
 
-			return {
-				transcriptionStatus: "PROCESSING",
-				aiGenerationStatus:
-					(metadata.aiGenerationStatus as AiGenerationStatus) || null,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-			};
-		} catch (error) {
+		await db()
+			.update(videos)
+			.set({ transcriptionStatus: "PROCESSING" })
+			.where(eq(videos.id, videoId));
+
+		transcribeVideo(videoId, video.ownerId, false, true).catch((error) => {
 			console.error(
-				`[Get Status] Error triggering transcription for video ${videoId}:`,
+				`[Get Status] Error starting transcription for video ${videoId}:`,
 				error,
 			);
+		});
+
+		return {
+			transcriptionStatus: "PROCESSING",
+			aiGenerationStatus:
+				(metadata.aiGenerationStatus as AiGenerationStatus) || null,
+			aiTitle: metadata.aiTitle || null,
+			summary: metadata.summary || null,
+			chapters: metadata.chapters || null,
+		};
+	}
+
+	if (video.transcriptionStatus === "PROCESSING") {
+		const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+		if (video.updatedAt < threeMinutesAgo) {
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: "ERROR" })
+				.where(eq(videos.id, videoId));
+
 			return {
 				transcriptionStatus: "ERROR",
 				aiGenerationStatus:
@@ -105,7 +115,7 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
-				error: "Failed to start transcription",
+				error: "Transcription timed out",
 			};
 		}
 	}
