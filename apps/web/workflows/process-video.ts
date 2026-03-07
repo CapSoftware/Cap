@@ -26,6 +26,10 @@ interface VideoProcessingResult {
 	};
 }
 
+function getValidDuration(duration: number) {
+	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+}
+
 export async function processVideoWorkflow(
 	payload: ProcessVideoWorkflowPayload,
 ): Promise<VideoProcessingResult> {
@@ -246,13 +250,15 @@ async function saveMetadataAndComplete(
 ): Promise<void> {
 	"use step";
 
+	const duration = getValidDuration(metadata.duration);
+
 	await db()
 		.update(videos)
 		.set({
 			width: metadata.width,
 			height: metadata.height,
-			duration: metadata.duration,
 			fps: metadata.fps,
+			...(duration === undefined ? {} : { duration }),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
