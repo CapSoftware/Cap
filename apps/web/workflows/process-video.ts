@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import type { S3Bucket, Video } from "@cap/web-domain";
@@ -33,25 +33,31 @@ export async function processVideoWorkflow(
 
 	const { videoId, userId, rawFileKey, bucketId } = payload;
 
-	await validateAndSetProcessing(videoId, rawFileKey);
+	try {
+		await validateProcessingRequest(videoId, rawFileKey);
 
-	const result = await processVideoOnMediaServer(
-		videoId,
-		userId,
-		rawFileKey,
-		bucketId,
-	);
+		const result = await processVideoOnMediaServer(
+			videoId,
+			userId,
+			rawFileKey,
+			bucketId,
+		);
 
-	await saveMetadataAndComplete(videoId, result.metadata);
+		await saveMetadataAndComplete(videoId, result.metadata);
+		await cleanupRawUpload(rawFileKey, bucketId);
 
-	return {
-		success: true,
-		message: "Video processing completed",
-		metadata: result.metadata,
-	};
+		return {
+			success: true,
+			message: "Video processing completed",
+			metadata: result.metadata,
+		};
+	} catch (error) {
+		await setProcessingError(videoId, error);
+		throw error;
+	}
 }
 
-async function validateAndSetProcessing(
+async function validateProcessingRequest(
 	videoId: string,
 	rawFileKey: string,
 ): Promise<void> {
@@ -71,16 +77,22 @@ async function validateAndSetProcessing(
 		throw new FatalError("Video does not exist");
 	}
 
-	await db()
-		.update(videoUploads)
-		.set({
-			phase: "processing",
-			processingProgress: 0,
-			processingMessage: "Starting video processing...",
-			rawFileKey,
-			updatedAt: new Date(),
-		})
+	const [upload] = await db()
+		.select()
+		.from(videoUploads)
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+	if (!upload) {
+		throw new FatalError("Upload does not exist");
+	}
+
+	if (upload.rawFileKey !== rawFileKey) {
+		throw new FatalError("Upload raw file key does not match");
+	}
+
+	if (upload.phase !== "processing") {
+		throw new FatalError("Upload is not ready for processing");
+	}
 }
 
 interface MediaServerProcessResult {
@@ -90,6 +102,17 @@ interface MediaServerProcessResult {
 		height: number;
 		fps: number;
 	};
+}
+
+function getInputExtension(rawFileKey: string): string {
+	const parts = rawFileKey.split(".");
+	const extension = parts.at(-1)?.toLowerCase();
+
+	if (!extension) {
+		return ".mp4";
+	}
+
+	return `.${extension}`;
 }
 
 async function processVideoOnMediaServer(
@@ -103,6 +126,9 @@ async function processVideoOnMediaServer(
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
+	if (!mediaServerUrl) {
+		throw new FatalError("MEDIA_SERVER_URL is not configured");
+	}
 
 	const [bucket] = await S3Buckets.getBucketAccess(
 		Option.fromNullable(bucketId as S3Bucket.S3BucketId | null),
@@ -139,6 +165,7 @@ async function processVideoOnMediaServer(
 			outputPresignedUrl,
 			thumbnailPresignedUrl,
 			webhookUrl,
+			inputExtension: getInputExtension(rawFileKey),
 		}),
 	});
 
@@ -152,7 +179,7 @@ async function processVideoOnMediaServer(
 
 	const { jobId } = (await response.json()) as { jobId: string };
 
-	const result = await pollForCompletion(mediaServerUrl!, jobId, videoId);
+	const result = await pollForCompletion(mediaServerUrl, jobId);
 
 	return result;
 }
@@ -160,7 +187,6 @@ async function processVideoOnMediaServer(
 async function pollForCompletion(
 	mediaServerUrl: string,
 	jobId: string,
-	videoId: string,
 ): Promise<MediaServerProcessResult> {
 	const maxAttempts = 360;
 	const pollIntervalMs = 5000;
@@ -226,10 +252,48 @@ async function saveMetadataAndComplete(
 			width: metadata.width,
 			height: metadata.height,
 			duration: metadata.duration,
+			fps: metadata.fps,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	await db()
 		.delete(videoUploads)
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+}
+
+async function cleanupRawUpload(
+	rawFileKey: string,
+	bucketId: string | null,
+): Promise<void> {
+	"use step";
+
+	try {
+		const [bucket] = await S3Buckets.getBucketAccess(
+			Option.fromNullable(bucketId as S3Bucket.S3BucketId | null),
+		).pipe(runPromise);
+
+		await bucket.deleteObject(rawFileKey).pipe(runPromise);
+	} catch (error) {
+		console.error("[process-video] Failed to delete raw upload", error);
+	}
+}
+
+async function setProcessingError(
+	videoId: string,
+	error: unknown,
+): Promise<void> {
+	"use step";
+
+	const message = error instanceof Error ? error.message : String(error);
+
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "error",
+			processingProgress: 0,
+			processingMessage: "Video processing failed",
+			processingError: message,
+			updatedAt: new Date(),
+		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 }
