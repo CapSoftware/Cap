@@ -1,5 +1,6 @@
 mod configuration;
 pub mod cursor;
+pub mod keyboard;
 mod meta;
 
 pub use configuration::*;

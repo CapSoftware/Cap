@@ -1,6 +1,9 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
+use cap_project::{
+    CursorClickEvent, CursorEvents, CursorMoveEvent, XY,
+    keyboard::{KeyPressEvent, KeyboardEvents},
+};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
 use std::{
@@ -23,11 +26,11 @@ pub type Cursors = HashMap<u64, Cursor>;
 
 #[derive(Clone)]
 pub struct CursorActorResponse {
-    // pub cursor_images: HashMap<String, Vec<u8>>,
     pub cursors: Cursors,
     pub next_cursor_id: u32,
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
+    pub keyboard_presses: Vec<KeyPressEvent>,
 }
 
 pub struct CursorActor {
@@ -59,6 +62,178 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
     }
 }
 
+fn flush_keyboard_data(output_path: &Path, presses: &[KeyPressEvent]) {
+    let events = KeyboardEvents {
+        presses: presses.to_vec(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&events)
+        && let Err(e) = std::fs::write(output_path, json)
+    {
+        tracing::error!(
+            "Failed to write keyboard data to {}: {}",
+            output_path.display(),
+            e
+        );
+    }
+}
+
+fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
+    use device_query::Keycode;
+    let (display, code) = match key {
+        Keycode::Key0 => ("0", "Key0"),
+        Keycode::Key1 => ("1", "Key1"),
+        Keycode::Key2 => ("2", "Key2"),
+        Keycode::Key3 => ("3", "Key3"),
+        Keycode::Key4 => ("4", "Key4"),
+        Keycode::Key5 => ("5", "Key5"),
+        Keycode::Key6 => ("6", "Key6"),
+        Keycode::Key7 => ("7", "Key7"),
+        Keycode::Key8 => ("8", "Key8"),
+        Keycode::Key9 => ("9", "Key9"),
+        Keycode::A => ("a", "A"),
+        Keycode::B => ("b", "B"),
+        Keycode::C => ("c", "C"),
+        Keycode::D => ("d", "D"),
+        Keycode::E => ("e", "E"),
+        Keycode::F => ("f", "F"),
+        Keycode::G => ("g", "G"),
+        Keycode::H => ("h", "H"),
+        Keycode::I => ("i", "I"),
+        Keycode::J => ("j", "J"),
+        Keycode::K => ("k", "K"),
+        Keycode::L => ("l", "L"),
+        Keycode::M => ("m", "M"),
+        Keycode::N => ("n", "N"),
+        Keycode::O => ("o", "O"),
+        Keycode::P => ("p", "P"),
+        Keycode::Q => ("q", "Q"),
+        Keycode::R => ("r", "R"),
+        Keycode::S => ("s", "S"),
+        Keycode::T => ("t", "T"),
+        Keycode::U => ("u", "U"),
+        Keycode::V => ("v", "V"),
+        Keycode::W => ("w", "W"),
+        Keycode::X => ("x", "X"),
+        Keycode::Y => ("y", "Y"),
+        Keycode::Z => ("z", "Z"),
+        Keycode::F1 => ("F1", "F1"),
+        Keycode::F2 => ("F2", "F2"),
+        Keycode::F3 => ("F3", "F3"),
+        Keycode::F4 => ("F4", "F4"),
+        Keycode::F5 => ("F5", "F5"),
+        Keycode::F6 => ("F6", "F6"),
+        Keycode::F7 => ("F7", "F7"),
+        Keycode::F8 => ("F8", "F8"),
+        Keycode::F9 => ("F9", "F9"),
+        Keycode::F10 => ("F10", "F10"),
+        Keycode::F11 => ("F11", "F11"),
+        Keycode::F12 => ("F12", "F12"),
+        Keycode::Escape => ("Escape", "Escape"),
+        Keycode::Space => ("Space", "Space"),
+        Keycode::LControl => ("LControl", "LControl"),
+        Keycode::RControl => ("RControl", "RControl"),
+        Keycode::LShift => ("LShift", "LShift"),
+        Keycode::RShift => ("RShift", "RShift"),
+        Keycode::LAlt => ("LAlt", "LAlt"),
+        Keycode::RAlt => ("RAlt", "RAlt"),
+        Keycode::LMeta => ("Meta", "LMeta"),
+        Keycode::RMeta => ("Meta", "RMeta"),
+        Keycode::Enter => ("Enter", "Enter"),
+        Keycode::Up => ("Up", "Up"),
+        Keycode::Down => ("Down", "Down"),
+        Keycode::Left => ("Left", "Left"),
+        Keycode::Right => ("Right", "Right"),
+        Keycode::Backspace => ("Backspace", "Backspace"),
+        Keycode::CapsLock => ("CapsLock", "CapsLock"),
+        Keycode::Tab => ("Tab", "Tab"),
+        Keycode::Home => ("Home", "Home"),
+        Keycode::End => ("End", "End"),
+        Keycode::PageUp => ("PageUp", "PageUp"),
+        Keycode::PageDown => ("PageDown", "PageDown"),
+        Keycode::Insert => ("Insert", "Insert"),
+        Keycode::Delete => ("Delete", "Delete"),
+        Keycode::Numpad0 => ("0", "Numpad0"),
+        Keycode::Numpad1 => ("1", "Numpad1"),
+        Keycode::Numpad2 => ("2", "Numpad2"),
+        Keycode::Numpad3 => ("3", "Numpad3"),
+        Keycode::Numpad4 => ("4", "Numpad4"),
+        Keycode::Numpad5 => ("5", "Numpad5"),
+        Keycode::Numpad6 => ("6", "Numpad6"),
+        Keycode::Numpad7 => ("7", "Numpad7"),
+        Keycode::Numpad8 => ("8", "Numpad8"),
+        Keycode::Numpad9 => ("9", "Numpad9"),
+        Keycode::NumpadSubtract => ("-", "NumpadSubtract"),
+        Keycode::NumpadAdd => ("+", "NumpadAdd"),
+        Keycode::NumpadDivide => ("/", "NumpadDivide"),
+        Keycode::NumpadMultiply => ("*", "NumpadMultiply"),
+        Keycode::Grave => ("`", "Grave"),
+        Keycode::Minus => ("-", "Minus"),
+        Keycode::Equal => ("=", "Equal"),
+        Keycode::LeftBracket => ("[", "LeftBracket"),
+        Keycode::RightBracket => ("]", "RightBracket"),
+        Keycode::BackSlash => ("\\", "BackSlash"),
+        Keycode::Semicolon => (";", "Semicolon"),
+        Keycode::Apostrophe => ("'", "Apostrophe"),
+        Keycode::Comma => (",", "Comma"),
+        Keycode::Dot => (".", "Dot"),
+        Keycode::Slash => ("/", "Slash"),
+        _ => {
+            let s = format!("{key:?}");
+            return (s.clone(), s);
+        }
+    };
+    (display.to_string(), code.to_string())
+}
+
+const SHIFT_SYMBOL_MAP: &[(char, char)] = &[
+    ('1', '!'),
+    ('2', '@'),
+    ('3', '#'),
+    ('4', '$'),
+    ('5', '%'),
+    ('6', '^'),
+    ('7', '&'),
+    ('8', '*'),
+    ('9', '('),
+    ('0', ')'),
+    ('-', '_'),
+    ('=', '+'),
+    ('[', '{'),
+    (']', '}'),
+    ('\\', '|'),
+    (';', ':'),
+    ('\'', '"'),
+    (',', '<'),
+    ('.', '>'),
+    ('/', '?'),
+    ('`', '~'),
+];
+
+fn apply_case_to_display(display: &str, shift_active: bool, caps_lock_active: bool) -> String {
+    if display.len() != 1 {
+        return display.to_string();
+    }
+    let ch = display.chars().next().unwrap();
+
+    if ch.is_ascii_lowercase() {
+        let uppercase = shift_active ^ caps_lock_active;
+        return if uppercase {
+            ch.to_ascii_uppercase().to_string()
+        } else {
+            display.to_string()
+        };
+    }
+
+    if shift_active
+        && let Some(&(_, shifted)) = SHIFT_SYMBOL_MAP.iter().find(|&&(from, _)| from == ch)
+    {
+        return shifted.to_string();
+    }
+
+    display.to_string()
+}
+
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     crop_bounds: CursorCropBounds,
@@ -68,6 +243,7 @@ pub fn spawn_cursor_recorder(
     next_cursor_id: u32,
     start_time: Timestamps,
     output_path: Option<PathBuf>,
+    keyboard_output_path: Option<PathBuf>,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
@@ -83,6 +259,7 @@ pub fn spawn_cursor_recorder(
     spawn_actor(async move {
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
+        let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
 
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
@@ -93,11 +270,13 @@ pub fn spawn_cursor_recorder(
             next_cursor_id,
             moves: vec![],
             clicks: vec![],
+            keyboard_presses: vec![],
         };
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
+        let mut caps_lock_active = false;
 
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(16));
@@ -203,10 +382,58 @@ pub fn spawn_cursor_recorder(
 
             last_mouse_state = mouse_state;
 
+            let current_keys = device_state.get_keys();
+            let shift_active = current_keys.iter().any(|k| {
+                matches!(
+                    k,
+                    device_query::Keycode::LShift | device_query::Keycode::RShift
+                )
+            });
+
+            let caps_just_pressed = current_keys
+                .iter()
+                .any(|k| matches!(k, device_query::Keycode::CapsLock))
+                && !last_keys
+                    .iter()
+                    .any(|k| matches!(k, device_query::Keycode::CapsLock));
+            if caps_just_pressed {
+                caps_lock_active = !caps_lock_active;
+            }
+
+            for key in &current_keys {
+                if !last_keys.contains(key) {
+                    let (display, code) = keycode_to_string(key);
+                    let display = apply_case_to_display(&display, shift_active, caps_lock_active);
+                    response.keyboard_presses.push(KeyPressEvent {
+                        key: display,
+                        key_code: code,
+                        time_ms: elapsed,
+                        down: true,
+                    });
+                }
+            }
+
+            for key in &last_keys {
+                if !current_keys.contains(key) {
+                    let (display, code) = keycode_to_string(key);
+                    response.keyboard_presses.push(KeyPressEvent {
+                        key: display,
+                        key_code: code,
+                        time_ms: elapsed,
+                        down: false,
+                    });
+                }
+            }
+
+            last_keys = current_keys;
+
             if let Some(ref path) = output_path
                 && last_flush.elapsed() >= flush_interval
             {
                 flush_cursor_data(path, &response.moves, &response.clicks);
+                if let Some(ref kb_path) = keyboard_output_path {
+                    flush_keyboard_data(kb_path, &response.keyboard_presses);
+                }
                 last_flush = Instant::now();
             }
         }
@@ -215,6 +442,10 @@ pub fn spawn_cursor_recorder(
 
         if let Some(ref path) = output_path {
             flush_cursor_data(path, &response.moves, &response.clicks);
+        }
+
+        if let Some(ref kb_path) = keyboard_output_path {
+            flush_keyboard_data(kb_path, &response.keyboard_presses);
         }
 
         let _ = tx.send(response);

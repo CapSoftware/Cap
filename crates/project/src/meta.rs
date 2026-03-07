@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
-    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS, keyboard::KeyboardEvents,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -361,6 +361,9 @@ pub struct MultipleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<String>)]
     pub cursor: Option<RelativePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<String>)]
+    pub keyboard: Option<RelativePathBuf>,
 }
 
 impl MultipleSegment {
@@ -378,7 +381,7 @@ impl MultipleSegment {
         let mut data = match CursorEvents::load_from_file(&full_path) {
             Ok(data) => data,
             Err(e) => {
-                eprintln!("Failed to load cursor data: {e}");
+                tracing::warn!("Failed to load cursor data: {e}");
                 return CursorEvents::default();
             }
         };
@@ -393,6 +396,29 @@ impl MultipleSegment {
         data.stabilize_short_lived_cursor_shapes(pointer_ids_ref, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
 
         data
+    }
+
+    pub fn keyboard_events(&self, meta: &RecordingMeta) -> KeyboardEvents {
+        let keyboard_path = self.keyboard.clone().or_else(|| {
+            let display_dir = self.display.path.parent()?;
+            let fallback = display_dir.join("keyboard.json");
+            let full = meta.path(&fallback);
+            full.exists().then_some(fallback)
+        });
+
+        let Some(keyboard_path) = keyboard_path else {
+            return KeyboardEvents::default();
+        };
+
+        let full_path = meta.path(&keyboard_path);
+
+        match KeyboardEvents::load_from_file(&full_path) {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!("Failed to load keyboard data: {e}");
+                KeyboardEvents::default()
+            }
+        }
     }
 
     pub fn latest_start_time(&self) -> Option<f64> {
