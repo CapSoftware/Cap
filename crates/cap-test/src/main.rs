@@ -55,6 +55,12 @@ enum Commands {
 
         #[arg(long, default_value = "10")]
         duration: u64,
+
+        #[arg(long)]
+        recording_path: Option<PathBuf>,
+
+        #[arg(long)]
+        gate: bool,
     },
 
     Synthetic {
@@ -134,8 +140,10 @@ async fn main() -> Result<()> {
             name,
             output,
             duration,
+            recording_path,
+            gate,
         } => {
-            cmd_suite(&name, duration, output).await?;
+            cmd_suite(&name, duration, recording_path, output, gate).await?;
         }
 
         Commands::Synthetic { config, output } => {
@@ -220,17 +228,27 @@ async fn cmd_matrix(
     Ok(())
 }
 
-async fn cmd_suite(name: &str, duration: u64, output: Option<PathBuf>) -> Result<()> {
+async fn cmd_suite(
+    name: &str,
+    duration: u64,
+    recording_path: Option<PathBuf>,
+    output: Option<PathBuf>,
+    gate: bool,
+) -> Result<()> {
     let hardware = DiscoveredHardware::discover().await?;
 
     let results = match name {
         "recording" => suites::run_recording_suite(&hardware, duration).await?,
         "encoding" => suites::run_encoding_suite(&hardware, duration).await?,
         "playback" => suites::run_playback_suite(&hardware, duration).await?,
+        "performance" => {
+            let recording_path = resolve_recording_path(recording_path)?;
+            suites::run_performance_suite(&hardware, &recording_path, duration).await?
+        }
         "sync" => suites::run_sync_suite(&hardware, duration).await?,
         _ => {
             anyhow::bail!(
-                "Unknown suite: {}. Available: recording, encoding, playback, sync",
+                "Unknown suite: {}. Available: recording, encoding, playback, performance, sync",
                 name
             );
         }
@@ -242,7 +260,40 @@ async fn cmd_suite(name: &str, duration: u64, output: Option<PathBuf>) -> Result
         results.save_json(&path)?;
     }
 
+    if gate && (results.summary.failed > 0 || results.summary.errors > 0) {
+        anyhow::bail!(
+            "Suite gate failed: {} failed, {} errors",
+            results.summary.failed,
+            results.summary.errors
+        );
+    }
+
     Ok(())
+}
+
+fn resolve_recording_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+
+    if let Some(path) = std::env::var_os("CAP_TEST_RECORDING_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let candidates = [
+        PathBuf::from("performance-fixtures/reference-recording.cap"),
+        PathBuf::from("crates/cap-test/fixtures/reference-recording.cap"),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    anyhow::bail!(
+        "Performance suite requires a recording fixture. Pass --recording-path, set CAP_TEST_RECORDING_PATH, or place the fixture at performance-fixtures/reference-recording.cap"
+    )
 }
 
 async fn cmd_synthetic(config_path: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {

@@ -1,0 +1,317 @@
+{
+	"meta": {
+		"timestamp": "2026-03-07T12:00:58.761167Z",
+		"config_name": "Performance Suite",
+		"config_path": "performance-fixtures/reference-recording.cap",
+		"platform": "macOS",
+		"system": {
+			"platform": "macOS",
+			"os_version": "macOS 26.2",
+			"cpu": "Apple M4 Max",
+			"memory_gb": 128,
+			"gpu": "Apple Silicon / Intel UHD"
+		},
+		"cap_version": null
+	},
+	"hardware": {
+		"displays": [
+			{
+				"id": "1",
+				"name": "Built-in Retina Display",
+				"physical_width": 3024,
+				"physical_height": 1964,
+				"logical_width": 1512.0,
+				"logical_height": 982.0,
+				"refresh_rate": 120.0,
+				"is_primary": true,
+				"scale_factor": 2.0
+			}
+		],
+		"cameras": [
+			{
+				"id": "6C707041-05AC-0010-0006-000000000001",
+				"name": "MacBook Pro Camera",
+				"formats": [
+					{
+						"width": 640,
+						"height": 480,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1280,
+						"height": 720,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1760,
+						"height": 1328,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1328,
+						"height": 1760,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1552,
+						"height": 1552,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1920,
+						"height": 1080,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1080,
+						"height": 1920,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					}
+				],
+				"is_virtual": false,
+				"is_capture_card": false
+			},
+			{
+				"id": "Camo",
+				"name": "Camo Camera",
+				"formats": [
+					{
+						"width": 1920,
+						"height": 1080,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					}
+				],
+				"is_virtual": true,
+				"is_capture_card": false
+			},
+			{
+				"id": "020D3C41-6354-495C-96AC-971500000001",
+				"name": "iPhone 16 Camera",
+				"formats": [
+					{
+						"width": 640,
+						"height": 480,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 640,
+						"height": 480,
+						"frame_rate": 60.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1280,
+						"height": 720,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1280,
+						"height": 720,
+						"frame_rate": 60.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1920,
+						"height": 1080,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1920,
+						"height": 1080,
+						"frame_rate": 60.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1920,
+						"height": 1440,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					},
+					{
+						"width": 1920,
+						"height": 1440,
+						"frame_rate": 60.0,
+						"pixel_format": null
+					}
+				],
+				"is_virtual": false,
+				"is_capture_card": false
+			},
+			{
+				"id": "020D3C41-6354-495C-96AC-971500000002",
+				"name": "iPhone 16 Desk View Camera",
+				"formats": [
+					{
+						"width": 1920,
+						"height": 1440,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					}
+				],
+				"is_virtual": false,
+				"is_capture_card": false
+			},
+			{
+				"id": "6C707041-05AC-0010-0006-000000000002",
+				"name": "MacBook Pro Desk View Camera",
+				"formats": [
+					{
+						"width": 1920,
+						"height": 1440,
+						"frame_rate": 30.0,
+						"pixel_format": null
+					}
+				],
+				"is_virtual": false,
+				"is_capture_card": false
+			}
+		],
+		"audio_inputs": [
+			{
+				"id": "iPhone 16 Microphone",
+				"name": "iPhone 16 Microphone",
+				"sample_rates": [48000],
+				"channels": 1,
+				"is_bluetooth": false,
+				"is_usb": false,
+				"is_builtin": false
+			},
+			{
+				"id": "MacBook Pro Microphone",
+				"name": "MacBook Pro Microphone",
+				"sample_rates": [44100, 48000, 96000],
+				"channels": 1,
+				"is_bluetooth": false,
+				"is_usb": false,
+				"is_builtin": true
+			},
+			{
+				"id": "Camo Microphone",
+				"name": "Camo Microphone",
+				"sample_rates": [48000],
+				"channels": 2,
+				"is_bluetooth": false,
+				"is_usb": false,
+				"is_builtin": false
+			},
+			{
+				"id": "MOTIV Mix Virtual",
+				"name": "MOTIV Mix Virtual",
+				"sample_rates": [48000],
+				"channels": 2,
+				"is_bluetooth": false,
+				"is_usb": false,
+				"is_builtin": false
+			}
+		],
+		"audio_outputs": [
+			{
+				"id": "MacBook Pro Speakers",
+				"name": "MacBook Pro Speakers",
+				"sample_rates": [44100, 48000, 96000],
+				"channels": 2,
+				"is_default": true
+			},
+			{
+				"id": "Camo Microphone",
+				"name": "Camo Microphone",
+				"sample_rates": [48000],
+				"channels": 2,
+				"is_default": false
+			},
+			{
+				"id": "MOTIV Mix Virtual",
+				"name": "MOTIV Mix Virtual",
+				"sample_rates": [48000],
+				"channels": 2,
+				"is_default": false
+			}
+		],
+		"system_info": {
+			"platform": "macOS",
+			"os_version": "macOS 26.2",
+			"cpu": "Apple M4 Max",
+			"memory_gb": 128,
+			"gpu": "Apple Silicon / Intel UHD"
+		}
+	},
+	"results": [
+		{
+			"test_id": "performance-open",
+			"name": "Fixture Open",
+			"config": {
+				"display": {
+					"width": 1920,
+					"height": 1080,
+					"fps": 30,
+					"display_id": "performance-fixtures/reference-recording.cap"
+				},
+				"camera": null,
+				"audio": null,
+				"duration_secs": 0
+			},
+			"iterations": [],
+			"status": "error",
+			"failure_reason": "Failed to open fixture: failed to load recording meta from performance-fixtures/reference-recording.cap: No such file or directory (os error 2)",
+			"notes": []
+		},
+		{
+			"test_id": "performance-playback",
+			"name": "Editor Playback",
+			"config": {
+				"display": {
+					"width": 1920,
+					"height": 1080,
+					"fps": 30,
+					"display_id": "performance-fixtures/reference-recording.cap"
+				},
+				"camera": null,
+				"audio": null,
+				"duration_secs": 0
+			},
+			"iterations": [],
+			"status": "error",
+			"failure_reason": "Playback benchmark failed: failed to load recording meta from performance-fixtures/reference-recording.cap: No such file or directory (os error 2)",
+			"notes": []
+		},
+		{
+			"test_id": "performance-export",
+			"name": "Export Startup And Throughput",
+			"config": {
+				"display": {
+					"width": 1920,
+					"height": 1080,
+					"fps": 30,
+					"display_id": "performance-fixtures/reference-recording.cap"
+				},
+				"camera": null,
+				"audio": null,
+				"duration_secs": 0
+			},
+			"iterations": [],
+			"status": "error",
+			"failure_reason": "Export benchmark failed: failed to build exporter base: Failed to load config: No such file or directory (os error 2)",
+			"notes": []
+		}
+	],
+	"summary": {
+		"total_tests": 3,
+		"passed": 0,
+		"failed": 0,
+		"skipped": 0,
+		"errors": 3,
+		"duration_secs": 0.001484459,
+		"pass_rate": 0.0
+	}
+}

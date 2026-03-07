@@ -61,6 +61,11 @@ impl ExporterBuilder {
         self
     }
 
+    pub fn with_output_path(mut self, output_path: PathBuf) -> Self {
+        self.output_path = Some(output_path);
+        self
+    }
+
     pub fn with_force_ffmpeg_decoder(mut self, force: bool) -> Self {
         self.force_ffmpeg_decoder = force;
         self
