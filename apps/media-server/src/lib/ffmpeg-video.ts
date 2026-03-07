@@ -41,6 +41,23 @@ const DEFAULT_THUMBNAIL_OPTIONS: Required<ThumbnailOptions> = {
 	quality: 85,
 };
 
+export function normalizeVideoInputExtension(
+	inputExtension: string | undefined,
+): `.${string}` {
+	if (!inputExtension) {
+		return ".mp4";
+	}
+
+	const normalized = inputExtension.trim().toLowerCase();
+	if (!normalized) {
+		return ".mp4";
+	}
+
+	return normalized.startsWith(".")
+		? (normalized as `.${string}`)
+		: (`.${normalized}` as `.${string}`);
+}
+
 function killProcess(proc: Subprocess): void {
 	try {
 		proc.kill();
@@ -141,9 +158,12 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 
 export async function downloadVideoToTemp(
 	videoUrl: string,
+	inputExtension?: string,
 	abortSignal?: AbortSignal,
 ): Promise<TempFileHandle> {
-	const tempFile = await createTempFile(".mp4");
+	const tempFile = await createTempFile(
+		normalizeVideoInputExtension(inputExtension),
+	);
 
 	console.log(
 		`[downloadVideoToTemp] Downloading from URL: ${videoUrl.substring(0, 100)}...`,
