@@ -1,7 +1,13 @@
 import type { UploadStatus } from "../../UploadingContext";
 import type { ChunkUploadState, VideoId } from "./web-recorder-types";
 
-const MIN_PART_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_PART_UPLOAD_ATTEMPTS = 3;
+const MAX_PARALLEL_PART_UPLOADS = 3;
+const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
+const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
+const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
+const PART_UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
 type SetUploadStatus = (status: UploadStatus | undefined) => void;
 
@@ -18,6 +24,42 @@ interface MultipartCompletePayload {
 	width?: number;
 	height?: number;
 	fps?: number;
+	subpath: string;
+}
+
+class HttpRequestError extends Error {
+	readonly status: number;
+	readonly url: string;
+
+	constructor(url: string, status: number, message: string) {
+		super(`Request to ${url} failed: ${status} ${message}`);
+		this.name = "HttpRequestError";
+		this.status = status;
+		this.url = url;
+	}
+}
+
+export class ProcessingStartError extends Error {
+	constructor() {
+		super("Video uploaded, but processing could not start");
+		this.name = "ProcessingStartError";
+	}
+}
+
+export class MultipartCompletionUncertainError extends Error {
+	constructor(cause?: unknown) {
+		super("Multipart upload completed but confirmation was interrupted", {
+			cause,
+		});
+		this.name = "MultipartCompletionUncertainError";
+	}
+}
+
+class CancelledUploadError extends Error {
+	constructor() {
+		super("Multipart upload was cancelled");
+		this.name = "CancelledUploadError";
+	}
 }
 
 const postJson = async <TResponse>(
@@ -33,20 +75,29 @@ const postJson = async <TResponse>(
 
 	if (!response.ok) {
 		const message = await response.text();
-		throw new Error(`Request to ${url} failed: ${response.status} ${message}`);
+		throw new HttpRequestError(url, response.status, message);
 	}
 
 	return (await response.json()) as TResponse;
 };
 
-export const initiateMultipartUpload = async (videoId: VideoId) => {
+export const initiateMultipartUpload = async ({
+	videoId,
+	contentType,
+	subpath,
+}: {
+	videoId: VideoId;
+	contentType: string;
+	subpath: string;
+}) => {
 	const result = await postJson<{ uploadId: string }>(
 		"/api/upload/multipart/initiate",
-		{ videoId, contentType: "video/mp4" },
+		{ videoId, contentType, subpath },
 	);
 
-	if (!result.uploadId)
+	if (!result.uploadId) {
 		throw new Error("Multipart initiate response missing uploadId");
+	}
 
 	return result.uploadId;
 };
@@ -55,10 +106,11 @@ const presignMultipartPart = async (
 	videoId: VideoId,
 	uploadId: string,
 	partNumber: number,
+	subpath: string,
 ): Promise<string> => {
 	const result = await postJson<{ presignedUrl: string }>(
 		"/api/upload/multipart/presign-part",
-		{ videoId, uploadId, partNumber },
+		{ videoId, uploadId, partNumber, subpath },
 	);
 
 	if (!result.presignedUrl) {
@@ -74,63 +126,116 @@ const completeMultipartUpload = async (
 	parts: UploadedPartPayload[],
 	meta: MultipartCompletePayload,
 ) => {
-	await postJson<{ success: boolean }>("/api/upload/multipart/complete", {
-		videoId,
-		uploadId,
-		parts,
-		durationInSecs: meta.durationSeconds,
-		width: meta.width,
-		height: meta.height,
-		fps: meta.fps,
-	});
+	try {
+		const response = await postJson<{
+			success: boolean;
+			processingStarted?: boolean;
+		}>("/api/upload/multipart/complete", {
+			videoId,
+			uploadId,
+			parts,
+			subpath: meta.subpath,
+			durationInSecs: meta.durationSeconds,
+			width: meta.width,
+			height: meta.height,
+			fps: meta.fps,
+		});
+
+		if (response.processingStarted === false) {
+			throw new ProcessingStartError();
+		}
+	} catch (error) {
+		if (error instanceof ProcessingStartError) {
+			throw error;
+		}
+
+		if (error instanceof HttpRequestError && error.status < 500) {
+			throw error;
+		}
+
+		throw new MultipartCompletionUncertainError(error);
+	}
 };
 
-const abortMultipartUpload = async (videoId: VideoId, uploadId: string) => {
+const abortMultipartUpload = async (
+	videoId: VideoId,
+	uploadId: string,
+	subpath: string,
+) => {
 	await postJson<{ success: boolean }>("/api/upload/multipart/abort", {
 		videoId,
 		uploadId,
+		subpath,
 	});
 };
 
 interface FinalizeOptions extends MultipartCompletePayload {
-	finalBlob: Blob;
-	thumbnailUrl?: string;
+	finalBlob?: Blob | null;
 }
 
-export class InstantMp4Uploader {
+export class InstantRecordingUploader {
 	private readonly videoId: VideoId;
 	private readonly uploadId: string;
 	private readonly mimeType: string;
+	private readonly subpath: string;
 	private readonly setUploadStatus: SetUploadStatus;
 	private readonly sendProgressUpdate: ProgressUpdater;
 	private readonly onChunkStateChange?: (chunks: ChunkUploadState[]) => void;
+	private readonly onOverflow?: (error: Error) => void;
+	private readonly onFatalError?: (error: Error) => void;
 
 	private bufferedChunks: Blob[] = [];
 	private bufferedBytes = 0;
 	private totalRecordedBytes = 0;
 	private uploadedBytes = 0;
-	private uploadPromise: Promise<void> = Promise.resolve();
+	private pendingUploadBytes = 0;
+	private readonly pendingUploadTasks = new Set<Promise<void>>();
+	private availableUploadSlots = MAX_PARALLEL_PART_UPLOADS;
+	private readonly uploadSlotWaiters: Array<() => void> = [];
 	private readonly parts: UploadedPartPayload[] = [];
 	private nextPartNumber = 1;
 	private finished = false;
+	private cancelled = false;
+	private fatalError: Error | null = null;
 	private finalTotalBytes: number | null = null;
-	private thumbnailUrl: string | undefined;
 	private readonly chunkStates = new Map<number, ChunkUploadState>();
+	private readonly activeRequests = new Map<number, XMLHttpRequest>();
+	private readonly retryTimeouts = new Set<number>();
+	private readonly retryWaiters = new Set<
+		(error: CancelledUploadError) => void
+	>();
+	private readonly stallTimeouts = new Set<number>();
 
 	constructor(options: {
 		videoId: VideoId;
 		uploadId: string;
 		mimeType: string;
+		subpath: string;
 		setUploadStatus: SetUploadStatus;
 		sendProgressUpdate: ProgressUpdater;
 		onChunkStateChange?: (chunks: ChunkUploadState[]) => void;
+		onOverflow?: (error: Error) => void;
+		onFatalError?: (error: Error) => void;
 	}) {
 		this.videoId = options.videoId;
 		this.uploadId = options.uploadId;
 		this.mimeType = options.mimeType;
+		this.subpath = options.subpath;
 		this.setUploadStatus = options.setUploadStatus;
 		this.sendProgressUpdate = options.sendProgressUpdate;
 		this.onChunkStateChange = options.onChunkStateChange;
+		this.onOverflow = options.onOverflow;
+		this.onFatalError = options.onFatalError;
+	}
+
+	private markFatalError(error: Error) {
+		if (this.fatalError) {
+			return this.fatalError;
+		}
+
+		this.fatalError = error;
+		this.onFatalError?.(error);
+		return error;
 	}
 
 	private emitChunkSnapshot() {
@@ -190,12 +295,34 @@ export class InstantMp4Uploader {
 		this.emitChunkSnapshot();
 	}
 
-	setThumbnailUrl(previewUrl: string | undefined) {
-		this.thumbnailUrl = previewUrl;
+	private emitProgress() {
+		const totalBytes =
+			this.finalTotalBytes ??
+			Math.max(this.totalRecordedBytes, this.uploadedBytes);
+		const progress =
+			totalBytes > 0
+				? Math.min(100, (this.uploadedBytes / totalBytes) * 100)
+				: 0;
+
+		this.setUploadStatus({
+			status: "uploadingVideo",
+			capId: this.videoId,
+			progress,
+			thumbnailUrl: undefined,
+		});
+
+		void this.sendProgressUpdate(this.uploadedBytes, totalBytes).catch(
+			(error) => {
+				console.error("Failed to send upload progress", error);
+			},
+		);
 	}
 
 	handleChunk(blob: Blob, recordedTotalBytes: number) {
 		if (this.finished || blob.size === 0) return;
+		if (this.fatalError) {
+			throw this.fatalError;
+		}
 
 		this.totalRecordedBytes = recordedTotalBytes;
 		this.bufferedChunks.push(blob);
@@ -217,15 +344,194 @@ export class InstantMp4Uploader {
 		this.enqueueUpload(chunk);
 	}
 
+	private createFinalBlobPart(finalBlob: Blob, start: number, end: number) {
+		return finalBlob.slice(start, end, this.mimeType);
+	}
+
 	private enqueueUpload(part: Blob) {
+		if (this.pendingUploadBytes + part.size > MAX_PENDING_UPLOAD_BYTES) {
+			const error = this.markFatalError(
+				new Error("Upload could not keep up with recording"),
+			);
+			this.onOverflow?.(error);
+			throw error;
+		}
+
 		const partNumber = this.nextPartNumber++;
+		this.pendingUploadBytes += part.size;
 		this.registerChunk(partNumber, part.size);
-		this.uploadPromise = this.uploadPromise
-			.then(() => this.uploadPart(partNumber, part))
-			.catch((error) => {
-				this.updateChunkState(partNumber, { status: "error" });
-				throw error;
-			});
+		const uploadTask = this.runPartUpload(partNumber, part);
+		this.pendingUploadTasks.add(uploadTask);
+		void uploadTask.catch(() => {});
+		void uploadTask.then(
+			() => {
+				this.pendingUploadTasks.delete(uploadTask);
+			},
+			() => {
+				this.pendingUploadTasks.delete(uploadTask);
+			},
+		);
+	}
+
+	private async uploadFinalBlob(finalBlob: Blob) {
+		let offset = 0;
+
+		while (offset < finalBlob.size) {
+			const partSize = Math.min(
+				FINAL_BLOB_PART_SIZE_BYTES,
+				finalBlob.size - offset,
+			);
+
+			if (this.pendingUploadBytes + partSize > MAX_PENDING_UPLOAD_BYTES) {
+				await this.waitForPendingUploads();
+				continue;
+			}
+
+			const end = offset + partSize;
+			this.enqueueUpload(this.createFinalBlobPart(finalBlob, offset, end));
+			offset = end;
+		}
+
+		await this.waitForPendingUploads();
+	}
+
+	private async runPartUpload(partNumber: number, part: Blob) {
+		await this.acquireUploadSlot();
+		try {
+			if (this.cancelled) {
+				throw new CancelledUploadError();
+			}
+			await this.uploadPartWithRetry(partNumber, part);
+		} finally {
+			this.releaseUploadSlot();
+		}
+	}
+
+	private async acquireUploadSlot() {
+		if (this.availableUploadSlots > 0) {
+			this.availableUploadSlots -= 1;
+			return;
+		}
+
+		await new Promise<void>((resolve) => {
+			this.uploadSlotWaiters.push(resolve);
+		});
+	}
+
+	private releaseUploadSlot() {
+		const nextWaiter = this.uploadSlotWaiters.shift();
+		if (nextWaiter) {
+			nextWaiter();
+			return;
+		}
+
+		this.availableUploadSlots = Math.min(
+			MAX_PARALLEL_PART_UPLOADS,
+			this.availableUploadSlots + 1,
+		);
+	}
+
+	private async waitForPendingUploads() {
+		while (this.pendingUploadTasks.size > 0) {
+			const results = await Promise.allSettled(
+				Array.from(this.pendingUploadTasks),
+			);
+			const rejection = results.find((result) => result.status === "rejected");
+			if (rejection?.status === "rejected") {
+				throw rejection.reason;
+			}
+		}
+	}
+
+	private async uploadPartWithRetry(partNumber: number, part: Blob) {
+		let attempt = 0;
+
+		while (attempt < MAX_PART_UPLOAD_ATTEMPTS) {
+			if (this.cancelled) {
+				throw new CancelledUploadError();
+			}
+
+			attempt += 1;
+			try {
+				await this.uploadPart(partNumber, part);
+				return;
+			} catch (error) {
+				if (error instanceof CancelledUploadError || this.cancelled) {
+					throw new CancelledUploadError();
+				}
+
+				if (attempt >= MAX_PART_UPLOAD_ATTEMPTS) {
+					this.updateChunkState(partNumber, { status: "error" });
+					this.pendingUploadBytes = Math.max(
+						0,
+						this.pendingUploadBytes - part.size,
+					);
+					throw this.markFatalError(
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
+
+				this.updateChunkState(partNumber, {
+					status: "queued",
+					uploadedBytes: 0,
+					progress: 0,
+				});
+				await this.waitForRetryDelay(attempt * 500);
+			}
+		}
+	}
+
+	private waitForRetryDelay(delayMs: number) {
+		if (this.cancelled) {
+			return Promise.reject(new CancelledUploadError());
+		}
+
+		return new Promise<void>((resolve, reject) => {
+			const cancelWaiter = (error: CancelledUploadError) => {
+				window.clearTimeout(timeoutId);
+				this.retryTimeouts.delete(timeoutId);
+				this.retryWaiters.delete(cancelWaiter);
+				reject(error);
+			};
+			const timeoutId = window.setTimeout(() => {
+				this.retryTimeouts.delete(timeoutId);
+				this.retryWaiters.delete(cancelWaiter);
+				resolve();
+			}, delayMs);
+			this.retryTimeouts.add(timeoutId);
+			this.retryWaiters.add(cancelWaiter);
+		});
+	}
+
+	private clearRetryTimeouts() {
+		this.retryTimeouts.forEach((timeoutId) => {
+			window.clearTimeout(timeoutId);
+		});
+		this.retryTimeouts.clear();
+	}
+
+	private cancelPendingRetryWaiters() {
+		const waiters = Array.from(this.retryWaiters);
+		this.retryWaiters.clear();
+		const error = new CancelledUploadError();
+		for (const waiter of waiters) {
+			waiter(error);
+		}
+	}
+
+	private clearStallTimeouts() {
+		this.stallTimeouts.forEach((timeoutId) => {
+			window.clearTimeout(timeoutId);
+		});
+		this.stallTimeouts.clear();
+	}
+
+	private abortActiveRequests() {
+		const activeRequests = Array.from(this.activeRequests.values());
+		this.activeRequests.clear();
+		for (const request of activeRequests) {
+			request.abort();
+		}
 	}
 
 	private async uploadPart(partNumber: number, part: Blob) {
@@ -233,6 +539,7 @@ export class InstantMp4Uploader {
 			this.videoId,
 			this.uploadId,
 			partNumber,
+			this.subpath,
 		);
 
 		const etag = await this.uploadBlobWithProgress({
@@ -242,6 +549,7 @@ export class InstantMp4Uploader {
 		});
 
 		this.parts.push({ partNumber, etag, size: part.size });
+		this.pendingUploadBytes = Math.max(0, this.pendingUploadBytes - part.size);
 		this.uploadedBytes += part.size;
 		this.emitProgress();
 	}
@@ -256,12 +564,19 @@ export class InstantMp4Uploader {
 		part: Blob;
 	}): Promise<string> {
 		return new Promise((resolve, reject) => {
+			if (this.cancelled) {
+				reject(new CancelledUploadError());
+				return;
+			}
+
 			const xhr = new XMLHttpRequest();
 			xhr.open("PUT", url);
 			xhr.responseType = "text";
+			xhr.timeout = PART_UPLOAD_REQUEST_TIMEOUT_MS;
 			if (this.mimeType) {
 				xhr.setRequestHeader("Content-Type", this.mimeType);
 			}
+			this.activeRequests.set(partNumber, xhr);
 
 			this.updateChunkState(partNumber, {
 				status: "uploading",
@@ -269,7 +584,32 @@ export class InstantMp4Uploader {
 				progress: 0,
 			});
 
+			const clearRequest = () => {
+				this.activeRequests.delete(partNumber);
+			};
+			let stallTimeoutId: number | null = null;
+			const clearStallTimeout = () => {
+				if (stallTimeoutId === null) {
+					return;
+				}
+				window.clearTimeout(stallTimeoutId);
+				this.stallTimeouts.delete(stallTimeoutId);
+				stallTimeoutId = null;
+			};
+			const refreshStallTimeout = () => {
+				clearStallTimeout();
+				const timeoutId = window.setTimeout(() => {
+					this.stallTimeouts.delete(timeoutId);
+					stallTimeoutId = null;
+					xhr.abort();
+				}, PART_UPLOAD_STALL_TIMEOUT_MS);
+				stallTimeoutId = timeoutId;
+				this.stallTimeouts.add(timeoutId);
+			};
+			refreshStallTimeout();
+
 			xhr.upload.onprogress = (event) => {
+				refreshStallTimeout();
 				const uploaded = event.lengthComputable
 					? event.loaded
 					: Math.min(part.size, event.loaded);
@@ -283,6 +623,8 @@ export class InstantMp4Uploader {
 			};
 
 			xhr.onload = () => {
+				clearStallTimeout();
+				clearRequest();
 				if (xhr.status >= 200 && xhr.status < 300) {
 					const etagHeader = xhr.getResponseHeader("ETag");
 					const etag = etagHeader?.replace(/"/g, "");
@@ -309,57 +651,67 @@ export class InstantMp4Uploader {
 			};
 
 			xhr.onerror = () => {
+				clearStallTimeout();
+				clearRequest();
 				this.updateChunkState(partNumber, { status: "error" });
 				reject(new Error(`Failed to upload part ${partNumber}: network error`));
+			};
+
+			xhr.ontimeout = () => {
+				clearStallTimeout();
+				clearRequest();
+				this.updateChunkState(partNumber, { status: "error" });
+				reject(new Error(`Failed to upload part ${partNumber}: timed out`));
+			};
+
+			xhr.onabort = () => {
+				clearStallTimeout();
+				clearRequest();
+				reject(
+					this.cancelled
+						? new CancelledUploadError()
+						: new Error(`Failed to upload part ${partNumber}: stalled`),
+				);
 			};
 
 			xhr.send(part);
 		});
 	}
 
-	private emitProgress() {
-		const totalBytes =
-			this.finalTotalBytes ??
-			Math.max(this.totalRecordedBytes, this.uploadedBytes);
-		const progress =
-			totalBytes > 0
-				? Math.min(100, (this.uploadedBytes / totalBytes) * 100)
-				: 0;
-
-		this.setUploadStatus({
-			status: "uploadingVideo",
-			capId: this.videoId,
-			progress,
-			thumbnailUrl: this.thumbnailUrl,
-		});
-
-		void this.sendProgressUpdate(this.uploadedBytes, totalBytes).catch(
-			(error) => {
-				console.error("Failed to send upload progress", error);
-			},
-		);
-	}
-
 	async finalize(options: FinalizeOptions) {
 		if (this.finished) return;
-
-		this.finalTotalBytes = options.finalBlob.size;
-		this.thumbnailUrl = options.thumbnailUrl;
-		this.flushBuffer(true);
-
-		await this.uploadPromise;
-
-		if (this.parts.length === 0) {
-			this.enqueueUpload(options.finalBlob);
-			await this.uploadPromise;
+		if (this.fatalError) {
+			throw this.fatalError;
 		}
 
-		await completeMultipartUpload(this.videoId, this.uploadId, this.parts, {
-			durationSeconds: options.durationSeconds,
-			width: options.width,
-			height: options.height,
-			fps: options.fps,
-		});
+		if (options.finalBlob) {
+			this.finalTotalBytes = options.finalBlob.size;
+			this.totalRecordedBytes = options.finalBlob.size;
+		}
+
+		this.flushBuffer(true);
+		await this.waitForPendingUploads();
+
+		if (options.finalBlob && this.parts.length === 0) {
+			await this.uploadFinalBlob(options.finalBlob);
+		}
+
+		if (this.parts.length === 0) {
+			throw new Error("No uploaded parts available for completion");
+		}
+
+		await completeMultipartUpload(
+			this.videoId,
+			this.uploadId,
+			[...this.parts].sort((left, right) => left.partNumber - right.partNumber),
+			{
+				durationSeconds: options.durationSeconds,
+				width: options.width,
+				height: options.height,
+				fps: options.fps,
+				subpath: options.subpath,
+			},
+		);
 
 		this.finished = true;
 		this.uploadedBytes = this.finalTotalBytes ?? this.uploadedBytes;
@@ -367,22 +719,25 @@ export class InstantMp4Uploader {
 			status: "uploadingVideo",
 			capId: this.videoId,
 			progress: 100,
-			thumbnailUrl: this.thumbnailUrl,
+			thumbnailUrl: undefined,
 		});
 		await this.sendProgressUpdate(this.uploadedBytes, this.uploadedBytes);
 	}
 
 	async cancel() {
 		if (this.finished) return;
+		this.cancelled = true;
 		this.finished = true;
 		this.bufferedChunks = [];
 		this.bufferedBytes = 0;
+		this.clearRetryTimeouts();
+		this.cancelPendingRetryWaiters();
+		this.clearStallTimeouts();
+		this.abortActiveRequests();
 		this.clearChunkStates();
-		const pendingUpload = this.uploadPromise.catch(() => {
-			// Swallow errors during cancellation cleanup.
-		});
+		const pendingUpload = this.waitForPendingUploads().catch(() => {});
 		try {
-			await abortMultipartUpload(this.videoId, this.uploadId);
+			await abortMultipartUpload(this.videoId, this.uploadId, this.subpath);
 		} catch (error) {
 			console.error("Failed to abort multipart upload", error);
 		}
