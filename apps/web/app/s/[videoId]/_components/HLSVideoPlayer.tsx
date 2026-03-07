@@ -5,12 +5,20 @@ import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useUploadProgress } from "./ProgressCircle";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldReloadPlaybackAfterUploadCompletes,
+	useUploadProgress,
+} from "./ProgressCircle";
 
 const { circumference } = getProgressCircleConfig();
 
@@ -28,12 +36,10 @@ function getProgressStatusText(
 }
 
 import {
-	EnhancedAudioSync,
 	MediaPlayer,
 	MediaPlayerCaptions,
 	MediaPlayerControls,
 	MediaPlayerControlsOverlay,
-	MediaPlayerEnhancedAudio,
 	MediaPlayerError,
 	MediaPlayerFullscreen,
 	MediaPlayerLoading,
@@ -73,6 +79,7 @@ interface Props {
 	availableCaptions?: CaptionOption[];
 	isCaptionLoading?: boolean;
 	hasCaptions?: boolean;
+	canRetryProcessing?: boolean;
 }
 
 export function HLSVideoPlayer({
@@ -85,13 +92,14 @@ export function HLSVideoPlayer({
 	autoplay = false,
 	hasActiveUpload,
 	disableCaptions,
-	enhancedAudioUrl,
-	enhancedAudioStatus,
+	enhancedAudioUrl: _enhancedAudioUrl,
+	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
 	onCaptionLanguageChange,
 	availableCaptions = [],
 	isCaptionLoading = false,
 	hasCaptions = false,
+	canRetryProcessing = false,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -100,12 +108,19 @@ export function HLSVideoPlayer({
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
-
-	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
-		enhancedAudioStatus === "COMPLETE",
-	);
-	const [enhancedAudioMuted, setEnhancedAudioMuted] = useState(false);
-	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
+	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
+	const [sourceVersion, setSourceVersion] = useState(0);
+	const queryClient = useQueryClient();
+	const playbackSrc =
+		sourceVersion === 0
+			? videoSrc
+			: videoSrc.includes("?")
+				? `${videoSrc}&_t=${sourceVersion}`
+				: `${videoSrc}?_t=${sourceVersion}`;
+	const reloadPlayback = useCallback(() => {
+		setVideoLoaded(false);
+		setSourceVersion((current) => current + 1);
+	}, []);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -143,7 +158,7 @@ export function HLSVideoPlayer({
 				error,
 				code: error?.code,
 				message: error?.message,
-				videoSrc,
+				videoSrc: playbackSrc,
 			});
 		};
 
@@ -167,12 +182,12 @@ export function HLSVideoPlayer({
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError);
 		};
-	}, [hasPlayedOnce, videoSrc, videoRef.current]);
+	}, [hasPlayedOnce, playbackSrc, videoRef.current]);
 
 	// HLS setup
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || !videoSrc) return;
+		if (!video || !playbackSrc) return;
 
 		if (Hls.isSupported()) {
 			const hls = new Hls({
@@ -183,7 +198,7 @@ export function HLSVideoPlayer({
 
 			hlsInstance.current = hls;
 
-			hls.loadSource(videoSrc);
+			hls.loadSource(playbackSrc);
 			hls.attachMedia(video);
 
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -225,13 +240,13 @@ export function HLSVideoPlayer({
 				}
 			};
 		} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-			// Native HLS support (Safari)
-			video.src = videoSrc;
+			video.src = playbackSrc;
+			video.load();
 			console.log("HLSVideoPlayer: Using native HLS support");
 		} else {
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
 		}
-	}, [videoSrc, hasPlayedOnce, videoRef.current]);
+	}, [playbackSrc, hasPlayedOnce, videoRef.current]);
 
 	// Caption handling
 	useEffect(() => {
@@ -326,6 +341,54 @@ export function HLSVideoPlayer({
 	const hasFailedOrError = isUploadFailed || isUploadError;
 	const hasActiveProgress =
 		isUploading || isProcessing || isGeneratingThumbnail;
+	const canRetryUploadProcessing = canRetryFailedProcessing(
+		uploadProgress,
+		canRetryProcessing,
+	);
+	const uploadFailureMessage = getUploadFailureMessage(
+		uploadProgress,
+		canRetryProcessing,
+	);
+
+	const retryProcessing = async () => {
+		if (!canRetryUploadProcessing || isRetryingProcessing) {
+			return;
+		}
+
+		setIsRetryingProcessing(true);
+
+		try {
+			const result = await retryVideoProcessing({ videoId });
+			await queryClient.invalidateQueries({
+				queryKey: ["getUploadProgress", videoId],
+			});
+			toast.success(
+				result.status === "started"
+					? "Video processing restarted."
+					: "Video is still processing.",
+			);
+		} catch (error) {
+			console.error("Failed to retry video processing", error);
+			toast.error("Could not retry video processing.");
+		} finally {
+			setIsRetryingProcessing(false);
+		}
+	};
+
+	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	useEffect(() => {
+		if (
+			shouldReloadPlaybackAfterUploadCompletes(
+				prevUploadProgress.current,
+				uploadProgress,
+				videoLoaded,
+			)
+		) {
+			reloadPlayback();
+			setTimeout(reloadPlayback, 1000);
+		}
+		prevUploadProgress.current = uploadProgress;
+	}, [uploadProgress, videoLoaded, reloadPlayback]);
 
 	return (
 		<MediaPlayer
@@ -343,10 +406,18 @@ export function HLSVideoPlayer({
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						{isUploadError
-							? "Processing failed. Please try re-uploading from the Cap desktop app via Settings > Previous Recordings."
-							: "Upload stalled. Please try re-uploading from the Cap desktop app via Settings > Previous Recordings."}
+						{uploadFailureMessage}
 					</p>
+					{canRetryUploadProcessing && (
+						<button
+							type="button"
+							onClick={retryProcessing}
+							disabled={isRetryingProcessing}
+							className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-600"
+						>
+							{isRetryingProcessing ? "Retrying..." : "Retry Processing"}
+						</button>
+					)}
 				</div>
 			)}
 			<div

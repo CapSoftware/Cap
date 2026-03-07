@@ -5,21 +5,27 @@ import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
-import { useUploadProgress } from "./ProgressCircle";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	useUploadProgress,
+} from "./ProgressCircle";
 
 import {
-	EnhancedAudioSync,
 	MediaPlayer,
 	MediaPlayerCaptions,
 	MediaPlayerControls,
 	MediaPlayerControlsOverlay,
-	MediaPlayerEnhancedAudio,
 	MediaPlayerError,
 	MediaPlayerFullscreen,
 	MediaPlayerLoading,
@@ -85,6 +91,7 @@ interface Props {
 	availableCaptions?: CaptionOption[];
 	isCaptionLoading?: boolean;
 	hasCaptions?: boolean;
+	canRetryProcessing?: boolean;
 }
 
 export function CapVideoPlayer({
@@ -102,13 +109,14 @@ export function CapVideoPlayer({
 	disableCommentStamps = false,
 	disableReactionStamps = false,
 	onSeek,
-	enhancedAudioUrl,
-	enhancedAudioStatus,
+	enhancedAudioUrl: _enhancedAudioUrl,
+	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
 	onCaptionLanguageChange,
 	availableCaptions = [],
 	isCaptionLoading = false,
 	hasCaptions = false,
+	canRetryProcessing = false,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -123,15 +131,11 @@ export function CapVideoPlayer({
 	const startTime = useRef<number>(Date.now());
 	const [hasError, setHasError] = useState(false);
 	const [isRetrying, setIsRetrying] = useState(false);
+	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const isRetryingRef = useRef(false);
 	const maxRetries = 3;
 	const [duration, setDuration] = useState(0);
-
-	const [enhancedAudioEnabled, setEnhancedAudioEnabled] = useState(
-		enhancedAudioStatus === "COMPLETE",
-	);
-	const [enhancedAudioMuted, setEnhancedAudioMuted] = useState(false);
-	const enhancedAudioRef = useRef<HTMLAudioElement | null>(null);
+	const queryClient = useQueryClient();
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -153,65 +157,64 @@ export function CapVideoPlayer({
 	const isProcessing = uploadProgress?.status === "processing";
 	const isGeneratingThumbnail =
 		uploadProgress?.status === "generating_thumbnail";
-	const isUploadProgressPending = uploadProgress?.status === "fetching";
 	const hasActiveProgress =
 		isUploading || isProcessing || isGeneratingThumbnail;
+	const shouldDeferResolvedSource = shouldDeferPlaybackSource(uploadProgress);
 
 	const resolvedSrc = useQuery<{ url: string; supportsCrossOrigin: boolean }>({
 		queryKey: ["resolvedSrc", videoSrc],
-		queryFn:
-			isUploadProgressPending || isUploading
-				? skipToken
-				: async () => {
-						try {
-							const timestamp = Date.now();
-							const urlWithTimestamp = videoSrc.includes("?")
-								? `${videoSrc}&_t=${timestamp}`
-								: `${videoSrc}?_t=${timestamp}`;
+		queryFn: shouldDeferResolvedSource
+			? skipToken
+			: async () => {
+					try {
+						const timestamp = Date.now();
+						const urlWithTimestamp = videoSrc.includes("?")
+							? `${videoSrc}&_t=${timestamp}`
+							: `${videoSrc}?_t=${timestamp}`;
 
-							const response = await fetch(urlWithTimestamp, {
-								method: "GET",
-								headers: { range: "bytes=0-0" },
-							});
-							const finalUrl = response.redirected
-								? response.url
-								: urlWithTimestamp;
+						const response = await fetch(urlWithTimestamp, {
+							method: "GET",
+							headers: { range: "bytes=0-0" },
+						});
+						const finalUrl = response.redirected
+							? response.url
+							: urlWithTimestamp;
 
-							// Check if the resolved URL is from a CORS-incompatible service
-							const isCloudflareR2 = finalUrl.includes(
-								".r2.cloudflarestorage.com",
+						// Check if the resolved URL is from a CORS-incompatible service
+						const isCloudflareR2 = finalUrl.includes(
+							".r2.cloudflarestorage.com",
+						);
+						const isS3 =
+							finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
+						const isCorsIncompatible = isCloudflareR2 || isS3;
+
+						let supportsCrossOrigin = enableCrossOrigin;
+
+						// Set CORS based on URL compatibility BEFORE video element is created
+						if (isCorsIncompatible) {
+							console.log(
+								"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
+								finalUrl,
 							);
-							const isS3 =
-								finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
-							const isCorsIncompatible = isCloudflareR2 || isS3;
-
-							let supportsCrossOrigin = enableCrossOrigin;
-
-							// Set CORS based on URL compatibility BEFORE video element is created
-							if (isCorsIncompatible) {
-								console.log(
-									"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
-									finalUrl,
-								);
-								supportsCrossOrigin = false;
-							}
-
-							return { url: finalUrl, supportsCrossOrigin };
-						} catch (error) {
-							console.error(
-								"CapVideoPlayer: Error fetching new video URL:",
-								error,
-							);
-							const timestamp = Date.now();
-							const fallbackUrl = videoSrc.includes("?")
-								? `${videoSrc}&_t=${timestamp}`
-								: `${videoSrc}?_t=${timestamp}`;
-							return {
-								url: fallbackUrl,
-								supportsCrossOrigin: enableCrossOrigin,
-							};
+							supportsCrossOrigin = false;
 						}
-					},
+
+						return { url: finalUrl, supportsCrossOrigin };
+					} catch (error) {
+						console.error(
+							"CapVideoPlayer: Error fetching new video URL:",
+							error,
+						);
+						const timestamp = Date.now();
+						const fallbackUrl = videoSrc.includes("?")
+							? `${videoSrc}&_t=${timestamp}`
+							: `${videoSrc}?_t=${timestamp}`;
+						return {
+							url: fallbackUrl,
+							supportsCrossOrigin: enableCrossOrigin,
+						};
+					}
+				},
 		refetchOnWindowFocus: false,
 	});
 
@@ -285,6 +288,7 @@ export function CapVideoPlayer({
 	}, [reloadVideo]);
 
 	useEffect(() => {
+		void videoSrc;
 		setVideoLoaded(false);
 		setHasError(false);
 		isRetryingRef.current = false;
@@ -540,14 +544,50 @@ export function CapVideoPlayer({
 	const isUploadFailed = uploadProgress?.status === "failed";
 	const isUploadError = uploadProgress?.status === "error";
 	const hasFailedOrError = isUploadFailed || isUploadError;
+	const canRetryUploadProcessing = canRetryFailedProcessing(
+		uploadProgress,
+		canRetryProcessing,
+	);
+	const uploadFailureMessage = getUploadFailureMessage(
+		uploadProgress,
+		canRetryProcessing,
+	);
+
+	const retryProcessing = useCallback(async () => {
+		if (!canRetryUploadProcessing || isRetryingProcessing) {
+			return;
+		}
+
+		setIsRetryingProcessing(true);
+
+		try {
+			const result = await retryVideoProcessing({ videoId });
+			await queryClient.invalidateQueries({
+				queryKey: ["getUploadProgress", videoId],
+			});
+			toast.success(
+				result.status === "started"
+					? "Video processing restarted."
+					: "Video is still processing.",
+			);
+		} catch (error) {
+			console.error("Failed to retry video processing", error);
+			toast.error("Could not retry video processing.");
+		} finally {
+			setIsRetryingProcessing(false);
+		}
+	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId]);
 
 	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
 	useEffect(() => {
-		// Check if we transitioned from having upload progress to null which means it's completed and reload the video.
-		// This prevents it just showing the dreaded "Format error" screen.
-		if (prevUploadProgress.current && !uploadProgress && !videoLoaded) {
+		if (
+			shouldReloadPlaybackAfterUploadCompletes(
+				prevUploadProgress.current,
+				uploadProgress,
+				videoLoaded,
+			)
+		) {
 			reloadVideo();
-			// Make it more reliable.
 			setTimeout(() => reloadVideo(), 1000);
 		}
 		prevUploadProgress.current = uploadProgress;
@@ -569,10 +609,18 @@ export function CapVideoPlayer({
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						{isUploadError
-							? "Processing failed. Please try re-uploading from the Cap desktop app via Settings > Previous Recordings."
-							: "Upload stalled. Please try re-uploading from the Cap desktop app via Settings > Previous Recordings."}
+						{uploadFailureMessage}
 					</p>
+					{canRetryUploadProcessing && (
+						<button
+							type="button"
+							onClick={retryProcessing}
+							disabled={isRetryingProcessing}
+							className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-600"
+						>
+							{isRetryingProcessing ? "Retrying..." : "Retry Processing"}
+						</button>
+					)}
 				</div>
 			)}
 			<div
