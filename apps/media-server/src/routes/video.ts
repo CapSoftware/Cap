@@ -49,6 +49,7 @@ const processSchema = z.object({
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
+	inputExtension: z.string().optional(),
 	maxWidth: z.number().max(4096).optional(),
 	maxHeight: z.number().max(4096).optional(),
 	crf: z.number().min(0).max(51).optional(),
@@ -295,6 +296,7 @@ async function processVideoAsync(
 
 		const inputTempFile = await downloadVideoToTemp(
 			videoUrl,
+			options.inputExtension,
 			abortController.signal,
 		);
 		updateJob(jobId, { inputTempFile });
