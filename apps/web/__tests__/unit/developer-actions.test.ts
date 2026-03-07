@@ -31,6 +31,10 @@ vi.mock("@cap/database/helpers", () => ({
 	nanoIdLong: vi.fn(() => "test-nano-id-long-value"),
 }));
 
+vi.mock("@cap/database/crypto", () => ({
+	encrypt: vi.fn(async (value: string) => `encrypted:${value}`),
+}));
+
 vi.mock("@cap/database/schema", () => ({
 	developerApps: {
 		id: "id",

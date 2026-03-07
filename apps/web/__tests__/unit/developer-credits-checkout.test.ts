@@ -51,6 +51,10 @@ vi.mock("@cap/database/schema", () => ({
 }));
 
 vi.mock("@cap/env", () => ({
+	buildEnv: {
+		NEXT_PUBLIC_IS_CAP: "",
+		NEXT_PUBLIC_WEB_URL: "https://cap.test",
+	},
 	serverEnv: () => ({
 		WEB_URL: "https://cap.test",
 	}),
@@ -70,6 +74,10 @@ const mockStripe = {
 };
 
 vi.mock("@cap/utils", () => ({
+	STRIPE_DEVELOPER_CREDITS_PRODUCT_ID: {
+		development: "prod_dev_test",
+		production: "prod_live_test",
+	},
 	stripe: () => mockStripe,
 }));
 
@@ -126,8 +134,7 @@ describe("POST /api/developer/credits/checkout", () => {
 			makeRequest({ appId: "app-456", amountCents: 1000 }),
 		);
 		expect(res.status).toBe(401);
-		const body = await res.json();
-		expect(body.error).toBe("Unauthorized");
+		expect(await res.text()).toBe("User not authenticated");
 	});
 
 	it("returns 400 when appId is missing", async () => {

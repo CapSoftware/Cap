@@ -34,6 +34,7 @@ vi.mock("@cap/database/schema", () => ({
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: any[]) => args),
 	eq: vi.fn((a: any, b: any) => ({ eq: [a, b] })),
+	inArray: vi.fn((a: any, b: any) => ({ inArray: [a, b] })),
 	isNull: vi.fn((a: any) => ({ isNull: a })),
 	sql: vi.fn(),
 }));
@@ -61,20 +62,36 @@ function makeChain(
 		select: vi.fn(() => chain),
 		from: vi.fn(() => chain),
 		where: vi.fn(() => chain),
+		groupBy: vi.fn(() => chain),
 		limit: vi.fn(() => Promise.resolve(result)),
 		insert: vi.fn(() => chain),
 		values: vi.fn(() => Promise.resolve()),
 		update: vi.fn(() => chain),
 		set: vi.fn(() => chain),
 		transaction: vi.fn(async (cb: any) => {
+			let currentOperation: "select" | "update" | "insert" | null = null;
 			const txChain: any = {
-				select: vi.fn(() => txChain),
+				select: vi.fn(() => {
+					currentOperation = "select";
+					return txChain;
+				}),
 				from: vi.fn(() => txChain),
-				where: vi.fn(() => txChain),
+				where: vi.fn(() => {
+					if (currentOperation === "update") {
+						return Promise.resolve([{ affectedRows: 1 }]);
+					}
+					return txChain;
+				}),
 				limit: vi.fn(() => Promise.resolve([{ balanceMicroCredits: 0 }])),
-				insert: vi.fn(() => txChain),
+				insert: vi.fn(() => {
+					currentOperation = "insert";
+					return txChain;
+				}),
 				values: vi.fn(() => Promise.resolve()),
-				update: vi.fn(() => txChain),
+				update: vi.fn(() => {
+					currentOperation = "update";
+					return txChain;
+				}),
 				set: vi.fn(() => txChain),
 			};
 			if (options?.onTransaction) {
@@ -148,7 +165,7 @@ describe("developer-storage cron job", () => {
 			setupDbSequence([
 				[{ id: "app-1" }],
 				[],
-				[{ totalDurationMinutes: 10, videoCount: 5 }],
+				[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 5 }],
 				[{ id: "account-1", appId: "app-1", balanceMicroCredits: 1000 }],
 				[],
 			]);
@@ -167,7 +184,7 @@ describe("developer-storage cron job", () => {
 
 			setupDbSequence([
 				[{ id: "app-1" }],
-				[{ id: "snapshot-1", processedAt: new Date() }],
+				[{ id: "snapshot-1", appId: "app-1", processedAt: new Date() }],
 			]);
 
 			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
@@ -184,7 +201,7 @@ describe("developer-storage cron job", () => {
 			setupDbSequence([
 				[{ id: "app-1" }],
 				[],
-				[{ totalDurationMinutes: 0, videoCount: 0 }],
+				[{ appId: "app-1", totalDurationMinutes: 0, videoCount: 0 }],
 			]);
 
 			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
@@ -201,7 +218,7 @@ describe("developer-storage cron job", () => {
 			setupDbSequence([
 				[{ id: "app-1" }],
 				[],
-				[{ totalDurationMinutes: 10, videoCount: 5 }],
+				[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 5 }],
 				[],
 			]);
 
@@ -223,7 +240,7 @@ describe("developer-storage cron job", () => {
 				[
 					[{ id: "app-1" }],
 					[],
-					[{ totalDurationMinutes: 10, videoCount: 5 }],
+					[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 5 }],
 					[{ id: "account-1", appId: "app-1", balanceMicroCredits: 1000 }],
 					[],
 				],
@@ -254,7 +271,7 @@ describe("developer-storage cron job", () => {
 				[
 					[{ id: "app-1" }],
 					[],
-					[{ totalDurationMinutes: 10, videoCount: 3 }],
+					[{ appId: "app-1", totalDurationMinutes: 10, videoCount: 3 }],
 					[{ id: "account-1", appId: "app-1", balanceMicroCredits: 500 }],
 					[],
 				],
