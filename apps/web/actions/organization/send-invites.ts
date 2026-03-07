@@ -35,7 +35,19 @@ export async function sendOrganizationInvites(
 		throw new Error("Organization not found");
 	}
 
-	if (organization.ownerId !== user.id) {
+	const [ownerMembership] = await db()
+		.select({ id: organizationMembers.id })
+		.from(organizationMembers)
+		.where(
+			and(
+				eq(organizationMembers.organizationId, organizationId),
+				eq(organizationMembers.userId, user.id),
+				eq(organizationMembers.role, "owner"),
+			),
+		)
+		.limit(1);
+
+	if (!ownerMembership) {
 		throw new Error("Only the organization owner can send invites");
 	}
 
