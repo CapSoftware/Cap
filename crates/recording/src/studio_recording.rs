@@ -97,6 +97,7 @@ impl Actor {
                 serde_json::to_string_pretty(&CursorEvents {
                     clicks: res.clicks,
                     moves: res.moves,
+                    keyboard: res.keyboard,
                 })?,
             )?;
 
