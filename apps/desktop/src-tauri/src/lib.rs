@@ -2082,12 +2082,26 @@ async fn update_project_config_in_memory(
 #[specta::specta]
 #[instrument(skip(editor_instance))]
 async fn generate_zoom_segments_from_clicks(
+    app: AppHandle,
     editor_instance: WindowEditorInstance,
 ) -> Result<Vec<ZoomSegment>, String> {
     let meta = editor_instance.meta();
     let recordings = &editor_instance.recordings;
+    let project_config = editor_instance.project_config.1.borrow();
+    let timeline_segments = project_config
+        .timeline
+        .as_ref()
+        .map(|t| t.segments.as_slice());
 
-    let zoom_segments = recording::generate_zoom_segments_for_project(meta, recordings);
+    let settings = GeneralSettingsStore::get(&app)?.unwrap_or_default();
+
+    let zoom_segments = recording::generate_zoom_segments_for_project(
+        meta,
+        recordings,
+        timeline_segments,
+        settings.auto_zoom_amount,
+        settings.auto_zoom_sensitivity,
+    );
 
     Ok(zoom_segments)
 }

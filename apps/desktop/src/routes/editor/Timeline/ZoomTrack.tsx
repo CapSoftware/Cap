@@ -13,7 +13,6 @@ import {
 	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
-import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
 import {
 	useSegmentContext,
@@ -48,21 +47,6 @@ export function ZoomTrack(props: {
 
 	const [creatingSegmentViaDrag, setCreatingSegmentViaDrag] =
 		createSignal(false);
-
-	const handleGenerateZoomSegments = async () => {
-		try {
-			const zoomSegments = await commands.generateZoomSegmentsFromClicks();
-			setProject("timeline", "zoomSegments", zoomSegments);
-			if (zoomSegments.length > 0) {
-				const currentSize = project.cursor?.size ?? 0;
-				if (currentSize < 200) {
-					setProject("cursor", "size", 200);
-				}
-			}
-		} catch (error) {
-			console.error("Failed to generate zoom segments:", error);
-		}
-	};
 
 	const newSegmentMinDuration = () =>
 		Math.max(
@@ -141,8 +125,6 @@ export function ZoomTrack(props: {
 			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "zoom")}
 			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
 			onContextMenu={async (e) => {
-				if (!import.meta.env.DEV) return;
-
 				e.preventDefault();
 				const menu = await Menu.new({
 					id: "zoom-track-options",
@@ -150,7 +132,12 @@ export function ZoomTrack(props: {
 						{
 							id: "generateZoomSegments",
 							text: "Generate zoom segments from clicks",
-							action: handleGenerateZoomSegments,
+							action: () => projectActions.generateAutoZoom(),
+						},
+						{
+							id: "removeAllZoomSegments",
+							text: "Remove all zoom segments",
+							action: () => projectActions.removeAllZoomSegments(),
 						},
 					],
 				});

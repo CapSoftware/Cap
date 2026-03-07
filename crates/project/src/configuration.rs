@@ -443,6 +443,14 @@ pub struct ScreenMovementSpring {
     pub stiffness: f32,
     pub damping: f32,
     pub mass: f32,
+    #[serde(default = "ScreenMovementSpring::default_dead_zone_radius")]
+    pub dead_zone_radius: f32,
+}
+
+impl ScreenMovementSpring {
+    fn default_dead_zone_radius() -> f32 {
+        0.03
+    }
 }
 
 impl Default for ScreenMovementSpring {
@@ -451,6 +459,7 @@ impl Default for ScreenMovementSpring {
             stiffness: 200.0,
             damping: 40.0,
             mass: 2.25,
+            dead_zone_radius: Self::default_dead_zone_radius(),
         }
     }
 }
