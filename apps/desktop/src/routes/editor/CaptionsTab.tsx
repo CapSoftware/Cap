@@ -440,7 +440,17 @@ export function CaptionsTab() {
 	);
 
 	return (
-		<Field name="Captions" icon={<IconCapMessageBubble />}>
+		<Field
+			name="Captions"
+			icon={<IconCapMessageBubble />}
+			value={
+				<Toggle
+					checked={getSetting("enabled")}
+					onChange={(checked) => updateCaptionSetting("enabled", checked)}
+					disabled={!hasCaptions()}
+				/>
+			}
+		>
 			<div class="flex flex-col gap-4">
 				<div class="space-y-6 transition-all duration-200">
 					<div class="space-y-4">
