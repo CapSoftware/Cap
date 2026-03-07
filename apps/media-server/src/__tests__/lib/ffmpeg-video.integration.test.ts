@@ -1,7 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { generateThumbnail, processVideo } from "../../lib/ffmpeg-video";
+import {
+	generateThumbnail,
+	normalizeVideoInputExtension,
+	processVideo,
+} from "../../lib/ffmpeg-video";
 import { probeVideo } from "../../lib/ffprobe";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
@@ -82,6 +87,12 @@ describe("generateThumbnail integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test("normalizes input extensions", () => {
+		expect(normalizeVideoInputExtension(undefined)).toBe(".mp4");
+		expect(normalizeVideoInputExtension("webm")).toBe(".webm");
+		expect(normalizeVideoInputExtension(".MOV")).toBe(".mov");
+	});
+
 	test("processes video and produces valid output", async () => {
 		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
 
@@ -165,4 +176,33 @@ describe("processVideo integration tests", () => {
 			processVideo("/nonexistent/path/to/video.mp4", fakeMetadata, {}),
 		).rejects.toThrow();
 	});
+
+	test("processes raw webm input into a valid mp4 output", async () => {
+		const rawWebmPath = join(
+			FIXTURES_DIR,
+			`generated-${Date.now()}-${Math.random().toString(36).slice(2)}.webm`,
+		);
+		tempFiles.push(rawWebmPath);
+
+		execFileSync("ffmpeg", [
+			"-y",
+			"-i",
+			TEST_VIDEO_WITH_AUDIO,
+			"-c:v",
+			"libvpx-vp9",
+			"-c:a",
+			"libopus",
+			rawWebmPath,
+		]);
+
+		const metadata = await probeVideo(`file://${rawWebmPath}`);
+		const tempFile = await processVideo(rawWebmPath, metadata, {});
+		tempFiles.push(tempFile.path);
+
+		const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+		expect(outputMetadata.videoCodec).toBe("h264");
+		expect(outputMetadata.audioCodec).toBe("aac");
+
+		await tempFile.cleanup();
+	}, 120000);
 });
