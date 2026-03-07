@@ -33,10 +33,88 @@ type UploadProgress =
 			lastUpdated: Date;
 	  };
 
+export function shouldDeferPlaybackSource(
+	uploadProgress: UploadProgress | null,
+): boolean {
+	return (
+		uploadProgress?.status === "fetching" ||
+		uploadProgress?.status === "uploading" ||
+		uploadProgress?.status === "processing" ||
+		uploadProgress?.status === "generating_thumbnail"
+	);
+}
+
+export function shouldReloadPlaybackAfterUploadCompletes(
+	previousUploadProgress: UploadProgress | null,
+	uploadProgress: UploadProgress | null,
+	videoLoaded: boolean,
+): boolean {
+	return (
+		previousUploadProgress !== null && uploadProgress === null && !videoLoaded
+	);
+}
+
+export function canRetryFailedProcessing(
+	uploadProgress: UploadProgress | null,
+	canRetryProcessing: boolean,
+): boolean {
+	return canRetryProcessing && uploadProgress?.status === "error";
+}
+
+export function getUploadFailureMessage(
+	uploadProgress: UploadProgress | null,
+	canRetryProcessing: boolean,
+): string {
+	if (uploadProgress?.status === "error") {
+		if (canRetryFailedProcessing(uploadProgress, canRetryProcessing)) {
+			return uploadProgress.errorMessage || "Processing failed.";
+		}
+
+		return (
+			uploadProgress.errorMessage ||
+			"Processing failed. Ask the owner to retry processing or re-upload the recording."
+		);
+	}
+
+	return "Upload stalled before processing finished. Re-upload the recording to continue.";
+}
+
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
+const STALE_PROCESSING_START_MS = 90 * SECOND;
+const STALE_PROCESSING_PROGRESS_MS = 10 * MINUTE;
+const STALE_THUMBNAIL_MS = 5 * MINUTE;
+
+export function getStalledProcessingMessage(input: {
+	phase:
+		| "uploading"
+		| "processing"
+		| "generating_thumbnail"
+		| "complete"
+		| "error";
+	updatedAt: Date;
+	processingProgress: number;
+}): string | null {
+	const ageMs = Date.now() - input.updatedAt.getTime();
+
+	if (input.phase === "processing") {
+		if (input.processingProgress === 0 && ageMs > STALE_PROCESSING_START_MS) {
+			return "Video processing did not start. Retry processing.";
+		}
+
+		if (ageMs > STALE_PROCESSING_PROGRESS_MS) {
+			return "Video processing stalled. Retry processing.";
+		}
+	}
+
+	if (input.phase === "generating_thumbnail" && ageMs > STALE_THUMBNAIL_MS) {
+		return "Video finishing stalled. Retry processing.";
+	}
+
+	return null;
+}
 
 export function useUploadProgress(
 	videoId: Video.VideoId,
@@ -68,6 +146,11 @@ export function useUploadProgress(
 
 	const lastUpdated = new Date(query.data.updatedAt);
 	const phase = query.data.phase;
+	const stalledProcessingMessage = getStalledProcessingMessage({
+		phase,
+		updatedAt: lastUpdated,
+		processingProgress: query.data.processingProgress,
+	});
 
 	if (phase === "complete") return null;
 
@@ -76,6 +159,14 @@ export function useUploadProgress(
 			status: "error",
 			lastUpdated,
 			errorMessage: Option.getOrNull(query.data.processingError),
+		};
+	}
+
+	if (stalledProcessingMessage) {
+		return {
+			status: "error",
+			lastUpdated,
+			errorMessage: stalledProcessingMessage,
 		};
 	}
 
