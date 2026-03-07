@@ -22,13 +22,18 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { runPromise } from "@/lib/server";
+import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
-import { parseVideoIdOrFileKey } from "../utils";
+import {
+	getMultipartFileKey,
+	getSubpath,
+	isRawRecorderUpload,
+} from "./multipart-utils";
 
 export const app = new Hono().use(withAuth);
 
 const runPromiseAnyEnv = runPromise as <A, E>(
-	effect: Effect.Effect<A, E, any>,
+	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
 
 const abortRequestSchema = z
@@ -37,7 +42,7 @@ const abortRequestSchema = z
 	})
 	.and(
 		z.union([
-			z.object({ videoId: z.string() }),
+			z.object({ videoId: z.string(), subpath: z.string().optional() }),
 			// deprecated
 			z.object({ fileKey: z.string() }),
 		]),
@@ -53,7 +58,7 @@ type AbortValidatorInput = {
 const abortRequestValidator = zValidator(
 	"json",
 	abortRequestSchema,
-) as MiddlewareHandler<any, "/abort", AbortValidatorInput>;
+) as MiddlewareHandler<Record<string, never>, "/abort", AbortValidatorInput>;
 
 app.post(
 	"/initiate",
@@ -61,7 +66,7 @@ app.post(
 		"json",
 		z.object({ contentType: z.string() }).and(
 			z.union([
-				z.object({ videoId: z.string() }),
+				z.object({ videoId: z.string(), subpath: z.string().optional() }),
 				// deprecated
 				z.object({ fileKey: z.string() }),
 			]),
@@ -71,10 +76,7 @@ app.post(
 		const { contentType, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
-		const fileKey = parseVideoIdOrFileKey(user.id, {
-			...body,
-			subpath: "result.mp4",
-		});
+		const fileKey = getMultipartFileKey(user.id, body);
 
 		const videoIdFromFileKey = fileKey.split("/")[1];
 		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
@@ -93,9 +95,17 @@ app.post(
 
 			yield* db.use((db) =>
 				db
-					.update(Db.videoUploads)
-					.set({ mode: "multipart" })
-					.where(eq(Db.videoUploads.videoId, video.value[0].id)),
+					.insert(Db.videoUploads)
+					.values({
+						videoId: video.value[0].id,
+						mode: "multipart",
+					})
+					.onDuplicateKeyUpdate({
+						set: {
+							mode: "multipart",
+							updatedAt: new Date(),
+						},
+					}),
 			);
 		}).pipe(
 			Effect.tapError(Effect.logError),
@@ -181,7 +191,7 @@ app.post(
 			})
 			.and(
 				z.union([
-					z.object({ videoId: z.string() }),
+					z.object({ videoId: z.string(), subpath: z.string().optional() }),
 					// deprecated
 					z.object({ fileKey: z.string() }),
 				]),
@@ -191,10 +201,7 @@ app.post(
 		const { uploadId, partNumber, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
-		const fileKey = parseVideoIdOrFileKey(user.id, {
-			...body,
-			subpath: "result.mp4",
-		});
+		const fileKey = getMultipartFileKey(user.id, body);
 
 		try {
 			try {
@@ -259,7 +266,7 @@ app.post(
 			})
 			.and(
 				z.union([
-					z.object({ videoId: z.string() }),
+					z.object({ videoId: z.string(), subpath: z.string().optional() }),
 					// deprecated
 					z.object({ fileKey: z.string() }),
 				]),
@@ -274,10 +281,8 @@ app.post(
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
-			const fileKey = parseVideoIdOrFileKey(user.id, {
-				...body,
-				subpath: "result.mp4",
-			});
+			const fileKey = getMultipartFileKey(user.id, body);
+			const subpath = getSubpath(body) ?? "result.mp4";
 
 			const videoIdFromFileKey = fileKey.split("/")[1];
 			const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
@@ -356,6 +361,71 @@ app.post(
 					);
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
+					yield* bucket.headObject(fileKey).pipe(
+						Effect.tap((headResult) =>
+							Effect.log(
+								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
+							),
+						),
+						Effect.catchAll((headError) =>
+							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+						),
+						Effect.retry({
+							times: 3,
+							schedule: Schedule.exponential("50 millis"),
+						}),
+					);
+
+					if (isRawRecorderUpload(subpath)) {
+						yield* db.use((db) =>
+							db
+								.update(Db.videos)
+								.set({
+									duration: updateIfDefined(
+										body.durationInSecs,
+										Db.videos.duration,
+									),
+									width: updateIfDefined(body.width, Db.videos.width),
+									height: updateIfDefined(body.height, Db.videos.height),
+									fps: updateIfDefined(body.fps, Db.videos.fps),
+								})
+								.where(
+									and(
+										eq(Db.videos.id, Video.VideoId.make(videoId)),
+										eq(Db.videos.ownerId, user.id),
+									),
+								),
+						);
+
+						const processingStarted = yield* Effect.tryPromise(() =>
+							startVideoProcessingWorkflow({
+								videoId: Video.VideoId.make(videoId),
+								userId: user.id,
+								rawFileKey: fileKey,
+								bucketId: Option.getOrNull(video.bucketId),
+								processingMessage: "Starting video processing...",
+								startFailureMessage:
+									"Video uploaded, but processing could not start.",
+								mode: "multipart",
+							}),
+						).pipe(
+							Effect.map(() => true),
+							Effect.catchAll((error) =>
+								Effect.logError(
+									"Failed to start video processing workflow after raw upload completion",
+									error,
+								).pipe(Effect.map(() => false)),
+							),
+						);
+
+						return c.json({
+							location: result.Location,
+							success: true,
+							fileKey,
+							processingStarted,
+						});
+					}
+
 					console.log(
 						"Performing metadata fix by copying the object to itself...",
 					);
@@ -380,21 +450,6 @@ app.post(
 								schedule: Schedule.exponential("50 millis"),
 							}),
 						);
-
-					yield* bucket.headObject(fileKey).pipe(
-						Effect.tap((headResult) =>
-							Effect.log(
-								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
-							),
-						),
-						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
-						),
-						Effect.retry({
-							times: 3,
-							schedule: Schedule.exponential("50 millis"),
-						}),
-					);
 
 					yield* db.use((db) =>
 						db.transaction(() =>
@@ -567,10 +622,7 @@ app.post("/abort", abortRequestValidator, (c) => {
 	const { uploadId, ...body } = c.req.valid("json");
 	const user = c.get("user");
 
-	const fileKey = parseVideoIdOrFileKey(user.id, {
-		...body,
-		subpath: "result.mp4",
-	});
+	const fileKey = getMultipartFileKey(user.id, body);
 
 	const videoIdFromFileKey = fileKey.split("/")[1];
 	const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
