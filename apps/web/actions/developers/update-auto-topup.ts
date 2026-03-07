@@ -35,10 +35,10 @@ export async function updateDeveloperAutoTopUp(data: {
 	) {
 		throw new Error("Threshold must be non-negative");
 	}
-	if (
-		data.amountCents !== undefined &&
-		(data.amountCents <= 0 || data.amountCents > 100_000)
-	) {
+	if (data.amountCents !== undefined && data.amountCents <= 0) {
+		throw new Error("Top-up amount must be positive");
+	}
+	if (data.amountCents !== undefined && data.amountCents > 100_000) {
 		throw new Error("Top-up amount must be between $0.01 and $1,000.00");
 	}
 
