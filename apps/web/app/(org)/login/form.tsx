@@ -29,7 +29,7 @@ const MotionButton = motion(Button);
 export function LoginForm() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
-	const next = searchParams?.get("next");
+	const next = searchParams?.get("next") || searchParams?.get("callbackUrl");
 	const [email, setEmail] = useState("");
 	const [loading, setLoading] = useState(false);
 	const [emailSent, setEmailSent] = useState(false);
@@ -124,7 +124,9 @@ export function LoginForm() {
 			);
 			setOrganizationName(data.name);
 
-			signIn("workos", undefined, {
+			signIn("workos", {
+				...(next && next.length > 0 ? { callbackUrl: next } : {}),
+			}, {
 				organization: data.organizationId,
 				connection: data.connectionId,
 			});

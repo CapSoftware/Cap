@@ -83,7 +83,7 @@ export const RecordingModeSelector = ({
 						)}
 					</SelectValue>
 				</SelectTrigger>
-				<SelectContent className="z-[502] max-w-[280px]">
+				<SelectContent className="z-[502] max-w-[320px]">
 					{Object.entries(recordingModeOptions).map(([value, option]) => {
 						const OptionIcon = option.icon;
 						const isFullscreen = value === "fullscreen";
