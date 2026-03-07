@@ -115,7 +115,7 @@ pub struct SegmentVideoPaths {
 
 impl RecordingSegmentDecoders {
     pub async fn new(
-        recording_meta: &RecordingMeta,
+        _recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
         segment: SegmentVideoPaths,
         segment_i: usize,
@@ -177,7 +177,7 @@ impl RecordingSegmentDecoders {
         let screen_future = async {
             spawn_decoder(
                 "screen",
-                recording_meta.project_path.join(display_path),
+                display_path,
                 screen_fps,
                 screen_offset,
                 force_ffmpeg,
@@ -193,7 +193,7 @@ impl RecordingSegmentDecoders {
             let camera_fps = camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?;
             let camera = spawn_decoder(
                 "camera",
-                recording_meta.project_path.join(camera_path),
+                camera_path,
                 camera_fps,
                 camera_offset,
                 force_ffmpeg,
