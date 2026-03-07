@@ -23,7 +23,6 @@ jobs:
         with:
           repository: CapSoftware/cap-performance-fixtures
           path: performance-fixtures
-          token: ${{ secrets.CAP_PERF_FIXTURE_REPO_TOKEN }}
 
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
