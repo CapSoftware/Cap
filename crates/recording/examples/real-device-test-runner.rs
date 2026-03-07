@@ -1596,6 +1596,33 @@ async fn check_permissions() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+async fn check_permissions() -> anyhow::Result<()> {
+    println!("\nChecking Linux device availability...\n");
+
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    if display.is_empty() {
+        println!("  Screen Recording: NO DISPLAY (set $DISPLAY)");
+    } else {
+        println!("  Screen Recording: AVAILABLE (X11 display: {display})");
+    }
+
+    if MicrophoneFeed::default_device().is_some() {
+        println!("  Microphone: AVAILABLE");
+    } else {
+        println!("  Microphone: NO DEVICE FOUND");
+    }
+
+    if cap_camera::list_cameras().next().is_some() {
+        println!("  Camera: AVAILABLE");
+    } else {
+        println!("  Camera: NO DEVICE FOUND");
+    }
+
+    println!();
+    Ok(())
+}
+
 fn print_summary(reports: &[TestReport]) {
     println!("\n{}", "=".repeat(70));
     println!("CAP REAL-DEVICE RECORDING TEST RESULTS");

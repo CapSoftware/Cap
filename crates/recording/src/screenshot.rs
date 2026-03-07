@@ -1104,6 +1104,9 @@ fn crop_area_if_needed(
             physical_width / logical_width
         };
 
+        #[cfg(target_os = "linux")]
+        let scale = 1.0f64;
+
         let x = (bounds.position().x() * scale) as u32;
         let y = (bounds.position().y() * scale) as u32;
         let width = (bounds.size().width() * scale) as u32;

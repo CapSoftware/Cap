@@ -19,6 +19,10 @@ use crate::{
     sources::{self, screen_capture},
 };
 
+#[cfg(target_os = "linux")]
+use crate::output_pipeline::{
+    FFmpegVideoFrame, Mp4Muxer, SegmentedVideoMuxer, SegmentedVideoMuxerConfig,
+};
 #[cfg(windows)]
 use crate::output_pipeline::{
     WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsFragmentedM4SCameraMuxer,
@@ -1016,6 +1020,15 @@ async fn create_segment_pipeline(
         None
     };
 
+    #[cfg(target_os = "linux")]
+    let shared_pause_state = if fragmented {
+        Some(SharedPauseState::new(Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )))
+    } else {
+        None
+    };
+
     let camera_only = matches!(
         base_inputs.capture_target,
         screen_capture::ScreenCaptureTarget::CameraOnly
@@ -1051,6 +1064,26 @@ async fn create_segment_pipeline(
             .instrument(error_span!("screen-out"))
             .await
             .context("camera-only screen pipeline setup")?;
+
+        #[cfg(target_os = "linux")]
+        let screen = {
+            let (video_tx, video_rx) = flume::bounded(8);
+            camera_feed
+                .ask(crate::feeds::camera::AddSender(video_tx))
+                .await
+                .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+
+            let video_info = *camera_feed.video_info();
+            OutputPipeline::builder(screen_output_path.clone())
+                .with_video::<crate::output_pipeline::ChannelVideoSource<FFmpegVideoFrame>>(
+                    crate::output_pipeline::ChannelVideoSourceConfig::new(video_info, video_rx),
+                )
+                .with_timestamps(start_time)
+                .build::<Mp4Muxer>(())
+                .instrument(error_span!("screen-out"))
+                .await
+                .context("camera-only screen pipeline setup")?
+        };
 
         (screen, None, None)
     } else {
@@ -1159,6 +1192,45 @@ async fn create_segment_pipeline(
                     encoder_preferences: encoder_preferences.clone(),
                     ..Default::default()
                 })
+                .instrument(error_span!("camera-out"))
+                .await
+        };
+        Some(pipeline.context("camera pipeline setup")?)
+    } else {
+        None
+    };
+
+    #[cfg(target_os = "linux")]
+    let camera = if camera_only {
+        None
+    } else if let Some(camera_feed) = base_inputs.camera_feed {
+        let (video_tx, video_rx) = flume::bounded(8);
+        camera_feed
+            .ask(crate::feeds::camera::AddSender(video_tx))
+            .await
+            .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+
+        let video_info = *camera_feed.video_info();
+        let pipeline = if fragmented {
+            let fragments_dir = dir.join("camera");
+            OutputPipeline::builder(fragments_dir)
+                .with_video::<crate::output_pipeline::ChannelVideoSource<FFmpegVideoFrame>>(
+                    crate::output_pipeline::ChannelVideoSourceConfig::new(video_info, video_rx),
+                )
+                .with_timestamps(start_time)
+                .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                    ..Default::default()
+                })
+                .instrument(error_span!("camera-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("camera.mp4"))
+                .with_video::<crate::output_pipeline::ChannelVideoSource<FFmpegVideoFrame>>(
+                    crate::output_pipeline::ChannelVideoSourceConfig::new(video_info, video_rx),
+                )
+                .with_timestamps(start_time)
+                .build::<Mp4Muxer>(())
                 .instrument(error_span!("camera-out"))
                 .await
         };

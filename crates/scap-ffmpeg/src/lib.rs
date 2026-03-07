@@ -8,6 +8,11 @@ mod direct3d;
 #[cfg(windows)]
 pub use direct3d::*;
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
 mod cpal;
 pub use cpal::*;
 

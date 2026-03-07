@@ -168,6 +168,20 @@ impl Window {
             ))
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            let display_logical_bounds = display.raw_handle().logical_bounds()?;
+            let window_logical_bounds = self.raw_handle().logical_bounds()?;
+
+            Some(LogicalBounds::new(
+                LogicalPosition::new(
+                    window_logical_bounds.position().x() - display_logical_bounds.position().x(),
+                    window_logical_bounds.position().y() - display_logical_bounds.position().y(),
+                ),
+                window_logical_bounds.size(),
+            ))
+        }
+
         #[cfg(windows)]
         {
             let display_physical_bounds = display.raw_handle().physical_bounds()?;
