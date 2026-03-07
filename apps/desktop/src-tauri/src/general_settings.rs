@@ -91,6 +91,8 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub hide_dock_icon: bool,
     #[serde(default)]
+    pub disable_update_checks: bool,
+    #[serde(default)]
     pub auto_create_shareable_link: bool,
     #[serde(default = "default_true")]
     pub enable_notifications: bool,
@@ -188,6 +190,7 @@ impl Default for GeneralSettingsStore {
             instance_id: uuid::Uuid::new_v4(),
             upload_individual_files: false,
             hide_dock_icon: false,
+            disable_update_checks: false,
             auto_create_shareable_link: false,
             enable_notifications: true,
             disable_auto_open_links: false,
