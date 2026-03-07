@@ -1,5 +1,4 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -8,7 +7,6 @@ import {
 	forwardRef,
 	useEffect,
 	useImperativeHandle,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -18,12 +16,6 @@ import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
-
-declare global {
-	interface Window {
-		MSStream: any;
-	}
-}
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -50,6 +42,7 @@ export const ShareVideo = forwardRef<
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
+		canRetryProcessing?: boolean;
 	}
 >(
 	(
@@ -61,6 +54,7 @@ export const ShareVideo = forwardRef<
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
+			canRetryProcessing,
 		},
 		ref,
 	) => {
@@ -241,6 +235,7 @@ export const ShareVideo = forwardRef<
 							availableCaptions={captionContext.availableTranslations}
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
+							canRetryProcessing={canRetryProcessing}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -259,14 +254,16 @@ export const ShareVideo = forwardRef<
 							availableCaptions={captionContext.availableTranslations}
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
+							canRetryProcessing={canRetryProcessing}
 						/>
 					)}
 				</div>
 
 				{!data.owner.isPro && (
 					<div className="absolute top-4 left-4 z-30">
-						<div
-							className="block cursor-pointer"
+						<button
+							type="button"
+							className="block"
 							onClick={(e) => {
 								e.stopPropagation();
 								setUpgradeModalOpen(true);
@@ -283,7 +280,7 @@ export const ShareVideo = forwardRef<
 									</p>
 								</div>
 							</div>
-						</div>
+						</button>
 					</div>
 				)}
 				<UpgradeModal

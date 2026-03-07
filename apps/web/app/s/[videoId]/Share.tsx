@@ -439,6 +439,7 @@ export const Share = ({
 									areReactionStampsDisabled={areReactionStampsDisabled}
 									chapters={aiData?.chapters || []}
 									aiGenerationStatus={aiData?.aiGenerationStatus}
+									canRetryProcessing={viewerId === data.owner.id}
 									ref={playerRef}
 								/>
 							</div>
