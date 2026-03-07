@@ -27,6 +27,7 @@ export function Field(
 		name: string;
 		icon?: JSX.Element;
 		value?: JSX.Element;
+		badge?: string;
 		class?: string;
 		disabled?: boolean;
 	}>,
@@ -39,6 +40,11 @@ export function Field(
 			>
 				{props.icon}
 				{props.name}
+				{props.badge && (
+					<span class="text-[10px] px-1.5 py-0.5 bg-gray-3 rounded-full text-gray-11 font-medium">
+						{props.badge}
+					</span>
+				)}
 				{props.value && <div class="ml-auto">{props.value}</div>}
 			</span>
 			{props.children}
