@@ -46,10 +46,27 @@ jobs:
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
 
       - name: Run performance suite
+        id: performance_suite
+        continue-on-error: true
         run: cargo run --release -p cap-test -- suite performance --recording-path performance-fixtures/reference-recording.cap --duration 8 --output performance-results.json --gate
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: performance-results-${{ matrix.runner }}
           path: performance-results.json
+
+      - name: Print results
+        if: always()
+        shell: bash
+        run: |
+          if [ -f performance-results.json ]; then
+            cat performance-results.json
+          else
+            echo "performance-results.json not found"
+          fi
+
+      - name: Enforce suite gate
+        if: always() && steps.performance_suite.outcome != 'success'
+        run: exit 1
