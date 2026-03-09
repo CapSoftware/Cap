@@ -24,7 +24,7 @@ import {
 
 declare global {
 	interface Window {
-		MSStream: any;
+		MSStream: unknown;
 	}
 }
 
@@ -54,7 +54,14 @@ export const EmbedVideo = forwardRef<
 	}
 >(
 	(
-		{ data, user, comments, chapters = [], ownerName, autoplay = false },
+		{
+			data,
+			user: _user,
+			comments: _comments,
+			chapters = [],
+			ownerName,
+			autoplay: _autoplay = false,
+		},
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement>(null);
@@ -128,6 +135,10 @@ export const EmbedVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		let videoSrc: string;
+		const rawFallbackSrc =
+			data.source.type === "webMP4"
+				? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=raw-preview`
+				: undefined;
 		let enableCrossOrigin = false;
 
 		if (isMp4Source) {
@@ -179,6 +190,7 @@ export const EmbedVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
+							rawFallbackSrc={rawFallbackSrc}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}

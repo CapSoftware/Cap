@@ -38,9 +38,7 @@ export function shouldDeferPlaybackSource(
 ): boolean {
 	return (
 		uploadProgress?.status === "fetching" ||
-		uploadProgress?.status === "uploading" ||
-		uploadProgress?.status === "processing" ||
-		uploadProgress?.status === "generating_thumbnail"
+		uploadProgress?.status === "uploading"
 	);
 }
 

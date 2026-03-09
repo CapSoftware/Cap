@@ -20,6 +20,10 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	useUploadProgress,
 } from "./ProgressCircle";
+import {
+	type ResolvedPlaybackSource,
+	resolvePlaybackSource,
+} from "./playback-source";
 
 import {
 	MediaPlayer,
@@ -65,6 +69,7 @@ interface CaptionOption {
 
 interface Props {
 	videoSrc: string;
+	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
@@ -96,6 +101,7 @@ interface Props {
 
 export function CapVideoPlayer({
 	videoSrc,
+	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
 	captionsSrc,
@@ -126,14 +132,8 @@ export function CapVideoPlayer({
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
-	const retryCount = useRef(0);
-	const retryTimeout = useRef<NodeJS.Timeout | null>(null);
-	const startTime = useRef<number>(Date.now());
 	const [hasError, setHasError] = useState(false);
-	const [isRetrying, setIsRetrying] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
-	const isRetryingRef = useRef(false);
-	const maxRetries = 3;
 	const [duration, setDuration] = useState(0);
 	const queryClient = useQueryClient();
 
@@ -161,146 +161,28 @@ export function CapVideoPlayer({
 		isUploading || isProcessing || isGeneratingThumbnail;
 	const shouldDeferResolvedSource = shouldDeferPlaybackSource(uploadProgress);
 
-	const resolvedSrc = useQuery<{ url: string; supportsCrossOrigin: boolean }>({
-		queryKey: ["resolvedSrc", videoSrc],
+	const resolvedSrc = useQuery<ResolvedPlaybackSource | null>({
+		queryKey: ["resolvedSrc", videoSrc, rawFallbackSrc, enableCrossOrigin],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
-			: async () => {
-					try {
-						const timestamp = Date.now();
-						const urlWithTimestamp = videoSrc.includes("?")
-							? `${videoSrc}&_t=${timestamp}`
-							: `${videoSrc}?_t=${timestamp}`;
-
-						const response = await fetch(urlWithTimestamp, {
-							method: "GET",
-							headers: { range: "bytes=0-0" },
-						});
-						const finalUrl = response.redirected
-							? response.url
-							: urlWithTimestamp;
-
-						// Check if the resolved URL is from a CORS-incompatible service
-						const isCloudflareR2 = finalUrl.includes(
-							".r2.cloudflarestorage.com",
-						);
-						const isS3 =
-							finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
-						const isCorsIncompatible = isCloudflareR2 || isS3;
-
-						let supportsCrossOrigin = enableCrossOrigin;
-
-						// Set CORS based on URL compatibility BEFORE video element is created
-						if (isCorsIncompatible) {
-							console.log(
-								"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
-								finalUrl,
-							);
-							supportsCrossOrigin = false;
-						}
-
-						return { url: finalUrl, supportsCrossOrigin };
-					} catch (error) {
-						console.error(
-							"CapVideoPlayer: Error fetching new video URL:",
-							error,
-						);
-						const timestamp = Date.now();
-						const fallbackUrl = videoSrc.includes("?")
-							? `${videoSrc}&_t=${timestamp}`
-							: `${videoSrc}?_t=${timestamp}`;
-						return {
-							url: fallbackUrl,
-							supportsCrossOrigin: enableCrossOrigin,
-						};
-					}
-				},
+			: () =>
+					resolvePlaybackSource({
+						videoSrc,
+						rawFallbackSrc,
+						enableCrossOrigin,
+					}),
 		refetchOnWindowFocus: false,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
 	});
-
-	const reloadVideo = useCallback(async () => {
-		const video = videoRef.current;
-		if (!video || retryCount.current >= maxRetries) return;
-
-		console.log(
-			`Reloading video (attempt ${retryCount.current + 1}/${maxRetries})`,
-		);
-
-		const currentPosition = video.currentTime;
-		const wasPlaying = !video.paused;
-
-		video.load();
-
-		if (currentPosition > 0) {
-			const restorePosition = () => {
-				video.currentTime = currentPosition;
-				if (wasPlaying) {
-					video
-						.play()
-						.catch((err) => console.error("Error resuming playback:", err));
-				}
-				video.removeEventListener("canplay", restorePosition);
-			};
-			video.addEventListener("canplay", restorePosition);
-		}
-
-		retryCount.current += 1;
-	}, [videoRef.current]);
-
-	const setupRetry = useCallback(() => {
-		if (retryTimeout.current) {
-			clearTimeout(retryTimeout.current);
-		}
-
-		if (retryCount.current >= maxRetries) {
-			console.error(`Video failed to load after ${maxRetries} attempts`);
-			setHasError(true);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
-			return;
-		}
-
-		const elapsedMs = Date.now() - startTime.current;
-		if (elapsedMs > 60000) {
-			console.error("Video failed to load after 1 minute");
-			setHasError(true);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
-			return;
-		}
-
-		let retryInterval: number;
-		if (retryCount.current === 0) {
-			retryInterval = 2000; // 2 seconds
-		} else if (retryCount.current === 1) {
-			retryInterval = 5000; // 5 seconds
-		} else {
-			retryInterval = 10000; // 10 seconds
-		}
-
-		console.log(
-			`Retrying video load in ${retryInterval}ms (attempt ${retryCount.current + 1}/${maxRetries})`,
-		);
-
-		retryTimeout.current = setTimeout(() => {
-			reloadVideo();
-		}, retryInterval);
-	}, [reloadVideo]);
 
 	useEffect(() => {
 		void videoSrc;
+		void rawFallbackSrc;
 		setVideoLoaded(false);
 		setHasError(false);
-		isRetryingRef.current = false;
-		setIsRetrying(false);
-		retryCount.current = 0;
-		startTime.current = Date.now();
-
-		if (retryTimeout.current) {
-			clearTimeout(retryTimeout.current);
-			retryTimeout.current = null;
-		}
-	}, [videoSrc]);
+		setShowPlayButton(false);
+	}, [videoSrc, rawFallbackSrc]);
 
 	// Track video duration for comment markers
 	useEffect(() => {
@@ -339,52 +221,52 @@ export function CapVideoPlayer({
 	}, [duration, comments.length, videoRef.current]);
 
 	useEffect(() => {
+		if (resolvedSrc.data) {
+			setHasError(false);
+			return;
+		}
+
+		if (uploadProgress || resolvedSrc.isPending) {
+			setHasError(false);
+			return;
+		}
+
+		if (resolvedSrc.isSuccess) {
+			setHasError(true);
+		}
+	}, [
+		resolvedSrc.data,
+		resolvedSrc.isPending,
+		resolvedSrc.isSuccess,
+		uploadProgress,
+	]);
+
+	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
 			setHasError(false);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
-			}
-			if (retryTimeout.current) {
-				clearTimeout(retryTimeout.current);
-				retryTimeout.current = null;
 			}
 		};
 
 		const handleCanPlay = () => {
 			setVideoLoaded(true);
 			setHasError(false);
-			isRetryingRef.current = false;
-			setIsRetrying(false);
-			if (retryTimeout.current) {
-				clearTimeout(retryTimeout.current);
-				retryTimeout.current = null;
+			if (!hasPlayedOnce) {
+				setShowPlayButton(true);
 			}
-		};
-
-		const handleLoad = () => {
-			setVideoLoaded(true);
 		};
 
 		const handlePlay = () => {
 			setHasPlayedOnce(true);
 		};
 
-		const handleError = (e: Event) => {
-			const error = (e.target as HTMLVideoElement).error;
-			console.error("CapVideoPlayer: Video error detected:", error);
-			if (!videoLoaded && !hasError) {
-				// Set both ref and state immediately to prevent any flash of error UI
-				isRetryingRef.current = true;
-				setIsRetrying(true);
-				setHasError(false);
-				setupRetry();
-			}
+		const handleError = () => {
+			setHasError(true);
 		};
 
 		// Caption track setup
@@ -427,6 +309,7 @@ export function CapVideoPlayer({
 
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
+			setHasError(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
@@ -441,12 +324,9 @@ export function CapVideoPlayer({
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
-		video.addEventListener("load", handleLoad);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
-		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
 
-		// Add event listeners to monitor track changes
 		video.textTracks.addEventListener("change", handleTrackChange);
 		video.textTracks.addEventListener("addtrack", handleTrackChange);
 		video.textTracks.addEventListener("removetrack", handleTrackChange);
@@ -455,41 +335,9 @@ export function CapVideoPlayer({
 			handleLoadedData();
 		}
 
-		// Initial timeout to catch videos that take too long to load
-		if (!videoLoaded && !hasError && retryCount.current === 0) {
-			const initialTimeout = setTimeout(() => {
-				if (!videoLoaded && !hasError) {
-					console.log(
-						"Video taking longer than expected to load, attempting reload",
-					);
-					isRetryingRef.current = true;
-					setIsRetrying(true);
-					setupRetry();
-				}
-			}, 10000);
-
-			return () => {
-				clearTimeout(initialTimeout);
-				video.removeEventListener("loadeddata", handleLoadedData);
-				video.removeEventListener("canplay", handleCanPlay);
-				video.removeEventListener("load", handleLoad);
-				video.removeEventListener("play", handlePlay);
-				video.removeEventListener("error", handleError as EventListener);
-				video.removeEventListener(
-					"loadedmetadata",
-					handleLoadedMetadataWithTracks,
-				);
-				video.textTracks.removeEventListener("change", handleTrackChange);
-				video.textTracks.removeEventListener("addtrack", handleTrackChange);
-				video.textTracks.removeEventListener("removetrack", handleTrackChange);
-				if (retryTimeout.current) clearTimeout(retryTimeout.current);
-			};
-		}
-
 		return () => {
 			video.removeEventListener("loadeddata", handleLoadedData);
 			video.removeEventListener("canplay", handleCanPlay);
-			video.removeEventListener("load", handleLoad);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
 			video.removeEventListener(
@@ -499,21 +347,11 @@ export function CapVideoPlayer({
 			video.textTracks.removeEventListener("change", handleTrackChange);
 			video.textTracks.removeEventListener("addtrack", handleTrackChange);
 			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (retryTimeout.current) {
-				clearTimeout(retryTimeout.current);
-			}
 			if (captionTrack) {
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [
-		hasPlayedOnce,
-		resolvedSrc.isPending,
-		hasError,
-		setupRetry,
-		videoLoaded,
-		videoRef.current,
-	]);
+	}, [hasPlayedOnce, resolvedSrc.isPending, videoRef.current]);
 
 	const generateVideoFrameThumbnail = useCallback(
 		(time: number): string => {
@@ -543,7 +381,9 @@ export function CapVideoPlayer({
 
 	const isUploadFailed = uploadProgress?.status === "failed";
 	const isUploadError = uploadProgress?.status === "error";
-	const hasFailedOrError = isUploadFailed || isUploadError;
+	const showUploadFailureOverlay =
+		isUploadFailed ||
+		(isUploadError && !resolvedSrc.data && !resolvedSrc.isPending);
 	const canRetryUploadProcessing = canRetryFailedProcessing(
 		uploadProgress,
 		canRetryProcessing,
@@ -587,11 +427,35 @@ export function CapVideoPlayer({
 				videoLoaded,
 			)
 		) {
-			reloadVideo();
-			setTimeout(() => reloadVideo(), 1000);
+			setHasError(false);
+			void queryClient.invalidateQueries({
+				queryKey: ["resolvedSrc", videoSrc, rawFallbackSrc, enableCrossOrigin],
+			});
 		}
 		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, videoLoaded, reloadVideo]);
+	}, [
+		enableCrossOrigin,
+		queryClient,
+		rawFallbackSrc,
+		uploadProgress,
+		videoLoaded,
+		videoSrc,
+	]);
+
+	const showPreparingOverlay =
+		!videoLoaded &&
+		!uploadProgress &&
+		!hasError &&
+		(!resolvedSrc.isSuccess || Boolean(resolvedSrc.data));
+	const showPlaybackResolutionError =
+		hasError && !uploadProgress && !resolvedSrc.data && !resolvedSrc.isPending;
+	const showRawPlaybackBadge = resolvedSrc.data?.type === "raw";
+	const rawPlaybackBadgeLabel =
+		uploadProgressRaw?.status === "error"
+			? "Previewing original upload"
+			: "Processing for best quality...";
+	const blockPlaybackControls =
+		(!videoLoaded && hasActiveProgress) || showUploadFailureOverlay;
 
 	return (
 		<MediaPlayer
@@ -605,7 +469,7 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
-			{hasFailedOrError && (
+			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
@@ -623,23 +487,31 @@ export function CapVideoPlayer({
 					)}
 				</div>
 			)}
+			{showPlaybackResolutionError && (
+				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
+					<AlertTriangleIcon className="text-red-500 size-12" />
+					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
+						Could not load a playable video source. Reload to try again.
+					</p>
+				</div>
+			)}
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 rounded-xl justify-center items-center bg-black transition-opacity duration-300 overflow-visible",
-					videoLoaded || !!uploadProgress
+					videoLoaded || !!uploadProgress || !showPreparingOverlay
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",
 				)}
 			>
 				<div className="flex flex-col gap-2 items-center">
 					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-					{retryCount.current > 0 && (
-						<p className="text-sm text-white opacity-75">
-							Preparing video... ({retryCount.current}/{maxRetries})
-						</p>
-					)}
 				</div>
 			</div>
+			{showRawPlaybackBadge && (
+				<div className="absolute top-3 left-3 bg-black/60 text-white text-xs px-2 py-1 rounded-full backdrop-blur-sm z-10">
+					{rawPlaybackBadgeLabel}
+				</div>
+			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
 					src={resolvedSrc.data.url}
@@ -669,7 +541,7 @@ export function CapVideoPlayer({
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
-				{!videoLoaded && hasActiveProgress && !hasFailedOrError && (
+				{!videoLoaded && hasActiveProgress && !showUploadFailureOverlay && (
 					<>
 						<motion.div
 							initial={{ opacity: 0 }}
@@ -729,8 +601,8 @@ export function CapVideoPlayer({
 				{showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
-					!hasActiveProgress &&
-					!hasFailedOrError && (
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError && (
 						<motion.div
 							whileHover={{ scale: 1.1 }}
 							whileTap={{ scale: 0.9 }}
@@ -762,9 +634,9 @@ export function CapVideoPlayer({
 				</div>
 			)}
 			<MediaPlayerLoading />
-			{!isRetrying && !isRetryingRef.current && !isUploading && (
-				<MediaPlayerError />
-			)}
+			{!isUploading &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
 
 			{mainControlsVisible &&
@@ -802,7 +674,7 @@ export function CapVideoPlayer({
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
 				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={hasActiveProgress || hasFailedOrError}
+				isUploadingOrFailed={blockPlaybackControls}
 			>
 				<MediaPlayerControlsOverlay className="rounded-b-xl" />
 				<MediaPlayerSeek

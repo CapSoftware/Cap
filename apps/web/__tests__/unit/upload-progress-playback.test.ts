@@ -15,6 +15,12 @@ describe("shouldDeferPlaybackSource", () => {
 			lastUpdated: new Date(),
 			progress: 10,
 		},
+	])("returns true for active upload state %#", (uploadProgress) => {
+		expect(shouldDeferPlaybackSource(uploadProgress as never)).toBe(true);
+	});
+
+	it.each([
+		null,
 		{
 			status: "processing",
 			lastUpdated: new Date(),
@@ -26,12 +32,6 @@ describe("shouldDeferPlaybackSource", () => {
 			lastUpdated: new Date(),
 			progress: 90,
 		},
-	])("returns true for active upload state %#", (uploadProgress) => {
-		expect(shouldDeferPlaybackSource(uploadProgress as never)).toBe(true);
-	});
-
-	it.each([
-		null,
 		{
 			status: "error",
 			lastUpdated: new Date(),
