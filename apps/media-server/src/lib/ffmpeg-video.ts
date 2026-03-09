@@ -216,12 +216,126 @@ export async function downloadVideoToTemp(
 	}
 }
 
+const REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
+
+export async function repairContainer(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<TempFileHandle> {
+	const repairedFile = await createTempFile(".mkv");
+
+	const ffmpegArgs = [
+		"ffmpeg",
+		"-threads",
+		"2",
+		"-err_detect",
+		"ignore_err",
+		"-fflags",
+		"+genpts+igndts",
+		"-i",
+		inputPath,
+		"-c",
+		"copy",
+		"-y",
+		repairedFile.path,
+	];
+
+	console.log(`[repairContainer] Running: ${ffmpegArgs.join(" ")}`);
+
+	const proc = spawn({
+		cmd: ffmpegArgs,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	let abortCleanup: (() => void) | undefined;
+	if (abortSignal) {
+		abortCleanup = () => {
+			killProcess(proc);
+		};
+		abortSignal.addEventListener("abort", abortCleanup, { once: true });
+	}
+
+	try {
+		await withTimeout(
+			(async () => {
+				drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+				const stderrText = await readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
+
+				const exitCode = await proc.exited;
+
+				if (exitCode !== 0) {
+					console.error(`[repairContainer] FFmpeg stderr:\n${stderrText}`);
+					throw new Error(`Container repair failed with exit code ${exitCode}`);
+				}
+
+				const outputFile = file(repairedFile.path);
+				if (outputFile.size === 0) {
+					throw new Error("Container repair produced empty file");
+				}
+
+				console.log(
+					`[repairContainer] Repair successful: ${outputFile.size} bytes`,
+				);
+			})(),
+			REPAIR_TIMEOUT_MS,
+			() => killProcess(proc),
+		);
+
+		return repairedFile;
+	} catch (err) {
+		await repairedFile.cleanup();
+		throw err;
+	} finally {
+		if (abortCleanup) {
+			abortSignal?.removeEventListener("abort", abortCleanup);
+		}
+		killProcess(proc);
+	}
+}
+
+export interface ResilientInputFlags {
+	errDetectIgnoreErr?: boolean;
+	genPts?: boolean;
+	discardCorrupt?: boolean;
+	maxMuxingQueueSize?: number;
+}
+
+function buildExtraInputFlags(flags: ResilientInputFlags): string[] {
+	const args: string[] = [];
+
+	if (flags.errDetectIgnoreErr) {
+		args.push("-err_detect", "ignore_err");
+	}
+
+	const fflags: string[] = [];
+	if (flags.genPts) fflags.push("+genpts");
+	if (flags.discardCorrupt) fflags.push("+discardcorrupt");
+	if (fflags.length > 0) {
+		args.push("-fflags", fflags.join(""));
+	}
+
+	return args;
+}
+
+function buildExtraOutputFlags(flags: ResilientInputFlags): string[] {
+	if (flags.maxMuxingQueueSize) {
+		return ["-max_muxing_queue_size", flags.maxMuxingQueueSize.toString()];
+	}
+	return [];
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
 	options: VideoProcessingOptions = {},
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
+	resilientFlags?: ResilientInputFlags,
 ): Promise<TempFileHandle> {
 	const definedOptions = Object.fromEntries(
 		Object.entries(options).filter(([, v]) => v !== undefined),
@@ -235,7 +349,21 @@ export async function processVideo(
 		: needsVideoTranscode(metadata, opts);
 	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 
-	const ffmpegArgs: string[] = ["ffmpeg", "-threads", "2", "-i", inputPath];
+	const extraInputArgs = resilientFlags
+		? buildExtraInputFlags(resilientFlags)
+		: [];
+	const extraOutputArgs = resilientFlags
+		? buildExtraOutputFlags(resilientFlags)
+		: [];
+
+	const ffmpegArgs: string[] = [
+		"ffmpeg",
+		"-threads",
+		"2",
+		...extraInputArgs,
+		"-i",
+		inputPath,
+	];
 
 	if (videoTranscode) {
 		ffmpegArgs.push(
@@ -265,6 +393,7 @@ export async function processVideo(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
+		...extraOutputArgs,
 		"-progress",
 		"pipe:2",
 		"-y",

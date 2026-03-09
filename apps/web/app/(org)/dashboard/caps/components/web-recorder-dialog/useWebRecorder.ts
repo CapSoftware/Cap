@@ -1178,10 +1178,6 @@ export const useWebRecorder = ({
 
 			createdVideoId = creationResult.id;
 
-			if (pipeline.mode === "streaming-webm" && creationResult.shareUrl) {
-				openShareUrl(creationResult.shareUrl);
-			}
-
 			updatePhase("uploading");
 			setUploadStatus({
 				status: "uploadingVideo",

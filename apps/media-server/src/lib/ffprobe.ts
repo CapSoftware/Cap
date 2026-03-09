@@ -190,6 +190,92 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 	}
 }
 
+export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
+	if (!canAcceptNewProbeProcess()) {
+		throw new Error("Server is busy, please try again later");
+	}
+
+	activeProbeProcesses++;
+
+	const proc = spawn({
+		cmd: [
+			"ffprobe",
+			"-v",
+			"quiet",
+			"-print_format",
+			"json",
+			"-show_format",
+			"-show_streams",
+			"-analyzeduration",
+			"10000000",
+			"-probesize",
+			"10000000",
+			filePath,
+		],
+		stdout: "pipe",
+		stderr: "ignore",
+	});
+
+	try {
+		const result = await withTimeout(
+			(async () => {
+				const stdoutText = await readStreamToString(
+					proc.stdout as ReadableStream<Uint8Array>,
+					MAX_OUTPUT_BYTES,
+				);
+
+				const exitCode = await proc.exited;
+
+				if (exitCode !== 0) {
+					throw new Error(`ffprobe exited with code ${exitCode}`);
+				}
+
+				const data: FFprobeOutput = JSON.parse(stdoutText);
+
+				console.log(
+					`[probeVideoFile] ffprobe output for ${filePath}: format=${JSON.stringify(data.format)}, streams=${data.streams?.length ?? 0}`,
+				);
+
+				const videoStream = data.streams?.find((s) => s.codec_type === "video");
+				const audioStream = data.streams?.find((s) => s.codec_type === "audio");
+
+				if (!videoStream) {
+					throw new Error("No video stream found");
+				}
+
+				const duration = Number.parseFloat(data.format?.duration ?? "0");
+				const fileSize = Number.parseInt(data.format?.size ?? "0", 10);
+				const bitrate = Number.parseInt(data.format?.bit_rate ?? "0", 10);
+				const fps =
+					parseFrameRate(videoStream.r_frame_rate) ||
+					parseFrameRate(videoStream.avg_frame_rate);
+
+				return {
+					duration,
+					width: videoStream.width ?? 0,
+					height: videoStream.height ?? 0,
+					fps: Math.round(fps * 100) / 100,
+					videoCodec: videoStream.codec_name ?? "unknown",
+					audioCodec: audioStream?.codec_name ?? null,
+					audioChannels: audioStream?.channels ?? null,
+					sampleRate: audioStream?.sample_rate
+						? Number.parseInt(audioStream.sample_rate, 10)
+						: null,
+					bitrate,
+					fileSize,
+				};
+			})(),
+			PROBE_TIMEOUT_MS,
+			() => killProcess(proc),
+		);
+
+		return result;
+	} finally {
+		activeProbeProcesses--;
+		killProcess(proc);
+	}
+}
+
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
 		const response = await fetch(videoUrl, {
