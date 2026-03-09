@@ -26,6 +26,10 @@ interface VideoProcessingResult {
 	};
 }
 
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
 }
@@ -56,7 +60,7 @@ export async function processVideoWorkflow(
 			metadata: result.metadata,
 		};
 	} catch (error) {
-		await setProcessingError(videoId, error);
+		await setProcessingError(videoId, getErrorMessage(error));
 		throw error;
 	}
 }
@@ -286,11 +290,9 @@ async function cleanupRawUpload(
 
 async function setProcessingError(
 	videoId: string,
-	error: unknown,
+	errorMessage: string,
 ): Promise<void> {
 	"use step";
-
-	const message = error instanceof Error ? error.message : String(error);
 
 	await db()
 		.update(videoUploads)
@@ -298,7 +300,7 @@ async function setProcessingError(
 			phase: "error",
 			processingProgress: 0,
 			processingMessage: "Video processing failed",
-			processingError: message,
+			processingError: errorMessage,
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
