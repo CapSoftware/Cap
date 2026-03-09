@@ -7,12 +7,23 @@ export const SUPPORTED_LANGUAGES = {
 	it: "Italian",
 	nl: "Dutch",
 	pl: "Polish",
+	sk: "Slovak",
 	ru: "Russian",
+	tr: "Turkish",
 	ja: "Japanese",
 	ko: "Korean",
 	zh: "Chinese (Simplified)",
 	ar: "Arabic",
 	hi: "Hindi",
+	bn: "Bengali",
+	ta: "Tamil",
+	te: "Telugu",
+	mr: "Marathi",
+	gu: "Gujarati",
+	pa: "Punjabi",
+	ur: "Urdu",
+	fa: "Persian",
+	he: "Hebrew",
 } as const;
 
 export type LanguageCode = keyof typeof SUPPORTED_LANGUAGES;
