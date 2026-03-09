@@ -997,9 +997,8 @@ export const useWebRecorder = ({
 			recorder.onerror = onRecorderError;
 
 			const handleVideoEnded = () => {
-				stopRecordingRef.current?.().catch(() => {
-					/* ignore */
-				});
+				window.focus();
+				stopRecordingRef.current?.().catch(() => {});
 			};
 
 			firstTrack?.addEventListener("ended", handleVideoEnded, { once: true });
