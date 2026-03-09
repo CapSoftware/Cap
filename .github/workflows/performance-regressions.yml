@@ -14,8 +14,6 @@ jobs:
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.runner }}
-    env:
-      PERFORMANCE_RESULTS_PATH: performance-results-${{ runner.os }}.json
     steps:
       - name: Checkout Cap
         uses: actions/checkout@v4
@@ -47,6 +45,10 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
 
+      - name: Set results path
+        shell: bash
+        run: echo "PERFORMANCE_RESULTS_PATH=performance-results-${{ matrix.runner }}.json" >> "$GITHUB_ENV"
+
       - name: Run performance suite
         id: performance_suite
         continue-on-error: true
@@ -57,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: performance-results-${{ matrix.runner }}
-          path: ${{ env.PERFORMANCE_RESULTS_PATH }}
+          path: ${{ github.workspace }}/${{ env.PERFORMANCE_RESULTS_PATH }}
 
       - name: Print results
         if: always()
