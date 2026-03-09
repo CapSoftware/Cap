@@ -47,12 +47,17 @@ jobs:
 
       - name: Set results path
         shell: bash
-        run: echo "PERFORMANCE_RESULTS_PATH=performance-results-${{ matrix.runner }}.json" >> "$GITHUB_ENV"
+        run: |
+          echo "PERFORMANCE_RESULTS_PATH=performance-results-${{ matrix.runner }}.json" >> "$GITHUB_ENV"
+          echo "PERFORMANCE_LOG_PATH=performance-suite-${{ matrix.runner }}.log" >> "$GITHUB_ENV"
 
       - name: Run performance suite
         id: performance_suite
         continue-on-error: true
-        run: cargo run --release -p cap-test -- suite performance --recording-path performance-fixtures/reference-recording.cap --duration 8 --output "$PERFORMANCE_RESULTS_PATH" --gate
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --release -p cap-test -- suite performance --recording-path performance-fixtures/reference-recording.cap --duration 8 --output "$PERFORMANCE_RESULTS_PATH" 2>&1 | tee "$PERFORMANCE_LOG_PATH"
 
       - name: Upload results
         if: always()
@@ -60,6 +65,13 @@ jobs:
         with:
           name: performance-results-${{ matrix.runner }}
           path: ${{ github.workspace }}/${{ env.PERFORMANCE_RESULTS_PATH }}
+
+      - name: Upload suite log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-log-${{ matrix.runner }}
+          path: ${{ github.workspace }}/${{ env.PERFORMANCE_LOG_PATH }}
 
       - name: Print results
         if: always()
@@ -72,12 +84,16 @@ jobs:
           fi
 
       - name: Enforce suite gate
-        if: always() && steps.performance_suite.outcome != 'success'
+        if: always()
         shell: bash
         run: |
           if [ -f "$PERFORMANCE_RESULTS_PATH" ]; then
             target/release/cap-test report "$PERFORMANCE_RESULTS_PATH"
+            node -e 'const fs = require("fs"); const p = process.env.PERFORMANCE_RESULTS_PATH; const r = JSON.parse(fs.readFileSync(p, "utf8")); process.exit((r.summary.failed || r.summary.errors) ? 1 : 0);'
           else
             echo "$PERFORMANCE_RESULTS_PATH not found"
+            if [ -f "$PERFORMANCE_LOG_PATH" ]; then
+              cat "$PERFORMANCE_LOG_PATH"
+            fi
+            exit 1
           fi
-          exit 1
