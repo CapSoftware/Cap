@@ -69,4 +69,11 @@ jobs:
 
       - name: Enforce suite gate
         if: always() && steps.performance_suite.outcome != 'success'
-        run: exit 1
+        shell: bash
+        run: |
+          if [ -f performance-results.json ]; then
+            target/release/cap-test report performance-results.json
+          else
+            echo "performance-results.json not found"
+          fi
+          exit 1
