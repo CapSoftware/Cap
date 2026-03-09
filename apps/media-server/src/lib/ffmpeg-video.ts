@@ -8,6 +8,9 @@ const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const PROCESS_EXIT_WAIT_MS = 5_000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_UPLOAD_RETRIES = 4;
+const INITIAL_UPLOAD_RETRY_DELAY_MS = 250;
 const MAX_STDERR_BYTES = 64 * 1024;
 
 export interface VideoProcessingOptions {
@@ -155,6 +158,10 @@ async function readStreamWithLimit(
 	return chunks
 		.map((chunk) => decoder.decode(chunk, { stream: true }))
 		.join("");
+}
+
+async function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export type ProgressCallback = (progress: number, message: string) => void;
@@ -375,6 +382,82 @@ function getProcessTimeoutMs(
 			Math.ceil(durationSeconds * PROCESS_TIMEOUT_PER_SECOND_MS),
 		),
 	);
+}
+
+function isRetryableUploadStatus(status: number): boolean {
+	return (
+		status === 408 ||
+		status === 425 ||
+		status === 429 ||
+		status === 500 ||
+		status === 502 ||
+		status === 503 ||
+		status === 504
+	);
+}
+
+function getErrorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+async function uploadWithRetry(
+	presignedUrl: string,
+	contentType: string,
+	contentLength: number,
+	bodyFactory: () => Blob | Uint8Array | ArrayBuffer | BunFile,
+): Promise<void> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+		try {
+			const response = await fetch(presignedUrl, {
+				method: "PUT",
+				headers: {
+					"Content-Type": contentType,
+					"Content-Length": contentLength.toString(),
+				},
+				body: bodyFactory(),
+				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+			});
+
+			if (response.ok) {
+				return;
+			}
+
+			const responseError = new Error(
+				`S3 upload failed: ${response.status} ${response.statusText}`,
+			);
+
+			if (
+				!isRetryableUploadStatus(response.status) ||
+				attempt === MAX_UPLOAD_RETRIES
+			) {
+				throw responseError;
+			}
+
+			lastError = responseError;
+			const delay = INITIAL_UPLOAD_RETRY_DELAY_MS * 2 ** attempt;
+			console.warn(
+				`[uploadWithRetry] Retrying upload after ${response.status} in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
+			);
+			await sleep(delay);
+		} catch (err) {
+			const uploadError = err instanceof Error ? err : new Error(String(err));
+
+			if (attempt === MAX_UPLOAD_RETRIES) {
+				throw uploadError;
+			}
+
+			lastError = uploadError;
+			const delay = INITIAL_UPLOAD_RETRY_DELAY_MS * 2 ** attempt;
+			console.warn(
+				`[uploadWithRetry] Upload attempt failed: ${getErrorMessage(uploadError)}; retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
+			);
+			await sleep(delay);
+		}
+	}
+
+	throw lastError ?? new Error("S3 upload failed after retries");
 }
 
 export async function processVideo(
@@ -643,20 +726,8 @@ export async function uploadToS3(
 		data instanceof Blob
 			? data
 			: new Blob([data.buffer as ArrayBuffer], { type: contentType });
-	const response = await fetch(presignedUrl, {
-		method: "PUT",
-		headers: {
-			"Content-Type": contentType,
-			"Content-Length": blob.size.toString(),
-		},
-		body: blob,
-	});
 
-	if (!response.ok) {
-		throw new Error(
-			`Failed to upload to S3: ${response.status} ${response.statusText}`,
-		);
-	}
+	await uploadWithRetry(presignedUrl, contentType, blob.size, () => blob);
 }
 
 export async function uploadFileToS3(
@@ -665,20 +736,9 @@ export async function uploadFileToS3(
 	contentType: string,
 ): Promise<void> {
 	const fileHandle = file(filePath);
-	const arrayBuffer = await fileHandle.arrayBuffer();
-
-	const response = await fetch(presignedUrl, {
-		method: "PUT",
-		headers: {
 			"Content-Type": contentType,
-			"Content-Length": arrayBuffer.byteLength.toString(),
-		},
-		body: arrayBuffer,
-	});
 
-	if (!response.ok) {
-		throw new Error(
-			`Failed to upload file to S3: ${response.status} ${response.statusText}`,
-		);
-	}
+	await uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
+		file(filePath),
+	);
 }

@@ -6,6 +6,7 @@ import {
 	generateThumbnail,
 	normalizeVideoInputExtension,
 	processVideo,
+	uploadToS3,
 	withTimeout,
 } from "../../lib/ffmpeg-video";
 import { probeVideo } from "../../lib/ffprobe";
@@ -88,6 +89,38 @@ describe("generateThumbnail integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test("retries transient S3 upload failures", async () => {
+		const originalFetch = globalThis.fetch;
+		let attempts = 0;
+
+		globalThis.fetch = (async () => {
+			attempts++;
+			if (attempts === 1) {
+				const error = new Error(
+					"The socket connection was closed unexpectedly.",
+				);
+				Object.assign(error, { code: "ECONNRESET" });
+				throw error;
+			}
+
+			return new Response(null, {
+				status: 200,
+				statusText: "OK",
+			});
+		}) as typeof fetch;
+
+		try {
+			await uploadToS3(
+				new Uint8Array([1, 2, 3, 4]),
+				"https://uploads.example/result.mp4",
+				"video/mp4",
+			);
+			expect(attempts).toBe(2);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("waits for async cleanup before rejecting timed out work", async () => {
 		let resolveCleanup: (() => void) | undefined;
 		let settled = false;
