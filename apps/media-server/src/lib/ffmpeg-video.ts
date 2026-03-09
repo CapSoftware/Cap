@@ -736,7 +736,6 @@ export async function uploadFileToS3(
 	contentType: string,
 ): Promise<void> {
 	const fileHandle = file(filePath);
-			"Content-Type": contentType,
 
 	await uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
 		file(filePath),
