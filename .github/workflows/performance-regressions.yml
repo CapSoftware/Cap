@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo run --release -p cap-test -- suite performance --recording-path performance-fixtures/reference-recording.cap --duration 8 --output "$PERFORMANCE_RESULTS_PATH" 2>&1 | tee "$PERFORMANCE_LOG_PATH"
+          cargo run --release -p cap-test -- suite performance --recording-path "${{ github.workspace }}/performance-fixtures/reference-recording.cap" --duration 8 --output "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}" 2>&1 | tee "${{ github.workspace }}/${PERFORMANCE_LOG_PATH}"
 
       - name: Upload results
         if: always()
@@ -77,8 +77,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -f "$PERFORMANCE_RESULTS_PATH" ]; then
-            cat "$PERFORMANCE_RESULTS_PATH"
+          if [ -f "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}" ]; then
+            cat "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}"
           else
             echo "$PERFORMANCE_RESULTS_PATH not found"
           fi
@@ -87,13 +87,13 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -f "$PERFORMANCE_RESULTS_PATH" ]; then
-            target/release/cap-test report "$PERFORMANCE_RESULTS_PATH"
-            node -e 'const fs = require("fs"); const p = process.env.PERFORMANCE_RESULTS_PATH; const r = JSON.parse(fs.readFileSync(p, "utf8")); process.exit((r.summary.failed || r.summary.errors) ? 1 : 0);'
+          if [ -f "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}" ]; then
+            target/release/cap-test report "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}"
+            node -e 'const fs = require("fs"); const p = process.env.GITHUB_WORKSPACE + "/" + process.env.PERFORMANCE_RESULTS_PATH; const r = JSON.parse(fs.readFileSync(p, "utf8")); process.exit((r.summary.failed || r.summary.errors) ? 1 : 0);'
           else
             echo "$PERFORMANCE_RESULTS_PATH not found"
-            if [ -f "$PERFORMANCE_LOG_PATH" ]; then
-              cat "$PERFORMANCE_LOG_PATH"
+            if [ -f "${{ github.workspace }}/${PERFORMANCE_LOG_PATH}" ]; then
+              cat "${{ github.workspace }}/${PERFORMANCE_LOG_PATH}"
             fi
             exit 1
           fi
