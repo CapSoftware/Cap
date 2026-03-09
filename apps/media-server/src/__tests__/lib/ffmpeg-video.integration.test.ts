@@ -6,6 +6,7 @@ import {
 	generateThumbnail,
 	normalizeVideoInputExtension,
 	processVideo,
+	withTimeout,
 } from "../../lib/ffmpeg-video";
 import { probeVideo } from "../../lib/ffprobe";
 
@@ -87,6 +88,34 @@ describe("generateThumbnail integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test("waits for async cleanup before rejecting timed out work", async () => {
+		let resolveCleanup: (() => void) | undefined;
+		let settled = false;
+		const cleanupFinished = new Promise<void>((resolve) => {
+			resolveCleanup = resolve;
+		});
+
+		const timedOutWork = withTimeout(
+			new Promise<never>(() => {}),
+			1,
+			async () => {
+				await cleanupFinished;
+			},
+		);
+
+		void timedOutWork.catch(() => {
+			settled = true;
+		});
+
+		await Bun.sleep(25);
+		expect(settled).toBe(false);
+
+		resolveCleanup?.();
+
+		await expect(timedOutWork).rejects.toThrow("Operation timed out after 1ms");
+		expect(settled).toBe(true);
+	});
+
 	test("normalizes input extensions", () => {
 		expect(normalizeVideoInputExtension(undefined)).toBe(".mp4");
 		expect(normalizeVideoInputExtension("webm")).toBe(".webm");
@@ -103,7 +132,7 @@ describe("processVideo integration tests", () => {
 			TEST_VIDEO_WITH_AUDIO,
 			metadata,
 			{ maxWidth: 640, maxHeight: 360 },
-			(progress, message) => {
+			(progress, _message) => {
 				expect(progress).toBeGreaterThanOrEqual(lastProgress);
 				progressUpdates.push(progress);
 				lastProgress = progress;

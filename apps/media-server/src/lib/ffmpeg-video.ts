@@ -2,7 +2,10 @@ import { file, type Subprocess, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { createTempFile, type TempFileHandle } from "./temp-files";
 
-const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
+const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
+const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
+const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const PROCESS_EXIT_WAIT_MS = 5_000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -15,6 +18,7 @@ export interface VideoProcessingOptions {
 	crf?: number;
 	preset?: "ultrafast" | "fast" | "medium" | "slow";
 	remuxOnly?: boolean;
+	timeoutMs?: number;
 }
 
 const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
@@ -25,6 +29,7 @@ const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	crf: 23,
 	preset: "medium",
 	remuxOnly: false,
+	timeoutMs: PROCESS_TIMEOUT_MS,
 };
 
 export interface ThumbnailOptions {
@@ -64,15 +69,38 @@ function killProcess(proc: Subprocess): void {
 	} catch {}
 }
 
-async function withTimeout<T>(
+async function waitForProcessExit(
+	proc: Pick<Subprocess, "exited">,
+	timeoutMs = PROCESS_EXIT_WAIT_MS,
+): Promise<void> {
+	await Promise.race([
+		proc.exited.then(
+			() => undefined,
+			() => undefined,
+		),
+		new Promise<void>((resolve) => {
+			setTimeout(resolve, timeoutMs);
+		}),
+	]);
+}
+
+async function terminateProcess(proc: Subprocess): Promise<void> {
+	killProcess(proc);
+	await waitForProcessExit(proc);
+}
+
+export async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
-	cleanup?: () => void,
+	cleanup?: () => void | Promise<void>,
 ): Promise<T> {
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let cleanupPromise: Promise<void> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutId = setTimeout(() => {
-			cleanup?.();
+			cleanupPromise = (async () => {
+				await cleanup?.();
+			})().catch(() => undefined);
 			reject(new Error(`Operation timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
 	});
@@ -82,6 +110,9 @@ async function withTimeout<T>(
 		if (timeoutId) clearTimeout(timeoutId);
 		return result;
 	} catch (err) {
+		if (cleanupPromise) {
+			await cleanupPromise;
+		}
 		if (timeoutId) clearTimeout(timeoutId);
 		throw err;
 	}
@@ -283,7 +314,7 @@ export async function repairContainer(
 				);
 			})(),
 			REPAIR_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return repairedFile;
@@ -294,7 +325,7 @@ export async function repairContainer(
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
@@ -329,6 +360,23 @@ function buildExtraOutputFlags(flags: ResilientInputFlags): string[] {
 	return [];
 }
 
+function getProcessTimeoutMs(
+	durationSeconds: number,
+	baseTimeoutMs: number,
+): number {
+	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+		return baseTimeoutMs;
+	}
+
+	return Math.min(
+		MAX_PROCESS_TIMEOUT_MS,
+		Math.max(
+			baseTimeoutMs,
+			Math.ceil(durationSeconds * PROCESS_TIMEOUT_PER_SECOND_MS),
+		),
+	);
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -355,6 +403,10 @@ export async function processVideo(
 	const extraOutputArgs = resilientFlags
 		? buildExtraOutputFlags(resilientFlags)
 		: [];
+	const processTimeoutMs = getProcessTimeoutMs(
+		metadata.duration,
+		opts.timeoutMs,
+	);
 
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
@@ -473,8 +525,8 @@ export async function processVideo(
 					throw new Error("FFmpeg produced empty output file");
 				}
 			})(),
-			PROCESS_TIMEOUT_MS,
-			() => killProcess(proc),
+			processTimeoutMs,
+			() => terminateProcess(proc),
 		);
 
 		return outputTempFile;
@@ -485,7 +537,7 @@ export async function processVideo(
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
