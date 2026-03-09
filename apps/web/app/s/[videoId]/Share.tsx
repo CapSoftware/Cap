@@ -440,6 +440,7 @@ export const Share = ({
 									chapters={aiData?.chapters || []}
 									aiGenerationStatus={aiData?.aiGenerationStatus}
 									canRetryProcessing={viewerId === data.owner.id}
+									showPlaybackStatusBadge={viewerId === data.owner.id}
 									ref={playerRef}
 								/>
 							</div>

@@ -8,7 +8,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon } from "lucide-react";
+import { AlertTriangleIcon, InfoIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
@@ -24,7 +24,6 @@ import {
 	type ResolvedPlaybackSource,
 	resolvePlaybackSource,
 } from "./playback-source";
-
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -44,6 +43,7 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
 
 const { circumference } = getProgressCircleConfig();
 
@@ -98,6 +98,7 @@ interface Props {
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
 	duration?: number | null;
+	showPlaybackStatusBadge?: boolean;
 }
 
 export function CapVideoPlayer({
@@ -125,6 +126,7 @@ export function CapVideoPlayer({
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
+	showPlaybackStatusBadge = false,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -461,11 +463,16 @@ export function CapVideoPlayer({
 		(!resolvedSrc.isSuccess || Boolean(resolvedSrc.data));
 	const showPlaybackResolutionError =
 		hasError && !uploadProgress && !resolvedSrc.data && !resolvedSrc.isPending;
-	const showRawPlaybackBadge = resolvedSrc.data?.type === "raw";
+	const showRawPlaybackBadge =
+		showPlaybackStatusBadge && resolvedSrc.data?.type === "raw";
 	const rawPlaybackBadgeLabel =
 		uploadProgressRaw?.status === "error"
-			? "Previewing original upload"
-			: "Processing for best quality...";
+			? "Original upload"
+			: "Optimizing video";
+	const rawPlaybackBadgeDescription =
+		uploadProgressRaw?.status === "error"
+			? "The processed version is unavailable right now, so this page is playing the original uploaded file instead."
+			: "This page is temporarily playing the original uploaded file while Cap finishes processing the optimized version for smoother playback and broader compatibility.";
 	const blockPlaybackControls =
 		(!videoLoaded && hasActiveProgress) || showUploadFailureOverlay;
 
@@ -520,9 +527,25 @@ export function CapVideoPlayer({
 				</div>
 			</div>
 			{showRawPlaybackBadge && (
-				<div className="absolute top-3 left-3 bg-black/60 text-white text-xs px-2 py-1 rounded-full backdrop-blur-sm z-10">
-					{rawPlaybackBadgeLabel}
-				</div>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							type="button"
+							className="absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/55 px-2 py-0.5 text-[11px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/70"
+							aria-label={rawPlaybackBadgeDescription}
+						>
+							<InfoIcon className="size-3" />
+							<span>{rawPlaybackBadgeLabel}</span>
+						</button>
+					</TooltipTrigger>
+					<TooltipContent
+						side="bottom"
+						align="start"
+						className="max-w-[260px] border border-white/10 bg-black/90 px-3 py-2 text-xs leading-relaxed text-white shadow-xl"
+					>
+						{rawPlaybackBadgeDescription}
+					</TooltipContent>
+				</Tooltip>
 			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo

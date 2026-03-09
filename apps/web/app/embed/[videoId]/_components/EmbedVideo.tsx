@@ -51,6 +51,7 @@ export const EmbedVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
 		autoplay?: boolean;
+		showPlaybackStatusBadge?: boolean;
 	}
 >(
 	(
@@ -61,6 +62,7 @@ export const EmbedVideo = forwardRef<
 			chapters = [],
 			ownerName,
 			autoplay: _autoplay = false,
+			showPlaybackStatusBadge = false,
 		},
 		ref,
 	) => {
@@ -194,6 +196,7 @@ export const EmbedVideo = forwardRef<
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
 							duration={data.duration}
+							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}

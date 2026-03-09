@@ -287,6 +287,7 @@ async function EmbedContent({
 			chapters={initialAiData?.chapters || []}
 			ownerName={videoOwner[0]?.name || null}
 			autoplay={autoplay}
+			showPlaybackStatusBadge={user?.id === video.ownerId}
 		/>
 	);
 }

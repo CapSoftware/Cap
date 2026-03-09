@@ -43,6 +43,7 @@ export const ShareVideo = forwardRef<
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
 		canRetryProcessing?: boolean;
+		showPlaybackStatusBadge?: boolean;
 	}
 >(
 	(
@@ -55,6 +56,7 @@ export const ShareVideo = forwardRef<
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
 			canRetryProcessing,
+			showPlaybackStatusBadge = false,
 		},
 		ref,
 	) => {
@@ -217,6 +219,7 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
 							duration={data.duration}
+							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
 							disableReactionStamps={areReactionStampsDisabled ?? false}
