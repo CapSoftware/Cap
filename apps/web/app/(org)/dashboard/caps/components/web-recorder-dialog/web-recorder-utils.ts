@@ -129,6 +129,14 @@ export const shouldPreferStreamingUpload = (
 	return brandMatch || /(chrome|chromium|edg|opr|opera|brave)/i.test(userAgent);
 };
 
+export const openShareUrlInNewTab = (shareUrl?: string | null) => {
+	if (!shareUrl || typeof window === "undefined") {
+		return false;
+	}
+
+	return window.open(shareUrl, "_blank", "noopener,noreferrer") !== null;
+};
+
 export const selectRecordingPipelineFromSupport = (
 	hasAudio: boolean,
 	isMimeSupported: (candidate: string) => boolean,

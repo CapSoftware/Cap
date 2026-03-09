@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	openShareUrlInNewTab,
 	selectRecordingPipelineFromSupport,
 	shouldPreferStreamingUpload,
 } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/web-recorder-utils";
@@ -122,5 +123,39 @@ describe("shouldPreferStreamingUpload", () => {
 					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:141.0) Gecko/20100101 Firefox/141.0",
 			}),
 		).toBe(false);
+	});
+});
+
+describe("openShareUrlInNewTab", () => {
+	it("opens the share url in a new tab", () => {
+		const open = vi.fn(() => ({}));
+		vi.stubGlobal("window", {
+			open,
+		});
+
+		expect(openShareUrlInNewTab("https://cap.so/s/test-video")).toBe(true);
+		expect(open).toHaveBeenCalledWith(
+			"https://cap.so/s/test-video",
+			"_blank",
+			"noopener,noreferrer",
+		);
+
+		vi.unstubAllGlobals();
+	});
+
+	it("returns false when the browser blocks the popup", () => {
+		vi.stubGlobal("window", {
+			open: vi.fn(() => null),
+		});
+
+		expect(openShareUrlInNewTab("https://cap.so/s/test-video")).toBe(false);
+
+		vi.unstubAllGlobals();
+	});
+
+	it("does not navigate when the share url is missing", () => {
+		expect(openShareUrlInNewTab(null)).toBe(false);
+		expect(openShareUrlInNewTab(undefined)).toBe(false);
+		expect(openShareUrlInNewTab("")).toBe(false);
 	});
 });

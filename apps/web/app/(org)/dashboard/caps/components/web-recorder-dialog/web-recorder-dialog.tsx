@@ -134,6 +134,7 @@ export const WebRecorderDialog = () => {
 		hasAudioTrack,
 		chunkUploads,
 		errorDownload,
+		completedShareUrl,
 		recoveredDownloads,
 		isRecording,
 		isBusy,
@@ -148,6 +149,7 @@ export const WebRecorderDialog = () => {
 		pauseRecording,
 		resumeRecording,
 		stopRecording,
+		openCompletedShareUrl,
 		restartRecording,
 		resetState,
 		dismissRecoveredDownload,
@@ -339,6 +341,22 @@ export const WebRecorderDialog = () => {
 								{!isBrowserSupported && unsupportedReason && (
 									<div className="rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
 										{unsupportedReason}
+									</div>
+								)}
+								{phase === "completed" && completedShareUrl && (
+									<div className="rounded-md border border-green-6 bg-green-3/70 px-3 py-3 text-xs text-green-12">
+										<div className="font-medium">Share link ready</div>
+										<div className="mt-1 leading-snug">
+											If it did not open automatically, open it here.
+										</div>
+										<Button
+											variant="blue"
+											size="sm"
+											className="mt-3 w-full"
+											onClick={openCompletedShareUrl}
+										>
+											Open Share Link
+										</Button>
 									</div>
 								)}
 								{phase === "idle" && recoveredDownloads.length > 0 && (

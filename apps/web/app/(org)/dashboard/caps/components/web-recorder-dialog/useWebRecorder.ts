@@ -54,6 +54,7 @@ import type {
 import {
 	detectCapabilities,
 	isUserCancellationError,
+	openShareUrlInNewTab,
 	type RecorderCapabilities,
 	type RecordingPipeline,
 	selectRecordingPipeline,
@@ -133,6 +134,9 @@ export const useWebRecorder = ({
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
 	const [errorDownload, setErrorDownload] =
 		useState<RecordingFailureDownload | null>(null);
+	const [completedShareUrl, setCompletedShareUrl] = useState<string | null>(
+		null,
+	);
 	const [recoveredDownloads, setRecoveredDownloads] = useState<
 		RecoveredRecordingDownload[]
 	>([]);
@@ -452,9 +456,8 @@ export const useWebRecorder = ({
 
 	const openShareUrl = useCallback((shareUrl?: string | null) => {
 		if (!shareUrl || shareUrlOpenedRef.current) return;
-		if (typeof window === "undefined") return;
+		if (!openShareUrlInNewTab(shareUrl)) return;
 		shareUrlOpenedRef.current = true;
-		window.open(shareUrl, "_blank", "noopener,noreferrer");
 	}, []);
 	const queryClient = useQueryClient();
 	const deleteVideo = useEffectMutation({
@@ -561,6 +564,7 @@ export const useWebRecorder = ({
 		setChunkUploads([]);
 		setHasAudioTrack(false);
 		replaceErrorDownload(null);
+		setCompletedShareUrl(null);
 		shareUrlOpenedRef.current = false;
 
 		const pendingInstantVideoId = pendingInstantVideoIdRef.current;
@@ -1342,6 +1346,7 @@ export const useWebRecorder = ({
 			await disposeRecordingSpool();
 
 			setUploadStatus(undefined);
+			setCompletedShareUrl(creationResult.shareUrl);
 			updatePhase("completed");
 			toast.success(
 				pipeline.mode === "streaming-webm"
@@ -1379,6 +1384,7 @@ export const useWebRecorder = ({
 					"Upload confirmation was interrupted. Open the video to verify processing before retrying.",
 				);
 				openShareUrl(videoCreationRef.current?.shareUrl ?? null);
+				setCompletedShareUrl(videoCreationRef.current?.shareUrl ?? null);
 				router.refresh();
 				return;
 			}
@@ -1512,6 +1518,7 @@ export const useWebRecorder = ({
 		hasAudioTrack,
 		chunkUploads,
 		errorDownload,
+		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
 		isRecording: isRecordingActive,
@@ -1522,6 +1529,7 @@ export const useWebRecorder = ({
 		pauseRecording,
 		resumeRecording,
 		stopRecording,
+		openCompletedShareUrl: () => openShareUrl(completedShareUrl),
 		restartRecording,
 		resetState,
 		dismissRecoveredDownload,
