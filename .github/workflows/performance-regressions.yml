@@ -14,6 +14,8 @@ jobs:
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.runner }}
+    env:
+      PERFORMANCE_RESULTS_PATH: performance-results-${{ runner.os }}.json
     steps:
       - name: Checkout Cap
         uses: actions/checkout@v4
@@ -48,32 +50,32 @@ jobs:
       - name: Run performance suite
         id: performance_suite
         continue-on-error: true
-        run: cargo run --release -p cap-test -- suite performance --recording-path performance-fixtures/reference-recording.cap --duration 8 --output performance-results.json --gate
+        run: cargo run --release -p cap-test -- suite performance --recording-path performance-fixtures/reference-recording.cap --duration 8 --output "$PERFORMANCE_RESULTS_PATH" --gate
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: performance-results-${{ matrix.runner }}
-          path: performance-results.json
+          path: ${{ env.PERFORMANCE_RESULTS_PATH }}
 
       - name: Print results
         if: always()
         shell: bash
         run: |
-          if [ -f performance-results.json ]; then
-            cat performance-results.json
+          if [ -f "$PERFORMANCE_RESULTS_PATH" ]; then
+            cat "$PERFORMANCE_RESULTS_PATH"
           else
-            echo "performance-results.json not found"
+            echo "$PERFORMANCE_RESULTS_PATH not found"
           fi
 
       - name: Enforce suite gate
         if: always() && steps.performance_suite.outcome != 'success'
         shell: bash
         run: |
-          if [ -f performance-results.json ]; then
-            target/release/cap-test report performance-results.json
+          if [ -f "$PERFORMANCE_RESULTS_PATH" ]; then
+            target/release/cap-test report "$PERFORMANCE_RESULTS_PATH"
           else
-            echo "performance-results.json not found"
+            echo "$PERFORMANCE_RESULTS_PATH not found"
           fi
           exit 1
