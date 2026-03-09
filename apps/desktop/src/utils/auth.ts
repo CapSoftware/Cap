@@ -10,16 +10,27 @@ import { authStore, generalSettingsStore } from "~/store";
 import { identifyUser, trackEvent } from "./analytics";
 import { commands } from "./tauri";
 
+const paramsValidator = z.union([
+	z.object({
+		type: z.literal("api_key"),
+		api_key: z.string(),
+		user_id: z.string(),
+	}),
+	z.object({
+		token: z.string(),
+		user_id: z.string(),
+		expires: z.coerce.number(),
+	}),
+]);
+
+type AuthParams = z.infer<typeof paramsValidator>;
+
 export function createSignInMutation() {
 	return createMutation(() => ({
 		mutationFn: async (abort: AbortController) => {
-			const platform = import.meta.env.DEV ? "web" : "desktop";
-
-			let session;
-
-			if (platform === "web")
-				session = await createLocalServerSession(abort.signal);
-			else session = await createDeepLinkSession(abort.signal);
+			const session = import.meta.env.DEV
+				? await createLocalServerSession(abort.signal)
+				: await createHybridDesktopSession(abort.signal);
 
 			await shell.open(session.url.toString());
 
@@ -49,6 +60,59 @@ async function createSessionRequestUrl(
 }
 
 async function createLocalServerSession(signal: AbortSignal) {
+	const localCallback = await startLocalCallbackSession(signal);
+
+	return {
+		url: await createSessionRequestUrl(localCallback.port, "web"),
+		complete: async () => {
+			const result = await localCallback.complete;
+			await localCallback.dispose();
+
+			if (!result) return null;
+			if (signal.aborted) throw new Error("Sign in aborted");
+
+			return result;
+		},
+	};
+}
+
+async function createHybridDesktopSession(signal: AbortSignal) {
+	const deepLink = await startDeepLinkSession(signal);
+	const localCallback = await startLocalCallbackSession(signal);
+
+	return {
+		url: await createSessionRequestUrl(localCallback.port, "desktop"),
+		complete: async () => {
+			const result = await Promise.race([
+				deepLink.complete.then((data) => ({
+					source: "deep-link" as const,
+					data,
+				})),
+				localCallback.complete.then((data) => ({
+					source: "local" as const,
+					data,
+				})),
+			]);
+
+			await deepLink.dispose();
+
+			if (result.source === "deep-link") {
+				window.setTimeout(() => {
+					void localCallback.dispose();
+				}, 10000);
+			} else {
+				await localCallback.dispose();
+			}
+
+			if (!result.data) return null;
+			if (signal.aborted) throw new Error("Sign in aborted");
+
+			return result.data;
+		},
+	};
+}
+
+async function startLocalCallbackSession(signal: AbortSignal) {
 	await invoke("plugin:oauth|stop").catch(() => {});
 
 	const port: string = await invoke("plugin:oauth|start", {
@@ -59,103 +123,90 @@ async function createLocalServerSession(signal: AbortSignal) {
 				"Cache-Control": "no-store, no-cache, must-revalidate",
 				Pragma: "no-cache",
 			},
-			// Add a cleanup function to stop the server after handling the request
 			cleanup: true,
 		},
 	});
 
-	signal.onabort = () => {
-		invoke("plugin:oauth|stop").catch(() => {});
+	let settled = false;
+	let stopListening: (() => void) | undefined;
+	let resolvePromise: (data: AuthParams | null) => void = () => {};
+
+	const complete = new Promise<AuthParams | null>((resolve) => {
+		resolvePromise = resolve;
+	});
+
+	const settle = (value: AuthParams | null) => {
+		if (settled) return;
+		settled = true;
+		resolvePromise(value);
 	};
 
-	let res: (url: URL | null) => void;
+	stopListening = await listen("oauth://url", (data: { payload: string }) => {
+		if (!(data.payload.includes("token") || data.payload.includes("api_key"))) {
+			return;
+		}
 
-	const stopListening = await listen(
-		"oauth://url",
-		(data: { payload: string }) => {
-			console.log(data);
-			if (
-				!(data.payload.includes("token") || data.payload.includes("api_key"))
-			) {
-				return;
-			}
+		settle(parseAuthParams(new URL(data.payload)));
+	});
 
-			const urlObject = new URL(data.payload);
-			res(urlObject);
-		},
-	);
-
-	signal.onabort = (_e: Event) => {
-		res(null);
+	const dispose = async () => {
+		stopListening?.();
+		stopListening = undefined;
+		settle(null);
+		await invoke("plugin:oauth|stop").catch(() => {});
 	};
 
-	return {
-		url: await createSessionRequestUrl(port, "web"),
-		complete: async () => {
-			const url = await new Promise<URL | null>((_res) => {
-				res = _res;
-			});
+	signal.addEventListener("abort", () => void dispose(), { once: true });
 
-			stopListening();
-			if (!url) return null;
-			if (signal.aborted) throw new Error("Sign in aborted");
-
-			const a = [...url.searchParams].reduce((acc, [k, v]) => {
-				acc[k] = v;
-				return acc;
-			}, {} as any);
-
-			return paramsValidator.parse(a);
-		},
-	};
+	return { port, complete, dispose };
 }
 
-const paramsValidator = z.union([
-	z.object({
-		type: z.literal("api_key"),
-		api_key: z.string(),
-		user_id: z.string(),
-	}),
-	z.object({
-		token: z.string(),
-		user_id: z.string(),
-		expires: z.coerce.number(),
-	}),
-]);
+async function startDeepLinkSession(signal: AbortSignal) {
+	let settled = false;
+	let stopListening: (() => void) | undefined;
+	let resolvePromise: (data: AuthParams | null) => void = () => {};
 
-async function createDeepLinkSession(signal: AbortSignal) {
-	let res: (data: z.infer<typeof paramsValidator>) => void;
-	const p = new Promise<z.infer<typeof paramsValidator>>((r) => {
-		res = r;
+	const complete = new Promise<AuthParams | null>((resolve) => {
+		resolvePromise = resolve;
 	});
-	const stopListening = await onOpenUrl(async (urls) => {
+
+	const settle = (value: AuthParams | null) => {
+		if (settled) return;
+		settled = true;
+		resolvePromise(value);
+	};
+
+	stopListening = await onOpenUrl(async (urls) => {
 		for (const urlString of urls) {
 			if (signal.aborted) return;
-
-			const url = new URL(urlString);
-
-			res(
-				paramsValidator.parse(
-					[...url.searchParams].reduce((acc, [k, v]) => {
-						acc[k] = v;
-						return acc;
-					}, {} as any),
-				),
-			);
+			settle(parseAuthParams(new URL(urlString)));
 		}
 	});
 
-	signal.onabort = () => {
-		stopListening();
+	const dispose = async () => {
+		stopListening?.();
+		stopListening = undefined;
+		settle(null);
 	};
 
-	return {
-		url: await createSessionRequestUrl(null, "desktop"),
-		complete: () => p,
-	};
+	signal.addEventListener("abort", () => void dispose(), { once: true });
+
+	return { complete, dispose };
 }
 
-async function processAuthData(data: z.infer<typeof paramsValidator>) {
+function parseAuthParams(url: URL) {
+	return paramsValidator.parse(
+		[...url.searchParams].reduce(
+			(acc, [key, value]) => {
+				acc[key] = value;
+				return acc;
+			},
+			{} as Record<string, string>,
+		),
+	);
+}
+
+async function processAuthData(data: AuthParams) {
 	identifyUser(data.user_id);
 	trackEvent("user_signed_in", { platform: "desktop" });
 
