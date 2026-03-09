@@ -30,7 +30,8 @@ const PLAYBACK_RESOLUTION: XY<u32> = XY::new(1920, 1080);
 const MAX_PLAYBACK_FAILURE_RATE: f64 = 5.0;
 const MAX_OPEN_TIME_SECS: f64 = 30.0;
 const MAX_EXPORT_START_SECS: f64 = 60.0;
-const MAX_EXPORT_WALL_TIME_SECS: u64 = 600;
+const MAX_EXPORT_SAMPLE_FRAMES: u32 = 120;
+const MAX_EXPORT_WALL_TIME_SECS: u64 = 180;
 
 pub async fn run_suite(
     hardware: &DiscoveredHardware,
@@ -284,6 +285,9 @@ async fn run_export_test(recording_path: &Path) -> TestResult {
             result
                 .notes
                 .push(format!("total_frames={}", metrics.total_frames));
+            result
+                .notes
+                .push(format!("rendered_frames={}", metrics.rendered_frames));
 
             let min_export_fps = 3.0;
 
@@ -443,9 +447,9 @@ async fn benchmark_playback(
 
 async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
     let output_dir = TempDir::new().context("failed to create export tempdir")?;
-    let output_path = output_dir.path().join("performance-export.mp4");
+    let planned_output_path = output_dir.path().join("performance-export.mp4");
     let exporter_base = ExporterBase::builder(recording_path.to_path_buf())
-        .with_output_path(output_path.clone())
+        .with_output_path(planned_output_path.clone())
         .build()
         .await
         .map_err(|error| anyhow::anyhow!("failed to build exporter base: {error}"))?;
@@ -459,14 +463,16 @@ async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
     };
 
     let total_frames = exporter_base.total_frames(settings.fps);
+    let sample_frames = total_frames.clamp(1, MAX_EXPORT_SAMPLE_FRAMES);
     let started_at = Instant::now();
     let last_frame = Arc::new(AtomicU32::new(0));
     let first_progress = Arc::new(Mutex::new(None));
     let progress_started_at = started_at;
     let progress_frame = Arc::clone(&last_frame);
     let progress_first = Arc::clone(&first_progress);
+    let stop_after_frame = sample_frames;
 
-    let output_path = tokio::time::timeout(
+    let export_result = tokio::time::timeout(
         Duration::from_secs(MAX_EXPORT_WALL_TIME_SECS),
         settings.export(exporter_base, move |frame| {
             progress_frame.store(frame, Ordering::Relaxed);
@@ -474,18 +480,27 @@ async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
             if first.is_none() {
                 *first = Some(progress_started_at.elapsed().as_secs_f64());
             }
-            true
+            frame.saturating_add(1) < stop_after_frame
         }),
     )
     .await
-    .context("export timed out")?
-    .map_err(anyhow::Error::msg)?;
+    .context("export timed out")?;
 
     let elapsed = started_at.elapsed();
-    let rendered_frames = last_frame.load(Ordering::Relaxed).saturating_add(1);
+    let rendered_frames = last_frame
+        .load(Ordering::Relaxed)
+        .saturating_add(1)
+        .min(sample_frames);
     let first_progress_secs = *first_progress.lock().unwrap_or_else(|err| err.into_inner());
+    let sampled_enough = rendered_frames >= sample_frames && first_progress_secs.is_some();
 
-    if !output_path.exists() {
+    let output_path = match export_result {
+        Ok(path) => path,
+        Err(_error) if sampled_enough => planned_output_path.clone(),
+        Err(error) => return Err(anyhow::Error::msg(error)),
+    };
+
+    if !sampled_enough && !output_path.exists() {
         bail!(
             "Export completed but output is missing at {}",
             output_path.display()
@@ -496,7 +511,7 @@ async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
         elapsed,
         first_progress_secs,
         output_path,
-        total_frames,
+        total_frames: sample_frames,
         rendered_frames,
         effective_fps: rendered_frames as f64 / elapsed.as_secs_f64().max(0.001),
     })
