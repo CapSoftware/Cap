@@ -97,6 +97,7 @@ interface Props {
 	isCaptionLoading?: boolean;
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
+	duration?: number | null;
 }
 
 export function CapVideoPlayer({
@@ -123,6 +124,7 @@ export function CapVideoPlayer({
 	isCaptionLoading = false,
 	hasCaptions = false,
 	canRetryProcessing = false,
+	duration: fallbackDuration,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -134,7 +136,7 @@ export function CapVideoPlayer({
 	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
-	const [duration, setDuration] = useState(0);
+	const [duration, setDuration] = useState(fallbackDuration ?? 0);
 	const queryClient = useQueryClient();
 
 	useEffect(() => {
@@ -186,19 +188,29 @@ export function CapVideoPlayer({
 
 	// Track video duration for comment markers
 	useEffect(() => {
+		setDuration(fallbackDuration ?? 0);
+	}, [fallbackDuration]);
+
+	useEffect(() => {
 		const video = videoRef.current;
 		if (!video) return;
 
 		const handleLoadedMetadata = () => {
-			setDuration(video.duration);
+			if (Number.isFinite(video.duration) && video.duration > 0) {
+				setDuration(video.duration);
+			}
 		};
+
+		if (Number.isFinite(video.duration) && video.duration > 0) {
+			setDuration(video.duration);
+		}
 
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
 
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
 		};
-	}, [videoRef.current]);
+	}, [videoRef]);
 
 	// Track when all data is ready for comment markers
 	const [markersReady, setMarkersReady] = useState(false);
@@ -695,7 +707,7 @@ export function CapVideoPlayer({
 							// enhancedAudioMuted={enhancedAudioMuted}
 							// setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
-						<MediaPlayerTime />
+						<MediaPlayerTime fallbackDuration={fallbackDuration} />
 					</div>
 					<div className="flex gap-2 items-center">
 						{!disableCaptions && (

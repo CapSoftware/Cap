@@ -80,6 +80,7 @@ interface Props {
 	isCaptionLoading?: boolean;
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
+	duration?: number | null;
 }
 
 export function HLSVideoPlayer({
@@ -100,6 +101,7 @@ export function HLSVideoPlayer({
 	isCaptionLoading = false,
 	hasCaptions = false,
 	canRetryProcessing = false,
+	duration: fallbackDuration,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -564,7 +566,7 @@ export function HLSVideoPlayer({
 							// enhancedAudioMuted={enhancedAudioMuted}
 							// setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
-						<MediaPlayerTime />
+						<MediaPlayerTime fallbackDuration={fallbackDuration} />
 					</div>
 					<div className="flex gap-2 items-center">
 						{!disableCaptions && (

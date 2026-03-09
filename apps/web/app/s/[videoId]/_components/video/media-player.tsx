@@ -2401,10 +2401,17 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 interface MediaPlayerTimeProps extends React.ComponentProps<"div"> {
 	variant?: "progress" | "remaining" | "duration";
 	asChild?: boolean;
+	fallbackDuration?: number | null;
 }
 
 function MediaPlayerTime(props: MediaPlayerTimeProps) {
-	const { variant = "progress", asChild, className, ...timeProps } = props;
+	const {
+		variant = "progress",
+		asChild,
+		className,
+		fallbackDuration,
+		...timeProps
+	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerTime");
 	const mediaCurrentTime = useMediaSelector(
@@ -2413,28 +2420,32 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 	const [, seekableEnd = 0] = useMediaSelector(
 		(state) => state.mediaSeekable ?? [0, 0],
 	);
+	const effectiveDuration =
+		Number.isFinite(fallbackDuration) && (fallbackDuration ?? 0) > 0
+			? Math.max(seekableEnd, fallbackDuration ?? 0)
+			: seekableEnd;
 
 	const times = React.useMemo(() => {
 		if (variant === "remaining") {
 			return {
 				remaining: timeUtils.formatTime(
-					seekableEnd - mediaCurrentTime,
-					seekableEnd,
+					effectiveDuration - mediaCurrentTime,
+					effectiveDuration,
 				),
 			};
 		}
 
 		if (variant === "duration") {
 			return {
-				duration: timeUtils.formatTime(seekableEnd, seekableEnd),
+				duration: timeUtils.formatTime(effectiveDuration, effectiveDuration),
 			};
 		}
 
 		return {
-			current: timeUtils.formatTime(mediaCurrentTime, seekableEnd),
-			duration: timeUtils.formatTime(seekableEnd, seekableEnd),
+			current: timeUtils.formatTime(mediaCurrentTime, effectiveDuration),
+			duration: timeUtils.formatTime(effectiveDuration, effectiveDuration),
 		};
-	}, [variant, mediaCurrentTime, seekableEnd]);
+	}, [variant, mediaCurrentTime, effectiveDuration]);
 
 	const TimePrimitive = asChild ? Slot : "div";
 

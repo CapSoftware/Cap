@@ -68,7 +68,9 @@ export const EmbedVideo = forwardRef<
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
 		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-		const [longestDuration, setLongestDuration] = useState<number>(0);
+		const [longestDuration, setLongestDuration] = useState<number>(
+			data.duration ?? 0,
+		);
 		const [isPlaying, setIsPlaying] = useState(false);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
@@ -191,6 +193,7 @@ export const EmbedVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
+							duration={data.duration}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
@@ -202,6 +205,7 @@ export const EmbedVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
+							duration={data.duration}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
