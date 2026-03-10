@@ -2417,13 +2417,29 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 	const mediaCurrentTime = useMediaSelector(
 		(state) => state.mediaCurrentTime ?? 0,
 	);
+	const mediaDuration = useMediaSelector((state) => state.mediaDuration ?? 0);
 	const [, seekableEnd = 0] = useMediaSelector(
 		(state) => state.mediaSeekable ?? [0, 0],
 	);
+	const resolvedDuration = React.useMemo(() => {
+		const candidates = [
+			mediaDuration,
+			seekableEnd,
+			fallbackDuration ?? 0,
+		].filter((duration) => Number.isFinite(duration) && duration > 0);
+
+		return candidates.length > 0 ? Math.max(...candidates) : 0;
+	}, [fallbackDuration, mediaDuration, seekableEnd]);
+	const lastKnownDurationRef = React.useRef(resolvedDuration);
+
+	React.useEffect(() => {
+		if (resolvedDuration > 0) {
+			lastKnownDurationRef.current = resolvedDuration;
+		}
+	}, [resolvedDuration]);
+
 	const effectiveDuration =
-		Number.isFinite(fallbackDuration) && (fallbackDuration ?? 0) > 0
-			? Math.max(seekableEnd, fallbackDuration ?? 0)
-			: seekableEnd;
+		resolvedDuration > 0 ? resolvedDuration : lastKnownDurationRef.current;
 
 	const times = React.useMemo(() => {
 		if (variant === "remaining") {
