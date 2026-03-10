@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { Subprocess } from "bun";
 import type { TempFileHandle } from "./temp-files";
 
@@ -58,33 +59,94 @@ export interface Job {
 const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 
-let activeVideoProcesses = 0;
-const maxConcurrentVideoProcesses =
+const configuredMaxProcesses =
 	Number.parseInt(
-		process.env.MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES ?? "3",
+		process.env.MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES ?? "0",
 		10,
-	) || 3;
+	) || 0;
+
+const cpuCount = os.cpus().length;
+const totalMemoryMB = os.totalmem() / (1024 * 1024);
+
+const CPU_LOAD_THRESHOLD = 0.8;
+const MEMORY_FREE_THRESHOLD = 0.15;
+
+function isActivePhase(phase: JobPhase): boolean {
+	return phase !== "complete" && phase !== "error" && phase !== "cancelled";
+}
 
 export function getActiveVideoProcessCount(): number {
-	return activeVideoProcesses;
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (isActivePhase(job.phase)) {
+			count++;
+		}
+	}
+	return count;
 }
 
 export function getMaxConcurrentVideoProcesses(): number {
-	return maxConcurrentVideoProcesses;
+	if (configuredMaxProcesses > 0) {
+		return configuredMaxProcesses;
+	}
+	return Math.max(1, Math.floor(cpuCount / 2));
+}
+
+export interface SystemResources {
+	cpuCount: number;
+	loadAvg1m: number;
+	cpuPressure: number;
+	totalMemoryMB: number;
+	freeMemoryMB: number;
+	memoryUsagePercent: number;
+	configuredMax: number;
+	effectiveMax: number;
+	throttleReason: string | null;
+}
+
+export function getSystemResources(): SystemResources {
+	const loadAvg1m = os.loadavg()[0];
+	const freeMemoryMB = os.freemem() / (1024 * 1024);
+	const cpuPressure = loadAvg1m / cpuCount;
+	const memoryUsagePercent = 1 - freeMemoryMB / totalMemoryMB;
+	const max = getMaxConcurrentVideoProcesses();
+
+	let effectiveMax = max;
+	let throttleReason: string | null = null;
+
+	if (cpuPressure > CPU_LOAD_THRESHOLD) {
+		effectiveMax = Math.max(
+			1,
+			Math.floor(max * (1 - (cpuPressure - CPU_LOAD_THRESHOLD))),
+		);
+		throttleReason = `CPU load ${cpuPressure.toFixed(2)} exceeds ${CPU_LOAD_THRESHOLD} threshold`;
+	}
+
+	if (memoryUsagePercent > 1 - MEMORY_FREE_THRESHOLD) {
+		const memMax = Math.max(1, Math.floor(max * (1 - memoryUsagePercent)));
+		if (memMax < effectiveMax) {
+			effectiveMax = memMax;
+			throttleReason = `Memory usage ${(memoryUsagePercent * 100).toFixed(0)}% exceeds ${((1 - MEMORY_FREE_THRESHOLD) * 100).toFixed(0)}% threshold`;
+		}
+	}
+
+	return {
+		cpuCount,
+		loadAvg1m,
+		cpuPressure,
+		totalMemoryMB: Math.round(totalMemoryMB),
+		freeMemoryMB: Math.round(freeMemoryMB),
+		memoryUsagePercent,
+		configuredMax: configuredMaxProcesses,
+		effectiveMax,
+		throttleReason,
+	};
 }
 
 export function canAcceptNewVideoProcess(): boolean {
-	return activeVideoProcesses < maxConcurrentVideoProcesses;
-}
-
-export function incrementActiveVideoProcesses(): void {
-	activeVideoProcesses++;
-}
-
-export function decrementActiveVideoProcesses(): void {
-	if (activeVideoProcesses > 0) {
-		activeVideoProcesses--;
-	}
+	const active = getActiveVideoProcessCount();
+	const resources = getSystemResources();
+	return active < resources.effectiveMax;
 }
 
 export function generateJobId(): string {
@@ -186,6 +248,12 @@ export function cleanupExpiredJobs(): number {
 
 	for (const [jobId, job] of jobs) {
 		if (now - job.updatedAt > JOB_TTL_MS) {
+			if (isActivePhase(job.phase)) {
+				console.warn(
+					`[job-manager] Cleaning up stuck job ${jobId} (phase=${job.phase}, age=${Math.round((now - job.createdAt) / 60000)}m)`,
+				);
+				job.abortController?.abort();
+			}
 			deleteJob(jobId);
 			cleaned++;
 		}

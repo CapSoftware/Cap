@@ -1,5 +1,10 @@
 import { spawn } from "bun";
 import { Hono } from "hono";
+import {
+	canAcceptNewVideoProcess,
+	getActiveVideoProcessCount,
+	getSystemResources,
+} from "../lib/job-manager";
 
 const health = new Hono();
 
@@ -26,12 +31,17 @@ health.get("/", async (c) => {
 		}
 	} catch {}
 
+	const resources = getSystemResources();
+
 	return c.json({
 		status: ffmpegAvailable ? "ok" : "degraded",
 		ffmpeg: {
 			available: ffmpegAvailable,
 			version: ffmpegVersion,
 		},
+		activeVideoProcesses: getActiveVideoProcessCount(),
+		canAcceptNewVideoProcess: canAcceptNewVideoProcess(),
+		resources,
 	});
 });
 

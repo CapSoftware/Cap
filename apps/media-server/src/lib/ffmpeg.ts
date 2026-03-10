@@ -255,27 +255,33 @@ export function extractAudioStream(
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	const timeout = options.timeoutMs ?? EXTRACT_TIMEOUT_MS;
 
-	const ffmpegArgs = [
-		"ffmpeg",
-		"-i",
-		videoUrl,
-		"-vn",
-		"-acodec",
-		opts.codec,
-		"-b:a",
-		opts.bitrate,
-		"-f",
-		"mp3",
-		"pipe:1",
-	];
+	let proc: Subprocess;
+	try {
+		const ffmpegArgs = [
+			"ffmpeg",
+			"-i",
+			videoUrl,
+			"-vn",
+			"-acodec",
+			opts.codec,
+			"-b:a",
+			opts.bitrate,
+			"-f",
+			"mp3",
+			"pipe:1",
+		];
 
-	const proc = registerSubprocess(
-		spawn({
-			cmd: ffmpegArgs,
-			stdout: "pipe",
-			stderr: "pipe",
-		}),
-	);
+		proc = registerSubprocess(
+			spawn({
+				cmd: ffmpegArgs,
+				stdout: "pipe",
+				stderr: "pipe",
+			}),
+		);
+	} catch (err) {
+		activeProcesses--;
+		throw err;
+	}
 
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	let cleaned = false;
