@@ -66,10 +66,10 @@ const configuredMaxProcesses =
 	) || 0;
 
 const cpuCount = os.cpus().length;
-const totalMemoryMB = os.totalmem() / (1024 * 1024);
 
 const CPU_LOAD_THRESHOLD = 0.8;
-const MEMORY_FREE_THRESHOLD = 0.15;
+const PROCESS_RSS_LIMIT_MB =
+	Number.parseInt(process.env.MEDIA_SERVER_MEMORY_LIMIT_MB ?? "0", 10) || 0;
 
 function isActivePhase(phase: JobPhase): boolean {
 	return phase !== "complete" && phase !== "error" && phase !== "cancelled";
@@ -96,9 +96,9 @@ export interface SystemResources {
 	cpuCount: number;
 	loadAvg1m: number;
 	cpuPressure: number;
-	totalMemoryMB: number;
-	freeMemoryMB: number;
-	memoryUsagePercent: number;
+	processRssMB: number;
+	processHeapMB: number;
+	processRssLimitMB: number;
 	configuredMax: number;
 	effectiveMax: number;
 	throttleReason: string | null;
@@ -106,9 +106,10 @@ export interface SystemResources {
 
 export function getSystemResources(): SystemResources {
 	const loadAvg1m = os.loadavg()[0];
-	const freeMemoryMB = os.freemem() / (1024 * 1024);
 	const cpuPressure = loadAvg1m / cpuCount;
-	const memoryUsagePercent = 1 - freeMemoryMB / totalMemoryMB;
+	const mem = process.memoryUsage();
+	const processRssMB = Math.round(mem.rss / (1024 * 1024));
+	const processHeapMB = Math.round(mem.heapUsed / (1024 * 1024));
 	const max = getMaxConcurrentVideoProcesses();
 
 	let effectiveMax = max;
@@ -122,11 +123,12 @@ export function getSystemResources(): SystemResources {
 		throttleReason = `CPU load ${cpuPressure.toFixed(2)} exceeds ${CPU_LOAD_THRESHOLD} threshold`;
 	}
 
-	if (memoryUsagePercent > 1 - MEMORY_FREE_THRESHOLD) {
-		const memMax = Math.max(1, Math.floor(max * (1 - memoryUsagePercent)));
+	if (PROCESS_RSS_LIMIT_MB > 0 && processRssMB > PROCESS_RSS_LIMIT_MB * 0.85) {
+		const memPressure = processRssMB / PROCESS_RSS_LIMIT_MB;
+		const memMax = Math.max(1, Math.floor(max * (1 - memPressure)));
 		if (memMax < effectiveMax) {
 			effectiveMax = memMax;
-			throttleReason = `Memory usage ${(memoryUsagePercent * 100).toFixed(0)}% exceeds ${((1 - MEMORY_FREE_THRESHOLD) * 100).toFixed(0)}% threshold`;
+			throttleReason = `Process RSS ${processRssMB}MB exceeds 85% of ${PROCESS_RSS_LIMIT_MB}MB limit`;
 		}
 	}
 
@@ -134,9 +136,9 @@ export function getSystemResources(): SystemResources {
 		cpuCount,
 		loadAvg1m,
 		cpuPressure,
-		totalMemoryMB: Math.round(totalMemoryMB),
-		freeMemoryMB: Math.round(freeMemoryMB),
-		memoryUsagePercent,
+		processRssMB,
+		processHeapMB,
+		processRssLimitMB: PROCESS_RSS_LIMIT_MB,
 		configuredMax: configuredMaxProcesses,
 		effectiveMax,
 		throttleReason,
