@@ -58,7 +58,7 @@ export async function processVideoWorkflow(
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		await setProcessingError(videoId, errorMessage);
-		throw error;
+		throw new FatalError(errorMessage);
 	}
 }
 
