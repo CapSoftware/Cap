@@ -138,7 +138,7 @@ export function CapVideoPlayer({
 	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
-	const [duration, setDuration] = useState(fallbackDuration ?? 0);
+	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const queryClient = useQueryClient();
 
 	useEffect(() => {
@@ -190,7 +190,7 @@ export function CapVideoPlayer({
 
 	// Track video duration for comment markers
 	useEffect(() => {
-		setDuration(fallbackDuration ?? 0);
+		setPlayerDuration(fallbackDuration ?? 0);
 	}, [fallbackDuration]);
 
 	useEffect(() => {
@@ -199,12 +199,12 @@ export function CapVideoPlayer({
 
 		const handleLoadedMetadata = () => {
 			if (Number.isFinite(video.duration) && video.duration > 0) {
-				setDuration(video.duration);
+				setPlayerDuration(video.duration);
 			}
 		};
 
 		if (Number.isFinite(video.duration) && video.duration > 0) {
-			setDuration(video.duration);
+			setPlayerDuration(video.duration);
 		}
 
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -229,10 +229,10 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		// Only show markers when we have duration, comments, and video element
-		if (duration > 0 && comments.length > 0 && videoRef.current) {
+		if (playerDuration > 0 && comments.length > 0 && videoRef.current) {
 			setMarkersReady(true);
 		}
-	}, [duration, comments.length, videoRef.current]);
+	}, [playerDuration, comments.length, videoRef.current]);
 
 	useEffect(() => {
 		if (resolvedSrc.data) {
@@ -687,7 +687,7 @@ export function CapVideoPlayer({
 					);
 
 					return filteredComments.map((comment) => {
-						const position = (Number(comment.timestamp) / duration) * 100;
+						const position = (Number(comment.timestamp) / playerDuration) * 100;
 						const containerPadding = 20;
 						const availableWidth = `calc(100% - ${containerPadding * 2}px)`;
 						const adjustedPosition = `calc(${containerPadding}px + (${position}% * ${availableWidth} / 100%))`;
@@ -730,7 +730,7 @@ export function CapVideoPlayer({
 							// enhancedAudioMuted={enhancedAudioMuted}
 							// setEnhancedAudioMuted={setEnhancedAudioMuted}
 						/>
-						<MediaPlayerTime fallbackDuration={fallbackDuration} />
+						<MediaPlayerTime fallbackDuration={playerDuration} />
 					</div>
 					<div className="flex gap-2 items-center">
 						{!disableCaptions && (
