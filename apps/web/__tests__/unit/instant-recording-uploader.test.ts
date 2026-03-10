@@ -450,7 +450,7 @@ describe("InstantRecordingUploader", () => {
 		);
 	});
 
-	it("fails finalize when server-side processing cannot start", async () => {
+	it("keeps finalize successful when server-side processing has not started yet", async () => {
 		const fetchMock = vi.fn(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
 				const url = input.toString();
@@ -499,7 +499,8 @@ describe("InstantRecordingUploader", () => {
 				durationSeconds: 12,
 				subpath: "raw-upload.webm",
 			}),
-		).rejects.toThrow("Video uploaded, but processing could not start");
+		).resolves.toBeUndefined();
+		expect(uploader.getProcessingStarted()).toBe(false);
 	});
 
 	it("treats interrupted multipart completion as uncertain instead of fatal cleanup", async () => {

@@ -15,7 +15,6 @@ import {
 	InstantRecordingUploader,
 	initiateMultipartUpload,
 	MultipartCompletionUncertainError,
-	ProcessingStartError,
 } from "./instant-mp4-uploader";
 import type { RecordingMode } from "./RecordingModeSelector";
 import { captureThumbnail, convertToMp4 } from "./recording-conversion";
@@ -1223,6 +1222,12 @@ export const useWebRecorder = ({
 					fps,
 					subpath: rawSubpath,
 				});
+
+				if (!uploader.getProcessingStarted()) {
+					toast.warning(
+						"Recording uploaded. Processing did not start yet, but the original recording is available.",
+					);
+				}
 			} else {
 				const processedRecordingBlob =
 					pipeline.fileExtension === "mp4"
@@ -1359,20 +1364,6 @@ export const useWebRecorder = ({
 			console.error("Failed to process recording", err);
 			setUploadStatus(undefined);
 			const failureBlob = await resolveFailureBlob(rawRecordingBlob);
-			if (err instanceof ProcessingStartError) {
-				instantUploaderRef.current = null;
-				recordingPipelineRef.current = null;
-				pendingInstantVideoIdRef.current = null;
-				videoCreationRef.current = null;
-				replaceErrorDownload(failureBlob);
-				await disposeRecordingSpool();
-				updatePhase("error");
-				toast.error(
-					"Recording uploaded, but processing could not start. Open the video to retry processing.",
-				);
-				router.refresh();
-				return;
-			}
 			if (err instanceof MultipartCompletionUncertainError) {
 				instantUploaderRef.current = null;
 				recordingPipelineRef.current = null;
