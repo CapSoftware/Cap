@@ -19,7 +19,6 @@ import type { VideoMetadata } from "../lib/job-manager";
 import {
 	canAcceptNewVideoProcess,
 	createJob,
-	decrementActiveVideoProcesses,
 	deleteJob,
 	generateJobId,
 	getActiveVideoProcessCount,
@@ -27,7 +26,7 @@ import {
 	getJob,
 	getJobProgress,
 	getMaxConcurrentVideoProcesses,
-	incrementActiveVideoProcesses,
+	getSystemResources,
 	sendWebhook,
 	updateJob,
 } from "../lib/job-manager";
@@ -77,14 +76,17 @@ function isTimeoutError(err: unknown): boolean {
 
 video.get("/status", (c) => {
 	const jobs = getAllJobs();
+	const resources = getSystemResources();
 	return c.json({
 		instanceId: getInstanceId(),
 		pid: process.pid,
 		activeVideoProcesses: getActiveVideoProcessCount(),
 		maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
+		effectiveMaxVideoProcesses: resources.effectiveMax,
 		activeProbeProcesses: getActiveProbeProcessCount(),
 		canAcceptNewVideoProcess: canAcceptNewVideoProcess(),
 		canAcceptNewProbeProcess: canAcceptNewProbeProcess(),
+		resources,
 		jobCount: jobs.length,
 		jobs: jobs.map((j) => ({
 			jobId: j.jobId,
@@ -239,17 +241,21 @@ video.post("/process", async (c) => {
 
 	if (!canAcceptNewVideoProcess()) {
 		const activeVideoProcesses = getActiveVideoProcessCount();
-		const maxConcurrentVideoProcesses = getMaxConcurrentVideoProcesses();
+		const resources = getSystemResources();
 		const jobs = getAllJobs();
 		return c.json(
 			{
 				error: "Server is busy",
 				code: "SERVER_BUSY",
-				details: `Too many concurrent video processing jobs (${activeVideoProcesses}/${maxConcurrentVideoProcesses}), please retry later`,
+				details: resources.throttleReason
+					? `Throttled: ${resources.throttleReason} (${activeVideoProcesses}/${resources.effectiveMax} active)`
+					: `Too many concurrent video processing jobs (${activeVideoProcesses}/${resources.effectiveMax}), please retry later`,
 				instanceId: getInstanceId(),
 				pid: process.pid,
 				activeVideoProcesses,
-				maxConcurrentVideoProcesses,
+				maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
+				effectiveMaxVideoProcesses: resources.effectiveMax,
+				resources,
 				jobCount: jobs.length,
 				jobs: jobs.map((job) => ({
 					jobId: job.jobId,
@@ -274,8 +280,6 @@ video.post("/process", async (c) => {
 
 	const jobId = generateJobId();
 	const job = createJob(jobId, videoId, userId, webhookUrl);
-
-	incrementActiveVideoProcesses();
 
 	processVideoAsync(
 		job.jobId,
@@ -494,7 +498,6 @@ async function processVideoAsync(
 ): Promise<void> {
 	const job = getJob(jobId);
 	if (!job) {
-		decrementActiveVideoProcesses();
 		return;
 	}
 
@@ -619,8 +622,6 @@ async function processVideoAsync(
 		}
 		await repairedTempFile?.cleanup();
 		await lastResortRepairFile?.cleanup();
-	} finally {
-		decrementActiveVideoProcesses();
 	}
 }
 
