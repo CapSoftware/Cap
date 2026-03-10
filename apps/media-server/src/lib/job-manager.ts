@@ -59,6 +59,24 @@ export interface Job {
 const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 
+// Dynamic concurrency control for video processing.
+//
+// Instead of a manual counter (which drifted and caused permanent "server busy"
+// errors), active process count is derived from actual job state in the map.
+//
+// Concurrency limit is determined by:
+//   1. MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES env var (if set, used as ceiling)
+//   2. Otherwise: floor(cpuCount / 2), minimum 1
+//   3. Dynamically reduced when CPU load or process memory is high
+//
+// CPU throttling: when 1-minute load average per core exceeds 0.8,
+// effective max is scaled down proportionally.
+//
+// Memory throttling (opt-in): set MEDIA_SERVER_MEMORY_LIMIT_MB to the container's
+// memory limit. When process RSS exceeds 85% of that limit, effective max is reduced.
+// Uses process-level RSS (not system-wide free memory) so it works correctly on
+// shared hosts where os.freemem() reflects other tenants.
+
 const configuredMaxProcesses =
 	Number.parseInt(
 		process.env.MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES ?? "0",
@@ -75,6 +93,7 @@ function isActivePhase(phase: JobPhase): boolean {
 	return phase !== "complete" && phase !== "error" && phase !== "cancelled";
 }
 
+// Derived from actual job state — no manual increment/decrement that can drift
 export function getActiveVideoProcessCount(): number {
 	let count = 0;
 	for (const job of jobs.values()) {
