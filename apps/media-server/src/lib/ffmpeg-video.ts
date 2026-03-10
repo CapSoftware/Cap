@@ -216,7 +216,18 @@ export async function downloadVideoToTemp(
 			throw new Error("No response body");
 		}
 
-		await Bun.write(tempFile.path, response);
+		const reader = response.body.getReader();
+		const writer = file(tempFile.path).writer();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				writer.write(value);
+			}
+			await writer.end();
+		} finally {
+			reader.releaseLock();
+		}
 
 		const fileHandle = file(tempFile.path);
 		const fileSize = fileHandle.size;
