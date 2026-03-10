@@ -213,8 +213,12 @@ export const CapCard = ({
 		cap.id,
 		cap.hasActiveUpload || false,
 	);
+	const hasRawFallback =
+		uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
 	const hasVisibleUploadProgress =
-		uploadProgress !== null && uploadProgress.status !== "fetching";
+		uploadProgress !== null &&
+		uploadProgress.status !== "fetching" &&
+		!hasRawFallback;
 	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
 	const prevUploadProgressRef = useRef(uploadProgress);
 

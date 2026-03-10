@@ -290,6 +290,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 								processingProgress: Db.videoUploads.processingProgress,
 								processingMessage: Db.videoUploads.processingMessage,
 								processingError: Db.videoUploads.processingError,
+								rawFileKey: Db.videoUploads.rawFileKey,
 							})
 							.from(Db.videoUploads)
 							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
@@ -307,6 +308,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						processingProgress: result.processingProgress,
 						processingMessage: Option.fromNullable(result.processingMessage),
 						processingError: Option.fromNullable(result.processingError),
+						hasRawFallback: result.rawFileKey != null,
 					}),
 				);
 			}),

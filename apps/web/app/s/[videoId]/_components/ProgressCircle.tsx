@@ -27,6 +27,7 @@ type UploadProgress =
 			status: "error";
 			lastUpdated: Date;
 			errorMessage: string | null;
+			hasRawFallback: boolean;
 	  }
 	| {
 			status: "failed";
@@ -157,6 +158,7 @@ export function useUploadProgress(
 			status: "error",
 			lastUpdated,
 			errorMessage: Option.getOrNull(query.data.processingError),
+			hasRawFallback: query.data.hasRawFallback,
 		};
 	}
 
@@ -165,6 +167,7 @@ export function useUploadProgress(
 			status: "error",
 			lastUpdated,
 			errorMessage: stalledProcessingMessage,
+			hasRawFallback: query.data.hasRawFallback,
 		};
 	}
 
