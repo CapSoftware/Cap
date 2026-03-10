@@ -713,6 +713,7 @@ export function CapVideoPlayer({
 			>
 				<MediaPlayerControlsOverlay className="rounded-b-xl" />
 				<MediaPlayerSeek
+					fallbackDuration={playerDuration}
 					tooltipThumbnailSrc={
 						isMobile || !resolvedSrc.isSuccess
 							? undefined

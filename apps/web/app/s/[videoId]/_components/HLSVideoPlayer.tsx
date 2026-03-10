@@ -571,7 +571,7 @@ export function HLSVideoPlayer({
 				isUploadingOrFailed={hasActiveProgress || hasFailedOrError}
 			>
 				<MediaPlayerControlsOverlay />
-				<MediaPlayerSeek />
+				<MediaPlayerSeek fallbackDuration={playerDuration} />
 				<div className="flex gap-2 items-center w-full">
 					<div className="flex flex-1 gap-2 items-center">
 						<MediaPlayerPlay />
