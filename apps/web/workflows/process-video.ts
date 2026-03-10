@@ -26,10 +26,6 @@ interface VideoProcessingResult {
 	};
 }
 
-function getErrorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
 }
@@ -60,7 +56,8 @@ export async function processVideoWorkflow(
 			metadata: result.metadata,
 		};
 	} catch (error) {
-		await setProcessingError(videoId, getErrorMessage(error));
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		await setProcessingError(videoId, errorMessage);
 		throw error;
 	}
 }
