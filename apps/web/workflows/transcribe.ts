@@ -1,6 +1,12 @@
 import { promises as fs } from "node:fs";
 import { db } from "@cap/database";
-import { organizations, s3Buckets, users, videos } from "@cap/database/schema";
+import {
+	organizations,
+	s3Buckets,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
@@ -175,16 +181,7 @@ async function extractAudio(
 		Option.fromNullable(bucketId),
 	).pipe(runPromise);
 
-	const videoKey = `${userId}/${videoId}/result.mp4`;
-	const videoUrl = await bucket.getSignedObjectUrl(videoKey).pipe(runPromise);
-
-	const response = await fetch(videoUrl, {
-		method: "GET",
-		headers: { range: "bytes=0-0" },
-	});
-	if (!response.ok) {
-		throw new Error("Video file not accessible");
-	}
+	const videoUrl = await resolveVideoSourceUrl(videoId, userId, bucketId);
 
 	const useMediaServer = isMediaServerConfigured();
 
@@ -226,6 +223,45 @@ async function extractAudio(
 		.pipe(runPromise);
 
 	return audioSignedUrl;
+}
+
+async function resolveVideoSourceUrl(
+	videoId: string,
+	userId: string,
+	bucketId: S3Bucket.S3BucketId | null,
+): Promise<string> {
+	const [bucket] = await S3Buckets.getBucketAccess(
+		Option.fromNullable(bucketId),
+	).pipe(runPromise);
+
+	const upload = await db()
+		.select({ rawFileKey: videoUploads.rawFileKey })
+		.from(videoUploads)
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId))
+		.limit(1);
+
+	const candidateKeys = [
+		`${userId}/${videoId}/result.mp4`,
+		upload[0]?.rawFileKey,
+	].filter(
+		(value, index, values): value is string =>
+			Boolean(value) && values.indexOf(value) === index,
+	);
+
+	for (const key of candidateKeys) {
+		const url = await bucket.getSignedObjectUrl(key).pipe(runPromise);
+		const response = await fetch(url, {
+			method: "GET",
+			headers: { range: "bytes=0-0" },
+		});
+
+		if (response.ok) {
+			console.log(`[transcribe] Using video source ${key}`);
+			return url;
+		}
+	}
+
+	throw new Error("Video file not accessible");
 }
 
 async function transcribeWithDeepgram(audioUrl: string): Promise<string> {
