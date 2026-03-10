@@ -59,14 +59,22 @@ const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 
 let activeVideoProcesses = 0;
-const MAX_CONCURRENT_VIDEO_PROCESSES = 3;
+const maxConcurrentVideoProcesses =
+	Number.parseInt(
+		process.env.MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES ?? "3",
+		10,
+	) || 3;
 
 export function getActiveVideoProcessCount(): number {
 	return activeVideoProcesses;
 }
 
+export function getMaxConcurrentVideoProcesses(): number {
+	return maxConcurrentVideoProcesses;
+}
+
 export function canAcceptNewVideoProcess(): boolean {
-	return activeVideoProcesses < MAX_CONCURRENT_VIDEO_PROCESSES;
+	return activeVideoProcesses < maxConcurrentVideoProcesses;
 }
 
 export function incrementActiveVideoProcesses(): void {
@@ -136,6 +144,7 @@ export function updateJob(
 export function deleteJob(jobId: string): boolean {
 	const job = jobs.get(jobId);
 	if (job) {
+		job.abortController?.abort();
 		job.inputTempFile?.cleanup().catch(() => {});
 		job.outputTempFile?.cleanup().catch(() => {});
 		if (job.process) {
@@ -145,6 +154,26 @@ export function deleteJob(jobId: string): boolean {
 		}
 	}
 	return jobs.delete(jobId);
+}
+
+export function abortAllJobs(): number {
+	let aborted = 0;
+
+	for (const job of jobs.values()) {
+		if (
+			job.phase !== "complete" &&
+			job.phase !== "error" &&
+			job.phase !== "cancelled"
+		) {
+			job.abortController?.abort();
+			job.phase = "cancelled";
+			job.message = "Server shutting down";
+			job.updatedAt = Date.now();
+			aborted++;
+		}
+	}
+
+	return aborted;
 }
 
 export function getAllJobs(): Job[] {
@@ -197,7 +226,7 @@ export async function sendWebhook(job: Job): Promise<void> {
 	}
 }
 
-setInterval(
+const cleanupInterval = setInterval(
 	() => {
 		const cleaned = cleanupExpiredJobs();
 		if (cleaned > 0) {
@@ -206,3 +235,5 @@ setInterval(
 	},
 	5 * 60 * 1000,
 );
+
+cleanupInterval.unref?.();

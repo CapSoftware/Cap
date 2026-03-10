@@ -1,11 +1,11 @@
 import { file, type Subprocess, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
+import { registerSubprocess, terminateProcess } from "./subprocess";
 import { createTempFile, type TempFileHandle } from "./temp-files";
 
 const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-const PROCESS_EXIT_WAIT_MS = 5_000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
@@ -66,32 +66,6 @@ export function normalizeVideoInputExtension(
 		: (`.${normalized}` as `.${string}`);
 }
 
-function killProcess(proc: Subprocess): void {
-	try {
-		proc.kill();
-	} catch {}
-}
-
-async function waitForProcessExit(
-	proc: Pick<Subprocess, "exited">,
-	timeoutMs = PROCESS_EXIT_WAIT_MS,
-): Promise<void> {
-	await Promise.race([
-		proc.exited.then(
-			() => undefined,
-			() => undefined,
-		),
-		new Promise<void>((resolve) => {
-			setTimeout(resolve, timeoutMs);
-		}),
-	]);
-}
-
-async function terminateProcess(proc: Subprocess): Promise<void> {
-	killProcess(proc);
-	await waitForProcessExit(proc);
-}
-
 export async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
@@ -144,11 +118,18 @@ async function readStreamWithLimit(
 	let totalBytes = 0;
 
 	try {
-		while (totalBytes < maxBytes) {
+		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			chunks.push(value);
-			totalBytes += value.length;
+			if (totalBytes < maxBytes) {
+				const remainingBytes = maxBytes - totalBytes;
+				const chunk =
+					value.length > remainingBytes
+						? value.slice(0, remainingBytes)
+						: value;
+				chunks.push(chunk);
+				totalBytes += chunk.length;
+			}
 		}
 	} finally {
 		reader.releaseLock();
@@ -230,8 +211,7 @@ export async function downloadVideoToTemp(
 			throw new Error("No response body");
 		}
 
-		const arrayBuffer = await response.arrayBuffer();
-		await Bun.write(tempFile.path, arrayBuffer);
+		await Bun.write(tempFile.path, response);
 
 		const fileHandle = file(tempFile.path);
 		const fileSize = fileHandle.size;
@@ -280,16 +260,18 @@ export async function repairContainer(
 
 	console.log(`[repairContainer] Running: ${ffmpegArgs.join(" ")}`);
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {
-			killProcess(proc);
+			void terminateProcess(proc);
 		};
 		abortSignal.addEventListener("abort", abortCleanup, { once: true });
 	}
@@ -537,18 +519,20 @@ export async function processVideo(
 
 	console.log(`[processVideo] Running FFmpeg: ${ffmpegArgs.join(" ")}`);
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	const totalDurationUs = metadata.duration * 1_000_000;
 
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {
-			killProcess(proc);
+			void terminateProcess(proc);
 		};
 		abortSignal.addEventListener("abort", abortCleanup, { once: true });
 	}
@@ -659,11 +643,13 @@ export async function generateThumbnail(
 		"pipe:1",
 	];
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	try {
 		const result = await withTimeout(
@@ -708,12 +694,12 @@ export async function generateThumbnail(
 				return output;
 			})(),
 			THUMBNAIL_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return result;
 	} finally {
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 

@@ -1,5 +1,6 @@
 import { type Subprocess, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
+import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const PROBE_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -15,21 +16,18 @@ export function canAcceptNewProbeProcess(): boolean {
 	return activeProbeProcesses < MAX_CONCURRENT_PROBE_PROCESSES;
 }
 
-function killProcess(proc: Subprocess): void {
-	try {
-		proc.kill();
-	} catch {}
-}
-
 async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
-	cleanup?: () => void,
+	cleanup?: () => void | Promise<void>,
 ): Promise<T> {
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let cleanupPromise: Promise<void> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutId = setTimeout(() => {
-			cleanup?.();
+			cleanupPromise = Promise.resolve()
+				.then(() => cleanup?.())
+				.then(() => undefined);
 			reject(new Error(`Operation timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
 	});
@@ -39,6 +37,9 @@ async function withTimeout<T>(
 		if (timeoutId) clearTimeout(timeoutId);
 		return result;
 	} catch (err) {
+		if (cleanupPromise) {
+			await cleanupPromise;
+		}
 		if (timeoutId) clearTimeout(timeoutId);
 		throw err;
 	}
@@ -53,11 +54,18 @@ async function readStreamToString(
 	let totalBytes = 0;
 
 	try {
-		while (totalBytes < maxBytes) {
+		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			chunks.push(value);
-			totalBytes += value.length;
+			if (totalBytes < maxBytes) {
+				const remainingBytes = maxBytes - totalBytes;
+				const chunk =
+					value.length > remainingBytes
+						? value.slice(0, remainingBytes)
+						: value;
+				chunks.push(chunk);
+				totalBytes += chunk.length;
+			}
 		}
 	} finally {
 		reader.releaseLock();
@@ -105,20 +113,22 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 
 	activeProbeProcesses++;
 
-	const proc = spawn({
-		cmd: [
-			"ffprobe",
-			"-v",
-			"quiet",
-			"-print_format",
-			"json",
-			"-show_format",
-			"-show_streams",
-			videoUrl,
-		],
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: [
+				"ffprobe",
+				"-v",
+				"quiet",
+				"-print_format",
+				"json",
+				"-show_format",
+				"-show_streams",
+				videoUrl,
+			],
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	try {
 		const result = await withTimeout(
@@ -180,13 +190,13 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 				};
 			})(),
 			PROBE_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return result;
 	} finally {
 		activeProbeProcesses--;
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
@@ -197,24 +207,26 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 
 	activeProbeProcesses++;
 
-	const proc = spawn({
-		cmd: [
-			"ffprobe",
-			"-v",
-			"quiet",
-			"-print_format",
-			"json",
-			"-show_format",
-			"-show_streams",
-			"-analyzeduration",
-			"10000000",
-			"-probesize",
-			"10000000",
-			filePath,
-		],
-		stdout: "pipe",
-		stderr: "ignore",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: [
+				"ffprobe",
+				"-v",
+				"quiet",
+				"-print_format",
+				"json",
+				"-show_format",
+				"-show_streams",
+				"-analyzeduration",
+				"10000000",
+				"-probesize",
+				"10000000",
+				filePath,
+			],
+			stdout: "pipe",
+			stderr: "ignore",
+		}),
+	);
 
 	try {
 		const result = await withTimeout(
@@ -266,13 +278,13 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 				};
 			})(),
 			PROBE_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return result;
 	} finally {
 		activeProbeProcesses--;
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 

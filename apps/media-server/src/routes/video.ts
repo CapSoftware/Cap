@@ -26,6 +26,7 @@ import {
 	getAllJobs,
 	getJob,
 	getJobProgress,
+	getMaxConcurrentVideoProcesses,
 	incrementActiveVideoProcesses,
 	sendWebhook,
 	updateJob,
@@ -74,6 +75,7 @@ video.get("/status", (c) => {
 	const jobs = getAllJobs();
 	return c.json({
 		activeVideoProcesses: getActiveVideoProcessCount(),
+		maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
 		activeProbeProcesses: getActiveProbeProcessCount(),
 		canAcceptNewVideoProcess: canAcceptNewVideoProcess(),
 		canAcceptNewProbeProcess: canAcceptNewProbeProcess(),
@@ -230,12 +232,15 @@ video.post("/process", async (c) => {
 	}
 
 	if (!canAcceptNewVideoProcess()) {
+		const activeVideoProcesses = getActiveVideoProcessCount();
+		const maxConcurrentVideoProcesses = getMaxConcurrentVideoProcesses();
 		return c.json(
 			{
 				error: "Server is busy",
 				code: "SERVER_BUSY",
-				details:
-					"Too many concurrent video processing jobs, please retry later",
+				details: `Too many concurrent video processing jobs (${activeVideoProcesses}/${maxConcurrentVideoProcesses}), please retry later`,
+				activeVideoProcesses,
+				maxConcurrentVideoProcesses,
 			},
 			503,
 		);
