@@ -58,6 +58,8 @@ export interface Job {
 
 const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
+const STALE_JOB_MS = 15 * 60 * 1000;
+const MAX_JOB_LIFETIME_MS = 45 * 60 * 1000;
 
 // Dynamic concurrency control for video processing.
 //
@@ -268,14 +270,43 @@ export function cleanupExpiredJobs(): number {
 	let cleaned = 0;
 
 	for (const [jobId, job] of jobs) {
-		if (now - job.updatedAt > JOB_TTL_MS) {
+		const age = now - job.createdAt;
+		const staleness = now - job.updatedAt;
+
+		if (staleness > JOB_TTL_MS) {
 			if (isActivePhase(job.phase)) {
 				console.warn(
-					`[job-manager] Cleaning up stuck job ${jobId} (phase=${job.phase}, age=${Math.round((now - job.createdAt) / 60000)}m)`,
+					`[job-manager] Cleaning up expired job ${jobId} (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 				);
 				job.abortController?.abort();
 			}
 			deleteJob(jobId);
+			cleaned++;
+			continue;
+		}
+
+		if (isActivePhase(job.phase) && staleness > STALE_JOB_MS) {
+			console.warn(
+				`[job-manager] Marking stale job ${jobId} as error (phase=${job.phase}, no update for ${Math.round(staleness / 60000)}m)`,
+			);
+			job.abortController?.abort();
+			job.phase = "error";
+			job.error = `Job stale: no progress update for ${Math.round(staleness / 60000)} minutes`;
+			job.message = "Processing failed (stale)";
+			job.updatedAt = now;
+			cleaned++;
+			continue;
+		}
+
+		if (isActivePhase(job.phase) && age > MAX_JOB_LIFETIME_MS) {
+			console.warn(
+				`[job-manager] Marking long-running job ${jobId} as error (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
+			);
+			job.abortController?.abort();
+			job.phase = "error";
+			job.error = `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`;
+			job.message = "Processing failed (timeout)";
+			job.updatedAt = now;
 			cleaned++;
 		}
 	}
@@ -315,14 +346,32 @@ export async function sendWebhook(job: Job): Promise<void> {
 	}
 }
 
-const cleanupInterval = setInterval(
-	() => {
-		const cleaned = cleanupExpiredJobs();
-		if (cleaned > 0) {
-			console.log(`[job-manager] Cleaned up ${cleaned} expired jobs`);
+export function forceCleanupActiveJobs(): number {
+	let cleaned = 0;
+	const now = Date.now();
+
+	for (const [jobId, job] of jobs) {
+		if (isActivePhase(job.phase)) {
+			console.warn(
+				`[job-manager] Force-cleaning job ${jobId} (phase=${job.phase}, age=${Math.round((now - job.createdAt) / 60000)}m)`,
+			);
+			job.abortController?.abort();
+			job.phase = "error";
+			job.error = "Force-cleaned by admin";
+			job.message = "Processing failed (force-cleaned)";
+			job.updatedAt = now;
+			cleaned++;
 		}
-	},
-	5 * 60 * 1000,
-);
+	}
+
+	return cleaned;
+}
+
+const cleanupInterval = setInterval(() => {
+	const cleaned = cleanupExpiredJobs();
+	if (cleaned > 0) {
+		console.log(`[job-manager] Cleaned up ${cleaned} expired/stale jobs`);
+	}
+}, 60 * 1000);
 
 cleanupInterval.unref?.();

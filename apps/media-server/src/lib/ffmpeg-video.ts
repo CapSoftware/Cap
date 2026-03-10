@@ -189,8 +189,13 @@ export async function downloadVideoToTemp(
 	);
 
 	try {
+		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+		const combinedSignal = abortSignal
+			? AbortSignal.any([abortSignal, timeoutSignal])
+			: timeoutSignal;
+
 		const response = await fetch(videoUrl, {
-			signal: abortSignal ?? AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+			signal: combinedSignal,
 		});
 
 		console.log(

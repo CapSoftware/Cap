@@ -20,6 +20,7 @@ import {
 	canAcceptNewVideoProcess,
 	createJob,
 	deleteJob,
+	forceCleanupActiveJobs,
 	generateJobId,
 	getActiveVideoProcessCount,
 	getAllJobs,
@@ -77,6 +78,7 @@ function isTimeoutError(err: unknown): boolean {
 video.get("/status", (c) => {
 	const jobs = getAllJobs();
 	const resources = getSystemResources();
+	const now = Date.now();
 	return c.json({
 		instanceId: getInstanceId(),
 		pid: process.pid,
@@ -95,6 +97,9 @@ video.get("/status", (c) => {
 			progress: j.progress,
 			createdAt: j.createdAt,
 			updatedAt: j.updatedAt,
+			ageMinutes: Math.round((now - j.createdAt) / 60000),
+			stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
+			error: j.error,
 		})),
 	});
 });
@@ -292,6 +297,19 @@ video.post("/process", async (c) => {
 			`[video/process] Async processing error for job ${jobId}:`,
 			err,
 		);
+		const currentJob = getJob(jobId);
+		if (
+			currentJob &&
+			currentJob.phase !== "error" &&
+			currentJob.phase !== "complete" &&
+			currentJob.phase !== "cancelled"
+		) {
+			updateJob(jobId, {
+				phase: "error",
+				error: err instanceof Error ? err.message : String(err),
+				message: "Processing failed (unhandled)",
+			});
+		}
 	});
 
 	return c.json({
@@ -751,6 +769,15 @@ video.post("/cleanup", async (c) => {
 	return c.json({
 		success: true,
 		cleanedFiles: cleaned,
+	});
+});
+
+video.post("/force-cleanup", (c) => {
+	const cleaned = forceCleanupActiveJobs();
+	return c.json({
+		success: true,
+		cleanedJobs: cleaned,
+		message: `Force-cleaned ${cleaned} active jobs`,
 	});
 });
 
