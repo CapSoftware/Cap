@@ -63,6 +63,10 @@ const processSchema = z.object({
 	remuxOnly: z.boolean().optional(),
 });
 
+function getInstanceId(): string {
+	return process.env.HOSTNAME || `pid-${process.pid}`;
+}
+
 function isBusyError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("Server is busy");
 }
@@ -74,6 +78,8 @@ function isTimeoutError(err: unknown): boolean {
 video.get("/status", (c) => {
 	const jobs = getAllJobs();
 	return c.json({
+		instanceId: getInstanceId(),
+		pid: process.pid,
 		activeVideoProcesses: getActiveVideoProcessCount(),
 		maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
 		activeProbeProcesses: getActiveProbeProcessCount(),
@@ -234,13 +240,24 @@ video.post("/process", async (c) => {
 	if (!canAcceptNewVideoProcess()) {
 		const activeVideoProcesses = getActiveVideoProcessCount();
 		const maxConcurrentVideoProcesses = getMaxConcurrentVideoProcesses();
+		const jobs = getAllJobs();
 		return c.json(
 			{
 				error: "Server is busy",
 				code: "SERVER_BUSY",
 				details: `Too many concurrent video processing jobs (${activeVideoProcesses}/${maxConcurrentVideoProcesses}), please retry later`,
+				instanceId: getInstanceId(),
+				pid: process.pid,
 				activeVideoProcesses,
 				maxConcurrentVideoProcesses,
+				jobCount: jobs.length,
+				jobs: jobs.map((job) => ({
+					jobId: job.jobId,
+					videoId: job.videoId,
+					phase: job.phase,
+					progress: job.progress,
+					updatedAt: job.updatedAt,
+				})),
 			},
 			503,
 		);

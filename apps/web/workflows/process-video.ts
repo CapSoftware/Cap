@@ -155,11 +155,35 @@ async function startMediaServerProcessJob(
 			error?: string;
 			code?: string;
 			details?: string;
+			instanceId?: string;
+			pid?: number;
+			activeVideoProcesses?: number;
+			maxConcurrentVideoProcesses?: number;
+			jobCount?: number;
 		};
-		const errorMessage =
+		const baseErrorMessage =
 			errorData.error ||
 			errorData.details ||
 			"Video processing failed to start";
+		const busyDiagnostics =
+			errorData.code === "SERVER_BUSY"
+				? [
+						errorData.instanceId ? `instance=${errorData.instanceId}` : null,
+						typeof errorData.pid === "number" ? `pid=${errorData.pid}` : null,
+						typeof errorData.activeVideoProcesses === "number" &&
+						typeof errorData.maxConcurrentVideoProcesses === "number"
+							? `active=${errorData.activeVideoProcesses}/${errorData.maxConcurrentVideoProcesses}`
+							: null,
+						typeof errorData.jobCount === "number"
+							? `jobCount=${errorData.jobCount}`
+							: null,
+					]
+						.filter(Boolean)
+						.join(", ")
+				: "";
+		const errorMessage = busyDiagnostics
+			? `${baseErrorMessage} (${busyDiagnostics})`
+			: baseErrorMessage;
 		const shouldRetry =
 			response.status === 503 &&
 			(errorData.code === "SERVER_BUSY" ||
