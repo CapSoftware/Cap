@@ -17,6 +17,7 @@ type UploadOutcome =
 class MockXMLHttpRequest {
 	static outcomes: UploadOutcome[] = [];
 	static abortedCount = 0;
+	static recordedHeaders: Array<Map<string, string>> = [];
 
 	upload = {
 		onprogress: null as ((event: ProgressEvent<EventTarget>) => void) | null,
@@ -34,6 +35,7 @@ class MockXMLHttpRequest {
 	static setOutcomes(outcomes: UploadOutcome[]) {
 		MockXMLHttpRequest.outcomes = [...outcomes];
 		MockXMLHttpRequest.abortedCount = 0;
+		MockXMLHttpRequest.recordedHeaders = [];
 	}
 
 	open() {}
@@ -47,6 +49,8 @@ class MockXMLHttpRequest {
 	}
 
 	send(part: Blob) {
+		MockXMLHttpRequest.recordedHeaders.push(new Map(this.headers));
+
 		const outcome = MockXMLHttpRequest.outcomes.shift();
 		if (!outcome) {
 			throw new Error("Missing upload outcome");
@@ -191,6 +195,43 @@ describe("InstantRecordingUploader", () => {
 				status: "complete",
 			}),
 		]);
+		expect(MockXMLHttpRequest.recordedHeaders[0]?.has("content-type")).toBe(
+			false,
+		);
+	});
+
+	it("normalizes multipart initiate content type before creating the upload", async () => {
+		const fetchMock = vi.fn(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = input.toString();
+				const body = init?.body ? JSON.parse(init.body as string) : null;
+
+				if (url === "/api/upload/multipart/initiate") {
+					expect(body).toMatchObject({
+						videoId,
+						contentType: "video/webm",
+						subpath: "raw-upload.webm",
+					});
+					return makeJsonResponse({ uploadId: "upload-123" });
+				}
+
+				throw new Error(`Unexpected fetch call: ${url}`);
+			},
+		);
+
+		vi.stubGlobal("fetch", fetchMock);
+
+		const { initiateMultipartUpload } = await import(
+			"@/app/(org)/dashboard/caps/components/web-recorder-dialog/instant-mp4-uploader"
+		);
+
+		await expect(
+			initiateMultipartUpload({
+				videoId,
+				contentType: "video/webm;codecs=vp9,opus",
+				subpath: "raw-upload.webm",
+			}),
+		).resolves.toBe("upload-123");
 	});
 
 	it("completes multipart uploads with parts ordered by part number", async () => {

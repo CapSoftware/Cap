@@ -81,6 +81,11 @@ const postJson = async <TResponse>(
 	return (await response.json()) as TResponse;
 };
 
+const normalizeMultipartContentType = (mimeType: string) => {
+	const normalized = mimeType.split(";")[0]?.trim();
+	return normalized || "application/octet-stream";
+};
+
 export const initiateMultipartUpload = async ({
 	videoId,
 	contentType,
@@ -92,7 +97,11 @@ export const initiateMultipartUpload = async ({
 }) => {
 	const result = await postJson<{ uploadId: string }>(
 		"/api/upload/multipart/initiate",
-		{ videoId, contentType, subpath },
+		{
+			videoId,
+			contentType: normalizeMultipartContentType(contentType),
+			subpath,
+		},
 	);
 
 	if (!result.uploadId) {
@@ -573,9 +582,6 @@ export class InstantRecordingUploader {
 			xhr.open("PUT", url);
 			xhr.responseType = "text";
 			xhr.timeout = PART_UPLOAD_REQUEST_TIMEOUT_MS;
-			if (this.mimeType) {
-				xhr.setRequestHeader("Content-Type", this.mimeType);
-			}
 			this.activeRequests.set(partNumber, xhr);
 
 			this.updateChunkState(partNumber, {
