@@ -160,7 +160,6 @@ const StepOne = ({
 					.then((res) => {
 						setLoading(false);
 						if (res?.ok && !res?.error) {
-							setEmail("");
 							setEmailSent(true);
 							setStep(2);
 							setLastResendTime(Date.now());
