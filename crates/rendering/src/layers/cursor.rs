@@ -794,6 +794,7 @@ mod tests {
                 .map(|(time, x, y)| move_event(*time, *x, *y))
                 .collect(),
             clicks: vec![],
+            keyboard: vec![],
         }
     }
 
