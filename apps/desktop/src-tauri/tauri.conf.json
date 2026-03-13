@@ -67,6 +67,36 @@
 			},
 			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
 		},
+		"linux": {
+			"deb": {
+				"depends": [
+					"libwebkit2gtk-4.1-0",
+					"libgtk-3-0",
+					"libayatana-appindicator3-1",
+					"libavcodec60",
+					"libavformat60",
+					"libavutil58",
+					"libswresample4",
+					"libswscale7",
+					"libavdevice60",
+					"libasound2",
+					"libx11-6",
+					"libxrandr2",
+					"libxfixes3"
+				],
+				"section": "video"
+			},
+			"appimage": {
+				"bundleMediaFramework": true
+			},
+			"rpm": {
+				"depends": [
+					"webkit2gtk4.1",
+					"gtk3",
+					"libayatana-appindicator-gtk3"
+				]
+			}
+		},
 		"windows": {
 			"nsis": {
 				"headerImage": "assets/nsis-header.bmp",

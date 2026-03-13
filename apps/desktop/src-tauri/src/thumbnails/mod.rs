@@ -1,7 +1,6 @@
 use cap_recording::sources::screen_capture::{list_displays, list_windows};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tracing::*;
 
 #[cfg(windows)]
 mod windows;
@@ -12,6 +11,11 @@ pub use windows::*;
 mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
 
 const THUMBNAIL_WIDTH: u32 = 320;
 const THUMBNAIL_HEIGHT: u32 = 180;

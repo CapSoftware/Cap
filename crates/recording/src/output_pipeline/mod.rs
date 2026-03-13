@@ -34,3 +34,8 @@ pub use win_segmented_camera::*;
 mod win_fragmented_m4s;
 #[cfg(windows)]
 pub use win_fragmented_m4s::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;

@@ -20,6 +20,10 @@ windows = { workspace = true }
 windows-core = { workspace = true }
 cap-camera-windows = { path = "../camera-windows" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ffmpeg = { workspace = true }
+tracing = { workspace = true }
+
 [dev-dependencies]
 inquire = "0.7.5"
 
