@@ -2092,6 +2092,76 @@ async fn generate_zoom_segments_from_clicks(
     Ok(zoom_segments)
 }
 
+fn load_keyboard_events_from_display_path(
+    display_path: &relative_path::RelativePathBuf,
+    meta: &cap_project::RecordingMeta,
+) -> cap_project::keyboard::KeyboardEvents {
+    let Some(dir) = display_path.parent() else {
+        return Default::default();
+    };
+    let kb_path = dir.join("keyboard.json");
+    let full = meta.path(&kb_path);
+    if full.exists() {
+        cap_project::keyboard::KeyboardEvents::load_from_file(&full).unwrap_or_default()
+    } else {
+        Default::default()
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
+async fn generate_keyboard_segments(
+    editor_instance: WindowEditorInstance,
+    grouping_threshold_ms: f64,
+    display_duration_ms: f64,
+    show_modifiers: bool,
+    show_special_keys: bool,
+) -> Result<Vec<cap_project::keyboard::KeyboardTrackSegment>, String> {
+    let meta = editor_instance.meta();
+
+    let RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
+        return Ok(vec![]);
+    };
+
+    let segments = match studio_meta.as_ref() {
+        StudioRecordingMeta::MultipleSegments { inner, .. } => &inner.segments,
+        StudioRecordingMeta::SingleSegment { segment } => {
+            let events = load_keyboard_events_from_display_path(&segment.display.path, meta);
+            return Ok(cap_project::keyboard::group_key_events(
+                &events,
+                grouping_threshold_ms,
+                display_duration_ms,
+                show_modifiers,
+                show_special_keys,
+            ));
+        }
+    };
+
+    let mut all_events = cap_project::keyboard::KeyboardEvents { presses: vec![] };
+
+    for segment in segments {
+        let events = segment.keyboard_events(meta);
+        all_events.presses.extend(events.presses);
+    }
+
+    all_events.presses.sort_by(|a, b| {
+        a.time_ms
+            .partial_cmp(&b.time_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let grouped = cap_project::keyboard::group_key_events(
+        &all_events,
+        grouping_threshold_ms,
+        display_duration_ms,
+        show_modifiers,
+        show_special_keys,
+    );
+
+    Ok(grouped)
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -3081,6 +3151,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_project_config,
             update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
+            generate_keyboard_segments,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,

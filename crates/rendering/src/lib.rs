@@ -11,7 +11,7 @@ use frame_pipeline::{RenderSession, finish_encoder, finish_encoder_nv12, flush_p
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    MaskLayer, TextLayer,
+    KeyboardLayer, MaskLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -317,6 +317,7 @@ pub enum RenderingError {
 
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
+    pub keyboard: Arc<cap_project::keyboard::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
 
@@ -2522,6 +2523,7 @@ pub struct RendererLayers {
     mask: MaskLayer,
     text: TextLayer,
     captions: CaptionsLayer,
+    keyboard: KeyboardLayer,
 }
 
 impl RendererLayers {
@@ -2561,6 +2563,7 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+            keyboard: KeyboardLayer::new(device, queue),
         }
     }
 
@@ -2662,6 +2665,13 @@ impl RendererLayers {
             constants,
         );
 
+        self.keyboard.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
         Ok(())
     }
 
@@ -2737,6 +2747,13 @@ impl RendererLayers {
         );
 
         self.captions.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
+        self.keyboard.prepare(
             uniforms,
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
@@ -2833,6 +2850,11 @@ impl RendererLayers {
         if self.captions.has_content() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.captions.render(&mut pass);
+        }
+
+        if self.keyboard.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.keyboard.render(&mut pass);
         }
     }
 }

@@ -323,6 +323,7 @@ impl Mp4ExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
                 })
                 .collect(),
