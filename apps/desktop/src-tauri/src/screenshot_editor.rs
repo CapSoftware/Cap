@@ -249,62 +249,61 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                let (instance, adapter, device, queue, is_software_adapter) =
-                    if let Some(shared) = gpu_context::get_shared_gpu().await {
-                        (
-                            shared.instance.clone(),
-                            shared.adapter.clone(),
-                            shared.device.clone(),
-                            shared.queue.clone(),
-                            shared.is_software_adapter,
-                        )
-                    } else {
-                        let instance =
-                            Arc::new(wgpu::Instance::new(&wgpu::InstanceDescriptor::default()));
-                        let adapter = Arc::new(
-                            instance
-                                .request_adapter(&wgpu::RequestAdapterOptions {
-                                    power_preference: wgpu::PowerPreference::HighPerformance,
-                                    force_fallback_adapter: false,
-                                    compatible_surface: None,
-                                })
-                                .await
-                                .map_err(|_| "No GPU adapter found".to_string())?,
-                        );
+                let shared = if let Some(gpu) = gpu_context::get_shared_gpu().await {
+                    cap_rendering::SharedWgpuDevice {
+                        instance: (*gpu.instance).clone(),
+                        adapter: (*gpu.adapter).clone(),
+                        device: (*gpu.device).clone(),
+                        queue: (*gpu.queue).clone(),
+                        is_software_adapter: gpu.is_software_adapter,
+                    }
+                } else {
+                    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+                    let adapter = instance
+                        .request_adapter(&wgpu::RequestAdapterOptions {
+                            power_preference: wgpu::PowerPreference::HighPerformance,
+                            force_fallback_adapter: false,
+                            compatible_surface: None,
+                        })
+                        .await
+                        .map_err(|_| "No GPU adapter found".to_string())?;
+                    let adapter_info = adapter.get_info();
+                    let is_software_adapter =
+                        cap_rendering::is_software_wgpu_adapter(&adapter_info);
 
-                        let (device, queue) = adapter
-                            .request_device(&wgpu::DeviceDescriptor {
-                                label: Some("cap-rendering-device"),
-                                required_features: wgpu::Features::empty(),
-                                ..Default::default()
-                            })
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        (instance, adapter, Arc::new(device), Arc::new(queue), false)
-                    };
+                    let (device, queue) = adapter
+                        .request_device(&wgpu::DeviceDescriptor {
+                            label: Some("cap-rendering-device"),
+                            required_features: wgpu::Features::empty(),
+                            ..Default::default()
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    cap_rendering::SharedWgpuDevice {
+                        instance,
+                        adapter,
+                        device,
+                        queue,
+                        is_software_adapter,
+                    }
+                };
 
                 let options = cap_rendering::RenderOptions {
                     screen_size: cap_project::XY::new(width, height),
                     camera_size: None,
                 };
 
-                // We need to extract the studio meta from the recording meta
                 let studio_meta = match &recording_meta.inner {
                     RecordingMetaInner::Studio(meta) => meta.clone(),
                     _ => return Err("Invalid recording meta for screenshot".to_string()),
                 };
 
-                let constants = RenderVideoConstants {
-                    _instance: (*instance).clone(),
-                    _adapter: (*adapter).clone(),
-                    queue: (*queue).clone(),
-                    device: (*device).clone(),
+                let constants = RenderVideoConstants::from_shared_device(
+                    shared,
                     options,
-                    meta: *studio_meta,
-                    recording_meta: recording_meta.clone(),
-                    background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-                    is_software_adapter,
-                };
+                    *studio_meta,
+                    recording_meta.clone(),
+                );
 
                 let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
 
