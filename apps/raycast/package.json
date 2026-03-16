@@ -1,0 +1,92 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recordings via deeplinks",
+  "icon": "command-icon.png",
+  "author": "cap",
+  "categories": ["Productivity"],
+  "license": "AGPL-3.0",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a Cap screen recording",
+      "mode": "view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume a paused Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "description": "Toggle pause/resume on the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "set-camera",
+      "title": "Set Camera",
+      "description": "Switch the camera input for Cap recordings",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "camera",
+          "placeholder": "Camera name or model",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "set-microphone",
+      "title": "Set Microphone",
+      "description": "Switch the microphone input for Cap recordings",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "microphone",
+          "placeholder": "Microphone label",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "description": "Open Cap settings",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.87.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "22.13.4",
+    "@types/react": "19.0.8",
+    "eslint": "^9.18.0",
+    "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint"
+  }
+}
