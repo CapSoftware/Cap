@@ -126,10 +126,7 @@ async fn run_open_test(recording_path: &Path) -> TestResult {
             };
 
             let mut notes = vec![
-                format!(
-                    "adapter={}",
-                    context.render_constants._adapter.get_info().name
-                ),
+                format!("adapter={}", context.render_constants.adapter_name()),
                 format!(
                     "software_adapter={}",
                     context.render_constants.is_software_adapter
@@ -347,7 +344,7 @@ async fn benchmark_playback(
     let mut metrics = PlaybackMetrics {
         requested_frames,
         setup_secs,
-        adapter_name: context.render_constants._adapter.get_info().name,
+        adapter_name: context.render_constants.adapter_name().to_string(),
         software_adapter: context.render_constants.is_software_adapter,
         ..Default::default()
     };
