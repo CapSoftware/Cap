@@ -257,7 +257,7 @@ async fn run_full_pipeline_benchmark(
 
     println!(
         "  GPU adapter: {} (software={})",
-        render_constants._adapter.get_info().name,
+        render_constants.adapter_name(),
         render_constants.is_software_adapter
     );
 
