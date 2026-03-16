@@ -86,11 +86,30 @@ vi.mock("drizzle-orm", () => ({
 	sql: vi.fn(),
 }));
 
-import { __mockDb } from "@cap/database";
+import * as capDatabase from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
-const mockDb = __mockDb as Record<string, ReturnType<typeof vi.fn>>;
+
+type MockFn = ReturnType<typeof vi.fn>;
+interface MockDb {
+	select: MockFn;
+	insert: MockFn;
+	update: MockFn;
+	delete: MockFn;
+	from: MockFn;
+	set: MockFn;
+	where: MockFn;
+	limit: MockFn;
+	values: MockFn;
+	transaction: MockFn;
+	leftJoin: MockFn;
+	orderBy: MockFn;
+	offset: MockFn;
+	[key: string]: MockFn | undefined;
+}
+
+const mockDb = (capDatabase as unknown as { __mockDb: MockDb }).__mockDb;
 
 const mockUser = { id: "user-123", email: "test@example.com" };
 const mockApp = {
@@ -103,8 +122,9 @@ const mockApp = {
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
-		if (typeof mockDb[key]?.mockClear === "function") {
-			mockDb[key].mockClear();
+		const fn = mockDb[key];
+		if (fn && typeof fn.mockClear === "function") {
+			fn.mockClear();
 		}
 	}
 	mockDb.select.mockReturnValue(mockDb);
@@ -161,7 +181,7 @@ describe("createDeveloperApp", () => {
 		});
 
 		expect(mockDb.insert).toHaveBeenCalled();
-		const firstValuesCall = mockDb.values.mock.calls[0][0];
+		const firstValuesCall = mockDb.values.mock.calls[0]![0];
 		expect(firstValuesCall).toMatchObject({
 			name: "My App",
 			environment: "production",
@@ -218,7 +238,7 @@ describe("createDeveloperApp", () => {
 		});
 
 		const expectedPrefix = result.publicKey.slice(0, 12);
-		const keysValuesCall = mockDb.values.mock.calls[1][0];
+		const keysValuesCall = mockDb.values.mock.calls[1]![0];
 		const publicKeyEntry = keysValuesCall.find(
 			(entry: Record<string, unknown>) => entry.keyType === "public",
 		);

@@ -118,7 +118,7 @@ const ALLOWED_REFERRERS = [
 
 function PolicyDeniedView({ reason }: { reason?: string }) {
 	let title = "This video is private";
-	let description = (
+	let description: React.ReactNode = (
 		<>
 			If you own this video, please <Link href="/login">sign in</Link> to manage
 			sharing.
@@ -329,6 +329,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					height: videos.height,
 					duration: videos.duration,
 					fps: videos.fps,
+					firstViewEmailSentAt: videos.firstViewEmailSentAt,
 					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,

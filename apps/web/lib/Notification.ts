@@ -5,7 +5,7 @@ import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
-import { type Comment, Video } from "@cap/web-domain";
+import { type Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
@@ -368,7 +368,7 @@ export async function sendFirstViewEmail(
 			const [viewer] = await database
 				.select({ name: users.name, email: users.email })
 				.from(users)
-				.where(eq(users.id, params.viewerUserId))
+				.where(eq(users.id, User.UserId.make(params.viewerUserId)))
 				.limit(1);
 			viewerName = viewer?.name || viewer?.email || "Someone";
 		}

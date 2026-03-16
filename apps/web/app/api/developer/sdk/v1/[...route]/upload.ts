@@ -8,7 +8,7 @@ import {
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
@@ -73,7 +73,7 @@ app.post(
 
 		try {
 			const uploadId = await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess();
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 				const { UploadId } = yield* bucket.multipart.create(s3Key, {
 					ContentType: resolvedContentType,
 					CacheControl: "max-age=31536000",
@@ -126,7 +126,7 @@ app.post(
 
 		try {
 			const presignedUrl = await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess();
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 				return yield* bucket.multipart.getPresignedUploadPartUrl(
 					s3Key,
 					uploadId,
@@ -268,7 +268,7 @@ app.post(
 			}
 
 			await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess();
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
 				const sortedParts = [...parts].sort(
 					(a, b) => a.partNumber - b.partNumber,
@@ -338,7 +338,7 @@ app.post(
 
 		try {
 			await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess();
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 				yield* bucket.multipart.abort(s3Key, uploadId);
 			}).pipe(provideOptionalAuth, runPromise);
 

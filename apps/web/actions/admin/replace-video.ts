@@ -9,7 +9,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { AwsCredentials, S3Buckets } from "@cap/web-backend";
-import { S3Bucket } from "@cap/web-domain";
+import { S3Bucket, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
@@ -32,7 +32,7 @@ async function getVideoOrThrow(videoId: string) {
 			bucket: videos.bucket,
 		})
 		.from(videos)
-		.where(eq(videos.id, videoId));
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 	if (!video) {
 		throw new Error("Video not found");

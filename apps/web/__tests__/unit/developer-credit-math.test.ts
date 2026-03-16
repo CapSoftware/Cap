@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 const MICRO_CREDITS_PER_DOLLAR = 100_000;
 const MICRO_CREDITS_PER_MINUTE = 5_000;
 const MICRO_CREDITS_PER_MINUTE_PER_DAY = 3.33;

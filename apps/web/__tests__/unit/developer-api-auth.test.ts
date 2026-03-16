@@ -75,7 +75,7 @@ describe("developer API auth - key format validation", () => {
 		});
 
 		it("rejects undefined via optional chaining", () => {
-			const key: string | undefined = undefined;
+			const key = undefined as string | undefined;
 			expect(key?.startsWith("cpk_")).toBeFalsy();
 		});
 
@@ -107,7 +107,7 @@ describe("developer API auth - key format validation", () => {
 		});
 
 		it("rejects undefined via optional chaining", () => {
-			const key: string | undefined = undefined;
+			const key = undefined as string | undefined;
 			expect(key?.startsWith("csk_")).toBeFalsy();
 		});
 
@@ -132,7 +132,7 @@ describe("developer API auth - bearer token extraction", () => {
 	});
 
 	it("returns undefined when authorization header is missing", () => {
-		const header: string | undefined = undefined;
+		const header = undefined as string | undefined;
 		const token = header?.split(" ")[1];
 		expect(token).toBeUndefined();
 	});

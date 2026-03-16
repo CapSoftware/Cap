@@ -374,7 +374,7 @@ const MockScreenshotEditor = () => {
 
 		const observer = new IntersectionObserver(
 			([entry]) => {
-				if (entry.isIntersecting && !isInView) {
+				if (entry?.isIntersecting && !isInView) {
 					setIsInView(true);
 				}
 			},
@@ -413,6 +413,7 @@ const MockScreenshotEditor = () => {
 			if (cancelled) return;
 			const next = (current + 1) % AUTO_CONFIGS.length;
 			const cfg = AUTO_CONFIGS[next];
+			if (!cfg) return;
 			setGradientIndex(cfg.gradientIndex);
 			setPadding(cfg.padding);
 			setRounded(cfg.rounded);

@@ -146,6 +146,7 @@ export default async function EmbedVideoPage(
 					height: videos.height,
 					duration: videos.duration,
 					fps: videos.fps,
+					firstViewEmailSentAt: videos.firstViewEmailSentAt,
 					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,

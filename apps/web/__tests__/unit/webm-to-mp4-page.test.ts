@@ -114,12 +114,12 @@ describe("WebM to MP4 FAQ schema validity", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]).toEqual({
+		expect(schema.mainEntity[0]!).toEqual({
 			"@type": "Question",
 			name: "How do I convert WebM to MP4 online?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0].answer,
+				text: faqs[0]!.answer,
 			},
 		});
 	});
@@ -169,11 +169,11 @@ describe("WebM to MP4 HowTo schema validity", () => {
 			steps: howToSteps,
 		});
 
-		expect(schema.step[0].position).toBe(1);
-		expect(schema.step[0].name).toBe("Upload your WebM file");
-		expect(schema.step[1].position).toBe(2);
-		expect(schema.step[2].position).toBe(3);
-		expect(schema.step[2].name).toBe("Download your MP4");
+		expect(schema.step[0]!.position).toBe(1);
+		expect(schema.step[0]!.name).toBe("Upload your WebM file");
+		expect(schema.step[1]!.position).toBe(2);
+		expect(schema.step[2]!.position).toBe(3);
+		expect(schema.step[2]!.name).toBe("Download your MP4");
 	});
 
 	it("produces JSON-serializable output", () => {

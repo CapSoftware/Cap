@@ -111,7 +111,7 @@ function setupDbSequence(
 	let callIndex = 0;
 	mockDb.mockImplementation(() => {
 		const idx = callIndex++;
-		const result = idx < responses.length ? responses[idx] : [];
+		const result = idx < responses.length ? responses[idx]! : [];
 		return makeChain(result, txOptions);
 	});
 }
