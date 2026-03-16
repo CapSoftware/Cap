@@ -1835,7 +1835,9 @@ struct SerializedEditorInstance {
 #[specta::specta]
 #[instrument(skip(window))]
 async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstance, String> {
-    let CapWindowId::Editor { id } = CapWindowId::from_str(window.label()).unwrap() else {
+    let CapWindowId::Editor { id } =
+        CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
+    else {
         return Err("Invalid window".to_string());
     };
 
@@ -1871,7 +1873,9 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 #[specta::specta]
 #[instrument(skip(window))]
 async fn get_editor_project_path(window: Window) -> Result<PathBuf, String> {
-    let CapWindowId::Editor { id } = CapWindowId::from_str(window.label()).unwrap() else {
+    let CapWindowId::Editor { id } =
+        CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
+    else {
         return Err("Invalid window".to_string());
     };
 
