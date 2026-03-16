@@ -50,6 +50,57 @@ use text::{PreparedText, prepare_texts};
 use zoom::*;
 pub use zoom_focus_interpolation::ZoomFocusInterpolator;
 
+pub fn is_software_wgpu_adapter(info: &wgpu::AdapterInfo) -> bool {
+    matches!(info.device_type, wgpu::DeviceType::Cpu)
+        || info
+            .name
+            .to_lowercase()
+            .contains("microsoft basic render driver")
+}
+
+pub async fn create_wgpu_instance() -> wgpu::Instance {
+    #[cfg(not(target_os = "windows"))]
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+
+    #[cfg(target_os = "windows")]
+    let instance = {
+        let dx12_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            ..Default::default()
+        });
+        let has_dx12 = dx12_instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .is_ok();
+        if has_dx12 {
+            dx12_instance
+        } else {
+            wgpu::Instance::new(&wgpu::InstanceDescriptor::default())
+        }
+    };
+
+    instance
+}
+
+pub async fn probe_software_adapter() -> Option<(bool, String)> {
+    let instance = create_wgpu_instance().await;
+
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .ok()?;
+    let info = adapter.get_info();
+    Some((is_software_wgpu_adapter(&info), info.name))
+}
+
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
 fn rounding_type_value(style: CornerStyle) -> f32 {
@@ -990,6 +1041,7 @@ pub struct RenderVideoConstants {
     pub recording_meta: RecordingMeta,
     pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
     pub is_software_adapter: bool,
+    adapter_name: String,
 }
 
 pub struct SharedWgpuDevice {
@@ -1019,6 +1071,8 @@ impl RenderVideoConstants {
 
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
+        let adapter_name = shared.adapter.get_info().name;
+
         Ok(Self {
             _instance: shared.instance,
             _adapter: shared.adapter,
@@ -1029,7 +1083,33 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             is_software_adapter: shared.is_software_adapter,
+            adapter_name,
         })
+    }
+
+    pub fn adapter_name(&self) -> &str {
+        &self.adapter_name
+    }
+
+    pub fn from_shared_device(
+        shared: SharedWgpuDevice,
+        options: RenderOptions,
+        meta: StudioRecordingMeta,
+        recording_meta: RecordingMeta,
+    ) -> Self {
+        let adapter_name = shared.adapter.get_info().name;
+        Self {
+            _instance: shared.instance,
+            _adapter: shared.adapter,
+            device: shared.device,
+            queue: shared.queue,
+            options,
+            background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            meta,
+            recording_meta,
+            is_software_adapter: shared.is_software_adapter,
+            adapter_name,
+        }
     }
 
     pub async fn new(
@@ -1047,31 +1127,7 @@ impl RenderVideoConstants {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        #[cfg(not(target_os = "windows"))]
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-
-        #[cfg(target_os = "windows")]
-        let instance = {
-            let dx12_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::DX12,
-                ..Default::default()
-            });
-            let has_dx12 = dx12_instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                })
-                .await
-                .is_ok();
-            if has_dx12 {
-                tracing::info!("Using DX12 backend for optimal D3D11 interop");
-                dx12_instance
-            } else {
-                tracing::info!("DX12 not available, falling back to all backends");
-                wgpu::Instance::new(&wgpu::InstanceDescriptor::default())
-            }
-        };
+        let instance = create_wgpu_instance().await;
 
         let hardware_adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -1082,13 +1138,27 @@ impl RenderVideoConstants {
             .await
             .ok();
 
-        let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
-            tracing::info!(
-                adapter_name = adapter.get_info().name,
-                adapter_backend = ?adapter.get_info().backend,
-                "Using hardware GPU adapter"
-            );
-            (adapter, false)
+        let (adapter, is_software_adapter, adapter_name) = if let Some(adapter) = hardware_adapter {
+            let adapter_info = adapter.get_info();
+            let is_software = is_software_wgpu_adapter(&adapter_info);
+
+            if is_software {
+                tracing::warn!(
+                    adapter_name = adapter_info.name,
+                    adapter_backend = ?adapter_info.backend,
+                    adapter_device_type = ?adapter_info.device_type,
+                    "Hardware adapter behaves like a software renderer"
+                );
+            } else {
+                tracing::info!(
+                    adapter_name = adapter_info.name,
+                    adapter_backend = ?adapter_info.backend,
+                    adapter_device_type = ?adapter_info.device_type,
+                    "Using hardware GPU adapter"
+                );
+            }
+
+            (adapter, is_software, adapter_info.name)
         } else {
             tracing::warn!("No hardware GPU adapter found, attempting software fallback");
             let software_adapter = instance
@@ -1100,12 +1170,14 @@ impl RenderVideoConstants {
                 .await
                 .map_err(|_| RenderingError::NoAdapter)?;
 
+            let adapter_info = software_adapter.get_info();
             tracing::info!(
-                adapter_name = software_adapter.get_info().name,
-                adapter_backend = ?software_adapter.get_info().backend,
+                adapter_name = adapter_info.name,
+                adapter_backend = ?adapter_info.backend,
+                adapter_device_type = ?adapter_info.device_type,
                 "Using software adapter (CPU rendering - performance may be reduced)"
             );
-            (software_adapter, true)
+            (software_adapter, true, adapter_info.name)
         };
 
         let mut required_features = wgpu::Features::empty();
@@ -1133,6 +1205,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             is_software_adapter,
+            adapter_name,
         })
     }
 }
