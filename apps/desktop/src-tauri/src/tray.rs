@@ -789,7 +789,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     });
                 }
                 Ok(TrayItem::Quit) => {
-                    app.exit(0);
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        crate::request_app_exit(app).await;
+                    });
                 }
                 Ok(TrayItem::PreviousItem(path)) => {
                     handle_previous_item_click(app, &path);
