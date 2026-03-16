@@ -3746,10 +3746,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                     if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
                         && settings.hide_dock_icon
-                        && app
-                            .webview_windows()
-                            .keys()
-                            .all(|label| !CapWindowId::from_str(label).unwrap().activates_dock())
+                        && app.webview_windows().keys().all(|label| {
+                            CapWindowId::from_str(label)
+                                .map(|id| !id.activates_dock())
+                                .unwrap_or(false)
+                        })
                     {
                         #[cfg(target_os = "macos")]
                         app.set_activation_policy(tauri::ActivationPolicy::Accessory)
