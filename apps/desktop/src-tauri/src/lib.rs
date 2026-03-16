@@ -194,6 +194,13 @@ fn spawn_exit_watchdog() {
     });
 }
 
+fn app_is_exiting(app: &AppHandle) -> bool {
+    match app.try_state::<AppExitState>() {
+        Some(state) => state.is_exiting(),
+        None => false,
+    }
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -799,6 +806,10 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
         let error_rx = error_rx;
 
         while let Ok(err) = error_rx.recv_async().await {
+            if app_is_exiting(&app_handle) {
+                break;
+            }
+
             error!("Mic feed actor error: {err}");
 
             {
@@ -873,6 +884,10 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
         let mut last_mics: Vec<String> = Vec::new();
         let mut fast_loops = 0u32;
         loop {
+            if app_is_exiting(&app_handle) {
+                break;
+            }
+
             let permissions = permissions::do_permissions_check(false);
             let cameras = if permissions.camera.permitted() {
                 cap_camera::list_cameras().collect::<Vec<_>>()
@@ -935,6 +950,10 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
             };
             fast_loops = fast_loops.saturating_add(1);
             tokio::time::sleep(dur).await;
+
+            if app_is_exiting(&app_handle) {
+                break;
+            }
         }
     });
 }
@@ -1128,6 +1147,10 @@ fn spawn_microphone_watcher(app_handle: AppHandle) {
         let state = state.inner().clone();
 
         loop {
+            if app_is_exiting(&app_handle) {
+                break;
+            }
+
             let (should_check, label, is_marked) = {
                 let guard = state.read().await;
                 (
@@ -1185,6 +1208,10 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
         let state = state.inner().clone();
 
         loop {
+            if app_is_exiting(&app_handle) {
+                break;
+            }
+
             let (should_check, camera_id, is_marked) = {
                 let guard = state.read().await;
                 (
@@ -3521,6 +3548,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             let label = window.label();
             let app = window.app_handle();
 
+            if matches!(
+                event,
+                WindowEvent::CloseRequested { .. }
+                    | WindowEvent::Moved(_)
+                    | WindowEvent::Focused(_)
+            ) && app_is_exiting(app)
+            {
+                return;
+            }
+
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
@@ -3582,6 +3619,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     }
                 }
                 WindowEvent::Destroyed => {
+                    if app_is_exiting(app) {
+                        return;
+                    }
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         if matches!(window_id, CapWindowId::Camera) {
                             tracing::warn!("Camera window Destroyed event received!");
