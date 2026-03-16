@@ -4077,17 +4077,13 @@ async fn create_editor_instance_impl(
 
     wait_for_recording_ready(&app, &path).await?;
 
-    let shared_device = if let Some(shared) = gpu_context::get_shared_gpu().await {
-        Some(cap_rendering::SharedWgpuDevice {
-            instance: (*shared.instance).clone(),
-            adapter: (*shared.adapter).clone(),
-            device: (*shared.device).clone(),
-            queue: (*shared.queue).clone(),
-            is_software_adapter: shared.is_software_adapter,
-        })
-    } else {
-        None
-    };
+    let shared_device = gpu_context::get_shared_gpu().await.map(|shared| cap_rendering::SharedWgpuDevice {
+        instance: (*shared.instance).clone(),
+        adapter: (*shared.adapter).clone(),
+        device: (*shared.device).clone(),
+        queue: (*shared.queue).clone(),
+        is_software_adapter: shared.is_software_adapter,
+    });
 
     let instance = {
         let app = app.clone();
