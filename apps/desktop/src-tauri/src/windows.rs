@@ -1463,6 +1463,9 @@ impl ShowCapWindow {
                     app.set_activation_policy(tauri::ActivationPolicy::Accessory)
                         .ok();
 
+                    let title = CapWindowId::Camera.title();
+                    let should_protect = should_protect_window(app, &title);
+
                     let mut window_builder = self
                         .window_builder(app, "/camera")
                         .maximized(false)
@@ -2245,7 +2248,7 @@ fn log_window_content_protection(window: &WebviewWindow, enabled: bool, window_t
     }
 
     let hwnd = match window.hwnd() {
-        Ok(hwnd) => hwnd,
+        Ok(hwnd) => windows::Win32::Foundation::HWND(hwnd.0),
         Err(error) => {
             warn!(
                 window = window.label(),
