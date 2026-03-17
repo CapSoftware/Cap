@@ -143,12 +143,12 @@ describe("VideoRecordingSoftwarePage FAQ schema", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]).toEqual({
+		expect(schema.mainEntity[0]!).toEqual({
 			"@type": "Question",
 			name: "What is video recording software?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0].answer,
+				text: faqs[0]!.answer,
 			},
 		});
 	});

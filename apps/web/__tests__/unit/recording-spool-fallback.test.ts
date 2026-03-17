@@ -7,7 +7,7 @@ const blobToText = async (blob: Blob) =>
 describe("moveRecordingSpoolToInMemoryBackup", () => {
 	it("merges recovered chunks with later in-memory chunks without duplicating them", async () => {
 		let retainedChunks = [new Blob(["older"], { type: "video/webm" })];
-		let releaseRecovery: (() => void) | null = null;
+		let releaseRecovery = null as (() => void) | null;
 
 		const replaceLocalRecording = vi.fn((chunks: Blob[]) => {
 			retainedChunks = chunks;

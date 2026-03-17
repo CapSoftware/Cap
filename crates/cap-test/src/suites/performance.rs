@@ -44,6 +44,24 @@ pub async fn run_suite(
     let mut results = Vec::new();
     let sample_duration_secs = duration.max(1);
 
+    if let Some(skipped_results) = probe_windows_ci_software_adapter(recording_path).await {
+        let summary = ResultsSummary::from_results(&skipped_results, start.elapsed());
+
+        return Ok(TestResults {
+            meta: ResultsMeta {
+                timestamp: Utc::now(),
+                config_name: "Performance Suite".to_string(),
+                config_path: Some(recording_path.display().to_string()),
+                platform: hardware.system_info.platform.clone(),
+                system: hardware.system_info.clone(),
+                cap_version: None,
+            },
+            hardware: Some(hardware.clone()),
+            results: skipped_results,
+            summary,
+        });
+    }
+
     results.push(run_open_test(recording_path).await);
     results.push(run_playback_test(recording_path, sample_duration_secs).await);
     results.push(run_export_test(recording_path).await);
@@ -63,6 +81,70 @@ pub async fn run_suite(
         results,
         summary,
     })
+}
+
+#[cfg(target_os = "windows")]
+async fn probe_windows_ci_software_adapter(recording_path: &Path) -> Option<Vec<TestResult>> {
+    if !std::env::var("GITHUB_ACTIONS")
+        .map(|value| value == "true")
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let (is_software, adapter_name) = cap_rendering::probe_software_adapter().await?;
+
+    if !is_software {
+        return None;
+    }
+
+    let reason = format!(
+        "Windows GitHub Actions exposed software rendering via {adapter_name}; performance gate skipped because the runner cannot provide representative GPU metrics"
+    );
+    let notes = vec![format!("adapter={adapter_name}")];
+
+    Some(vec![
+        skipped_result(
+            "performance-open",
+            "Fixture Open",
+            fixture_config(recording_path),
+            &reason,
+            &notes,
+        ),
+        skipped_result(
+            "performance-playback",
+            "Editor Playback",
+            fixture_config(recording_path),
+            &reason,
+            &notes,
+        ),
+        skipped_result(
+            "performance-export",
+            "Export Startup And Throughput",
+            fixture_config(recording_path),
+            &reason,
+            &notes,
+        ),
+    ])
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn probe_windows_ci_software_adapter(_recording_path: &Path) -> Option<Vec<TestResult>> {
+    None
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn skipped_result(
+    test_id: &str,
+    name: &str,
+    config: TestCaseConfig,
+    reason: &str,
+    notes: &[String],
+) -> TestResult {
+    let mut result = TestResult::new(test_id.to_string(), name.to_string(), config);
+    result.set_skipped(reason);
+    result.notes.extend(notes.iter().cloned());
+    result
 }
 
 struct FixtureContext {
@@ -126,10 +208,7 @@ async fn run_open_test(recording_path: &Path) -> TestResult {
             };
 
             let mut notes = vec![
-                format!(
-                    "adapter={}",
-                    context.render_constants._adapter.get_info().name
-                ),
+                format!("adapter={}", context.render_constants.adapter_name()),
                 format!(
                     "software_adapter={}",
                     context.render_constants.is_software_adapter
@@ -347,7 +426,7 @@ async fn benchmark_playback(
     let mut metrics = PlaybackMetrics {
         requested_frames,
         setup_secs,
-        adapter_name: context.render_constants._adapter.get_info().name,
+        adapter_name: context.render_constants.adapter_name().to_string(),
         software_adapter: context.render_constants.is_software_adapter,
         ..Default::default()
     };

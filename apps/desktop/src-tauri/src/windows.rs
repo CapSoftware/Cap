@@ -1463,6 +1463,9 @@ impl ShowCapWindow {
                     app.set_activation_policy(tauri::ActivationPolicy::Accessory)
                         .ok();
 
+                    let title = CapWindowId::Camera.title();
+                    let should_protect = should_protect_window(app, &title);
+
                     let mut window_builder = self
                         .window_builder(app, "/camera")
                         .maximized(false)
@@ -1480,6 +1483,7 @@ impl ShowCapWindow {
 		                ",
                             state.camera_ws_port, centered
                         ))
+                        .content_protected(should_protect)
                         .transparent(true)
                         .visible(false);
 
@@ -1502,6 +1506,9 @@ impl ShowCapWindow {
                             return Err(e);
                         }
                     };
+
+                    #[cfg(target_os = "windows")]
+                    log_window_content_protection(&window, should_protect, &title);
 
                     let camera_monitor = CapWindowId::Main
                         .get(app)
@@ -1838,6 +1845,9 @@ impl ShowCapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
+
+                #[cfg(target_os = "windows")]
+                log_window_content_protection(&window, should_protect, &title);
 
                 let (pos_x, pos_y) = cursor_monitor.bottom_center_position(width, height, 120.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -2194,6 +2204,98 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
         .unwrap_or_else(|| matches(&general_settings::default_excluded_windows()))
 }
 
+#[cfg(target_os = "windows")]
+fn cached_windows_version() -> Option<&'static scap_direct3d::WindowsVersion> {
+    static VERSION: std::sync::OnceLock<Option<scap_direct3d::WindowsVersion>> =
+        std::sync::OnceLock::new();
+    VERSION
+        .get_or_init(scap_direct3d::WindowsVersion::detect)
+        .as_ref()
+}
+
+#[cfg(target_os = "windows")]
+fn display_affinity_name(value: u32) -> &'static str {
+    match value {
+        0 => "WDA_NONE",
+        1 => "WDA_MONITOR",
+        17 => "WDA_EXCLUDEFROMCAPTURE",
+        _ => "UNKNOWN",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn log_window_content_protection(window: &WebviewWindow, enabled: bool, window_title: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+    };
+
+    let expected = if enabled {
+        WDA_EXCLUDEFROMCAPTURE
+    } else {
+        WDA_NONE
+    };
+
+    if let Some(version) = cached_windows_version()
+        && enabled
+        && version.build < 19041
+    {
+        warn!(
+            window = window.label(),
+            title = window_title,
+            version = %version.display_name(),
+            expected = display_affinity_name(expected.0),
+            "Window capture exclusion is not fully supported on this Windows build"
+        );
+    }
+
+    let hwnd = match window.hwnd() {
+        Ok(hwnd) => windows::Win32::Foundation::HWND(hwnd.0),
+        Err(error) => {
+            warn!(
+                window = window.label(),
+                title = window_title,
+                error = %error,
+                "Failed to get HWND for content protection diagnostics"
+            );
+            return;
+        }
+    };
+
+    let mut applied = 0u32;
+    match unsafe { GetWindowDisplayAffinity(hwnd, &mut applied) } {
+        Ok(()) => {
+            if applied == expected.0 {
+                debug!(
+                    window = window.label(),
+                    title = window_title,
+                    expected = display_affinity_name(expected.0),
+                    applied = display_affinity_name(applied),
+                    "Window content protection verified"
+                );
+            } else {
+                warn!(
+                    window = window.label(),
+                    title = window_title,
+                    expected = display_affinity_name(expected.0),
+                    expected_raw = expected.0,
+                    applied = display_affinity_name(applied),
+                    applied_raw = applied,
+                    "Window content protection mismatch"
+                );
+            }
+        }
+        Err(error) => {
+            warn!(
+                window = window.label(),
+                title = window_title,
+                expected = display_affinity_name(expected.0),
+                error = %error,
+                "Failed to query window display affinity"
+            );
+        }
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -2201,9 +2303,12 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label) {
             let title = id.title();
+            let should_protect = should_protect_window(&app, &title);
             window
-                .set_content_protected(should_protect_window(&app, &title))
+                .set_content_protected(should_protect)
                 .map_err(|e| e.to_string())?;
+            #[cfg(target_os = "windows")]
+            log_window_content_protection(&window, should_protect, &title);
         }
     }
 

@@ -35,8 +35,8 @@ describe("createBreadcrumbSchema", () => {
 			name: "Tools",
 			item: "https://cap.so/tools",
 		});
-		expect(schema.itemListElement[2].position).toBe(3);
-		expect(schema.itemListElement[2].name).toBe("Convert");
+		expect(schema.itemListElement[2]!.position).toBe(3);
+		expect(schema.itemListElement[2]!.name).toBe("Convert");
 	});
 
 	it("omits item field when no url is provided", () => {
@@ -45,8 +45,8 @@ describe("createBreadcrumbSchema", () => {
 			{ name: "Current Page" },
 		]);
 
-		expect(schema.itemListElement[0].item).toBe("https://cap.so");
-		expect("item" in schema.itemListElement[1]).toBe(false);
+		expect(schema.itemListElement[0]!.item).toBe("https://cap.so");
+		expect("item" in schema.itemListElement[1]!).toBe(false);
 	});
 
 	it("handles single item breadcrumb", () => {
@@ -55,7 +55,7 @@ describe("createBreadcrumbSchema", () => {
 		]);
 
 		expect(schema.itemListElement).toHaveLength(1);
-		expect(schema.itemListElement[0].position).toBe(1);
+		expect(schema.itemListElement[0]!.position).toBe(1);
 	});
 
 	it("handles empty array", () => {

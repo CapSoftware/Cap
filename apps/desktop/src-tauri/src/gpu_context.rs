@@ -49,31 +49,7 @@ pub struct SharedGpuContext {
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 
 async fn init_gpu_inner() -> Option<SharedGpuContext> {
-    #[cfg(not(target_os = "windows"))]
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-
-    #[cfg(target_os = "windows")]
-    let instance = {
-        let dx12_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::DX12,
-            ..Default::default()
-        });
-        let has_dx12 = dx12_instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .is_ok();
-        if has_dx12 {
-            tracing::info!("Using DX12 backend for shared GPU context");
-            dx12_instance
-        } else {
-            tracing::info!("DX12 not available for shared context, falling back to all backends");
-            wgpu::Instance::new(&wgpu::InstanceDescriptor::default())
-        }
-    };
+    let instance = cap_rendering::create_wgpu_instance().await;
 
     let hardware_adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -85,12 +61,26 @@ async fn init_gpu_inner() -> Option<SharedGpuContext> {
         .ok();
 
     let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
-        tracing::info!(
-            adapter_name = adapter.get_info().name,
-            adapter_backend = ?adapter.get_info().backend,
-            "Using hardware GPU adapter for shared context"
-        );
-        (adapter, false)
+        let adapter_info = adapter.get_info();
+        let is_software_adapter = cap_rendering::is_software_wgpu_adapter(&adapter_info);
+
+        if is_software_adapter {
+            tracing::warn!(
+                adapter_name = adapter_info.name,
+                adapter_backend = ?adapter_info.backend,
+                adapter_device_type = ?adapter_info.device_type,
+                "Selected shared-context adapter behaves like a software renderer"
+            );
+        } else {
+            tracing::info!(
+                adapter_name = adapter_info.name,
+                adapter_backend = ?adapter_info.backend,
+                adapter_device_type = ?adapter_info.device_type,
+                "Using hardware GPU adapter for shared context"
+            );
+        }
+
+        (adapter, is_software_adapter)
     } else {
         tracing::warn!(
             "No hardware GPU adapter found, attempting software fallback for shared context"
@@ -104,9 +94,12 @@ async fn init_gpu_inner() -> Option<SharedGpuContext> {
             .await
             .ok()?;
 
+        let adapter_info = software_adapter.get_info();
+
         tracing::info!(
-            adapter_name = software_adapter.get_info().name,
-            adapter_backend = ?software_adapter.get_info().backend,
+            adapter_name = adapter_info.name,
+            adapter_backend = ?adapter_info.backend,
+            adapter_device_type = ?adapter_info.device_type,
             "Using software adapter for shared context (CPU rendering - performance may be reduced)"
         );
         (software_adapter, true)
