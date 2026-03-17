@@ -89,14 +89,25 @@ pub async fn create_wgpu_instance() -> wgpu::Instance {
 pub async fn probe_software_adapter() -> Option<(bool, String)> {
     let instance = create_wgpu_instance().await;
 
-    let adapter = instance
+    let adapter = match instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
         })
         .await
-        .ok()?;
+        .ok()
+    {
+        Some(adapter) => adapter,
+        None => instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                force_fallback_adapter: true,
+                compatible_surface: None,
+            })
+            .await
+            .ok()?,
+    };
     let info = adapter.get_info();
     Some((is_software_wgpu_adapter(&info), info.name))
 }

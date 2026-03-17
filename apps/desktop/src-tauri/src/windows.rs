@@ -1483,6 +1483,7 @@ impl ShowCapWindow {
 		                ",
                             state.camera_ws_port, centered
                         ))
+                        .content_protected(should_protect)
                         .transparent(true)
                         .visible(false);
 

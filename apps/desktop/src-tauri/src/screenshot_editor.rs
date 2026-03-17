@@ -258,7 +258,7 @@ impl ScreenshotEditorInstances {
                         is_software_adapter: gpu.is_software_adapter,
                     }
                 } else {
-                    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+                    let instance = cap_rendering::create_wgpu_instance().await;
                     let adapter = instance
                         .request_adapter(&wgpu::RequestAdapterOptions {
                             power_preference: wgpu::PowerPreference::HighPerformance,
