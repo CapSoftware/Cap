@@ -127,4 +127,6 @@ function getLink(notification: APINotification) {
 		case "anon_view":
 			return `/s/${notification.videoId}`;
 	}
+
+	return `/s/${notification.videoId}`;
 }
