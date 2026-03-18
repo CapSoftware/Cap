@@ -189,7 +189,6 @@ impl ZoomFocusInterpolator {
     }
 }
 
-#[allow(dead_code)]
 pub fn apply_edge_snap_to_focus(
     focus: Coord<RawDisplayUVSpace>,
     segment: &ZoomSegment,

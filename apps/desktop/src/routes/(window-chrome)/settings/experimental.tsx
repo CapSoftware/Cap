@@ -83,6 +83,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				minZoomAmount: 1.2,
 				maxZoomAmount: 2.5,
 				intensitySpatialScale: 0.3,
+				edgeSnapEnabled: true,
 			},
 		},
 	);
@@ -163,6 +164,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						/>
 					</div>
 					<Show when={settings.autoZoomOnClicks}>
+						<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+							<ToggleSettingItem
+								label="Edge Snapping"
+								description="Snap the zoomed viewport to screen edges instead of following the cursor into awkward corners."
+								value={settings.autoZoomConfig?.edgeSnapEnabled ?? true}
+								onChange={(v) => handleConfigChange("edgeSnapEnabled", v)}
+							/>
+						</div>
 						<div class="px-3 py-3 space-y-4">
 							<SettingSlider
 								label="Min Zoom"

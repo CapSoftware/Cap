@@ -1933,8 +1933,36 @@ impl ProjectUniforms {
             .unwrap_or(&[]);
 
         let zoom_focus = zoom_focus_interpolator.interpolate(current_recording_time);
+        let zoom_focus = {
+            let active_segment = zoom_segments
+                .iter()
+                .find(|s| frame_time as f64 > s.start && frame_time as f64 <= s.end);
+            if let Some(segment) = active_segment {
+                if matches!(segment.mode, cap_project::ZoomMode::Auto) {
+                    zoom_focus_interpolation::apply_edge_snap_to_focus(zoom_focus, segment)
+                } else {
+                    zoom_focus
+                }
+            } else {
+                zoom_focus
+            }
+        };
 
         let prev_zoom_focus = zoom_focus_interpolator.interpolate(prev_recording_time);
+        let prev_zoom_focus = {
+            let active_segment = zoom_segments
+                .iter()
+                .find(|s| prev_frame_time as f64 > s.start && prev_frame_time as f64 <= s.end);
+            if let Some(segment) = active_segment {
+                if matches!(segment.mode, cap_project::ZoomMode::Auto) {
+                    zoom_focus_interpolation::apply_edge_snap_to_focus(prev_zoom_focus, segment)
+                } else {
+                    prev_zoom_focus
+                }
+            } else {
+                prev_zoom_focus
+            }
+        };
 
         let actual_cursor_coord = interpolated_cursor
             .as_ref()

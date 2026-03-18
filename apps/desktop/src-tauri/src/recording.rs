@@ -2322,7 +2322,7 @@ fn generate_zoom_segments_from_clicks_impl(
                 glide_direction: GlideDirection::None,
                 glide_speed: 0.5,
                 instant_animation: false,
-                edge_snap_ratio: 0.25,
+                edge_snap_ratio: if config.edge_snap_enabled { 0.25 } else { 0.0 },
             })
         })
         .collect()

@@ -478,6 +478,8 @@ pub struct AutoZoomConfig {
     pub max_zoom_amount: f64,
     #[serde(default = "AutoZoomConfig::default_intensity_spatial_scale")]
     pub intensity_spatial_scale: f64,
+    #[serde(default = "AutoZoomConfig::default_edge_snap_enabled")]
+    pub edge_snap_enabled: bool,
 }
 
 impl AutoZoomConfig {
@@ -491,6 +493,10 @@ impl AutoZoomConfig {
 
     fn default_intensity_spatial_scale() -> f64 {
         0.3
+    }
+
+    fn default_edge_snap_enabled() -> bool {
+        true
     }
 }
 
@@ -514,6 +520,7 @@ impl Default for AutoZoomConfig {
             min_zoom_amount: Self::default_min_zoom_amount(),
             max_zoom_amount: Self::default_max_zoom_amount(),
             intensity_spatial_scale: Self::default_intensity_spatial_scale(),
+            edge_snap_enabled: Self::default_edge_snap_enabled(),
         }
     }
 }
