@@ -455,6 +455,40 @@ impl Default for ScreenMovementSpring {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoZoomConfig {
+    pub zoom_amount: f64,
+    pub click_group_time_threshold: f64,
+    pub click_group_spatial_threshold: f64,
+    pub click_pre_padding: f64,
+    pub click_post_padding: f64,
+    pub movement_pre_padding: f64,
+    pub movement_post_padding: f64,
+    pub merge_gap_threshold: f64,
+    pub min_segment_duration: f64,
+    pub movement_event_distance_threshold: f64,
+    pub movement_window_distance_threshold: f64,
+}
+
+impl Default for AutoZoomConfig {
+    fn default() -> Self {
+        Self {
+            zoom_amount: 1.5,
+            click_group_time_threshold: 2.5,
+            click_group_spatial_threshold: 0.15,
+            click_pre_padding: 0.4,
+            click_post_padding: 1.8,
+            movement_pre_padding: 0.3,
+            movement_post_padding: 1.5,
+            merge_gap_threshold: 0.8,
+            min_segment_duration: 1.0,
+            movement_event_distance_threshold: 0.02,
+            movement_window_distance_threshold: 0.08,
+        }
+    }
+}
+
 impl CursorAnimationStyle {
     pub fn preset(self) -> Option<CursorSmoothingPreset> {
         match self {
