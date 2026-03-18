@@ -78,6 +78,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				movementEventDistanceThreshold: 0.02,
 				movementWindowDistanceThreshold: 0.08,
 				deadZoneRadius: 0.1,
+				doubleClickThresholdMs: 400.0,
+				ignoreRightClicks: true,
 			},
 		},
 	);

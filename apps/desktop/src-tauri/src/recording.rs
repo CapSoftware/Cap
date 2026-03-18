@@ -2027,6 +2027,10 @@ fn generate_zoom_segments_from_clicks_impl(
         return Vec::new();
     }
 
+    if config.ignore_right_clicks {
+        clicks.retain(|c| c.cursor_num == 0);
+    }
+
     clicks.sort_by(|a, b| {
         a.time_ms
             .partial_cmp(&b.time_ms)
@@ -2037,6 +2041,32 @@ fn generate_zoom_segments_from_clicks_impl(
             .partial_cmp(&b.time_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    if config.double_click_threshold_ms > 0.0 {
+        let mut i = 0;
+        while i < clicks.len() {
+            if !clicks[i].down {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < clicks.len() {
+                if !clicks[j].down {
+                    j += 1;
+                    continue;
+                }
+                if clicks[j].time_ms - clicks[i].time_ms > config.double_click_threshold_ms {
+                    break;
+                }
+                if clicks[j].cursor_num == clicks[i].cursor_num {
+                    clicks.remove(j);
+                } else {
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+    }
 
     while let Some(index) = clicks.iter().rposition(|c| c.down) {
         let time_secs = clicks[index].time_ms / 1000.0;
@@ -2566,6 +2596,136 @@ mod tests {
             2,
             "with dead_zone_radius=0.0, nearby clicks should produce 2 segments, got {}",
             segments.len()
+        );
+    }
+
+    #[test]
+    fn double_click_deduplication() {
+        let double_clicks = vec![
+            CursorClickEvent {
+                down: true,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1000.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1050.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: true,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1200.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1250.0,
+                active_modifiers: vec![],
+            },
+        ];
+        let moves = vec![move_event(999.0, 0.5, 0.5)];
+
+        let config = cap_project::AutoZoomConfig {
+            double_click_threshold_ms: 400.0,
+            ..Default::default()
+        };
+
+        let double_segments =
+            generate_zoom_segments_from_clicks_impl(double_clicks, moves.clone(), 20.0, &config);
+
+        let single_clicks = vec![click_event(1000.0)];
+        let single_segments =
+            generate_zoom_segments_from_clicks_impl(single_clicks, moves, 20.0, &config);
+
+        assert_eq!(
+            double_segments.len(),
+            single_segments.len(),
+            "double-click should be deduped to same segment count as single click: double={}, single={}",
+            double_segments.len(),
+            single_segments.len()
+        );
+    }
+
+    #[test]
+    fn right_click_ignored() {
+        let clicks = vec![
+            CursorClickEvent {
+                down: true,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1000.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1050.0,
+                active_modifiers: vec![],
+            },
+        ];
+        let moves = vec![
+            move_event(500.0, 0.1, 0.1),
+            move_event(999.0, 0.5, 0.5),
+            move_event(1500.0, 0.9, 0.9),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            ignore_right_clicks: true,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        let has_click_segment = segments.iter().any(|s| {
+            let click_time_secs = 1.0;
+            s.start <= click_time_secs && s.end >= click_time_secs
+        });
+
+        assert!(
+            !has_click_segment,
+            "right-click should be filtered out when ignore_right_clicks is true"
+        );
+    }
+
+    #[test]
+    fn right_click_allowed_when_disabled() {
+        let clicks = vec![
+            CursorClickEvent {
+                down: true,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1000.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1050.0,
+                active_modifiers: vec![],
+            },
+        ];
+        let moves = vec![move_event(999.0, 0.5, 0.5)];
+
+        let config = cap_project::AutoZoomConfig {
+            ignore_right_clicks: false,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            !segments.is_empty(),
+            "right-click should produce segments when ignore_right_clicks is false"
         );
     }
 }

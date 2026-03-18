@@ -470,6 +470,8 @@ pub struct AutoZoomConfig {
     pub movement_event_distance_threshold: f64,
     pub movement_window_distance_threshold: f64,
     pub dead_zone_radius: f64,
+    pub double_click_threshold_ms: f64,
+    pub ignore_right_clicks: bool,
 }
 
 impl Default for AutoZoomConfig {
@@ -487,6 +489,8 @@ impl Default for AutoZoomConfig {
             movement_event_distance_threshold: 0.02,
             movement_window_distance_threshold: 0.08,
             dead_zone_radius: 0.1,
+            double_click_threshold_ms: 400.0,
+            ignore_right_clicks: true,
         }
     }
 }
