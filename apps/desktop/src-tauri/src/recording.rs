@@ -2150,7 +2150,7 @@ fn generate_zoom_segments_from_clicks_impl(
         }
     }
 
-    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    let mut intervals: Vec<(f64, f64, Vec<(f64, f64)>)> = Vec::new();
 
     for group in click_groups {
         if group.is_empty() {
@@ -2168,7 +2168,11 @@ fn generate_zoom_segments_from_clicks_impl(
         let end = (group_end + click_post_padding).min(activity_end_limit);
 
         if end > start {
-            intervals.push((start, end));
+            let positions: Vec<(f64, f64)> = group
+                .iter()
+                .filter_map(|&idx| click_positions.get(&idx).copied())
+                .collect();
+            intervals.push((start, end, positions));
         }
     }
 
@@ -2258,7 +2262,7 @@ fn generate_zoom_segments_from_clicks_impl(
         let end = (time + movement_post_padding).min(activity_end_limit);
 
         if end > start {
-            intervals.push((start, end));
+            intervals.push((start, end, vec![]));
         }
     }
 
@@ -2268,20 +2272,43 @@ fn generate_zoom_segments_from_clicks_impl(
 
     intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    for interval in intervals {
+    let mut merged: Vec<(f64, f64, Vec<(f64, f64)>)> = Vec::new();
+    for (start, end, positions) in intervals {
         if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + merge_gap_threshold
+            && start <= last.1 + merge_gap_threshold
         {
-            last.1 = last.1.max(interval.1);
+            last.1 = last.1.max(end);
+            last.2.extend(positions);
             continue;
         }
-        merged.push(interval);
+        merged.push((start, end, positions));
+    }
+
+    fn compute_zoom_amount(positions: &[(f64, f64)], config: &cap_project::AutoZoomConfig) -> f64 {
+        if (config.max_zoom_amount - config.min_zoom_amount).abs() < f64::EPSILON {
+            return config.zoom_amount;
+        }
+        if positions.len() < 2 {
+            return config.max_zoom_amount;
+        }
+        let mut max_dist = 0.0_f64;
+        for i in 0..positions.len() {
+            for j in (i + 1)..positions.len() {
+                let dx = positions[i].0 - positions[j].0;
+                let dy = positions[i].1 - positions[j].1;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > max_dist {
+                    max_dist = dist;
+                }
+            }
+        }
+        let t = (max_dist / config.intensity_spatial_scale).clamp(0.0, 1.0);
+        config.max_zoom_amount + t * (config.min_zoom_amount - config.max_zoom_amount)
     }
 
     merged
         .into_iter()
-        .filter_map(|(start, end)| {
+        .filter_map(|(start, end, positions)| {
             let duration = end - start;
             if duration < min_segment_duration {
                 return None;
@@ -2290,7 +2317,7 @@ fn generate_zoom_segments_from_clicks_impl(
             Some(ZoomSegment {
                 start,
                 end,
-                amount: auto_zoom_amount,
+                amount: compute_zoom_amount(&positions, config),
                 mode: ZoomMode::Auto,
                 glide_direction: GlideDirection::None,
                 glide_speed: 0.5,
@@ -2694,6 +2721,106 @@ mod tests {
             !has_click_segment,
             "right-click should be filtered out when ignore_right_clicks is true"
         );
+    }
+
+    #[test]
+    fn intensity_tight_cluster_zooms_more() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(1_500.0),
+            click_event(2_000.0),
+        ];
+        let moves = vec![
+            move_event(999.0, 0.50, 0.50),
+            move_event(1_499.0, 0.51, 0.51),
+            move_event(1_999.0, 0.52, 0.52),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            min_zoom_amount: 1.2,
+            max_zoom_amount: 2.5,
+            intensity_spatial_scale: 0.3,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            !segments.is_empty(),
+            "tight cluster should produce at least one segment"
+        );
+        assert!(
+            segments[0].amount > 2.0,
+            "tight cluster should zoom near max, got {}",
+            segments[0].amount
+        );
+    }
+
+    #[test]
+    fn intensity_spread_activity_zooms_less() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(1_500.0),
+            click_event(2_000.0),
+        ];
+        let moves = vec![
+            move_event(999.0, 0.1, 0.1),
+            move_event(1_499.0, 0.5, 0.5),
+            move_event(1_999.0, 0.9, 0.9),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            min_zoom_amount: 1.2,
+            max_zoom_amount: 2.5,
+            intensity_spatial_scale: 0.3,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            !segments.is_empty(),
+            "spread activity should produce at least one segment"
+        );
+        for segment in &segments {
+            assert!(
+                segment.amount < 1.8,
+                "spread activity should zoom closer to min, got {}",
+                segment.amount
+            );
+        }
+    }
+
+    #[test]
+    fn intensity_disabled_when_equal() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(1_500.0),
+            click_event(2_000.0),
+        ];
+        let moves = vec![
+            move_event(999.0, 0.50, 0.50),
+            move_event(1_499.0, 0.51, 0.51),
+            move_event(1_999.0, 0.52, 0.52),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            min_zoom_amount: 1.5,
+            max_zoom_amount: 1.5,
+            zoom_amount: 1.5,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(!segments.is_empty(), "should produce at least one segment");
+        for segment in &segments {
+            assert!(
+                (segment.amount - 1.5).abs() < f64::EPSILON,
+                "when min == max, all segments should get exactly 1.5x, got {}",
+                segment.amount
+            );
+        }
     }
 
     #[test]

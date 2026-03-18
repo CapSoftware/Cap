@@ -472,6 +472,26 @@ pub struct AutoZoomConfig {
     pub dead_zone_radius: f64,
     pub double_click_threshold_ms: f64,
     pub ignore_right_clicks: bool,
+    #[serde(default = "AutoZoomConfig::default_min_zoom_amount")]
+    pub min_zoom_amount: f64,
+    #[serde(default = "AutoZoomConfig::default_max_zoom_amount")]
+    pub max_zoom_amount: f64,
+    #[serde(default = "AutoZoomConfig::default_intensity_spatial_scale")]
+    pub intensity_spatial_scale: f64,
+}
+
+impl AutoZoomConfig {
+    fn default_min_zoom_amount() -> f64 {
+        1.2
+    }
+
+    fn default_max_zoom_amount() -> f64 {
+        2.5
+    }
+
+    fn default_intensity_spatial_scale() -> f64 {
+        0.3
+    }
 }
 
 impl Default for AutoZoomConfig {
@@ -491,6 +511,9 @@ impl Default for AutoZoomConfig {
             dead_zone_radius: 0.1,
             double_click_threshold_ms: 400.0,
             ignore_right_clicks: true,
+            min_zoom_amount: Self::default_min_zoom_amount(),
+            max_zoom_amount: Self::default_max_zoom_amount(),
+            intensity_spatial_scale: Self::default_intensity_spatial_scale(),
         }
     }
 }

@@ -80,6 +80,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				deadZoneRadius: 0.1,
 				doubleClickThresholdMs: 400.0,
 				ignoreRightClicks: true,
+				minZoomAmount: 1.2,
+				maxZoomAmount: 2.5,
+				intensitySpatialScale: 0.3,
 			},
 		},
 	);
@@ -162,10 +165,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					<Show when={settings.autoZoomOnClicks}>
 						<div class="px-3 py-3 space-y-4">
 							<SettingSlider
-								label="Zoom Amount"
-								value={settings.autoZoomConfig?.zoomAmount ?? 1.5}
-								onChange={(v) => handleConfigChange("zoomAmount", v)}
+								label="Min Zoom"
+								value={settings.autoZoomConfig?.minZoomAmount ?? 1.2}
+								onChange={(v) => handleConfigChange("minZoomAmount", v)}
 								min={1.0}
+								max={3.0}
+								step={0.1}
+								format={(v) => `${v.toFixed(1)}x`}
+							/>
+							<SettingSlider
+								label="Max Zoom"
+								value={settings.autoZoomConfig?.maxZoomAmount ?? 2.5}
+								onChange={(v) => handleConfigChange("maxZoomAmount", v)}
+								min={1.5}
 								max={4.0}
 								step={0.1}
 								format={(v) => `${v.toFixed(1)}x`}
