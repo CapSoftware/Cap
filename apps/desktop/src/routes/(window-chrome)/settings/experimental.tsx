@@ -77,6 +77,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				minSegmentDuration: 1.0,
 				movementEventDistanceThreshold: 0.02,
 				movementWindowDistanceThreshold: 0.08,
+				deadZoneRadius: 0.1,
 			},
 		},
 	);

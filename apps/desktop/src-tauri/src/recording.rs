@@ -2011,6 +2011,7 @@ fn generate_zoom_segments_from_clicks_impl(
     let movement_event_distance_threshold = config.movement_event_distance_threshold;
     let movement_window_distance_threshold = config.movement_window_distance_threshold;
     let auto_zoom_amount = config.zoom_amount;
+    let dead_zone_radius = config.dead_zone_radius;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -2072,7 +2073,7 @@ fn generate_zoom_segments_from_clicks_impl(
 
         let mut found_group = false;
         for group in click_groups.iter_mut() {
-            let can_join = group.iter().any(|&group_idx| {
+            let time_and_spatial = group.iter().any(|&group_idx| {
                 let group_click = &clicks[group_idx];
                 let group_time = group_click.time_ms / 1000.0;
                 let time_close = (click_time - group_time).abs() < click_group_time_threshold_secs;
@@ -2089,7 +2090,25 @@ fn generate_zoom_segments_from_clicks_impl(
                 time_close && spatial_close
             });
 
-            if can_join {
+            let in_dead_zone = dead_zone_radius > 0.0 && click_pos.is_some() && {
+                let (cx, cy) = click_pos.unwrap();
+                let group_positions: Vec<(f64, f64)> = group
+                    .iter()
+                    .filter_map(|&gi| click_positions.get(&gi).copied())
+                    .collect();
+                if group_positions.is_empty() {
+                    false
+                } else {
+                    let count = group_positions.len() as f64;
+                    let centroid_x = group_positions.iter().map(|(x, _)| x).sum::<f64>() / count;
+                    let centroid_y = group_positions.iter().map(|(_, y)| y).sum::<f64>() / count;
+                    let dx = cx - centroid_x;
+                    let dy = cy - centroid_y;
+                    (dx * dx + dy * dy).sqrt() < dead_zone_radius
+                }
+            };
+
+            if time_and_spatial || in_dead_zone {
                 group.push(*idx);
                 found_group = true;
                 break;
@@ -2488,6 +2507,65 @@ mod tests {
         assert!(
             segments.is_empty(),
             "small jitter should not generate segments"
+        );
+    }
+
+    #[test]
+    fn dead_zone_merges_nearby_clicks() {
+        let clicks = vec![click_event(1_000.0), click_event(5_000.0)];
+        let moves = vec![move_event(999.0, 0.5, 0.5), move_event(4_999.0, 0.55, 0.55)];
+
+        let config = cap_project::AutoZoomConfig {
+            dead_zone_radius: 0.1,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            segments.len() <= 1,
+            "nearby clicks within dead zone should merge into at most 1 segment, got {}",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn dead_zone_allows_distant_clicks() {
+        let clicks = vec![click_event(1_000.0), click_event(5_000.0)];
+        let moves = vec![move_event(999.0, 0.2, 0.2), move_event(4_999.0, 0.8, 0.8)];
+
+        let config = cap_project::AutoZoomConfig {
+            dead_zone_radius: 0.1,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert_eq!(
+            segments.len(),
+            2,
+            "distant clicks outside dead zone should produce 2 separate segments, got {}",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn dead_zone_zero_disables() {
+        let clicks = vec![click_event(1_000.0), click_event(5_000.0)];
+        let moves = vec![move_event(999.0, 0.5, 0.5), move_event(4_999.0, 0.55, 0.55)];
+
+        let config = cap_project::AutoZoomConfig {
+            dead_zone_radius: 0.0,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert_eq!(
+            segments.len(),
+            2,
+            "with dead_zone_radius=0.0, nearby clicks should produce 2 segments, got {}",
+            segments.len()
         );
     }
 }

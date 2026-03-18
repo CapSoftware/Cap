@@ -469,6 +469,7 @@ pub struct AutoZoomConfig {
     pub min_segment_duration: f64,
     pub movement_event_distance_threshold: f64,
     pub movement_window_distance_threshold: f64,
+    pub dead_zone_radius: f64,
 }
 
 impl Default for AutoZoomConfig {
@@ -485,6 +486,7 @@ impl Default for AutoZoomConfig {
             min_segment_duration: 1.0,
             movement_event_distance_threshold: 0.02,
             movement_window_distance_threshold: 0.08,
+            dead_zone_radius: 0.1,
         }
     }
 }
