@@ -2122,11 +2122,8 @@ async fn generate_zoom_segments_from_clicks(
     let meta = editor_instance.meta();
     let recordings = &editor_instance.recordings;
 
-    let zoom_segments = recording::generate_zoom_segments_for_project(
-        meta,
-        recordings,
-        &settings.auto_zoom_config,
-    );
+    let zoom_segments =
+        recording::generate_zoom_segments_for_project(meta, recordings, &settings.auto_zoom_config);
 
     Ok(zoom_segments)
 }

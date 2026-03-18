@@ -6,8 +6,8 @@ import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
 import {
-	commands,
 	type AutoZoomConfig,
+	commands,
 	type GeneralSettingsStore,
 } from "~/utils/tauri";
 import { ToggleSettingItem } from "./Setting";
@@ -170,14 +170,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							<SettingSlider
 								label="Sensitivity"
 								value={
-									settings.autoZoomConfig
-										?.movementWindowDistanceThreshold ?? 0.08
+									settings.autoZoomConfig?.movementWindowDistanceThreshold ??
+									0.08
 								}
 								onChange={(v) =>
-									handleConfigChange(
-										"movementWindowDistanceThreshold",
-										v,
-									)
+									handleConfigChange("movementWindowDistanceThreshold", v)
 								}
 								min={0.02}
 								max={0.2}
@@ -190,12 +187,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							/>
 							<SettingSlider
 								label="Smoothing"
-								value={
-									settings.autoZoomConfig?.mergeGapThreshold ?? 0.8
-								}
-								onChange={(v) =>
-									handleConfigChange("mergeGapThreshold", v)
-								}
+								value={settings.autoZoomConfig?.mergeGapThreshold ?? 0.8}
+								onChange={(v) => handleConfigChange("mergeGapThreshold", v)}
 								min={0.2}
 								max={2.0}
 								step={0.1}
