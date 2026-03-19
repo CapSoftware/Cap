@@ -2629,15 +2629,11 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(_app))]
-async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
+#[instrument(skip(app))]
+async fn reset_camera_permissions(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        #[cfg(debug_assertions)]
-        let bundle_id =
-            std::env::var("CAP_BUNDLE_ID").unwrap_or_else(|_| "com.apple.Terminal".to_string());
-        #[cfg(not(debug_assertions))]
-        let bundle_id = "so.cap.desktop";
+        let bundle_id = app.config().identifier.clone();
 
         Command::new("tccutil")
             .arg("reset")
@@ -2652,12 +2648,9 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(_app))]
-async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+#[instrument(skip(app))]
+async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
+    let bundle_id = app.config().identifier.clone();
 
     Command::new("tccutil")
         .arg("reset")
