@@ -8,11 +8,11 @@ export const LogoBadge = ({ className }: { className: string }) => {
     >
       <rect width="40" height="40" fill="#fff" rx="8"></rect>
       <path
-        fill="#4785FF"
+        fill="#800020"
         d="M20 36c8.837 0 16-7.163 16-16 0-8.836-7.163-16-16-16-8.836 0-16 7.164-16 16 0 8.837 7.164 16 16 16z"
       ></path>
       <path
-        fill="#ADC9FF"
+        fill="#D4879A"
         d="M20 33c7.18 0 13-5.82 13-13S27.18 7 20 7 7 12.82 7 20s5.82 13 13 13z"
       ></path>
       <path

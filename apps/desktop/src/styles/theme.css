@@ -25,14 +25,14 @@
   --white-transparent-20: rgba(255, 255, 255, 0.2);
   --white-transparent-40: rgba(255, 255, 255, 0.4);
 
-  --blue-50: #ebf1ff;
-  --blue-100: #adc9ff;
-  --blue-200: #85adff;
-  --blue-300: #4785ff;
-  --blue-400: #3f75e0;
+  --blue-50: #ffe8ec;
+  --blue-100: #d4879a;
+  --blue-200: #b05068;
+  --blue-300: #800020;
+  --blue-400: #660019;
 
-  --blue-transparent-10: rgba(34, 64, 122, 0.1);
-  --blue-transparent-20: rgba(34, 64, 122, 0.2);
+  --blue-transparent-10: rgba(128, 0, 32, 0.1);
+  --blue-transparent-20: rgba(128, 0, 32, 0.2);
 
   --red-50: #ffebee;
   --red-100: #ffadbb;
@@ -75,14 +75,14 @@
   --white-transparent-40: rgba(18, 22, 31, 0.4);
 
   /* Accent colors remain mostly the same but adjusted for dark theme */
-  --blue-50: #1a2438;
-  --blue-100: #243352;
-  --blue-200: #2e426b;
-  --blue-300: #4785ff;
-  --blue-400: #5c8fff;
+  --blue-50: #2c1018;
+  --blue-100: #421820;
+  --blue-200: #5a2028;
+  --blue-300: #800020;
+  --blue-400: #a83040;
 
-  --blue-transparent-10: rgba(71, 133, 255, 0.1);
-  --blue-transparent-20: rgba(71, 133, 255, 0.2);
+  --blue-transparent-10: rgba(128, 0, 32, 0.1);
+  --blue-transparent-20: rgba(128, 0, 32, 0.2);
 
   --red-50: #2c1a1e;
   --red-100: #52232c;

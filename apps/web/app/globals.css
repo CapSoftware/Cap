@@ -3,15 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --primary: #005cb1;
-  --primary-2: #004c93;
-  --primary-3: #003b73;
-  --secondary: #2eb4ff;
-  --secondary-2: #1696e0;
-  --secondary-3: #117ebd;
-  --tertiary: #c5eaff;
-  --tertiary-2: #d3e5ff;
-  --tertiary-3: #e0edff;
+  --primary: #800020;
+  --primary-2: #660019;
+  --primary-3: #4d0013;
+  --secondary: #c94060;
+  --secondary-2: #a8303e;
+  --secondary-3: #8b1a2a;
+  --tertiary: #ffe0e5;
+  --tertiary-2: #ffc8d0;
+  --tertiary-3: #ffb0bc;
   --filler: #efefef;
   --filler-2: #e4e4e4;
   --filler-3: #e2e2e2;
@@ -180,7 +180,7 @@ label {
   inset: 0;
   padding: 1px;
   border-radius: 100px;
-  background: linear-gradient(to bottom, #446FAE 20%, transparent 90%);
+  background: linear-gradient(to bottom, #8b1a2a 20%, transparent 90%);
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
@@ -203,7 +203,7 @@ label {
 }
 
 .custom-bg {
-  background: linear-gradient(180deg, #4785FF 0%, #85ADFF 100%);
+  background: linear-gradient(180deg, #800020 0%, #c94060 100%);
 }
 
 .muted-custom-bg {
