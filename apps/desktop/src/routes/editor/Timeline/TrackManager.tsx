@@ -1,44 +1,53 @@
 import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
+import { cx } from "cva";
 import type { JSX } from "solid-js";
-
 import type { TimelineTrackType } from "../context";
 
 type TrackManagerOption = {
 	type: TimelineTrackType;
 	label: string;
-	icon: JSX.Element;
 	active: boolean;
 	available: boolean;
 	locked: boolean;
+	supportsMultiple?: boolean;
 };
 
 export function TrackManager(props: {
 	options: TrackManagerOption[];
 	onToggle(type: TimelineTrackType, next: boolean): void;
+	onAdd(type: TimelineTrackType): void;
 }) {
 	let addButton: HTMLButtonElement | undefined;
 
 	const handleOpenMenu = async () => {
 		try {
-			const items = await Promise.all(
-				props.options.map((option) => {
-					if (!option.locked) {
-						return CheckMenuItem.new({
-							text: option.label,
-							checked: option.active,
-							enabled: option.available,
-							action: () => props.onToggle(option.type, !option.active),
-						});
-					}
+			const items = [];
+			for (const option of props.options) {
+				if (option.locked) {
+					continue;
+				}
 
-					return CheckMenuItem.new({
+				if (option.supportsMultiple) {
+					items.push(
+						await MenuItem.new({
+							text: `Add ${option.label} track`,
+							enabled: option.available,
+							action: () => props.onAdd(option.type),
+						}),
+					);
+					continue;
+				}
+
+				items.push(
+					await CheckMenuItem.new({
 						text: option.label,
 						checked: option.active,
-						enabled: false,
-					});
-				}),
-			);
+						enabled: option.available,
+						action: () => props.onToggle(option.type, !option.active),
+					}),
+				);
+			}
 
 			const menu = await Menu.new({ items });
 			const rect = addButton?.getBoundingClientRect();
@@ -66,10 +75,13 @@ export function TrackManager(props: {
 	);
 }
 
-export function TrackIcon(props: { icon: JSX.Element }) {
+export function TrackIcon(props: { icon: JSX.Element; class?: string }) {
 	return (
 		<div
-			class="relative z-10 w-[3.5rem] h-[3.25rem] flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40"
+			class={cx(
+				"relative z-10 w-[3.5rem] h-[3.25rem] flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40",
+				props.class,
+			)}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
 			{props.icon}

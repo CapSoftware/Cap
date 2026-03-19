@@ -1,12 +1,19 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
-import { createMemo, createRoot, For } from "solid-js";
+import { createMemo, createRoot, createSignal, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
 import { defaultMaskSegment } from "../masks";
+import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
 import { useTimelineContext } from "./context";
-import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
+import {
+	SegmentContent,
+	SegmentHandle,
+	SegmentRoot,
+	TrackRoot,
+	useSetPreviewTime,
+} from "./Track";
 
 export type MaskSegmentDragState =
 	| { type: "idle" }
@@ -17,6 +24,7 @@ const MIN_SEGMENT_SECS = 1;
 const MIN_SEGMENT_PIXELS = 80;
 
 export function MaskTrack(props: {
+	laneIndex: number;
 	onDragStateChanged: (v: MaskSegmentDragState) => void;
 	handleUpdatePlayhead: (e: MouseEvent) => void;
 }) {
@@ -30,23 +38,33 @@ export function MaskTrack(props: {
 		projectActions,
 	} = useEditorContext();
 	const { secsPerPixel, timelineBounds } = useTimelineContext();
+	const [draggingSegment, setDraggingSegment] = createSignal(false);
+	const [hoveringTrack, setHoveringTrack] = createSignal(false);
+	const setPreviewTime = useSetPreviewTime();
 
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
 	const maskSegments = () => project.timeline?.maskSegments ?? [];
+	const laneSegments = createMemo(() =>
+		maskSegments()
+			.map((segment, index) => ({ segment, index }))
+			.filter(({ segment }) => getSegmentTrack(segment) === props.laneIndex),
+	);
 
 	const neighborBounds = (index: number) => {
-		const segments = maskSegments();
+		const segments = laneSegments();
+		const laneIndex = segments.findIndex((segment) => segment.index === index);
 		return {
-			prevEnd: segments[index - 1]?.end ?? 0,
-			nextStart: segments[index + 1]?.start ?? totalDuration(),
+			prevEnd: segments[laneIndex - 1]?.segment.end ?? 0,
+			nextStart: segments[laneIndex + 1]?.segment.start ?? totalDuration(),
 		};
 	};
 
 	const findPlacement = (time: number, length: number) => {
 		const gaps: Array<{ start: number; end: number }> = [];
-		const sorted = maskSegments()
+		const sorted = laneSegments()
+			.map(({ segment }) => segment)
 			.slice()
 			.sort((a, b) => a.start - b.start);
 
@@ -94,11 +112,30 @@ export function MaskTrack(props: {
 			"maskSegments",
 			produce((segments) => {
 				segments ??= [];
-				segments.push(defaultMaskSegment(placement.start, placement.end));
-				segments.sort((a, b) => a.start - b.start);
+				segments.push({
+					...defaultMaskSegment(placement.start, placement.end),
+					track: props.laneIndex,
+				});
+				sortTrackSegments(segments);
 			}),
 		);
 	};
+
+	const newSegmentDetails = createMemo(() => {
+		if (!hoveringTrack() || editorState.previewTime === null) return;
+
+		const previewTime = editorState.previewTime;
+
+		if (
+			laneSegments().some(
+				({ segment }) =>
+					previewTime > segment.start && previewTime < segment.end,
+			)
+		)
+			return;
+
+		return findPlacement(previewTime, Math.min(minDuration(), totalDuration()));
+	});
 
 	const handleBackgroundMouseDown = (e: MouseEvent) => {
 		if (e.button !== 0) return;
@@ -123,6 +160,7 @@ export function MaskTrack(props: {
 			let initialMouseX: number | null = null;
 
 			const resumeHistory = projectHistory.pause();
+			setDraggingSegment(true);
 			props.onDragStateChanged({ type: "movePending" });
 
 			function finish(e: MouseEvent) {
@@ -177,6 +215,7 @@ export function MaskTrack(props: {
 					props.handleUpdatePlayhead(e);
 				}
 				props.onDragStateChanged({ type: "idle" });
+				setDraggingSegment(false);
 			}
 
 			function handleUpdate(event: MouseEvent) {
@@ -207,26 +246,37 @@ export function MaskTrack(props: {
 
 	return (
 		<TrackRoot
-			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "mask")}
-			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
+			onMouseEnter={() => {
+				setHoveringTrack(true);
+				setEditorState("timeline", "hoveredTrack", "mask");
+			}}
+			onMouseLeave={() => {
+				setHoveringTrack(false);
+				setEditorState("timeline", "hoveredTrack", null);
+			}}
 			onMouseDown={handleBackgroundMouseDown}
 		>
 			<For
-				each={maskSegments()}
+				each={laneSegments()}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-						<div>Click to add a mask</div>
-						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
-							(Combine sensitive blur or highlight masks)
+					<Show
+						when={!newSegmentDetails()}
+						fallback={<div class="w-full rounded-xl bg-transparent" />}
+					>
+						<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
+							<div>Click to add a mask</div>
+							<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+								(Combine sensitive blur or highlight masks)
+							</div>
 						</div>
-					</div>
+					</Show>
 				}
 			>
-				{(segment, i) => {
+				{({ segment, index }) => {
 					const isSelected = createMemo(() => {
 						const selection = editorState.timeline.selection;
 						if (!selection || selection.type !== "mask") return false;
-						return selection.indices.includes(i());
+						return selection.indices.includes(index);
 					});
 
 					const contentLabel = () =>
@@ -237,7 +287,7 @@ export function MaskTrack(props: {
 					return (
 						<SegmentRoot
 							data-mask-segment
-							data-index={i()}
+							data-index={index}
 							class={cx(
 								"border duration-200 hover:border-gray-12 transition-colors group",
 								"bg-gradient-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022]",
@@ -251,16 +301,16 @@ export function MaskTrack(props: {
 									const rect = e.currentTarget.getBoundingClientRect();
 									const fraction = (e.clientX - rect.left) / rect.width;
 									const splitTime = fraction * segmentWidth();
-									projectActions.splitMaskSegment(i(), splitTime);
+									projectActions.splitMaskSegment(index, splitTime);
 								}
 							}}
 						>
 							<SegmentHandle
 								position="start"
 								onMouseDown={createMouseDownDrag(
-									i,
+									() => index,
 									() => {
-										const bounds = neighborBounds(i());
+										const bounds = neighborBounds(index);
 										const start = segment.start;
 										const minValue = bounds.prevEnd;
 										const maxValue = Math.max(
@@ -278,24 +328,31 @@ export function MaskTrack(props: {
 											value.minValue,
 											Math.min(value.maxValue, value.start + delta),
 										);
-										setProject("timeline", "maskSegments", i(), "start", next);
+										setProject(
+											"timeline",
+											"maskSegments",
+											index,
+											"start",
+											next,
+										);
 										setProject(
 											"timeline",
 											"maskSegments",
 											produce((items) => {
-												items.sort((a, b) => a.start - b.start);
+												sortTrackSegments(items);
 											}),
 										);
+										setPreviewTime(next);
 									},
 								)}
 							/>
 							<SegmentContent
 								class="flex justify-center items-center cursor-grab px-3"
 								onMouseDown={createMouseDownDrag(
-									i,
+									() => index,
 									() => {
 										const original = { ...segment };
-										const bounds = neighborBounds(i());
+										const bounds = neighborBounds(index);
 										const minDelta = bounds.prevEnd - original.start;
 										const maxDelta = bounds.nextStart - original.end;
 										return {
@@ -312,7 +369,7 @@ export function MaskTrack(props: {
 											upperBound,
 											Math.max(lowerBound, delta),
 										);
-										setProject("timeline", "maskSegments", i(), {
+										setProject("timeline", "maskSegments", index, {
 											...value.original,
 											start: value.original.start + clampedDelta,
 											end: value.original.end + clampedDelta,
@@ -321,7 +378,7 @@ export function MaskTrack(props: {
 											"timeline",
 											"maskSegments",
 											produce((items) => {
-												items.sort((a, b) => a.start - b.start);
+												sortTrackSegments(items);
 											}),
 										);
 									},
@@ -341,9 +398,9 @@ export function MaskTrack(props: {
 							<SegmentHandle
 								position="end"
 								onMouseDown={createMouseDownDrag(
-									i,
+									() => index,
 									() => {
-										const bounds = neighborBounds(i());
+										const bounds = neighborBounds(index);
 										const end = segment.end;
 										const minValue = segment.start + minDuration();
 										const maxValue = Math.max(minValue, bounds.nextStart);
@@ -355,14 +412,15 @@ export function MaskTrack(props: {
 											value.minValue,
 											Math.min(value.maxValue, value.end + delta),
 										);
-										setProject("timeline", "maskSegments", i(), "end", next);
+										setProject("timeline", "maskSegments", index, "end", next);
 										setProject(
 											"timeline",
 											"maskSegments",
 											produce((items) => {
-												items.sort((a, b) => a.start - b.start);
+												sortTrackSegments(items);
 											}),
 										);
+										setPreviewTime(next);
 									},
 								)}
 							/>
@@ -370,6 +428,21 @@ export function MaskTrack(props: {
 					);
 				}}
 			</For>
+			<Show when={!draggingSegment() && newSegmentDetails()}>
+				{(details) => (
+					<SegmentRoot
+						class="pointer-events-none z-10 border border-transparent"
+						innerClass="ring-red-300"
+						segment={details()}
+					>
+						<SegmentContent class="bg-gradient-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
+							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
+								+
+							</p>
+						</SegmentContent>
+					</SegmentRoot>
+				)}
+			</Show>
 		</TrackRoot>
 	);
 }
