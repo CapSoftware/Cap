@@ -2025,27 +2025,25 @@ mod tests {
                 let mut pts_duration = timestamp.checked_sub(off).unwrap_or(Duration::ZERO);
 
                 let mut deferred: Option<Duration> = None;
-                if let Some(last_pts) = lv {
-                    if pts_duration <= last_pts {
-                        let adjusted = last_pts + frame_dur;
-                        let new_off = timestamp.checked_sub(adjusted);
-                        if defer_offset {
-                            deferred = new_off;
-                        } else if let Some(o) = new_off {
-                            off = o;
-                        }
-                        pts_duration = adjusted;
+                if let Some(last_pts) = lv
+                    && pts_duration <= last_pts
+                {
+                    let adjusted = last_pts + frame_dur;
+                    let new_off = timestamp.checked_sub(adjusted);
+                    if defer_offset {
+                        deferred = new_off;
+                    } else if let Some(o) = new_off {
+                        off = o;
                     }
+                    pts_duration = adjusted;
                 }
 
                 let pts_us = pts_duration.as_micros() as i64;
                 let appended = i != fail_at_index;
 
                 if appended {
-                    if defer_offset {
-                        if let Some(o) = deferred {
-                            off = o;
-                        }
+                    if defer_offset && let Some(o) = deferred {
+                        off = o;
                     }
                     lv = Some(pts_duration);
                 }
@@ -3068,7 +3066,7 @@ mod tests {
                 Err(_) => {}
             }
 
-            if frame_idx % 4 == 0 {
+            if frame_idx.is_multiple_of(4) {
                 let audio_frame = create_test_audio_frame(48000, 3840);
                 let _ = encoder.queue_audio_frame(&audio_frame, ts);
             }
