@@ -1,6 +1,10 @@
 import { createWritableMemo } from "@solid-primitives/memo";
 import { TextInput } from "./TextInput";
 
+export function getColorPreviewBorderColor(color: string) {
+	return `color-mix(in srgb, ${color} 82%, black)`;
+}
+
 export function rgbToHex(rgb: [number, number, number]) {
 	return `#${rgb
 		.map((c) => c.toString(16).padStart(2, "0"))
@@ -44,6 +48,9 @@ export function RgbInput(props: {
 				class="size-[2rem] rounded-[0.5rem]"
 				style={{
 					"background-color": rgbToHex(props.value),
+					"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
+						rgbToHex(props.value),
+					)}`,
 				}}
 				onClick={() => colorInput.click()}
 			/>
