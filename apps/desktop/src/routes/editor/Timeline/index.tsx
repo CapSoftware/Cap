@@ -21,6 +21,8 @@ import "./styles.css";
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
+import type { MaskSegment } from "../masks";
+import type { TextSegment } from "../text";
 import { getTrackRowsWithCount, getUsedTrackCount } from "../timelineTracks";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
@@ -82,6 +84,19 @@ const trackDefinitions: TrackDefinition[] = [
 		locked: false,
 	},
 ];
+
+function deleteTrackLane<T extends { track?: number }>(
+	segments: T[],
+	laneIndex: number,
+) {
+	return segments
+		.filter((segment) => (segment.track ?? 0) !== laneIndex)
+		.map<T>((segment) => {
+			const track = segment.track ?? 0;
+			if (track <= laneIndex) return segment;
+			return { ...segment, track: track - 1 };
+		});
+}
 
 export function Timeline() {
 	const {
@@ -190,19 +205,24 @@ export function Timeline() {
 	function handleDeleteTrackLane(type: "text" | "mask", laneIndex: number) {
 		const resumeHistory = projectHistory.pause();
 		const currentTrackCount = trackState()[type];
-		const sourceSegments =
+		const nextTextSegments =
 			type === "text"
-				? (project.timeline?.textSegments ?? [])
-				: (project.timeline?.maskSegments ?? []);
-		const nextSegments = sourceSegments
-			.filter((segment) => (segment.track ?? 0) !== laneIndex)
-			.map((segment) => {
-				const track = segment.track ?? 0;
-				if (track <= laneIndex) return segment;
-				return { ...segment, track: track - 1 };
-			});
+				? deleteTrackLane<TextSegment>(
+						project.timeline?.textSegments ?? [],
+						laneIndex,
+					)
+				: null;
+		const nextMaskSegments =
+			type === "mask"
+				? deleteTrackLane<MaskSegment>(
+						project.timeline?.maskSegments ?? [],
+						laneIndex,
+					)
+				: null;
 		const nextTrackCount = Math.max(
-			getUsedTrackCount(nextSegments),
+			type === "text"
+				? getUsedTrackCount(nextTextSegments ?? [])
+				: getUsedTrackCount(nextMaskSegments ?? []),
 			currentTrackCount - 1,
 			0,
 		);
@@ -217,10 +237,10 @@ export function Timeline() {
 					const timeline = project.timeline;
 					if (!timeline) return;
 
-					if (type === "text") {
-						timeline.textSegments = nextSegments;
-					} else {
-						timeline.maskSegments = nextSegments;
+					if (type === "text" && nextTextSegments) {
+						timeline.textSegments = nextTextSegments;
+					} else if (nextMaskSegments) {
+						timeline.maskSegments = nextMaskSegments;
 					}
 				}),
 			);

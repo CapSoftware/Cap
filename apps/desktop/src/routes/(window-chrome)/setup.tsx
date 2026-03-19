@@ -29,7 +29,15 @@ function isPermitted(status?: OSPermissionStatus): boolean {
 	return status === "granted" || status === "notNeeded";
 }
 
-const permissions = [
+type SetupPermission = {
+	name: string;
+	key: OSPermission;
+	description: string;
+	requiresManualGrant: boolean;
+	optional?: boolean;
+};
+
+const permissions: readonly SetupPermission[] = [
 	{
 		name: "Screen Recording",
 		key: "screenRecording" as const,
@@ -59,7 +67,7 @@ const permissions = [
 		requiresManualGrant: false,
 		optional: true,
 	},
-] as const;
+];
 
 export default function () {
 	const [initialCheck, setInitialCheck] = createSignal(true);
