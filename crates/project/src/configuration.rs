@@ -669,6 +669,8 @@ pub struct MaskKeyframes {
 pub struct MaskSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub track: u32,
     #[serde(default = "MaskSegment::default_enabled")]
     pub enabled: bool,
     pub mask_type: MaskKind,
@@ -707,6 +709,8 @@ impl MaskSegment {
 pub struct TextSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub track: u32,
     #[serde(default = "TextSegment::default_enabled")]
     pub enabled: bool,
     #[serde(default = "TextSegment::default_content")]
