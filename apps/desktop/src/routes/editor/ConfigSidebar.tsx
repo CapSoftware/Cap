@@ -65,7 +65,12 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
-import { hexToRgb, RgbInput, rgbToHex } from "./color-utils";
+import {
+	getColorPreviewBorderColor,
+	hexToRgb,
+	RgbInput,
+	rgbToHex,
+} from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
@@ -2372,8 +2377,11 @@ function HexColorInput(props: {
 			<div class="relative">
 				<button
 					type="button"
-					class="w-10 h-10 rounded-md border border-gray-4 cursor-pointer hover:border-gray-5 transition-colors"
-					style={{ "background-color": text() }}
+					class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
+					style={{
+						"background-color": text(),
+						"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
+					}}
 					onClick={() => colorInput?.click()}
 				/>
 				<input
