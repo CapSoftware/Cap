@@ -38,6 +38,8 @@
 		"test:suite:encoding": "pnpm with-env cargo run -p cap-test -- suite encoding",
 		"test:suite:playback": "pnpm with-env cargo run -p cap-test -- suite playback",
 		"test:suite:sync": "pnpm with-env cargo run -p cap-test -- suite sync",
+		"test:desktop:memory": "pnpm --dir apps/desktop test:memory",
+		"test:desktop:memory:unit": "pnpm --dir apps/desktop test:memory:unit",
 		"web": "pnpm --filter=@cap/web",
 		"env-setup": "node scripts/env-cli.js",
 		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",
