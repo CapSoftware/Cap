@@ -3033,15 +3033,6 @@ pub fn create_shader_render_pipeline(
     })
 }
 
-fn srgb_to_linear(c: u16) -> f32 {
-    let c = c as f32 / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 #[cfg(test)]
 mod project_uniforms_tests {
     use super::*;
