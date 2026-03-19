@@ -494,6 +494,9 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		width: number;
 		data: ImageData;
 	} | null>();
+	let reusableFrameData: ImageData | null = null;
+	let reusableFrameWidth = 0;
+	let reusableFrameHeight = 0;
 
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
@@ -530,8 +533,30 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		onCleanup(() => resizeObserver.disconnect());
 	});
 
+	function getReusableFrameData(width: number, height: number) {
+		if (
+			!reusableFrameData ||
+			reusableFrameWidth !== width ||
+			reusableFrameHeight !== height
+		) {
+			reusableFrameData = new ImageData(width, height);
+			reusableFrameWidth = width;
+			reusableFrameHeight = height;
+		}
+
+		return reusableFrameData;
+	}
+
 	function imageDataHandler(imageData: { width: number; data: ImageData }) {
-		setLatestFrame(imageData);
+		const currentFrame = latestFrame();
+		if (
+			!currentFrame ||
+			currentFrame.data !== imageData.data ||
+			currentFrame.data.width !== imageData.data.width ||
+			currentFrame.data.height !== imageData.data.height
+		) {
+			setLatestFrame(imageData);
+		}
 
 		const currentDimensions = frameDimensions();
 		if (
@@ -619,27 +644,19 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				return;
 			}
 
-			let pixels: Uint8ClampedArray;
-
+			const imageData = getReusableFrameData(width, height);
 			if (strideBytes === expectedRowBytes) {
-				pixels = source.subarray(0, expectedLength);
+				imageData.data.set(source.subarray(0, expectedLength));
 			} else {
-				pixels = new Uint8ClampedArray(expectedLength);
 				for (let row = 0; row < height; row += 1) {
 					const srcStart = row * strideBytes;
 					const destStart = row * expectedRowBytes;
-					pixels.set(
+					imageData.data.set(
 						source.subarray(srcStart, srcStart + expectedRowBytes),
 						destStart,
 					);
 				}
 			}
-
-			const imageData = new ImageData(
-				new Uint8ClampedArray(pixels),
-				width,
-				height,
-			);
 			imageDataHandler({ width, data: imageData });
 		};
 
@@ -682,6 +699,9 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 
 	onCleanup(() => {
+		reusableFrameData = null;
+		reusableFrameWidth = 0;
+		reusableFrameHeight = 0;
 		stopSocket();
 	});
 

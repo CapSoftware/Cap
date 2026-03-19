@@ -947,9 +947,37 @@ function CameraPreviewInline() {
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
 	let isCleanedUp = false;
+	let reusableFrame: ImageData | null = null;
+	let reusableFrameWidth = 0;
+	let reusableFrameHeight = 0;
 
 	const cameraWsPort = (window as any).__CAP__?.cameraWsPort;
 	const hasCameraSelected = () => rawOptions.cameraID !== null;
+
+	const getReusableFrame = (width: number, height: number) => {
+		if (
+			!reusableFrame ||
+			reusableFrameWidth !== width ||
+			reusableFrameHeight !== height
+		) {
+			reusableFrame = new ImageData(width, height);
+			reusableFrameWidth = width;
+			reusableFrameHeight = height;
+		}
+
+		return reusableFrame;
+	};
+
+	const drawFrame = (image: ImageData) => {
+		const canvas = canvasRef;
+		if (!canvas) return;
+		if (canvas.width !== image.width || canvas.height !== image.height) {
+			canvas.width = image.width;
+			canvas.height = image.height;
+		}
+		const ctx = canvas.getContext("2d");
+		ctx?.putImageData(image, 0, 0);
+	};
 
 	const scheduleReconnect = () => {
 		if (isCleanedUp) return;
@@ -1043,23 +1071,32 @@ function CameraPreviewInline() {
 
 			if (expectedLength > MAX_FRAME_SIZE) return;
 
-			let pixels: Uint8ClampedArray;
+			const imageData = getReusableFrame(width, height);
 
 			if (strideBytes === expectedRowBytes) {
-				pixels = source.subarray(0, expectedLength);
+				imageData.data.set(source.subarray(0, expectedLength));
 			} else {
-				pixels = new Uint8ClampedArray(expectedLength);
 				for (let row = 0; row < height; row += 1) {
 					const srcStart = row * strideBytes;
 					const destStart = row * expectedRowBytes;
-					pixels.set(
+					imageData.data.set(
 						source.subarray(srcStart, srcStart + expectedRowBytes),
 						destStart,
 					);
 				}
 			}
 
-			setFrame(new ImageData(new Uint8ClampedArray(pixels), width, height));
+			drawFrame(imageData);
+
+			const currentFrame = frame();
+			if (
+				!currentFrame ||
+				currentFrame !== imageData ||
+				currentFrame.width !== imageData.width ||
+				currentFrame.height !== imageData.height
+			) {
+				setFrame(imageData);
+			}
 		};
 
 		return socket;
@@ -1090,6 +1127,9 @@ function CameraPreviewInline() {
 			}
 			ws = undefined;
 			setFrame(null);
+			reusableFrame = null;
+			reusableFrameWidth = 0;
+			reusableFrameHeight = 0;
 			setConnectionFailed(false);
 		}
 	});
@@ -1099,6 +1139,9 @@ function CameraPreviewInline() {
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
 		}
+		reusableFrame = null;
+		reusableFrameWidth = 0;
+		reusableFrameHeight = 0;
 		ws?.close();
 	});
 
