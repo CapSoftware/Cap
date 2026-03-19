@@ -60,7 +60,7 @@ impl From<BackgroundSource> for Background {
                 ],
                 angle: angle as f32,
                 noise_intensity: noise_intensity.unwrap_or(0.0),
-                noise_scale: noise_scale.unwrap_or(50.0),
+                noise_scale: noise_scale.unwrap_or(3.0),
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
                 if let Some(path) = path
