@@ -575,6 +575,24 @@ mod tests {
     }
 
     #[test]
+    fn test_color_conversion_uses_normalized_byte_values() {
+        let source = BackgroundSource::Color {
+            value: [128, 64, 32],
+            alpha: 200,
+        };
+        let background = Background::from(source);
+        match background {
+            Background::Color(color) => {
+                assert!((color[0] - (128.0 / 255.0)).abs() < 1e-6);
+                assert!((color[1] - (64.0 / 255.0)).abs() < 1e-6);
+                assert!((color[2] - (32.0 / 255.0)).abs() < 1e-6);
+                assert!((color[3] - (200.0 / 255.0)).abs() < 1e-6);
+            }
+            _ => panic!("Expected Color variant"),
+        }
+    }
+
+    #[test]
     fn test_gradient_conversion() {
         let source = BackgroundSource::Gradient {
             from: [0, 255, 0],
