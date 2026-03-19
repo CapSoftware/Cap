@@ -2629,11 +2629,11 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(app))]
-async fn reset_camera_permissions(app: AppHandle) -> Result<(), String> {
+#[instrument(skip(_app))]
+async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let bundle_id = app.config().identifier.clone();
+        let bundle_id = _app.config().identifier.clone();
 
         Command::new("tccutil")
             .arg("reset")
