@@ -112,6 +112,7 @@ export type CanvasControls = {
 	initDirectCanvas: (canvas: HTMLCanvasElement) => void;
 	resetFrameState: () => void;
 	captureFrame: () => Promise<Blob | null>;
+	dispose: () => void;
 };
 
 interface ReadyMessage {
@@ -252,6 +253,8 @@ export function createImageDataWS(
 		if (isCleanedUp) return;
 		isCleanedUp = true;
 
+		ws.onmessage = null;
+
 		if (producer) {
 			producer.signalShutdown();
 			producer = null;
@@ -275,15 +278,27 @@ export function createImageDataWS(
 			mainThreadWebGPU = null;
 		}
 
+		mainThreadWebGPUInitializing = false;
 		pendingNv12Frame = null;
+		mainThreadNv12Buffer = null;
+		mainThreadNv12BufferSize = 0;
 		cachedDirectImageData = null;
 		cachedDirectWidth = 0;
 		cachedDirectHeight = 0;
 		cachedStrideImageData = null;
 		cachedStrideWidth = 0;
 		cachedStrideHeight = 0;
+		directCanvas = null;
+		directCtx = null;
 
 		lastRenderedFrameData = null;
+		globalFpsStatsGetter =
+			globalFpsStatsGetter === getLocalFpsStats ? null : globalFpsStatsGetter;
+		if (
+			(globalThis as Record<string, unknown>).__capFpsStats === getLocalFpsStats
+		) {
+			delete (globalThis as Record<string, unknown>).__capFpsStats;
+		}
 
 		setIsConnected(false);
 	}
@@ -395,6 +410,11 @@ export function createImageDataWS(
 					disposeWebGPU(mainThreadWebGPU);
 					mainThreadWebGPU = null;
 				}
+				if (strideWorker) {
+					strideWorker.onmessage = null;
+					strideWorker.terminate();
+					strideWorker = null;
+				}
 				directCtx = null;
 				mainThreadWebGPUInitializing = false;
 			}
@@ -436,38 +456,43 @@ export function createImageDataWS(
 				});
 			}
 
-			strideWorker = new StrideCorrectionWorker();
-			strideWorker.onmessage = (e: MessageEvent<StrideCorrectionResponse>) => {
-				if (e.data.type !== "corrected" || !directCanvas || !directCtx) return;
+			if (!strideWorker) {
+				strideWorker = new StrideCorrectionWorker();
+				strideWorker.onmessage = (
+					e: MessageEvent<StrideCorrectionResponse>,
+				) => {
+					if (e.data.type !== "corrected" || !directCanvas || !directCtx)
+						return;
 
-				const { buffer, width, height } = e.data;
-				if (directCanvas.width !== width || directCanvas.height !== height) {
-					directCanvas.width = width;
-					directCanvas.height = height;
-				}
+					const { buffer, width, height } = e.data;
+					if (directCanvas.width !== width || directCanvas.height !== height) {
+						directCanvas.width = width;
+						directCanvas.height = height;
+					}
 
-				const frameData = new Uint8ClampedArray(buffer);
-				if (
-					!cachedStrideImageData ||
-					cachedStrideWidth !== width ||
-					cachedStrideHeight !== height
-				) {
-					cachedStrideImageData = new ImageData(width, height);
-					cachedStrideWidth = width;
-					cachedStrideHeight = height;
-				}
-				cachedStrideImageData.data.set(frameData);
-				directCtx.putImageData(cachedStrideImageData, 0, 0);
+					const frameData = new Uint8ClampedArray(buffer);
+					if (
+						!cachedStrideImageData ||
+						cachedStrideWidth !== width ||
+						cachedStrideHeight !== height
+					) {
+						cachedStrideImageData = new ImageData(width, height);
+						cachedStrideWidth = width;
+						cachedStrideHeight = height;
+					}
+					cachedStrideImageData.data.set(frameData);
+					directCtx.putImageData(cachedStrideImageData, 0, 0);
 
-				storeRenderedFrame(
-					cachedStrideImageData.data,
-					width,
-					height,
-					width * 4,
-					false,
-				);
-				onmessage({ width, height });
-			};
+					storeRenderedFrame(
+						cachedStrideImageData.data,
+						width,
+						height,
+						width * 4,
+						false,
+					);
+					onmessage({ width, height });
+				};
+			}
 		},
 		resetFrameState: () => {
 			worker.postMessage({ type: "reset-frame-state" });
@@ -495,6 +520,15 @@ export function createImageDataWS(
 			return new Promise<Blob | null>((resolve) => {
 				canvas.toBlob((blob) => resolve(blob), "image/png");
 			});
+		},
+		dispose: () => {
+			cleanup();
+			if (
+				ws.readyState !== WebSocket.CLOSING &&
+				ws.readyState !== WebSocket.CLOSED
+			) {
+				ws.close();
+			}
 		},
 	};
 
