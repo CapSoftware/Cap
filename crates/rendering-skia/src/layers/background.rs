@@ -27,9 +27,9 @@ impl From<BackgroundSource> for Background {
     fn from(source: BackgroundSource) -> Self {
         match source {
             BackgroundSource::Color { value, .. } => Background::Color(value),
-            BackgroundSource::Gradient { from, to, angle } => {
-                Background::Gradient { from, to, angle }
-            }
+            BackgroundSource::Gradient {
+                from, to, angle, ..
+            } => Background::Gradient { from, to, angle },
             BackgroundSource::Image { path } => {
                 if let Some(path) = path {
                     Background::Image {
@@ -344,6 +344,10 @@ mod tests {
             from: [65535, 0, 0],
             to: [0, 0, 65535],
             angle: 45,
+            noise_intensity: None,
+            noise_scale: None,
+            animated: None,
+            animation_speed: None,
         };
         let gradient_bg = Background::from(gradient_source);
         assert!(matches!(
