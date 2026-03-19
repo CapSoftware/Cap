@@ -61,7 +61,7 @@ fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
             overlay_channel(color.b, n),
         );
 
-        let intensity = u.noise_intensity / 100.0;
+        let intensity = (u.noise_intensity / 100.0) * 0.25;
         color = vec4<f32>(mix(color.rgb, blended, intensity), color.a);
     }
 

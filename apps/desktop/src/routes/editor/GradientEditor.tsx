@@ -34,6 +34,9 @@ export const GRADIENT_PRESETS = [
 	{ from: [255, 0, 255], to: [0, 255, 0] },
 ] satisfies Array<{ from: RGBColor; to: RGBColor }>;
 
+const DEFAULT_NOISE_SCALE = 3;
+const NOISE_INTENSITY_MULTIPLIER = 0.25;
+
 function randomColor(): RGBColor {
 	return [
 		Math.floor(Math.random() * 256),
@@ -53,7 +56,7 @@ export function GradientEditor() {
 
 	const angle = () => source()?.angle ?? 90;
 	const noiseIntensity = () => source()?.noise_intensity ?? 0;
-	const noiseScale = () => source()?.noise_scale ?? 50;
+	const noiseScale = () => source()?.noise_scale ?? DEFAULT_NOISE_SCALE;
 
 	const updateGradient = (updates: Partial<GradientSourceFields>) => {
 		setProject("background", "source", updates as Record<string, unknown>);
@@ -72,6 +75,10 @@ export function GradientEditor() {
 		return (0.3 + ((100 - scale) / 100) * 1.2).toFixed(3);
 	});
 
+	const noiseOpacity = createMemo(
+		() => (noiseIntensity() / 100) * NOISE_INTENSITY_MULTIPLIER,
+	);
+
 	return (
 		<Show when={source()}>
 			{(src) => (
@@ -88,7 +95,7 @@ export function GradientEditor() {
 							<svg
 								class="absolute inset-0 w-full h-full pointer-events-none"
 								style={{
-									opacity: noiseIntensity() / 100,
+									opacity: noiseOpacity(),
 									"mix-blend-mode": "overlay",
 								}}
 							>
