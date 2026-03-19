@@ -71,10 +71,10 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
         let needs_activation =
             matches!(_permission, OSPermission::Camera | OSPermission::Microphone);
 
-        if needs_activation {
-            if let Err(err) = _app.set_activation_policy(tauri::ActivationPolicy::Regular) {
-                tracing::warn!("Failed to set activation policy to Regular: {err}");
-            }
+        if needs_activation
+            && let Err(err) = _app.set_activation_policy(tauri::ActivationPolicy::Regular)
+        {
+            tracing::warn!("Failed to set activation policy to Regular: {err}");
         }
 
         match _permission {
@@ -120,10 +120,10 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
             }
         }
 
-        if needs_activation {
-            if let Err(err) = _app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-                tracing::warn!("Failed to restore activation policy to Accessory: {err}");
-            }
+        if needs_activation
+            && let Err(err) = _app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+        {
+            tracing::warn!("Failed to restore activation policy to Accessory: {err}");
         }
     }
 }
