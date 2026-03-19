@@ -22,6 +22,7 @@ import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
 import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
+import { getColorPreviewBorderColor } from "./color-utils";
 import { useEditorContext } from "./context";
 import { TextInput } from "./TextInput";
 import {
@@ -128,16 +129,17 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 		<div class="flex flex-row items-center gap-[0.75rem] relative">
 			<button
 				type="button"
-				class="size-[3rem] rounded-[0.5rem]"
+				class="size-[2rem] rounded-[0.5rem]"
 				style={{
 					"background-color": text(),
+					"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
 				}}
 				onClick={() => colorInput.click()}
 			/>
 			<input
 				ref={colorInput}
 				type="color"
-				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
+				class="absolute left-0 bottom-0 size-[2rem] opacity-0"
 				value={text()}
 				onChange={(e) => {
 					setText(e.target.value);

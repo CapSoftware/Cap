@@ -7,7 +7,9 @@
 		"preparescript": "node scripts/prepare.js",
 		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3002",
 		"build": "vinxi build",
-		"tauri": "tauri"
+		"tauri": "tauri",
+		"test:memory": "node scripts/desktop-memory-soak.js",
+		"test:memory:unit": "vitest run scripts/desktop-memory-soak.test.js"
 	},
 	"dependencies": {
 		"@aerofoil/rive-solid-canvas": "^2.1.4",

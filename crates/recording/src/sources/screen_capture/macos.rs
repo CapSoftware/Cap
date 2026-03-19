@@ -576,10 +576,6 @@ impl Capturer {
 
         Ok(())
     }
-
-    fn mark_stopped(&self) {
-        self.started.store(false, atomic::Ordering::Relaxed);
-    }
 }
 
 pub struct VideoSourceConfig {
@@ -623,9 +619,7 @@ impl output_pipeline::VideoSource for VideoSource {
             drop_counter,
         } = config;
 
-        let monitor_capturer = capturer.clone();
         let monitor_cancel = cancel_token.clone();
-        let health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn("screen-capture-monitor", async move {
             loop {
                 select! {
@@ -641,25 +635,11 @@ impl output_pipeline::VideoSource for VideoSource {
                         };
 
                         if is_system_stop_error(err.as_ref()) {
-                            warn!("Screen capture stream stopped by the system; attempting restart");
-                            output_pipeline::emit_health(
-                                &health_tx,
-                                output_pipeline::PipelineHealthEvent::SourceRestarting,
-                            );
                             if monitor_cancel.is_cancelled() {
                                 break Ok(());
                             }
-                            monitor_capturer.mark_stopped();
-                            if let Err(restart_err) = monitor_capturer.start().await {
-                                return Err(anyhow!(format!(
-                                    "Failed to restart ScreenCaptureKit stream: {restart_err:#}"
-                                )));
-                            }
-                            output_pipeline::emit_health(
-                                &health_tx,
-                                output_pipeline::PipelineHealthEvent::SourceRestarted,
-                            );
-                            continue;
+                            warn!("Screen capture stream stopped by the system");
+                            return Err(anyhow!(system_stop_message()));
                         }
 
                         return Err(anyhow!(format!("{err}")));
@@ -768,6 +748,10 @@ fn is_system_stop_error(err: &ns::Error) -> bool {
         && err.domain().to_string() == sc::error::domain().to_string()
 }
 
+fn system_stop_message() -> &'static str {
+    "Screen capture stopped because macOS made the display unavailable. This commonly happens when the lid is closed or the display sleeps."
+}
+
 pub struct SystemAudioSourceConfig(
     ChannelAudioSourceConfig,
     Capturer,
@@ -806,8 +790,8 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                 match error_rx.recv().await {
                     Ok(err) => {
                         if is_system_stop_error(err.as_ref()) {
-                            warn!("Screen capture audio stream stopped by the system; awaiting restart");
-                            continue;
+                            warn!("Screen capture audio stream stopped by the system");
+                            return Err(anyhow!(system_stop_message()));
                         }
 
                         return Err(anyhow!("{err}"));

@@ -41,6 +41,14 @@ pub enum BackgroundSource {
         to: Color,
         #[serde(default = "default_gradient_angle")]
         angle: u16,
+        #[serde(default)]
+        noise_intensity: Option<f32>,
+        #[serde(default)]
+        noise_scale: Option<f32>,
+        #[serde(default)]
+        animated: Option<bool>,
+        #[serde(default)]
+        animation_speed: Option<f32>,
     },
 }
 
@@ -661,6 +669,8 @@ pub struct MaskKeyframes {
 pub struct MaskSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub track: u32,
     #[serde(default = "MaskSegment::default_enabled")]
     pub enabled: bool,
     pub mask_type: MaskKind,
@@ -699,6 +709,8 @@ impl MaskSegment {
 pub struct TextSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub track: u32,
     #[serde(default = "TextSegment::default_enabled")]
     pub enabled: bool,
     #[serde(default = "TextSegment::default_content")]

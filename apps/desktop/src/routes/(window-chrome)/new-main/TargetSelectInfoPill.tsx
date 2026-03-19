@@ -21,6 +21,7 @@ export default function TargetSelectInfoPill<T>(props: {
 			}}
 			onClick={(e) => {
 				if (!props.permissionGranted) {
+					e.stopPropagation();
 					props.requestPermission();
 					return;
 				}

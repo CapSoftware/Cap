@@ -50,6 +50,11 @@ import {
 } from "./cropVideoPreloader";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
+import {
+	getUsedTrackCount,
+	normalizeTrackSegments,
+	sortTrackSegments,
+} from "./timelineTracks";
 import { createProgressBar } from "./utils";
 
 export type CurrentDialog =
@@ -143,18 +148,20 @@ export function normalizeProject(
 		? {
 				...config.timeline,
 				sceneSegments: config.timeline.sceneSegments ?? [],
-				maskSegments:
+				maskSegments: normalizeTrackSegments(
 					(
 						config.timeline as TimelineConfiguration & {
 							maskSegments?: MaskSegment[];
 						}
 					).maskSegments ?? [],
-				textSegments:
+				),
+				textSegments: normalizeTrackSegments(
 					(
 						config.timeline as TimelineConfiguration & {
 							textSegments?: TextSegment[];
 						}
 					).textSegments ?? [],
+				),
 			}
 		: undefined;
 
@@ -284,6 +291,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							end: segment.end,
 						});
 						segments[index].end = segment.start + time;
+						sortTrackSegments(segments);
 					}),
 				);
 			},
@@ -323,6 +331,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							end: segment.end,
 						});
 						segments[index].end = segment.start + time;
+						sortTrackSegments(segments);
 					}),
 				);
 			},
@@ -339,6 +348,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								)
 								.sort((a, b) => b - a);
 							for (const i of sorted) segments.splice(i, 1);
+							normalizeTrackSegments(segments);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
@@ -362,6 +372,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							end: segment.end,
 						});
 						segments[index].end = segment.start + time;
+						sortTrackSegments(segments);
 					}),
 				);
 			},
@@ -378,6 +389,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								)
 								.sort((a, b) => b - a);
 							for (const i of sorted) segments.splice(i, 1);
+							normalizeTrackSegments(segments);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
@@ -629,10 +641,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			};
 		}
 
-		const initialMaskTrackEnabled =
-			(project.timeline?.maskSegments?.length ?? 0) > 0;
-		const initialTextTrackEnabled =
-			(project.timeline?.textSegments?.length ?? 0) > 0;
+		const initialMaskTrackCount = getUsedTrackCount(
+			project.timeline?.maskSegments ?? [],
+		);
+		const initialTextTrackCount = getUsedTrackCount(
+			project.timeline?.textSegments ?? [],
+		);
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -693,8 +707,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					clip: true,
 					zoom: true,
 					scene: true,
-					mask: initialMaskTrackEnabled,
-					text: initialTextTrackEnabled,
+					mask: initialMaskTrackCount,
+					text: initialTextTrackCount,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},
@@ -794,6 +808,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
 		onCleanup(() => {
 			disposeWorkerReadyEffect?.();
+			canvasControls()?.dispose();
 			cleanupCropVideoPreloader();
 		});
 

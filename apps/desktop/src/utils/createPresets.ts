@@ -56,5 +56,16 @@ export function createPresets() {
 			updatePresets((store) => {
 				store.presets[index].name = name;
 			}),
+		saveToPreset: (
+			index: number,
+			config: Omit<ProjectConfiguration, "timeline">,
+		) =>
+			updatePresets((store) => {
+				store.presets[index].config = {
+					...config,
+					timeline: null,
+					clips: [],
+				};
+			}),
 	};
 }

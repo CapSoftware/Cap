@@ -123,7 +123,7 @@ export function SegmentHandle(
 				props.position === "start"
 					? "left-0 justify-center -ml-1"
 					: "right-0 justify-center -mr-1",
-				hidden() ? "opacity-0" : "opacity-0 group-hover:opacity-100",
+				hidden() ? "opacity-0" : "opacity-35 group-hover:opacity-100",
 				props.class,
 			)}
 			data-hidden={hidden()}
@@ -131,4 +131,12 @@ export function SegmentHandle(
 			<div class="w-[3px] h-8 bg-solid-white rounded-full" />
 		</div>
 	);
+}
+
+export function useSetPreviewTime() {
+	const { totalDuration, setEditorState } = useEditorContext();
+
+	return (time: number) => {
+		setEditorState("previewTime", Math.min(Math.max(0, time), totalDuration()));
+	};
 }

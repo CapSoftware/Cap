@@ -20,13 +20,20 @@ import {
 	useTimelineContext,
 	useTrackContext,
 } from "./context";
-import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
+import {
+	SegmentContent,
+	SegmentHandle,
+	SegmentRoot,
+	TrackRoot,
+	useSetPreviewTime,
+} from "./Track";
 
 export type ZoomSegmentDragState =
 	| { type: "idle" }
 	| { type: "movePending" }
 	| { type: "moving" };
 
+const MIN_ZOOM_SEGMENT_PIXEL_WIDTH = 40;
 const MIN_NEW_SEGMENT_PIXEL_WIDTH = 80;
 const MIN_NEW_SEGMENT_SECS_WIDTH = 1;
 
@@ -45,6 +52,7 @@ export function ZoomTrack(props: {
 	} = useEditorContext();
 
 	const { duration, secsPerPixel } = useTimelineContext();
+	const setPreviewTime = useSetPreviewTime();
 
 	const [creatingSegmentViaDrag, setCreatingSegmentViaDrag] =
 		createSignal(false);
@@ -444,13 +452,18 @@ export function ZoomTrack(props: {
 									onMouseDown={createMouseDownDrag(
 										() => {
 											const start = segment().start;
+											const minDuration = Math.max(
+												1,
+												secsPerPixel() * MIN_ZOOM_SEGMENT_PIXEL_WIDTH,
+											);
 
 											let minValue = 0;
 
-											const maxValue = segment().end - 1;
+											const maxValue = segment().end - minDuration;
 
 											for (let i = zoomSegments().length - 1; i >= 0; i--) {
-												const segment = zoomSegments()[i]!;
+												const segment = zoomSegments()[i];
+												if (!segment) continue;
 												if (segment.end <= start) {
 													minValue = segment.end;
 													break;
@@ -463,16 +476,17 @@ export function ZoomTrack(props: {
 											const newStart =
 												value.start +
 												(e.clientX - initialMouseX) * secsPerPixel();
+											const nextStart = Math.min(
+												value.maxValue,
+												Math.max(value.minValue, newStart),
+											);
 
 											setProject(
 												"timeline",
 												"zoomSegments",
 												i,
 												"start",
-												Math.min(
-													value.maxValue,
-													Math.max(value.minValue, newStart),
-												),
+												nextStart,
 											);
 
 											setProject(
@@ -482,6 +496,7 @@ export function ZoomTrack(props: {
 													s.sort((a, b) => a.start - b.start);
 												}),
 											);
+											setPreviewTime(nextStart);
 										},
 									)}
 								/>
@@ -558,13 +573,18 @@ export function ZoomTrack(props: {
 									onMouseDown={createMouseDownDrag(
 										() => {
 											const end = segment().end;
+											const minDuration = Math.max(
+												1,
+												secsPerPixel() * MIN_ZOOM_SEGMENT_PIXEL_WIDTH,
+											);
 
-											const minValue = segment().start + 1;
+											const minValue = segment().start + minDuration;
 
 											let maxValue = duration();
 
 											for (let i = 0; i < zoomSegments().length; i++) {
-												const segment = zoomSegments()[i]!;
+												const segment = zoomSegments()[i];
+												if (!segment) continue;
 												if (segment.start > end) {
 													maxValue = segment.start;
 													break;
@@ -577,17 +597,12 @@ export function ZoomTrack(props: {
 											const newEnd =
 												value.end +
 												(e.clientX - initialMouseX) * secsPerPixel();
-
-											setProject(
-												"timeline",
-												"zoomSegments",
-												i,
-												"end",
-												Math.min(
-													value.maxValue,
-													Math.max(value.minValue, newEnd),
-												),
+											const nextEnd = Math.min(
+												value.maxValue,
+												Math.max(value.minValue, newEnd),
 											);
+
+											setProject("timeline", "zoomSegments", i, "end", nextEnd);
 
 											setProject(
 												"timeline",
@@ -596,6 +611,7 @@ export function ZoomTrack(props: {
 													s.sort((a, b) => a.start - b.start);
 												}),
 											);
+											setPreviewTime(nextEnd);
 										},
 									)}
 								/>
