@@ -83,7 +83,10 @@ pub fn interpolate_masks(
         let mut intensity =
             interpolate_scalar(segment.opacity, &segment.keyframes.intensity, relative_time);
 
-        let fade_duration = segment.fade_duration.max(0.0);
+        let fade_duration = match segment.mask_type {
+            MaskKind::Sensitive => 0.0,
+            MaskKind::Highlight => segment.fade_duration.max(0.0),
+        };
         if fade_duration > 0.0 {
             let time_since_start = (frame_time - segment.start).max(0.0);
             let time_until_end = (segment.end - frame_time).max(0.0);
