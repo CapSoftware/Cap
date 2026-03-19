@@ -1,60 +1,71 @@
-import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
+import { produce } from "solid-js/store";
 import { presetsStore } from "~/store";
+import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
 
 export type CreatePreset = {
-  name: string;
-  config: Omit<ProjectConfiguration, "timeline">;
-  default: boolean;
+	name: string;
+	config: Omit<ProjectConfiguration, "timeline">;
+	default: boolean;
 };
 
 export function createPresets() {
-  const query = presetsStore.createQuery();
+	const query = presetsStore.createQuery();
 
-  async function updatePresets(fn: (prev: PresetsStore) => PresetsStore) {
-    if (query.isLoading) throw new Error("Presets not loaded");
+	async function updatePresets(fn: (prev: PresetsStore) => void) {
+		if (query.isLoading) throw new Error("Presets not loaded");
 
-    let p = query.data;
-    if (!p) await presetsStore.set((p = { presets: [], default: null }));
+		let p = query.data;
+		if (!p) await presetsStore.set((p = { presets: [], default: null }));
 
-    const newValue = fn(p);
+		const newValue = produce(fn)(p);
 
-    await presetsStore.set(newValue);
-  }
+		await presetsStore.set(newValue);
+	}
 
-  return {
-    query,
-    createPreset: async (preset: CreatePreset) => {
-      let config = { ...preset.config };
-      // @ts-ignore we reeeally don't want the timeline in the preset
-      config.timeline = undefined;
+	return {
+		query,
+		createPreset: async (preset: CreatePreset) => {
+			const config = {
+				...preset.config,
+				timeline: null,
+				clips: [],
+			};
 
-      await updatePresets((prev) => ({
-        presets: [...prev.presets, { name: preset.name, config }],
-        default: preset.default ? prev.presets.length : prev.default,
-      }));
-    },
-    deletePreset: (index: number) =>
-      updatePresets((prev) => {
-        prev.presets.splice(index, 1);
-
-        return {
-          presets: prev.presets,
-          default:
-            index > prev.presets.length - 1
-              ? prev.presets.length - 1
-              : prev.default,
-        };
-      }),
-    setDefault: (index: number) =>
-      updatePresets((prev) => ({
-        presets: [...prev.presets],
-        default: index,
-      })),
-    renamePreset: (index: number, name: string) =>
-      updatePresets((prev) => {
-        prev.presets[index].name = name;
-
-        return prev;
-      }),
-  };
+			await updatePresets((store) => {
+				store.presets.push({ name: preset.name, config });
+				store.default = preset.default
+					? store.presets.length - 1
+					: store.default;
+			});
+		},
+		deletePreset: (index: number) =>
+			updatePresets((store) => {
+				store.presets.splice(index, 1);
+				if (store.default === null) return;
+				if (index === store.default) {
+					store.default = store.presets.length > 0 ? 0 : null;
+				} else if (index < store.default) {
+					store.default = store.default - 1;
+				}
+			}),
+		setDefault: (index: number) =>
+			updatePresets((store) => {
+				store.default = index;
+			}),
+		renamePreset: (index: number, name: string) =>
+			updatePresets((store) => {
+				store.presets[index].name = name;
+			}),
+		saveToPreset: (
+			index: number,
+			config: Omit<ProjectConfiguration, "timeline">,
+		) =>
+			updatePresets((store) => {
+				store.presets[index].config = {
+					...config,
+					timeline: null,
+					clips: [],
+				};
+			}),
+	};
 }

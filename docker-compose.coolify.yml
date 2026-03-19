@@ -1,0 +1,127 @@
+name: cap
+
+services:
+  cap-web:
+    container_name: cap-web
+    image: ghcr.io/capsoftware/cap-web:latest
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://cap:${MYSQL_PASSWORD:-changeme}@mysql:3306/cap
+      WEB_URL: ${WEB_URL:-http://localhost:3000}
+      NEXTAUTH_URL: ${WEB_URL:-http://localhost:3000}
+      DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      CAP_AWS_ACCESS_KEY: ${MINIO_ROOT_USER:-capadmin}
+      CAP_AWS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme123}
+      CAP_AWS_BUCKET: ${S3_BUCKET:-cap}
+      CAP_AWS_REGION: us-east-1
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_INTERNAL_ENDPOINT: http://minio:9000
+      S3_PATH_STYLE: "true"
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_DOMAIN: ${RESEND_FROM_DOMAIN:-}
+      MEDIA_SERVER_URL: http://media-server:3456
+      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET}
+      MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - cap-network
+
+  media-server:
+    container_name: cap-media-server
+    image: ghcr.io/capsoftware/cap-media-server:latest
+    restart: unless-stopped
+    environment:
+      PORT: 3456
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3456/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - cap-network
+
+  mysql:
+    container_name: cap-mysql
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: cap
+      MYSQL_USER: cap
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootchangeme}
+    command:
+      - --max_connections=1000
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - cap-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "cap", "-p${MYSQL_PASSWORD:-changeme}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cap-network
+
+  minio:
+    container_name: cap-minio
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-capadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme123}
+    volumes:
+      - cap-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - cap-network
+
+  minio-setup:
+    container_name: cap-minio-setup
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set capminio http://minio:9000 $${MINIO_ROOT_USER:-capadmin} $${MINIO_ROOT_PASSWORD:-changeme123};
+      mc mb capminio/$${S3_BUCKET:-cap} --ignore-existing;
+      mc anonymous set download capminio/$${S3_BUCKET:-cap};
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-capadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme123}
+      S3_BUCKET: ${S3_BUCKET:-cap}
+    networks:
+      - cap-network
+
+volumes:
+  cap-mysql-data:
+  cap-minio-data:
+
+networks:
+  cap-network:
+    driver: bridge

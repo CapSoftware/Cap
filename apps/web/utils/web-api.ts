@@ -1,10 +1,19 @@
-import { initClient } from "@ts-rest/core";
 import { contract } from "@cap/web-api-contract";
-import { clientEnv } from "@cap/env";
+import { initClient } from "@ts-rest/core";
+import { useState } from "react";
 
-export const apiClient = initClient(contract, {
-  baseUrl:
-    typeof window !== "undefined"
-      ? `${clientEnv.NEXT_PUBLIC_WEB_URL}/api`
-      : "/api",
-});
+import { usePublicEnv } from "./public-env";
+
+export function useApiClient() {
+	const { webUrl } = usePublicEnv();
+	const [client] = useState(() =>
+		initClient(contract, {
+			baseUrl:
+				typeof window === "undefined"
+					? `${webUrl.replace(/\/+$/, "")}/api`
+					: "/api",
+		}),
+	);
+
+	return client;
+}

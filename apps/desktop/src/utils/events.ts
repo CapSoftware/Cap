@@ -1,27 +1,35 @@
-import { onCleanup, onMount, type ResourceReturn } from "solid-js";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import type { UseQueryResult } from "@tanstack/solid-query";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { events } from "./tauri";
-import { CreateQueryResult } from "@tanstack/solid-query";
 
-export function makeInvalidated<R>(
-  resource: ResourceReturn<R>,
-  event: keyof typeof events
+export function createQueryInvalidate<T extends UseQueryResult>(
+	query: T,
+	event: keyof typeof events,
 ) {
-  const [_, { refetch }] = resource;
-
-  onMount(() => {
-    const cleanup = events[event].listen(() => refetch());
-    onCleanup(() => cleanup.then((c) => c()));
-  });
-
-  return resource;
+	onMount(() => {
+		const cleanup = events[event].listen(() => query.refetch());
+		onCleanup(() => cleanup.then((c) => c()));
+	});
 }
 
-export function createQueryInvalidate<T extends CreateQueryResult<any, any>>(
-  query: T,
-  event: keyof typeof events
+export function createKeyDownSignal(
+	element: HTMLElement | Window,
+	key: string,
 ) {
-  onMount(() => {
-    const cleanup = events[event].listen(() => query.refetch());
-    onCleanup(() => cleanup.then((c) => c()));
-  });
+	const [isDown, setDown] = createSignal(false);
+
+	createEventListenerMap(element, {
+		keydown: (e) => {
+			if (e.key === key) setDown(true);
+		},
+		keyup: (e) => {
+			if (e.key === key) setDown(false);
+		},
+		blur: () => {
+			setDown(false);
+		},
+	});
+
+	return isDown;
 }

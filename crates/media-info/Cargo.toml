@@ -1,0 +1,14 @@
+[package]
+name = "cap-media-info"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ffmpeg.workspace = true
+thiserror.workspace = true
+cpal.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+
+[lints]
+workspace = true

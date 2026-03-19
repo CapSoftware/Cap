@@ -1,351 +1,271 @@
-import { type NextRequest } from "next/server";
-import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import * as Db from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
+import {
+	Database,
+	provideOptionalAuth,
+	S3Buckets,
+	Videos,
+} from "@cap/web-backend";
+import { Video } from "@cap/web-domain";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiError,
+	HttpApiGroup,
+	HttpServerResponse,
+} from "@effect/platform";
 import { eq } from "drizzle-orm";
+import { Effect, Layer, Option, Schema } from "effect";
+import { apiToHandler } from "@/lib/server";
+import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
-  ListObjectsV2Command,
-  GetObjectCommand,
-  HeadObjectCommand,
-} from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { getCurrentUser } from "@cap/database/auth/session";
-import {
-  generateM3U8Playlist,
-  generateMasterPlaylist,
+	generateM3U8Playlist,
+	generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
-import { getHeaders, CACHE_CONTROL_HEADERS } from "@/utils/helpers";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "@cap/env";
 
-export const revalidate = 3599;
+export const dynamic = "force-dynamic";
 
-export async function OPTIONS(request: NextRequest) {
-  const origin = request.headers.get("origin") as string;
+const GetPlaylistParams = Schema.Struct({
+	videoId: Video.VideoId,
+	videoType: Schema.Literal("video", "audio", "master", "mp4", "raw-preview"),
+	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
+	fileType: Schema.OptionFromUndefinedOr(Schema.String),
+});
 
-  return new Response(null, {
-    status: 200,
-    headers: getHeaders(origin),
-  });
-}
+class Api extends HttpApi.make("CapWebApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.get("getVideoSrc")`/api/playlist`
+			.setUrlParams(GetPlaylistParams)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Unauthorized)
+			.addError(HttpApiError.InternalServerError)
+			.addError(HttpApiError.NotFound),
+	),
+) {}
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const userId = searchParams.get("userId") || "";
-  const videoId = searchParams.get("videoId") || "";
-  const videoType = searchParams.get("videoType") || "";
-  const thumbnail = searchParams.get("thumbnail") || "";
-  const fileType = searchParams.get("fileType") || "";
-  const origin = request.headers.get("origin") as string;
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			Effect.gen(function* () {
+				const s3Buckets = yield* S3Buckets;
+				const videos = yield* Videos;
 
-  if (!userId || !videoId) {
-    return new Response(
-      JSON.stringify({
-        error: true,
-        message: "userId or videoId not supplied",
-      }),
-      { status: 401, headers: getHeaders(origin) }
-    );
-  }
+				return handlers.handle("getVideoSrc", ({ urlParams }) =>
+					Effect.gen(function* () {
+						const [video] = yield* videos
+							.getByIdForViewing(urlParams.videoId)
+							.pipe(
+								Effect.flatten,
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new HttpApiError.NotFound(),
+								),
+							);
 
-  const query = await db
-    .select({ video: videos, bucket: s3Buckets })
-    .from(videos)
-    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-    .where(eq(videos.id, videoId));
+						return yield* getPlaylistResponse(video, urlParams);
+					}).pipe(
+						provideOptionalAuth,
+						Effect.tapErrorCause(Effect.logError),
+						Effect.catchTags({
+							VerifyVideoPasswordError: () => new HttpApiError.Forbidden(),
+							PolicyDenied: () => new HttpApiError.Unauthorized(),
+							DatabaseError: () => new HttpApiError.InternalServerError(),
+							S3Error: () => new HttpApiError.InternalServerError(),
+							UnknownException: () => new HttpApiError.InternalServerError(),
+						}),
+						Effect.provideService(S3Buckets, s3Buckets),
+					),
+				);
+			}),
+		),
+	),
+);
 
-  if (!query[0]) {
-    return new Response(
-      JSON.stringify({ error: true, message: "Video does not exist" }),
-      {
-        status: 401,
-        headers: getHeaders(origin),
-      }
-    );
-  }
+const getPlaylistResponse = (
+	video: Video.Video,
+	urlParams: (typeof GetPlaylistParams)["Type"],
+) =>
+	Effect.gen(function* () {
+		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		const isMp4Source =
+			video.source.type === "desktopMP4" || video.source.type === "webMP4";
 
-  const { video, bucket } = query[0];
+		if (urlParams.videoType === "raw-preview") {
+			const db = yield* Database;
+			const [uploadRecord] = yield* db.use((db) =>
+				db
+					.select({ rawFileKey: Db.videoUploads.rawFileKey })
+					.from(Db.videoUploads)
+					.where(eq(Db.videoUploads.videoId, urlParams.videoId)),
+			);
 
-  if (video.public === false) {
-    const user = await getCurrentUser();
+			if (!uploadRecord?.rawFileKey) {
+				return yield* Effect.fail(new HttpApiError.NotFound());
+			}
 
-    if (!user || user.id !== video.ownerId) {
-      return new Response(
-        JSON.stringify({ error: true, message: "Video is not public" }),
-        {
-          status: 401,
-          headers: getHeaders(origin),
-        }
-      );
-    }
-  }
+			return yield* s3
+				.getSignedObjectUrl(uploadRecord.rawFileKey)
+				.pipe(Effect.map(HttpServerResponse.redirect));
+		}
 
-  const Bucket = await getS3Bucket(bucket);
-  const s3Client = await createS3Client(bucket);
+		if (Option.isNone(customBucket)) {
+			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
-  if (!bucket || video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) {
-    if (video.source.type === "desktopMP4") {
-      return new Response(null, {
-        status: 302,
-        headers: {
-          ...getHeaders(origin),
-          Location: `${S3_BUCKET_URL}/${userId}/${videoId}/result.mp4`,
-          ...CACHE_CONTROL_HEADERS,
-        },
-      });
-    }
+			if (isMp4Source || urlParams.videoType === "mp4")
+				redirect = `${video.ownerId}/${video.id}/result.mp4`;
+			else if (video.source.type === "MediaConvert")
+				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
 
-    if (video.source.type === "MediaConvert") {
-      return new Response(null, {
-        status: 302,
-        headers: {
-          ...getHeaders(origin),
-          Location: `${S3_BUCKET_URL}/${userId}/${videoId}/output/video_recording_000.m3u8`,
-          ...CACHE_CONTROL_HEADERS,
-        },
-      });
-    }
+			return HttpServerResponse.redirect(
+				yield* s3.getSignedObjectUrl(redirect),
+			);
+		}
 
-    const playlistUrl = `${S3_BUCKET_URL}/${userId}/${videoId}/combined-source/stream.m3u8`;
-    return new Response(null, {
-      status: 302,
-      headers: {
-        ...getHeaders(origin),
-        Location: playlistUrl,
-        ...CACHE_CONTROL_HEADERS,
-      },
-    });
-  }
+		if (
+			Option.isSome(urlParams.fileType) &&
+			urlParams.fileType.value === "transcription"
+		) {
+			return yield* s3
+				.getObject(`${video.ownerId}/${video.id}/transcription.vtt`)
+				.pipe(
+					Effect.andThen(
+						Option.match({
+							onNone: () => new HttpApiError.NotFound(),
+							onSome: (c) =>
+								HttpServerResponse.text(c).pipe(
+									HttpServerResponse.setHeaders({
+										...CACHE_CONTROL_HEADERS,
+										"Content-Type": "text/vtt",
+									}),
+								),
+						}),
+					),
+					Effect.withSpan("fetchTranscription"),
+				);
+		}
 
-  // Handle transcription file request first
-  if (fileType === "transcription") {
-    try {
-      const transcriptionUrl = await getSignedUrl(
-        s3Client,
-        new GetObjectCommand({
-          Bucket,
-          Key: `${userId}/${videoId}/transcription.vtt`,
-        }),
-        { expiresIn: 3600 }
-      );
+		if (
+			Option.isSome(urlParams.fileType) &&
+			urlParams.fileType.value === "enhanced-audio"
+		) {
+			const enhancedAudioKey = `${video.ownerId}/${video.id}/enhanced-audio.mp3`;
+			return yield* s3.getSignedObjectUrl(enhancedAudioKey).pipe(
+				Effect.map(HttpServerResponse.redirect),
+				Effect.catchTag("S3Error", () => new HttpApiError.NotFound()),
+				Effect.withSpan("fetchEnhancedAudio"),
+			);
+		}
 
-      const response = await fetch(transcriptionUrl);
-      const transcriptionContent = await response.text();
+		yield* Effect.log("Resolving path with custom bucket");
 
-      return new Response(transcriptionContent, {
-        status: 200,
-        headers: {
-          ...getHeaders(origin),
-          ...CACHE_CONTROL_HEADERS,
-          "Content-Type": "text/vtt",
-        },
-      });
-    } catch (error) {
-      console.error("Error fetching transcription file:", error);
-      return new Response(
-        JSON.stringify({
-          error: true,
-          message: "Transcription file not found",
-        }),
-        {
-          status: 404,
-          headers: getHeaders(origin),
-        }
-      );
-    }
-  }
+		const videoPrefix = `${video.ownerId}/${video.id}/video/`;
+		const audioPrefix = `${video.ownerId}/${video.id}/audio/`;
 
-  // Handle video/audio files
-  const videoPrefix = `${userId}/${videoId}/video/`;
-  const audioPrefix = `${userId}/${videoId}/audio/`;
+		return yield* Effect.gen(function* () {
+			if (video.source.type === "local") {
+				const playlistText =
+					(yield* s3.getObject(
+						`${video.ownerId}/${video.id}/combined-source/stream.m3u8`,
+					)).pipe(Option.getOrNull) ?? "";
 
-  try {
-    if (video.source.type === "local") {
-      const playlistUrl = await getSignedUrl(
-        s3Client,
-        new GetObjectCommand({
-          Bucket,
-          Key: `${userId}/${videoId}/combined-source/stream.m3u8`,
-        }),
-        { expiresIn: 3600 }
-      );
-      const playlistResp = await fetch(playlistUrl);
-      const playlistText = await playlistResp.text();
+				const lines = playlistText.split("\n");
 
-      const lines = playlistText.split("\n");
+				for (const [index, line] of lines.entries()) {
+					if (line.endsWith(".ts")) {
+						const url = yield* s3.getSignedObjectUrl(
+							`${video.ownerId}/${video.id}/combined-source/${line}`,
+						);
+						lines[index] = url;
+					}
+				}
 
-      for (const [index, line] of lines.entries()) {
-        if (line.endsWith(".ts")) {
-          lines[index] = await getSignedUrl(
-            s3Client,
-            new GetObjectCommand({
-              Bucket,
-              Key: `${userId}/${videoId}/combined-source/${line}`,
-            }),
-            { expiresIn: 3600 }
-          );
-        }
-      }
+				const playlist = lines.join("\n");
 
-      const playlist = lines.join("\n");
+				return HttpServerResponse.text(playlist, {
+					headers: CACHE_CONTROL_HEADERS,
+				});
+			} else if (isMp4Source) {
+				yield* Effect.log(
+					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
+				);
+				return yield* s3
+					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
+					.pipe(Effect.map(HttpServerResponse.redirect));
+			}
 
-      return new Response(playlist, {
-        status: 200,
-        headers: {
-          ...getHeaders(origin),
-          ...CACHE_CONTROL_HEADERS,
-        },
-      });
-    }
+			if (urlParams.videoType === "master") {
+				const [videoSegment, audioSegment] = yield* Effect.all([
+					s3.listObjects({ prefix: videoPrefix, maxKeys: 1 }),
+					s3.listObjects({ prefix: audioPrefix, maxKeys: 1 }),
+				]);
 
-    if (video.source.type === "desktopMP4") {
-      const playlistUrl = await getSignedUrl(
-        s3Client,
-        new GetObjectCommand({
-          Bucket,
-          Key: `${userId}/${videoId}/result.mp4`,
-        }),
-        { expiresIn: 3600 }
-      );
+				const videoMetadata = yield* s3.headObject(
+					videoSegment.Contents?.[0]?.Key ?? "",
+				);
+				const audioMetadata =
+					audioSegment?.KeyCount && audioSegment.KeyCount > 0
+						? yield* s3.headObject(audioSegment.Contents?.[0]?.Key ?? "")
+						: undefined;
 
-      return new Response(null, {
-        status: 302,
-        headers: {
-          ...getHeaders(origin),
-          Location: playlistUrl,
-          ...CACHE_CONTROL_HEADERS,
-        },
-      });
-    }
+				const generatedPlaylist = generateMasterPlaylist(
+					videoMetadata?.Metadata?.resolution ?? "",
+					videoMetadata?.Metadata?.bandwidth ?? "",
+					`${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=video`,
+					audioMetadata
+						? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=audio`
+						: null,
+				);
 
-    // Handle screen, video, and now audio types
-    let objectsCommand, prefix;
-    switch (videoType) {
-      case "video":
-        prefix = videoPrefix;
-        break;
-      case "audio":
-        prefix = audioPrefix;
-        break;
-      case "master":
-        prefix = null;
-        break;
-      default:
-        return new Response(
-          JSON.stringify({ error: true, message: "Invalid video type" }),
-          { status: 401, headers: getHeaders(origin) }
-        );
-    }
+				return HttpServerResponse.text(generatedPlaylist, {
+					headers: CACHE_CONTROL_HEADERS,
+				});
+			}
 
-    if (prefix === null) {
-      const videoSegmentCommand = new ListObjectsV2Command({
-        Bucket,
-        Prefix: videoPrefix,
-        MaxKeys: 1,
-      });
+			const prefix =
+				urlParams.videoType === "video"
+					? videoPrefix
+					: urlParams.videoType === "audio"
+						? audioPrefix
+						: undefined;
 
-      let audioSegment;
-      const audioSegmentCommand = new ListObjectsV2Command({
-        Bucket,
-        Prefix: audioPrefix,
-        MaxKeys: 1,
-      });
+			if (!prefix) {
+				return yield* Effect.fail(new HttpApiError.NotFound());
+			}
 
-      try {
-        audioSegment = await s3Client.send(audioSegmentCommand);
-      } catch (error) {
-        console.warn("No audio segment found for this video", error);
-      }
+			const objects = yield* s3.listObjects({
+				prefix,
+				maxKeys: urlParams.thumbnail ? 1 : undefined,
+			});
 
-      const [videoSegment] = await Promise.all([
-        s3Client.send(videoSegmentCommand),
-      ]);
+			const chunksUrls = yield* Effect.all(
+				(objects.Contents || []).map((object) =>
+					Effect.gen(function* () {
+						const url = yield* s3.getSignedObjectUrl(object.Key ?? "");
+						const metadata = yield* s3.headObject(object.Key ?? "");
 
-      let audioMetadata;
-      const [videoMetadata] = await Promise.all([
-        s3Client.send(
-          new HeadObjectCommand({
-            Bucket,
-            Key: videoSegment.Contents?.[0]?.Key ?? "",
-          })
-        ),
-      ]);
+						return {
+							url: url,
+							duration: metadata?.Metadata?.duration ?? "",
+							bandwidth: metadata?.Metadata?.bandwidth ?? "",
+							resolution: metadata?.Metadata?.resolution ?? "",
+							videoCodec: metadata?.Metadata?.videocodec ?? "",
+							audioCodec: metadata?.Metadata?.audiocodec ?? "",
+						};
+					}),
+				),
+			);
 
-      if (audioSegment?.KeyCount && audioSegment?.KeyCount > 0) {
-        audioMetadata = await s3Client.send(
-          new HeadObjectCommand({
-            Bucket,
-            Key: audioSegment.Contents?.[0]?.Key ?? "",
-          })
-        );
-      }
+			const generatedPlaylist = generateM3U8Playlist(chunksUrls);
 
-      const generatedPlaylist = await generateMasterPlaylist(
-        videoMetadata?.Metadata?.resolution ?? "",
-        videoMetadata?.Metadata?.bandwidth ?? "",
-        `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=video`,
-        audioMetadata
-          ? `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=audio`
-          : null,
-        video.xStreamInfo ?? ""
-      );
+			return HttpServerResponse.text(generatedPlaylist, {
+				headers: CACHE_CONTROL_HEADERS,
+			});
+		}).pipe(Effect.withSpan("generateUrls"));
+	});
 
-      return new Response(generatedPlaylist, {
-        status: 200,
-        headers: {
-          ...getHeaders(origin),
-          ...CACHE_CONTROL_HEADERS,
-        },
-      });
-    }
+const handler = apiToHandler(ApiLive);
 
-    objectsCommand = new ListObjectsV2Command({
-      Bucket,
-      Prefix: prefix,
-      MaxKeys: thumbnail ? 1 : undefined,
-    });
-
-    const objects = await s3Client.send(objectsCommand);
-
-    const chunksUrls = await Promise.all(
-      (objects.Contents || []).map(async (object) => {
-        const url = await getSignedUrl(
-          s3Client,
-          new GetObjectCommand({ Bucket, Key: object.Key }),
-          { expiresIn: 3600 }
-        );
-        const metadata = await s3Client.send(
-          new HeadObjectCommand({ Bucket, Key: object.Key })
-        );
-
-        return {
-          url: url,
-          duration: metadata?.Metadata?.duration ?? "",
-          bandwidth: metadata?.Metadata?.bandwidth ?? "",
-          resolution: metadata?.Metadata?.resolution ?? "",
-          videoCodec: metadata?.Metadata?.videocodec ?? "",
-          audioCodec: metadata?.Metadata?.audiocodec ?? "",
-        };
-      })
-    );
-
-    const generatedPlaylist = generateM3U8Playlist(chunksUrls);
-
-    return new Response(generatedPlaylist, {
-      status: 200,
-      headers: {
-        ...getHeaders(origin),
-        ...CACHE_CONTROL_HEADERS,
-      },
-    });
-  } catch (error) {
-    console.error("Error generating video segment URLs", error);
-    return new Response(
-      JSON.stringify({ error: error, message: "Error generating video URLs" }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
-    );
-  }
-}
+export const GET = (r: Request) => handler(r);
+export const HEAD = (r: Request) => handler(r);

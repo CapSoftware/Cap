@@ -1,6 +1,4 @@
-# Cap Contributor Guide: Work In Progress
-
-**TLDR:** The quickest way to contribute to the Cap desktop app, without any external dependencies required, is the `How do I run the desktop app locally without needing to use auth?` section of this guide.
+# Cap Contributor Guide
 
 ## Introduction
 
@@ -29,21 +27,21 @@ There are many ways to contribute to Cap. You can:
 Before anything else, make sure you have the following installed:
 
 - Node Version 20+
-- Rust 1.84.0+
+- Rust 1.88.0+
 - pnpm 8.10.5+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
 ### General Setup
 
-Configure the necessary environment variables by copying the `.env.example` file to `.env`.
-`.env.example` by default assumes you want to run both `@cap/desktop` and `@cap/web` locally.
-Follow the instructions in the file for how to configure the environment variables for which apps you want to run.
-
-Run `pnpm cap-setup` to install native dependencies such as FFmpeg,
-then run `pnpm install`.
+Run `pnpm install`, then run `pnpm cap-setup` to install native dependencies such as FFmpeg.
 
 On Windows, llvm, clang, and VCPKG must be installed.
+On MacOS, cmake must be installed.
 `pnpm cap-setup` does not yet install these dependencies for you.
+
+Run `pnpm env-setup` to generate a `.env` file configured for your environment.
+It will ask you which apps you intend to run, whether you'd like to use Docker to run S3 (MinIO) and MySQL locally,
+and allow you to provide overrides as needed.
 
 To run both `@cap/desktop` and `@cap/web` together, use `pnpm dev`.
 To run only one of them, use `pnpm dev:desktop` or `pnpm dev:web` respectively.

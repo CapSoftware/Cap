@@ -1,7 +1,4 @@
-# Cap Web App
+# `@cap/web`
 
-More details, as well as a contributor guide, will be posted soon.
-
-## Illustrations
-
-A big thank you to Popsy (https://popsy.co) for some of the illustrations used in Cap.
+Cap's NextJS web app for video sharing.
+Used for both self hosting and on [cap.so](https://cap.so).

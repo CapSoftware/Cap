@@ -1,0 +1,18 @@
+NODE "analytics_pages_mv_node"
+DESCRIPTION >
+    Materialized view that aggregates uniq sessions per tenant, path and day.
+SQL >
+	SELECT
+		tenant_id,
+		toDate(timestamp) AS date,
+		coalesce(nullIf(pathname, ''), '/') AS pathname,
+		coalesce(country, '') AS country,
+		coalesce(region, '') AS region,
+		coalesce(city, '') AS city,
+		uniqState(session_id) AS visits
+	FROM analytics_events
+	WHERE action = 'page_hit'
+	GROUP BY tenant_id, date, pathname, country, region, city
+
+TYPE MATERIALIZED
+DATASOURCE analytics_pages_mv

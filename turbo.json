@@ -1,36 +1,51 @@
 {
-  "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": [".env", ".env"],
-  "globalEnv": ["*"],
-  "tasks": {
-    "build": {
-      "inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
-      "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**"]
-    },
-    "lint": {
-      "cache": false
-    },
-    "docker:up": {
-      "cache": false,
-      "persistent": true
-    },
-    "docker:stop": {
-      "cache": false
-    },
-    "docker:clean": {
-      "cache": false
-    },
-    "db:generate": {
-      "cache": false
-    },
-    "db:push": {
-      "cache": false
-    },
-    "dev": {
-      "dependsOn": ["db:push", "db:generate"],
-      "cache": false,
-      "persistent": true
-    }
-  }
+	"$schema": "https://turbo.build/schema.json",
+	"globalDependencies": [".env", ".env"],
+	"globalEnv": ["*"],
+	"tasks": {
+		"build": {
+			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"dependsOn": ["^build"],
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
+		},
+		"build:web:docker": {
+			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"dependsOn": ["^build"],
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
+		},
+		"build:web": {
+			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"dependsOn": ["^build"],
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
+		},
+		"lint": {
+			"cache": false
+		},
+		"docker:up": {
+			"cache": false,
+			"persistent": true
+		},
+		"docker:stop": {
+			"cache": false
+		},
+		"docker:clean": {
+			"cache": false
+		},
+		"db:generate": {
+			"cache": false
+		},
+		"db:push": {
+			"cache": false,
+			"interactive": true
+		},
+		"dev": {
+			"dependsOn": ["db:push"],
+			"cache": false,
+			"persistent": true
+		},
+		"test": {
+			"inputs": ["**/*.ts", "**/*.tsx", "!node_modules/**"],
+			"cache": false
+		}
+	}
 }

@@ -1,75 +1,117 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { UnlistenFn } from "@tauri-apps/api/event";
-import { AbsoluteInsetLoader } from "~/components/Loader";
-import { initializeTitlebar } from "~/utils/titlebar-state";
-import Titlebar from "~/components/titlebar/Titlebar";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
+import { onCleanup, onMount, type ParentProps, Suspense } from "solid-js";
 
-export const route = {
-  info: {
-    AUTO_SHOW_WINDOW: false,
-  },
-};
+import { AbsoluteInsetLoader } from "~/components/Loader";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { initializeTitlebar } from "~/utils/titlebar-state";
+import {
+	useWindowChromeContext,
+	WindowChromeContext,
+} from "./(window-chrome)/Context";
 
 export default function (props: RouteSectionProps) {
-  let unlistenResize: UnlistenFn | undefined;
+	let unlistenResize: UnlistenFn | undefined;
 
-  onMount(async () => {
-    console.log("window chrome mounted");
-    unlistenResize = await initializeTitlebar();
-    if (location.pathname === "/") getCurrentWindow().show();
-  });
+	onMount(async () => {
+		console.log("window chrome mounted");
+		unlistenResize = await initializeTitlebar();
+		const capContext = (window as any).__CAP__;
+		const hasInitialTargetMode = capContext?.initialTargetMode != null;
+		if (location.pathname === "/" && !hasInitialTargetMode)
+			getCurrentWindow().show();
+	});
 
-  onCleanup(() => {
-    unlistenResize?.();
-  });
+	onCleanup(() => {
+		unlistenResize?.();
+	});
 
-  return (
-    <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
-      <Titlebar />
-      {/* breaks sometimes */}
-      {/* <Transition
+	const isMacOS = ostype() === "macos";
+
+	return (
+		<WindowChromeContext>
+			<div
+				class={cx(
+					"flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1",
+					isMacOS && "rounded-[16px]",
+				)}
+			>
+				<Header />
+
+				{/* breaks sometimes */}
+				{/* <Transition
         mode="outin"
         enterActiveClass="transition-opacity duration-100"
         exitActiveClass="transition-opacity duration-100"
         enterClass="opacity-0"
         exitToClass="opacity-0"
         > */}
-      <Suspense
-        fallback={
-          (() => {
-            console.log("Outer window chrome suspense fallback");
-            return <AbsoluteInsetLoader />;
-          }) as any
-        }
-      >
-        <Inner>
-          {/* prevents flicker idk */}
-          <Suspense
-            fallback={
-              (() => {
-                console.log("Inner window chrome suspense fallback");
-              }) as any
-            }
-          >
-            {props.children}
-          </Suspense>
-        </Inner>
-      </Suspense>
-      {/* </Transition> */}
-    </div>
-  );
+				<Suspense
+					fallback={
+						(() => {
+							console.log("Outer window chrome suspense fallback");
+							return <AbsoluteInsetLoader />;
+						}) as any
+					}
+				>
+					<Inner>
+						{/* prevents flicker idk */}
+						<Suspense
+							fallback={
+								(() => {
+									console.log("Inner window chrome suspense fallback");
+								}) as any
+							}
+						>
+							{props.children}
+						</Suspense>
+					</Inner>
+				</Suspense>
+				{/* </Transition> */}
+			</div>
+		</WindowChromeContext>
+	);
+}
+
+function Header() {
+	const ctx = useWindowChromeContext()!;
+
+	const isWindows = ostype() === "windows";
+	const isMacOS = ostype() === "macos";
+
+	return (
+		<header
+			class={cx(
+				"flex items-center h-9 select-none shrink-0 bg-gray-2",
+				isWindows ? "flex-row" : "flex-row-reverse",
+			)}
+			data-tauri-drag-region
+		>
+			{ctx.state()?.items}
+			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
+			{isMacOS && (
+				<CaptionControlsMacOS
+					class="!mr-auto ml-3"
+					showMinimize={false}
+					showZoom={false}
+				/>
+			)}
+		</header>
+	);
 }
 
 function Inner(props: ParentProps) {
-  onMount(() => {
-    if (location.pathname !== "/") getCurrentWindow().show();
-  });
+	onMount(() => {
+		if (location.pathname !== "/") getCurrentWindow().show();
+	});
 
-  return (
-    <div class="animate-in fade-in flex-1 flex flex-col overflow-y-hidden">
-      {props.children}
-    </div>
-  );
+	return (
+		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
+			{props.children}
+		</div>
+	);
 }

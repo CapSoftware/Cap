@@ -17,6 +17,7 @@ dist-ssr
 .env.test
 target
 .cursorrules
+.github/hooks
 
 # Editor directories and files
 .vscode/*
@@ -35,8 +36,36 @@ pnpm-lock.yaml
 .vinxi
 native-deps*
 apps/storybook/storybook-static
+.tinyb
+
+**/.tinyb
 
 *.tsbuildinfo
 .cargo/config.toml
 tauri.windows.conf.json
 .vercel
+
+# sst
+.sst
+
+# Cursor
+.cursor
+.env*.local
+.docs/
+.claude/
+.claude/settings.local.json
+
+# Release backfill scripts (one-time use)
+scripts/backfill-releases.sh
+scripts/update-github-releases.sh
+scripts/releases-backfill-data.txt
+
+# SEO agent state (machine-local, contains sensitive ranking data)
+/seo/
+/docs/
+
+# OpenCode commands (local)
+.opencode/
+analysis/
+analysis/plans/
+.ralphy

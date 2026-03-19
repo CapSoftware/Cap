@@ -1,104 +1,121 @@
-import { JSX } from "solid-js";
+import { cx } from "cva";
+import { type JSX, Show } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
-import { RecordingMode } from "~/utils/tauri";
-import InstantModeDark from "../assets/illustrations/instant-mode-dark.png";
-import InstantModeLight from "../assets/illustrations/instant-mode-light.png";
-import StudioModeDark from "../assets/illustrations/studio-mode-dark.png";
-import StudioModeLight from "../assets/illustrations/studio-mode-light.png";
+import { commands, type RecordingMode } from "~/utils/tauri";
 
 interface ModeOptionProps {
-  mode: RecordingMode;
-  title: string;
-  description: string;
-  icon: (props: { class: string }) => JSX.Element;
-  isSelected: boolean;
-  onSelect: (mode: RecordingMode) => void;
-  darkimg: string;
-  lightimg: string;
+	mode: RecordingMode;
+	title: string;
+	description: string;
+	icon: (props: { class: string; style?: JSX.CSSProperties }) => JSX.Element;
+	isSelected: boolean;
+	onSelect: (mode: RecordingMode) => void;
 }
 
 const ModeOption = (props: ModeOptionProps) => {
-  return (
-    <div
-      onClick={() => props.onSelect(props.mode)}
-      class={`p-4 rounded-lg bg-gray-100 transition-all duration-200  ${
-        props.isSelected
-          ? "ring-2 ring-offset-2 hover:bg-gray-100 cursor-default ring-blue-300 ring-offset-gray-100"
-          : "ring-2 ring-transparent ring-offset-transparent hover:bg-gray-200 cursor-pointer"
-      }`}
-    >
-      <div class="flex flex-col items-center mb-2 text-center">
-        {/* <props.icon
-          class={`size-8 mb-2 ${
-            props.isSelected ? "text-gray-50" : "text-[--gray-500]"
-          }`}
-        /> */}
-        <img
-          src={props.isSelected ? props.lightimg : props.darkimg}
-          class="mb-6 w-full max-w-32"
-        />
-        <h3
-          class={`text-lg font-medium ${
-            props.isSelected ? "text-gray-500" : "text-gray-500"
-          }`}
-        >
-          {props.title}
-        </h3>
-      </div>
+	return (
+		<div
+			data-tauri-drag-region="none"
+			onClick={() => props.onSelect(props.mode)}
+			class={cx(
+				"relative flex flex-col items-center rounded-xl border-2 transition-all duration-200 cursor-pointer overflow-hidden group",
+				props.isSelected
+					? "border-blue-9 bg-blue-3 dark:bg-blue-3/30 shadow-lg shadow-blue-9/10"
+					: "border-gray-4 dark:border-gray-5 bg-gray-2 dark:bg-gray-3 hover:border-gray-6 dark:hover:border-gray-6 hover:bg-gray-3 dark:hover:bg-gray-4",
+			)}
+			role="button"
+			aria-pressed={props.isSelected}
+		>
+			<Show when={props.isSelected}>
+				<div class="absolute top-2.5 right-2.5 flex items-center justify-center size-5 rounded-full bg-blue-9">
+					<IconLucideCheck class="size-3 text-white" />
+				</div>
+			</Show>
 
-      <p
-        class={`mx-auto w-full text-sm text-gray-400 dark:text-gray-400 max-w-[300px]`}
-      >
-        {props.description}
-      </p>
-    </div>
-  );
+			<div class="flex items-center justify-center w-full pt-5 pb-3">
+				<props.icon class="size-6 invert dark:invert-0" />
+			</div>
+
+			<div class="flex flex-col items-center px-4 pb-4 text-center">
+				<h3
+					class={cx(
+						"text-base font-semibold mb-1.5",
+						props.isSelected ? "text-blue-11" : "text-gray-12",
+					)}
+				>
+					{props.title}
+				</h3>
+				<p class="text-xs leading-relaxed text-gray-11 line-clamp-3">
+					{props.description}
+				</p>
+			</div>
+		</div>
+	);
 };
 
-const ModeSelect = () => {
-  const { options, setOptions } = createOptionsQuery();
+const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
+	const { rawOptions, setOptions } = createOptionsQuery();
 
-  const handleModeChange = (mode: RecordingMode) => {
-    if (options.data) setOptions.mutate({ ...options.data, mode });
-  };
+	const handleModeChange = (mode: RecordingMode) => {
+		setOptions({ mode });
+		commands.setRecordingMode(mode);
+	};
 
-  const modeOptions = [
-    {
-      mode: "instant" as const,
-      title: "Instant Mode",
-      description:
-        "Share your screen instantly with a magic link — no waiting for rendering, just capture and share in seconds.",
-      icon: IconCapInstant,
-      darkimg: InstantModeDark,
-      lightimg: InstantModeLight,
-    },
-    {
-      mode: "studio" as const,
-      title: "Studio Mode",
-      description:
-        "Records at the highest quality/framerate. Captures both your screen and camera separately for editing later.",
-      icon: IconCapFilmCut,
-      darkimg: StudioModeDark,
-      lightimg: StudioModeLight,
-    },
-  ];
+	const modeOptions = [
+		{
+			mode: "instant" as const,
+			title: "Instant",
+			description: "Share instantly with a link. Uploads as you record.",
+			icon: IconCapInstant,
+		},
+		{
+			mode: "studio" as const,
+			title: "Studio",
+			description: "Highest quality local recording for editing later.",
+			icon: IconCapFilmCut,
+		},
+		{
+			mode: "screenshot" as const,
+			title: "Screenshot",
+			description: "Capture and annotate screenshots instantly.",
+			icon: IconCapScreenshot,
+		},
+	];
 
-  return (
-    <div class="grid grid-cols-2 gap-8 text-center">
-      {modeOptions.map((option) => (
-        <ModeOption
-          mode={option.mode}
-          title={option.title}
-          description={option.description}
-          darkimg={option.darkimg}
-          lightimg={option.lightimg}
-          icon={option.icon}
-          isSelected={options.data?.mode === option.mode}
-          onSelect={handleModeChange}
-        />
-      ))}
-    </div>
-  );
+	return (
+		<div
+			data-tauri-drag-region="none"
+			class={cx(
+				"relative",
+				props.standalone
+					? "absolute z-10 border border-gray-3 p-8 rounded-xl bg-gray-1"
+					: "",
+			)}
+			onClick={(e) => e.stopPropagation()}
+		>
+			<Show when={props.onClose}>
+				<div
+					onClick={() => props.onClose?.()}
+					class="absolute -top-2.5 -right-2.5 p-2 rounded-full border duration-200 bg-gray-2 border-gray-3 hover:bg-gray-3 transition-colors cursor-pointer"
+				>
+					<IconCapX class="invert-1 size-2 dark:invert" />
+				</div>
+			</Show>
+
+			<div class="grid grid-cols-3 gap-4">
+				{modeOptions.map((option) => (
+					<ModeOption
+						mode={option.mode}
+						title={option.title}
+						description={option.description}
+						icon={option.icon}
+						isSelected={rawOptions.mode === option.mode}
+						onSelect={handleModeChange}
+					/>
+				))}
+			</div>
+		</div>
+	);
 };
 
 export default ModeSelect;

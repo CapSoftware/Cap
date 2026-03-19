@@ -1,0 +1,19 @@
+---
+
+title: Recording picker upgrades, auto-zoom improvements & Windows encoding fixes
+app: Cap Desktop
+publishedAt: "2025-10-07"
+version: 0.3.72
+image:
+------
+
+* New **List View** in the recording picker (enable via **Settings → Experimental**).
+* Faster recording start on macOS by sharing ScreenCaptureKit warm-up across sessions
+* Windows capturer now runs on a dedicated thread for snappier, more reliable capture
+* Windows encoding is more resilient: automatic fallback to software H.264 when hardware `ProcessInput` fails, plus fixes to the software path
+* Auto-zoom feels smoother on fast cursor moves with refined segment generation and steadier cursor behavior (including safer cursor-actor cleanup)
+* Fixed a case where the **5-minute Studio export limit** could be enforced incorrectly
+* Improved app icon/logo render quality in the new recording picker on Windows
+* Added minidump crash reporting (Sentry via Tauri) to help diagnose rare crashes.
+* Clearer “needs input” error handling in the desktop flow.
+* Improved recording pipeline under the hood for improved reliability and lower latency

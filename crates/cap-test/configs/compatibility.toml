@@ -1,0 +1,66 @@
+[meta]
+name = "Compatibility Validation Matrix"
+description = "Full compatibility validation for release sign-off. Covers macOS 13+, Windows, all microphone types (built-in/USB/Bluetooth), all webcam classes (built-in/USB/virtual), and monitor scenarios (single/multi, disconnect/reconnect, resolution change). Required before claiming full hardware compatibility."
+
+[recording]
+duration_secs = 15
+warmup_secs = 3
+iterations = 3
+
+[displays]
+use_discovered = true
+frame_rates = [30, 60]
+resolutions = [
+    { width = 1280, height = 720, label = "720p" },
+    { width = 1920, height = 1080, label = "1080p" },
+    { width = 2560, height = 1440, label = "1440p" },
+    { width = 3840, height = 2160, label = "4K" },
+    { width = 5120, height = 2880, label = "5K" },
+    { width = 2560, height = 1080, label = "UW-1080" },
+    { width = 3440, height = 1440, label = "UW-1440" },
+    { width = 3024, height = 1964, label = "MBP-14" },
+    { width = 3456, height = 2234, label = "MBP-16" },
+]
+
+[cameras]
+enabled = true
+frame_rates = [30, 60]
+pixel_formats = ["NV12", "YUYV422", "MJPEG"]
+resolutions = [
+    { width = 640, height = 480, label = "VGA" },
+    { width = 1280, height = 720, label = "720p" },
+    { width = 1920, height = 1080, label = "1080p" },
+    { width = 3840, height = 2160, label = "4K" },
+]
+
+[audio.microphones]
+enabled = true
+sample_rates = [8000, 16000, 44100, 48000, 96000]
+channels = [1, 2]
+include_bluetooth = true
+include_usb = true
+include_builtin = true
+
+[audio.system]
+enabled = true
+sample_rates = [44100, 48000]
+
+[thresholds]
+max_drop_rate_percent = 1.0
+min_effective_fps_ratio = 0.95
+max_p95_latency_ms = 50.0
+max_av_sync_drift_ms = 100.0
+
+[scenarios]
+enabled = true
+duration_secs = 15
+scenarios = [
+    "mic_disconnect_reconnect",
+    "camera_disconnect_reconnect",
+    "display_resolution_change",
+    "system_audio_device_switch",
+    "capture_source_restart",
+    "multi_monitor_recording",
+    "long_duration_stability",
+    "all_devices_combined",
+]

@@ -1,33 +1,55 @@
+import type { MetadataRoute } from "next";
+import { headers, type UnsafeUnwrappedHeaders } from "next/headers";
 import { seoPages } from "@/lib/seo-pages";
-import { MetadataRoute } from "next";
-
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 export default function robots(): MetadataRoute.Robots {
-  const seoPageSlugs = Object.keys(seoPages);
+	const seoPageSlugs = Object.keys(seoPages);
+	const headersList = headers() as unknown as UnsafeUnwrappedHeaders;
+	const referrer = headersList.get("x-referrer") || "";
 
-  return {
-    rules: [
-      {
-        userAgent: "*",
-        allow: [
-          "/",
-          "/blog/",
-          // Dynamically add all SEO pages
-          ...seoPageSlugs.map((slug) => `/${slug}`),
-        ],
-        // Be more specific about what we're disallowing under /s/
-        disallow: [
-          "/dashboard",
-          "/s/*", // This will match /s/ and anything under it
-          "/login",
-          "/invite",
-          "/onboarding",
-          "/record",
-        ],
-      },
-    ],
-    sitemap: "https://cap.so/sitemap.xml",
-  };
+	const allowedReferrers = [
+		"x.com",
+		"facebook.com",
+		"fb.com",
+		"linkedin.com",
+		"slack.com",
+		"notion.so",
+		"reddit.com",
+		"youtube.com",
+		"quora.com",
+		"t.co",
+	];
+
+	const isAllowedReferrer = allowedReferrers.some((domain) =>
+		referrer.includes(domain),
+	);
+
+	const disallowPaths = [
+		"/dashboard",
+		"/login",
+		"/invite",
+		"/onboarding",
+		"/record",
+		"/home",
+	];
+
+	if (!isAllowedReferrer) {
+		disallowPaths.push("/s/*");
+	}
+
+	return {
+		rules: [
+			{
+				userAgent: "*",
+				allow: [
+					"/",
+					"/blog/",
+					...seoPageSlugs.map((slug) => `/${slug}`),
+					...(isAllowedReferrer ? ["/s/*"] : []),
+				],
+				disallow: disallowPaths,
+			},
+		],
+		sitemap: "https://cap.so/sitemap.xml",
+	};
 }

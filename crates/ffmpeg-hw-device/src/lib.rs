@@ -5,13 +5,12 @@ use std::{
 
 use ffmpeg::{
     codec,
-    format::Pixel,
     frame::{self, Video},
-};
-use ffmpeg_sys_next::{
-    av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_transfer_data,
-    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVCodecHWConfig, AVHWDeviceType,
-    AVPixelFormat, AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
+    sys::{
+        AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX, AVBufferRef, AVCodecContext, AVCodecHWConfig,
+        AVHWDeviceType, AVPixelFormat, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create,
+        av_hwframe_transfer_data, avcodec_get_hw_config,
+    },
 };
 
 thread_local! {
@@ -22,21 +21,23 @@ unsafe extern "C" fn get_format(
     _: *mut AVCodecContext,
     pix_fmts: *const AVPixelFormat,
 ) -> AVPixelFormat {
-    let mut fmt = pix_fmts;
+    unsafe {
+        let mut fmt = pix_fmts;
 
-    loop {
-        if *fmt == AVPixelFormat::AV_PIX_FMT_NONE {
-            break;
+        loop {
+            if *fmt == AVPixelFormat::AV_PIX_FMT_NONE {
+                break;
+            }
+
+            if *fmt == HW_PIX_FMT.get() {
+                return *fmt;
+            }
+
+            fmt = fmt.offset(1);
         }
 
-        if *fmt == HW_PIX_FMT.get() {
-            return *fmt;
-        }
-
-        fmt = fmt.offset(1);
+        AVPixelFormat::AV_PIX_FMT_NONE
     }
-
-    AVPixelFormat::AV_PIX_FMT_NONE
 }
 
 pub struct HwDevice {
@@ -51,6 +52,7 @@ impl HwDevice {
                 let mut sw_frame = frame::Video::empty();
 
                 if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
+                    sw_frame.set_pts(src.pts());
                     return Some(sw_frame);
                 };
             }

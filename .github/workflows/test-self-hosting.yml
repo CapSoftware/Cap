@@ -1,0 +1,136 @@
+name: "Test Self-Hosting"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "docker-compose.yml"
+      - "docker-compose.coolify.yml"
+      - "apps/media-server/**"
+      - "apps/web/Dockerfile"
+      - ".github/workflows/test-self-hosting.yml"
+  pull_request:
+    paths:
+      - "docker-compose.yml"
+      - "docker-compose.coolify.yml"
+      - "apps/media-server/**"
+      - "apps/web/Dockerfile"
+      - ".github/workflows/test-self-hosting.yml"
+
+jobs:
+  test-docker-compose:
+    name: Test Docker Compose Self-Hosting
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Start Cap with Docker Compose
+        run: |
+          echo "Starting Cap..."
+          docker compose up -d
+          echo "Waiting for services to initialize..."
+
+      - name: Wait for MySQL to be healthy
+        run: |
+          echo "Waiting for MySQL..."
+          timeout 120 bash -c 'until docker inspect cap-mysql --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          echo "MySQL is healthy"
+
+      - name: Wait for MinIO to be healthy
+        run: |
+          echo "Waiting for MinIO..."
+          timeout 60 bash -c 'until docker inspect cap-minio --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          echo "MinIO is healthy"
+
+      - name: Wait for Media Server to be healthy
+        run: |
+          echo "Waiting for Media Server..."
+          timeout 60 bash -c 'until docker inspect cap-media-server --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          echo "Media Server is healthy"
+
+      - name: Wait for Cap Web to be healthy
+        run: |
+          echo "Waiting for Cap Web..."
+          timeout 180 bash -c 'until docker inspect cap-web --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          echo "Cap Web is healthy"
+
+      - name: Show service status
+        run: docker compose ps
+
+      - name: Test Cap Web responds
+        run: |
+          echo "Testing Cap Web..."
+          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000)
+          if [ "$response" = "307" ] || [ "$response" = "200" ]; then
+            echo "✓ Cap Web responds (HTTP $response)"
+          else
+            echo "✗ Cap Web failed (HTTP $response)"
+            exit 1
+          fi
+
+      - name: Test login page renders
+        run: |
+          echo "Testing login page..."
+          if curl -s http://localhost:3000/login | grep -q "Cap"; then
+            echo "✓ Login page renders correctly"
+          else
+            echo "✗ Login page failed to render"
+            exit 1
+          fi
+
+      - name: Test Media Server health
+        run: |
+          echo "Testing Media Server..."
+          health=$(docker exec cap-web wget -qO- http://media-server:3456/health)
+          if echo "$health" | grep -q '"status":"ok"'; then
+            echo "✓ Media Server is healthy"
+            echo "  Response: $health"
+          else
+            echo "✗ Media Server health check failed"
+            exit 1
+          fi
+
+      - name: Test database has tables
+        run: |
+          echo "Testing database..."
+          tables=$(docker exec cap-mysql mysql -ucap -pcap-local-pwd-123 cap -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='cap';" -s -N 2>/dev/null)
+          if [ "$tables" -gt 0 ]; then
+            echo "✓ Database has $tables tables (migrations ran successfully)"
+          else
+            echo "✗ Database has no tables"
+            exit 1
+          fi
+
+      - name: Test MinIO bucket exists
+        run: |
+          echo "Testing MinIO bucket..."
+          if docker compose logs minio-setup 2>&1 | grep -q "Bucket created successfully\|already exists"; then
+            echo "✓ MinIO bucket is configured"
+          else
+            echo "✗ MinIO bucket setup failed"
+            docker compose logs minio-setup
+            exit 1
+          fi
+
+      - name: Show Cap Web logs
+        if: always()
+        run: |
+          echo "=== Cap Web Logs ==="
+          docker compose logs cap-web | tail -50
+
+      - name: Show all logs on failure
+        if: failure()
+        run: |
+          echo "=== All Service Logs ==="
+          docker compose logs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose down -v
+          echo "Cleanup complete"

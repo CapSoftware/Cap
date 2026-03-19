@@ -1,0 +1,19 @@
+{
+	"name": "@cap/media-server",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev:local": "bun --watch src/index.ts",
+		"start": "bun src/index.ts",
+		"build": "echo 'No build step needed for Bun'",
+		"test": "bun test",
+		"test:watch": "bun test --watch"
+	},
+	"dependencies": {
+		"hono": "^4.7.1",
+		"zod": "^3.24.2"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

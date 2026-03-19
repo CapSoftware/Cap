@@ -1,58 +1,111 @@
+pub mod benchmark;
 mod capture_pipeline;
 pub mod cursor;
+pub mod diagnostics;
+pub mod feeds;
+pub mod fragmentation;
 pub mod instant_recording;
+mod output_pipeline;
+pub mod recovery;
+mod resolution_limits;
+pub mod screenshot;
+pub mod sources;
 pub mod studio_recording;
+pub mod sync_calibration;
 
-pub use studio_recording::{
-    spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
-};
+pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 
-use cap_media::{platform::Bounds, sources::*, MediaError};
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_sources;
+
+pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
+pub use output_pipeline::*;
+pub use sources::screen_capture;
+
+use cap_media::MediaError;
+use feeds::microphone::MicrophoneFeedLock;
+use scap_targets::bounds::LogicalBounds;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use thiserror::Error;
 
-#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
+use crate::{feeds::camera::CameraFeedLock, sources::screen_capture::ScreenCaptureTarget};
+
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingMode {
+    #[default]
     Studio,
     Instant,
+    Screenshot,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
     pub capture_target: ScreenCaptureTarget,
-    pub audio_input_name: Option<String>,
+    #[serde(alias = "audio_input_name")]
+    pub mic_name: Option<String>,
     pub camera_label: Option<String>,
+    #[serde(default)]
+    pub capture_system_audio: bool,
     pub mode: RecordingMode,
+}
+
+#[derive(Clone)]
+pub struct RecordingBaseInputs {
+    pub capture_target: ScreenCaptureTarget,
+    pub capture_system_audio: bool,
+    pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    pub camera_feed: Option<Arc<CameraFeedLock>>,
+    #[cfg(target_os = "macos")]
+    pub shareable_content: Option<SendableShareableContent>,
+    #[cfg(target_os = "macos")]
+    pub excluded_windows: Vec<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+pub struct SendableShareableContent(
+    Arc<std::sync::Mutex<cidre::arc::R<cidre::sc::ShareableContent>>>,
+);
+
+#[cfg(target_os = "macos")]
+impl SendableShareableContent {
+    pub fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl From<cidre::arc::R<cidre::sc::ShareableContent>> for SendableShareableContent {
+    fn from(value: cidre::arc::R<cidre::sc::ShareableContent>) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(value)))
+    }
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingOptionCaptureTarget {
-    Window { id: u32 },
-    Screen { id: u32 },
-    Area { screen_id: u32, bounds: Bounds },
+    Window {
+        id: u32,
+    },
+    Screen {
+        id: u32,
+    },
+    Area {
+        screen_id: u32,
+        bounds: LogicalBounds,
+    },
 }
-
-// impl Default for RecordingOptions {
-//     fn default() -> Self {
-//         Self {
-//             capture_target: None,
-//             camera_label: None,
-//             audio_input_name: None,
-//             mode: RecordingMode::Studio,
-//         }
-//     }
-// }
 
 impl RecordingOptions {
     pub fn camera_label(&self) -> Option<&str> {
         self.camera_label.as_deref()
     }
 
-    pub fn audio_input_name(&self) -> Option<&str> {
-        self.audio_input_name.as_deref()
+    pub fn mic_name(&self) -> Option<&str> {
+        self.mic_name.as_deref()
     }
 }
 

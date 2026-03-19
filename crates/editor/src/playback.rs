@@ -1,24 +1,103 @@
-use std::{sync::Arc, time::Duration};
-
-use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
-use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
+use cap_audio::FromSampleBytes;
+#[cfg(not(target_os = "windows"))]
+use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
+use cap_media::MediaError;
+use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{ProjectUniforms, RenderVideoConstants};
-use cpal::{
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-    BufferSize, SampleFormat,
+use cap_rendering::{
+    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
+    spring_mass_damper::SpringMassDamperSimulationConfig,
 };
-use tokio::{sync::watch, time::Instant};
+#[cfg(not(target_os = "windows"))]
+use cpal::{BufferSize, SupportedBufferSize};
+use cpal::{
+    SampleFormat,
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+};
+use futures::stream::{FuturesUnordered, StreamExt};
+use lru::LruCache;
+use std::{
+    collections::{HashSet, VecDeque},
+    num::NonZeroUsize,
+    sync::{Arc, RwLock, mpsc as std_mpsc},
+    time::{Duration, Instant},
+};
+use tokio::sync::watch;
+use tracing::{error, info, warn};
 
-use crate::editor;
-use crate::editor_instance::Segment;
+#[cfg(not(target_os = "windows"))]
+use crate::audio::AudioPlaybackBuffer;
+use crate::{
+    audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
+};
+
+const PREFETCH_BUFFER_SIZE: usize = 90;
+const PARALLEL_DECODE_TASKS: usize = 4;
+const INITIAL_PARALLEL_DECODE_TASKS: usize = 4;
+const MAX_PREFETCH_AHEAD: u32 = 90;
+#[cfg(not(target_os = "windows"))]
+const PREFETCH_BEHIND: u32 = 10;
+const FRAME_CACHE_SIZE: usize = 90;
+const RAMP_UP_FRAME_COUNT: u32 = 15;
+
+#[cfg(target_os = "windows")]
+struct WindowsTimerResolution;
+
+#[cfg(target_os = "windows")]
+impl WindowsTimerResolution {
+    fn set_high_precision() -> Self {
+        unsafe {
+            windows::Win32::Media::timeBeginPeriod(1);
+        }
+        Self
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsTimerResolution {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::Media::timeEndPeriod(1);
+        }
+    }
+}
+
+fn precision_sleep_sync(deadline: Instant) {
+    let now = Instant::now();
+    if now >= deadline {
+        return;
+    }
+
+    let remaining = deadline.saturating_duration_since(now);
+
+    #[cfg(target_os = "windows")]
+    {
+        let spin_threshold = Duration::from_millis(2);
+        if remaining > spin_threshold {
+            std::thread::sleep(remaining.saturating_sub(spin_threshold));
+        }
+        while Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::thread::sleep(remaining);
+    }
+}
+
+#[derive(Debug)]
+pub enum PlaybackStartError {
+    InvalidFps,
+}
 
 pub struct Playback {
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
-    pub segments: Arc<Vec<Segment>>,
+    pub segment_medias: Arc<Vec<SegmentMedia>>,
 }
 
 #[derive(Clone, Copy)]
@@ -34,13 +113,71 @@ pub struct PlaybackHandle {
     event_rx: watch::Receiver<PlaybackEvent>,
 }
 
+struct PrefetchedFrame {
+    frame_number: u32,
+    segment_frames: DecodedSegmentFrames,
+    segment_index: u32,
+}
+
+struct FrameCache {
+    cache: LruCache<u32, (Arc<DecodedSegmentFrames>, u32)>,
+}
+
+impl FrameCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            cache: LruCache::new(NonZeroUsize::new(capacity).unwrap()),
+        }
+    }
+
+    fn get(&mut self, frame_number: u32) -> Option<(Arc<DecodedSegmentFrames>, u32)> {
+        self.cache
+            .get(&frame_number)
+            .map(|(frames, idx)| (Arc::clone(frames), *idx))
+    }
+
+    fn insert(
+        &mut self,
+        frame_number: u32,
+        segment_frames: Arc<DecodedSegmentFrames>,
+        segment_index: u32,
+    ) {
+        self.cache
+            .put(frame_number, (segment_frames, segment_index));
+    }
+
+    fn evict_far_from(&mut self, current_frame: u32, max_distance: u32) {
+        let keys_to_remove: Vec<u32> = self
+            .cache
+            .iter()
+            .filter_map(|(k, _)| {
+                if (*k).abs_diff(current_frame) > max_distance {
+                    Some(*k)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            self.cache.pop(&key);
+        }
+    }
+}
+
 impl Playback {
     pub async fn start(
-        self,
+        mut self,
         fps: u32,
         resolution_base: XY<u32>,
-        is_upgraded: bool,
-    ) -> PlaybackHandle {
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        let fps_f64 = fps as f64;
+
+        if !(fps_f64.is_finite() && fps_f64 > 0.0) {
+            warn!(fps, "Invalid FPS provided for playback start");
+            return Err(PlaybackStartError::InvalidFps);
+        }
+
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -52,94 +189,590 @@ impl Playback {
             event_rx,
         };
 
-        tokio::spawn(async move {
-            let start = Instant::now();
+        let (prefetch_tx, prefetch_rx) = std_mpsc::channel::<PrefetchedFrame>();
+        let (frame_request_tx, mut frame_request_rx) = watch::channel(self.start_frame_number);
+        let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
 
+        let in_flight_frames: Arc<RwLock<HashSet<u32>>> = Arc::new(RwLock::new(HashSet::new()));
+        let prefetch_in_flight = in_flight_frames.clone();
+        let _main_in_flight = in_flight_frames;
+
+        let prefetch_stop_rx = stop_rx.clone();
+        let mut prefetch_project = self.project.clone();
+        let prefetch_segment_medias = self.segment_medias.clone();
+        let (prefetch_duration, has_timeline) =
+            if let Some(timeline) = &self.project.borrow().timeline {
+                (timeline.duration(), true)
+            } else {
+                (f64::MAX, false)
+            };
+        let segment_media_count = self.segment_medias.len();
+
+        tokio::spawn(async move {
+            if !has_timeline {
+                warn!("Prefetch: No timeline configuration found");
+            }
+            if segment_media_count == 0 {
+                warn!("Prefetch: No segment media available");
+            }
+            type PrefetchFuture = std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = (u32, u32, Option<DecodedSegmentFrames>)>
+                        + Send,
+                >,
+            >;
+            let mut next_prefetch_frame = *frame_request_rx.borrow();
+            let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
+            let mut frames_decoded: u32 = 0;
+            let mut prefetched_behind: HashSet<u32> = HashSet::new();
+            #[cfg(target_os = "windows")]
+            let prefetch_behind = 0u32;
+            #[cfg(not(target_os = "windows"))]
+            let prefetch_behind = PREFETCH_BEHIND;
+            let mut cached_project = prefetch_project.borrow().clone();
+
+            loop {
+                if *prefetch_stop_rx.borrow() {
+                    break;
+                }
+
+                if prefetch_project.has_changed().unwrap_or(false) {
+                    cached_project = prefetch_project.borrow_and_update().clone();
+                }
+
+                if let Ok(true) = frame_request_rx.has_changed() {
+                    let requested = *frame_request_rx.borrow_and_update();
+                    if requested != next_prefetch_frame {
+                        let old_frame = next_prefetch_frame;
+                        let is_backward_seek = requested < old_frame;
+                        let seek_distance = if is_backward_seek {
+                            old_frame - requested
+                        } else {
+                            requested - old_frame
+                        };
+
+                        next_prefetch_frame = requested;
+                        frames_decoded = 0;
+                        prefetched_behind.clear();
+
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.clear();
+                        }
+
+                        if is_backward_seek || seek_distance > MAX_PREFETCH_AHEAD / 2 {
+                            in_flight = FuturesUnordered::new();
+                        }
+                    }
+                }
+
+                let current_playback_frame = *playback_position_rx.borrow();
+                let max_prefetch_ahead = MAX_PREFETCH_AHEAD;
+                let max_prefetch_frame = current_playback_frame + max_prefetch_ahead;
+
+                let initial_parallel_decode_tasks = INITIAL_PARALLEL_DECODE_TASKS;
+                let parallel_decode_tasks = PARALLEL_DECODE_TASKS;
+
+                let effective_parallel = if frames_decoded < RAMP_UP_FRAME_COUNT {
+                    initial_parallel_decode_tasks
+                } else {
+                    parallel_decode_tasks
+                };
+
+                while in_flight.len() < effective_parallel {
+                    let frame_num = next_prefetch_frame;
+
+                    if frame_num > max_prefetch_frame {
+                        break;
+                    }
+
+                    let prefetch_time = frame_num as f64 / fps_f64;
+
+                    if prefetch_time >= prefetch_duration {
+                        break;
+                    }
+
+                    let already_in_flight = prefetch_in_flight
+                        .read()
+                        .map(|guard| guard.contains(&frame_num))
+                        .unwrap_or(false);
+                    if already_in_flight {
+                        next_prefetch_frame += 1;
+                        continue;
+                    }
+
+                    if let Some((segment_time, segment)) =
+                        cached_project.get_segment_time(prefetch_time)
+                        && let Some(segment_media) =
+                            prefetch_segment_medias.get(segment.recording_clip as usize)
+                    {
+                        let clip_offsets = cached_project
+                            .clips
+                            .iter()
+                            .find(|v| v.index == segment.recording_clip)
+                            .map(|v| v.offsets)
+                            .unwrap_or_default();
+
+                        let decoders = segment_media.decoders.clone();
+                        let hide_camera = cached_project.camera.hide;
+                        let segment_index = segment.recording_clip;
+                        let is_initial = frames_decoded < 10;
+
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.insert(frame_num);
+                        }
+
+                        in_flight.push(Box::pin(async move {
+                            let result = if is_initial {
+                                decoders
+                                    .get_frames_initial(
+                                        segment_time as f32,
+                                        !hide_camera,
+                                        clip_offsets,
+                                    )
+                                    .await
+                            } else {
+                                decoders
+                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .await
+                            };
+                            (frame_num, segment_index, result)
+                        }));
+                    }
+
+                    next_prefetch_frame += 1;
+                }
+
+                if in_flight.len() < effective_parallel {
+                    for behind_offset in 1..=prefetch_behind {
+                        if in_flight.len() >= effective_parallel {
+                            break;
+                        }
+                        let behind_frame = current_playback_frame.saturating_sub(behind_offset);
+                        if behind_frame == 0 || prefetched_behind.contains(&behind_frame) {
+                            continue;
+                        }
+
+                        let prefetch_time = behind_frame as f64 / fps_f64;
+                        if prefetch_time >= prefetch_duration || prefetch_time < 0.0 {
+                            continue;
+                        }
+
+                        let already_in_flight = prefetch_in_flight
+                            .read()
+                            .map(|guard| guard.contains(&behind_frame))
+                            .unwrap_or(false);
+                        if already_in_flight {
+                            continue;
+                        }
+
+                        if let Some((segment_time, segment)) =
+                            cached_project.get_segment_time(prefetch_time)
+                            && let Some(segment_media) =
+                                prefetch_segment_medias.get(segment.recording_clip as usize)
+                        {
+                            let clip_offsets = cached_project
+                                .clips
+                                .iter()
+                                .find(|v| v.index == segment.recording_clip)
+                                .map(|v| v.offsets)
+                                .unwrap_or_default();
+
+                            let decoders = segment_media.decoders.clone();
+                            let hide_camera = cached_project.camera.hide;
+                            let segment_index = segment.recording_clip;
+
+                            if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                                in_flight_guard.insert(behind_frame);
+                            }
+
+                            prefetched_behind.insert(behind_frame);
+                            in_flight.push(Box::pin(async move {
+                                let result = decoders
+                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .await;
+                                (behind_frame, segment_index, result)
+                            }));
+                        }
+                    }
+                }
+
+                tokio::select! {
+                    biased;
+
+                    Some((frame_num, segment_index, result)) = in_flight.next() => {
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.remove(&frame_num);
+                        }
+                        frames_decoded = frames_decoded.saturating_add(1);
+
+                        if let Some(segment_frames) = result {
+                            let _ = prefetch_tx.send(PrefetchedFrame {
+                                frame_number: frame_num,
+                                segment_frames,
+                                segment_index,
+                            });
+                        } else if frames_decoded <= 5 {
+                            warn!(
+                                frame = frame_num,
+                                segment = segment_index,
+                                "Prefetch: decoder returned no frames"
+                            );
+                        }
+                    }
+
+                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                }
+            }
+        });
+
+        let tokio_handle = tokio::runtime::Handle::current();
+
+        let playback_body = move || {
             let duration = if let Some(timeline) = &self.project.borrow().timeline {
                 timeline.duration()
             } else {
                 f64::MAX
             };
 
-            // TODO: make this work with >1 segment
-            if self.segments[0].audio.is_some() {
+            let (audio_playhead_tx, audio_playhead_rx) =
+                watch::channel(self.start_frame_number as f64 / fps as f64);
+
+            let has_audio = {
+                let _guard = tokio_handle.enter();
                 AudioPlayback {
-                    segments: self
-                        .segments
-                        .iter()
-                        .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
-                        .collect(),
+                    segments: get_audio_segments(&self.segment_medias),
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
                     project: self.project.clone(),
                     fps,
+                    playhead_rx: audio_playhead_rx,
+                    duration_secs: duration,
                 }
-                .spawn();
+                .spawn()
             };
 
-            loop {
-                let time =
-                    (self.start_frame_number as f64 / fps as f64) + start.elapsed().as_secs_f64();
-                let frame_number = (time * fps as f64).floor() as u32;
+            let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
+            let mut frame_number = self.start_frame_number;
+            let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
+                VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
+            let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
 
-                if frame_number as f64 >= fps as f64 * duration {
-                    break;
+            let mut total_frames_rendered = 0u64;
+            let mut total_frames_skipped = 0u64;
+            let mut cache_hits = 0u64;
+            let mut prefetch_hits = 0u64;
+            let sync_decodes = 0u64;
+            let mut last_stats_time = Instant::now();
+            let stats_interval = Duration::from_secs(2);
+
+            let warmup_target_frames = 10usize;
+            let warmup_after_first_timeout = Duration::from_millis(500);
+            let warmup_no_frames_timeout = Duration::from_secs(5);
+            let warmup_start = Instant::now();
+            let mut first_frame_time: Option<Instant> = None;
+
+            while !*stop_rx.borrow() {
+                let should_start = if let Some(first_time) = first_frame_time {
+                    prefetch_buffer.len() >= warmup_target_frames
+                        || first_time.elapsed() > warmup_after_first_timeout
+                } else {
+                    false
                 };
 
-                let project = self.project.borrow().clone();
+                if should_start {
+                    break;
+                }
 
-                if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
-                    let segment = &self.segments[segment_i as usize];
+                if first_frame_time.is_none() && warmup_start.elapsed() > warmup_no_frames_timeout {
+                    warn!(
+                        "Playback warmup timed out waiting for first frame after {:?}",
+                        warmup_start.elapsed()
+                    );
+                    let _ = event_tx.send(PlaybackEvent::Stop);
+                    return;
+                }
 
-                    tokio::select! {
-                        _ = stop_rx.changed() => {
-                           break;
-                        },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => {
-                            if let Some(segment_frames) = data {
-                                let uniforms = ProjectUniforms::new(
-                                    &self.render_constants,
-                                    &project,
-                                    frame_number,
-                                    fps,
-                                    resolution_base,
-                                    is_upgraded,
-                                    &segment.cursor
-                                );
-
-                                self
-                                    .renderer
-                                    .render_frame(
-                                        segment_frames,
-                                        project.background.source.clone(),
-                                        uniforms,
-                                        resolution_base,
-                                        segment.cursor.clone()
-                                    )
-                                    .await;
+                match prefetch_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(prefetched) => {
+                        if prefetched.frame_number >= frame_number {
+                            prefetch_buffer.push_back(prefetched);
+                            if first_frame_time.is_none() {
+                                first_frame_time = Some(Instant::now());
                             }
                         }
-                        else => {
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+
+            prefetch_buffer
+                .make_contiguous()
+                .sort_by_key(|p| p.frame_number);
+
+            #[cfg(target_os = "windows")]
+            let _timer_guard = WindowsTimerResolution::set_high_precision();
+
+            let start = Instant::now();
+            let mut cached_project = self.project.borrow().clone();
+
+            'playback: loop {
+                if self.project.has_changed().unwrap_or(false) {
+                    cached_project = self.project.borrow_and_update().clone();
+                }
+
+                let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
+                let next_deadline = start + frame_duration.mul_f64(frame_offset);
+
+                precision_sleep_sync(next_deadline);
+
+                if *stop_rx.borrow() {
+                    break;
+                }
+
+                let overshoot = Instant::now().saturating_duration_since(next_deadline);
+                if overshoot > frame_duration + frame_duration / 2 {
+                    let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
+                    let skip = frames_behind.max(1);
+                    frame_number += skip;
+                    total_frames_skipped += skip as u64;
+                    while prefetch_buffer
+                        .front()
+                        .is_some_and(|f| f.frame_number < frame_number)
+                    {
+                        prefetch_buffer.pop_front();
+                    }
+                    frame_cache.evict_far_from(frame_number, MAX_PREFETCH_AHEAD);
+                    let _ = frame_request_tx.send(frame_number);
+                    let _ = playback_position_tx.send(frame_number);
+                    if has_audio
+                        && audio_playhead_tx
+                            .send(frame_number as f64 / fps_f64)
+                            .is_err()
+                    {
+                        break 'playback;
+                    }
+                    continue;
+                }
+
+                while prefetch_buffer
+                    .front()
+                    .is_some_and(|f| f.frame_number < frame_number)
+                {
+                    prefetch_buffer.pop_front();
+                }
+                if prefetch_buffer.len() >= PREFETCH_BUFFER_SIZE {
+                    prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                }
+                let drain_budget = 16usize;
+                let mut drained = 0usize;
+                while prefetch_buffer.len() < PREFETCH_BUFFER_SIZE && drained < drain_budget {
+                    match prefetch_rx.try_recv() {
+                        Ok(prefetched) => {
+                            drained += 1;
+                            if prefetched.frame_number >= frame_number {
+                                prefetch_buffer.push_back(prefetched);
+                            }
                         }
+                        Err(_) => break,
                     }
                 }
 
-                tokio::time::sleep_until(
-                    start
-                        + (frame_number - self.start_frame_number)
-                            * Duration::from_secs_f32(1.0 / fps as f32),
-                )
-                .await;
+                let playback_time = frame_number as f64 / fps_f64;
+                if playback_time >= duration {
+                    break;
+                }
+
+                let mut was_cached = false;
+
+                let segment_frames_opt = if let Some(cached) = frame_cache.get(frame_number) {
+                    was_cached = true;
+                    cache_hits += 1;
+                    Some(cached)
+                } else if prefetch_buffer
+                    .front()
+                    .is_some_and(|f| f.frame_number == frame_number)
+                {
+                    let prefetched = prefetch_buffer.pop_front().unwrap();
+                    prefetch_hits += 1;
+                    Some((
+                        Arc::new(prefetched.segment_frames),
+                        prefetched.segment_index,
+                    ))
+                } else {
+                    let prefetched_idx = prefetch_buffer
+                        .iter()
+                        .position(|p| p.frame_number == frame_number);
+
+                    if let Some(idx) = prefetched_idx {
+                        let prefetched = prefetch_buffer.remove(idx).unwrap();
+                        prefetch_hits += 1;
+                        Some((
+                            Arc::new(prefetched.segment_frames),
+                            prefetched.segment_index,
+                        ))
+                    } else if prefetch_buffer.is_empty() {
+                        let _ = frame_request_tx.send(frame_number);
+
+                        let wait_ms = if total_frames_rendered < 15 { 100 } else { 50 };
+                        match prefetch_rx.recv_timeout(Duration::from_millis(wait_ms)) {
+                            Ok(prefetched) => {
+                                if prefetched.frame_number == frame_number {
+                                    Some((
+                                        Arc::new(prefetched.segment_frames),
+                                        prefetched.segment_index,
+                                    ))
+                                } else if prefetched.frame_number > frame_number {
+                                    frame_number = prefetched.frame_number;
+                                    total_frames_skipped += 1;
+                                    Some((
+                                        Arc::new(prefetched.segment_frames),
+                                        prefetched.segment_index,
+                                    ))
+                                } else {
+                                    prefetch_buffer.push_back(prefetched);
+                                    frame_number = frame_number.saturating_add(1);
+                                    total_frames_skipped += 1;
+                                    continue;
+                                }
+                            }
+                            Err(_) => {
+                                frame_number = frame_number.saturating_add(1);
+                                total_frames_skipped += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        let _ = frame_request_tx.send(frame_number);
+                        frame_number = frame_number.saturating_add(1);
+                        total_frames_skipped += 1;
+                        continue;
+                    }
+                };
+
+                if let Some((segment_frames, segment_index)) = segment_frames_opt {
+                    let Some(segment_media) = self.segment_medias.get(segment_index as usize)
+                    else {
+                        frame_number = frame_number.saturating_add(1);
+                        continue;
+                    };
+
+                    if !was_cached {
+                        frame_cache.insert(
+                            frame_number,
+                            Arc::clone(&segment_frames),
+                            segment_index,
+                        );
+                    }
+
+                    let cursor_smoothing =
+                        (!cached_project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+                            tension: cached_project.cursor.tension,
+                            mass: cached_project.cursor.mass,
+                            friction: cached_project.cursor.friction,
+                        });
+
+                    let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
+                        segment_media.cursor.clone(),
+                        cursor_smoothing,
+                        cached_project.screen_movement_spring,
+                        duration,
+                    );
+
+                    let uniforms = ProjectUniforms::new(
+                        &self.render_constants,
+                        &cached_project,
+                        frame_number,
+                        fps,
+                        resolution_base,
+                        &segment_media.cursor,
+                        &segment_frames,
+                        duration,
+                        &zoom_focus_interpolator,
+                    );
+
+                    self.renderer.render_frame(
+                        Arc::unwrap_or_clone(segment_frames),
+                        uniforms,
+                        segment_media.cursor.clone(),
+                    );
+
+                    total_frames_rendered += 1;
+                }
+
+                if last_stats_time.elapsed() >= stats_interval {
+                    let effective_fps =
+                        total_frames_rendered as f64 / start.elapsed().as_secs_f64().max(0.001);
+                    let buffer_len = prefetch_buffer.len();
+                    info!(
+                        effective_fps = format!("{:.1}", effective_fps),
+                        total_rendered = total_frames_rendered,
+                        total_skipped = total_frames_skipped,
+                        cache_hits = cache_hits,
+                        prefetch_hits = prefetch_hits,
+                        sync_decodes = sync_decodes,
+                        prefetch_buffer = buffer_len,
+                        "Playback stats"
+                    );
+                    last_stats_time = Instant::now();
+                }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+
+                frame_number = frame_number.saturating_add(1);
+                let _ = playback_position_tx.send(frame_number);
+                if has_audio
+                    && audio_playhead_tx
+                        .send(frame_number as f64 / fps_f64)
+                        .is_err()
+                {
+                    break 'playback;
+                }
+
+                let expected_frame = self.start_frame_number
+                    + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+
+                if frame_number < expected_frame {
+                    let frames_behind = expected_frame - frame_number;
+
+                    if frames_behind <= 2 {
+                        continue;
+                    }
+
+                    let skipped = frames_behind;
+                    frame_number += skipped;
+                    total_frames_skipped += skipped as u64;
+
+                    while prefetch_buffer
+                        .front()
+                        .is_some_and(|f| f.frame_number < frame_number)
+                    {
+                        prefetch_buffer.pop_front();
+                    }
+                    frame_cache.evict_far_from(frame_number, MAX_PREFETCH_AHEAD);
+                    let _ = frame_request_tx.send(frame_number);
+                    let _ = playback_position_tx.send(frame_number);
+                    if has_audio
+                        && audio_playhead_tx
+                            .send(frame_number as f64 / fps_f64)
+                            .is_err()
+                    {
+                        break 'playback;
+                    }
+                }
             }
 
             stop_tx.send(true).ok();
 
             event_tx.send(PlaybackEvent::Stop).ok();
-        });
+        };
 
-        handle
+        std::thread::Builder::new()
+            .name("cap-playback".into())
+            .spawn(playback_body)
+            .expect("failed to spawn playback thread");
+
+        Ok(handle)
     }
 }
 
@@ -155,100 +788,477 @@ impl PlaybackHandle {
 }
 
 struct AudioPlayback {
-    segments: Vec<AudioData>,
+    segments: Vec<AudioSegment>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
     fps: u32,
+    playhead_rx: watch::Receiver<f64>,
+    duration_secs: f64,
 }
 
 impl AudioPlayback {
-    fn spawn(self) {
+    fn spawn(self) -> bool {
         let handle = tokio::runtime::Handle::current();
+
+        if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
+            info!("No audio segments found, skipping audio playback thread.");
+            return false;
+        }
 
         std::thread::spawn(move || {
             let host = cpal::default_host();
-            let device = host.default_output_device().unwrap();
-            println!("Output device: {}", device.name().unwrap());
-            let supported_config = device
-                .default_output_config()
-                .expect("Failed to get default output format");
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    error!("No default output device found. Skipping audio playback.");
+                    return;
+                }
+            };
+            let supported_config = match device.default_output_config() {
+                Ok(sc) => sc,
+                Err(e) => {
+                    error!(
+                        "Failed to get default output config: {}. Skipping audio playback.",
+                        e
+                    );
+                    return;
+                }
+            };
 
-            let (mut stop_rx, stream) = match supported_config.sample_format() {
-                // SampleFormat::I8 => create_stream::<i8>(shared_data),
-                SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
-                SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
-                SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
-                SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
-                // SampleFormat::U16 => create_stream::<u16>(shared_data),
-                // SampleFormat::U32 => create_stream::<u32>(shared_data),
-                // SampleFormat::U64 => create_stream::<u64>(shared_data),
-                SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
-                SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
-                _ => unimplemented!(),
+            let duration_secs = self.duration_secs;
+
+            let result = match supported_config.sample_format() {
+                SampleFormat::I16 => {
+                    self.create_stream_prerendered::<i16>(device, supported_config, duration_secs)
+                }
+                SampleFormat::I32 => {
+                    self.create_stream_prerendered::<i32>(device, supported_config, duration_secs)
+                }
+                SampleFormat::F32 => {
+                    self.create_stream_prerendered::<f32>(device, supported_config, duration_secs)
+                }
+                SampleFormat::I64 => {
+                    self.create_stream_prerendered::<i64>(device, supported_config, duration_secs)
+                }
+                SampleFormat::U8 => {
+                    self.create_stream_prerendered::<u8>(device, supported_config, duration_secs)
+                }
+                SampleFormat::F64 => {
+                    self.create_stream_prerendered::<f64>(device, supported_config, duration_secs)
+                }
+                format => {
+                    error!(
+                        "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
+                        format
+                    );
+                    return;
+                }
+            };
+
+            let (mut stop_rx, stream) = match result {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(
+                        "Failed to create audio stream: {}. Skipping audio playback.",
+                        e
+                    );
+                    return;
+                }
+            };
+
+            if let Err(e) = stream.play() {
+                error!(
+                    "Failed to play audio stream: {}. Skipping audio playback.",
+                    e
+                );
+                return;
             }
-            .unwrap();
 
-            stream.play().unwrap();
-
-            handle.block_on(stop_rx.changed()).ok();
-
-            stream.pause().ok();
+            let _ = handle.block_on(stop_rx.changed());
+            info!("Audio playback thread finished.");
         });
+
+        true
     }
 
-    fn create_stream<T: FromSampleBytes>(
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
+    fn create_stream<T>(
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
-    ) -> Result<(watch::Receiver<bool>, cpal::Stream), AudioInfoError> {
+    ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
+    where
+        T: FromSampleBytes + cpal::Sample,
+    {
         let AudioPlayback {
             stop_rx,
             start_frame_number,
             project,
             segments,
             fps,
+            playhead_rx,
             ..
         } = self;
 
-        let mut output_info = AudioInfo::from_stream_config(&supported_config)?;
-        output_info.sample_format = output_info.sample_format.packed();
+        let mut base_output_info = AudioInfo::from_stream_config(&supported_config);
+        base_output_info.sample_format = base_output_info.sample_format.packed();
+        let default_output_info = base_output_info;
 
-        // TODO: Get fps and duration from video (once we start supporting other frame rates)
-        // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
-        // pre-recorded videos are obviously a fixed size
-        let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
+        let initial_latency_hint =
+            default_output_latency_hint(base_output_info.sample_rate, base_output_info.buffer_size);
+        let is_wireless = initial_latency_hint
+            .as_ref()
+            .map(|hint| hint.transport.is_wireless())
+            .unwrap_or(false);
+
+        let default_samples_count = AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT;
+        let wireless_samples_count = AudioPlaybackBuffer::<T>::WIRELESS_PLAYBACK_SAMPLES_COUNT;
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum BufferSizeStrategy {
+            Fixed(u32),
+            DeviceDefault,
+        }
+
+        let candidate_order = if is_wireless {
+            vec![
+                BufferSizeStrategy::DeviceDefault,
+                BufferSizeStrategy::Fixed(wireless_samples_count),
+                BufferSizeStrategy::Fixed(default_samples_count),
+            ]
+        } else {
+            vec![
+                BufferSizeStrategy::DeviceDefault,
+                BufferSizeStrategy::Fixed(default_samples_count),
+            ]
+        };
+
+        let mut attempts = Vec::new();
+        for strategy in candidate_order {
+            if !attempts.contains(&strategy) {
+                attempts.push(strategy);
+            }
+        }
+
         let playhead = f64::from(start_frame_number) / f64::from(fps);
-        audio_renderer.set_playhead(playhead, &project.borrow());
+        let mut last_error: Option<MediaError> = None;
 
-        // Prerender enough for smooth playback
-        // disabled bc it causes weirdness during playback atm
-        // while !audio_renderer.buffer_reaching_limit() {
-        //     audio_renderer.render(project.borrow().timeline());
-        // }
+        for (attempt_index, strategy) in attempts.into_iter().enumerate() {
+            let mut config = supported_config.config();
+            base_output_info = match strategy {
+                BufferSizeStrategy::Fixed(desired) => {
+                    let clamped = match supported_config.buffer_size() {
+                        SupportedBufferSize::Range { min, max } => desired.clamp(*min, *max),
+                        SupportedBufferSize::Unknown => desired,
+                    };
+
+                    if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size()
+                        && clamped != desired
+                    {
+                        info!(
+                            requested_frames = desired,
+                            clamped_frames = clamped,
+                            range_min = *min,
+                            range_max = *max,
+                            "Adjusted requested audio buffer to fit device capabilities",
+                        );
+                    }
+
+                    config.buffer_size = BufferSize::Fixed(clamped);
+
+                    let mut info =
+                        AudioInfo::from_stream_config_with_buffer(&supported_config, Some(clamped));
+                    info.sample_format = info.sample_format.packed();
+                    info
+                }
+                BufferSizeStrategy::DeviceDefault => {
+                    config.buffer_size = BufferSize::Default;
+                    default_output_info
+                }
+            };
+
+            // Clamp output info for FFmpeg compatibility (max 8 channels)
+            // This must match what AudioPlaybackBuffer will use internally
+            base_output_info = base_output_info.for_ffmpeg_output();
+
+            // Also update the stream config to match the clamped channels
+            config.channels = base_output_info.channels as u16;
+
+            let sample_rate = base_output_info.sample_rate;
+            let buffer_size = base_output_info.buffer_size;
+            let channels = base_output_info.channels;
+
+            #[cfg(target_os = "windows")]
+            let headroom_multiplier = 4usize;
+            #[cfg(not(target_os = "windows"))]
+            let headroom_multiplier = 2usize;
+
+            let headroom_samples = (buffer_size as usize)
+                .saturating_mul(channels)
+                .saturating_mul(headroom_multiplier)
+                .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
+
+            let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), base_output_info);
+
+            match strategy {
+                BufferSizeStrategy::Fixed(desired) => {
+                    let actual = match config.buffer_size {
+                        BufferSize::Fixed(value) => value,
+                        _ => desired,
+                    };
+
+                    if attempt_index == 0 {
+                        if actual > default_samples_count {
+                            info!("Using enlarged audio buffer: {} frames", actual);
+                        } else if is_wireless {
+                            info!(
+                                "Using device-limited audio buffer for wireless output: {} frames",
+                                actual
+                            );
+                        }
+                    } else {
+                        info!("Falling back to audio buffer size: {} frames", actual);
+                    }
+                }
+                BufferSizeStrategy::DeviceDefault => {
+                    if attempt_index == 0 {
+                        info!("Using device default audio buffer size");
+                    } else {
+                        info!("Falling back to device default audio buffer size");
+                    }
+                }
+            }
+
+            let static_latency_hint =
+                default_output_latency_hint(sample_rate, buffer_size).or(initial_latency_hint);
+            let latency_config = LatencyCorrectionConfig::default();
+            #[allow(unused_mut)]
+            let mut latency_corrector = LatencyCorrector::new(static_latency_hint, latency_config);
+            let initial_compensation_secs = latency_corrector.initial_compensation_secs();
+            let device_sample_rate = sample_rate;
+
+            {
+                let project_snapshot = project.borrow();
+                audio_renderer
+                    .set_playhead(playhead + initial_compensation_secs, &project_snapshot);
+
+                #[cfg(target_os = "windows")]
+                let initial_prefill = headroom_samples * 4;
+                #[cfg(not(target_os = "windows"))]
+                let initial_prefill = headroom_samples;
+
+                audio_renderer.prefill(&project_snapshot, initial_prefill);
+            }
+
+            if let Some(hint) = static_latency_hint
+                && hint.latency_secs > 0.0
+            {
+                match hint.transport {
+                    cap_audio::OutputTransportKind::Airplay => info!(
+                        "Applying AirPlay output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    transport if transport.is_wireless() => info!(
+                        "Applying wireless output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    _ => info!(
+                        "Applying output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                }
+            }
+
+            let project_for_stream = project.clone();
+            let headroom_for_stream = headroom_samples;
+            let mut playhead_rx_for_stream = playhead_rx.clone();
+            let mut last_video_playhead = playhead;
+
+            #[cfg(target_os = "windows")]
+            const FIXED_LATENCY_SECS: f64 = 0.08;
+            #[cfg(target_os = "windows")]
+            const SYNC_THRESHOLD_SECS: f64 = 0.10;
+            #[cfg(target_os = "windows")]
+            const HARD_SEEK_THRESHOLD_SECS: f64 = 0.3;
+            #[cfg(target_os = "windows")]
+            const MIN_SYNC_INTERVAL_CALLBACKS: u32 = 30;
+
+            #[cfg(not(target_os = "windows"))]
+            const SYNC_THRESHOLD_SECS: f64 = 0.08;
+
+            #[cfg(target_os = "windows")]
+            let mut callbacks_since_last_sync: u32 = MIN_SYNC_INTERVAL_CALLBACKS;
+
+            let stream_result = device.build_output_stream(
+                &config,
+                move |buffer: &mut [T], info| {
+                    #[cfg(not(target_os = "windows"))]
+                    let latency_secs = latency_corrector.update_from_callback(info);
+                    #[cfg(target_os = "windows")]
+                    let _ = (info, &latency_corrector);
+
+                    let project = project_for_stream.borrow();
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        callbacks_since_last_sync = callbacks_since_last_sync.saturating_add(1);
+                    }
+
+                    if playhead_rx_for_stream.has_changed().unwrap_or(false) {
+                        let video_playhead = *playhead_rx_for_stream.borrow_and_update();
+
+                        #[cfg(target_os = "windows")]
+                        {
+                            let jump = (video_playhead - last_video_playhead).abs();
+                            let audio_playhead = audio_renderer
+                                .current_audible_playhead(device_sample_rate, FIXED_LATENCY_SECS);
+                            let drift = (video_playhead - audio_playhead).abs();
+
+                            if jump > HARD_SEEK_THRESHOLD_SECS {
+                                audio_renderer.set_playhead(
+                                    video_playhead + initial_compensation_secs,
+                                    &project,
+                                );
+                                callbacks_since_last_sync = 0;
+                            } else if drift > SYNC_THRESHOLD_SECS
+                                && callbacks_since_last_sync >= MIN_SYNC_INTERVAL_CALLBACKS
+                            {
+                                audio_renderer.set_playhead_smooth(
+                                    video_playhead + initial_compensation_secs,
+                                    &project,
+                                );
+                                callbacks_since_last_sync = 0;
+                            }
+                        }
+
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            let audio_playhead = audio_renderer
+                                .current_audible_playhead(device_sample_rate, latency_secs);
+                            let drift = (video_playhead - audio_playhead).abs();
+
+                            if drift > SYNC_THRESHOLD_SECS
+                                || (video_playhead - last_video_playhead).abs()
+                                    > SYNC_THRESHOLD_SECS
+                            {
+                                audio_renderer.set_playhead(
+                                    video_playhead + initial_compensation_secs,
+                                    &project,
+                                );
+                            }
+                        }
+
+                        last_video_playhead = video_playhead;
+                    }
+
+                    let playback_samples = buffer.len();
+                    let min_headroom = headroom_for_stream.max(playback_samples * 2);
+                    audio_renderer.fill(buffer, &project, min_headroom);
+                },
+                |_err| eprintln!("Audio stream error: {_err}"),
+                None,
+            );
+
+            match stream_result {
+                Ok(stream) => {
+                    return Ok((stop_rx, stream));
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "Audio stream creation failed, attempting fallback"
+                    );
+                    last_error = Some(MediaError::TaskLaunch(format!(
+                        "Failed to build audio output stream: {err}"
+                    )));
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            MediaError::TaskLaunch("Failed to build audio output stream".to_string())
+        }))
+    }
+
+    fn create_stream_prerendered<T>(
+        self,
+        device: cpal::Device,
+        supported_config: cpal::SupportedStreamConfig,
+        duration_secs: f64,
+    ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
+    where
+        T: FromSampleBytes + cpal::Sample,
+    {
+        use crate::audio::PrerenderedAudioBuffer;
+
+        let AudioPlayback {
+            stop_rx,
+            start_frame_number,
+            project,
+            segments,
+            fps,
+            playhead_rx,
+            ..
+        } = self;
+
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
+        output_info.sample_format = output_info.sample_format.packed();
+        // Clamp output info for FFmpeg compatibility (max 8 channels)
+        output_info = output_info.for_ffmpeg_output();
 
         let mut config = supported_config.config();
-        // Low-latency playback
-        config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
+        // Match stream config channels to clamped output info
+        config.channels = output_info.channels as u16;
+
+        let sample_rate = output_info.sample_rate;
+
+        let playhead = f64::from(start_frame_number) / f64::from(fps);
+
+        info!(
+            duration_secs = duration_secs,
+            start_playhead = playhead,
+            sample_rate = sample_rate,
+            "Creating pre-rendered audio stream"
+        );
+
+        let project_snapshot = project.borrow().clone();
+        let mut audio_buffer = PrerenderedAudioBuffer::<T>::new(
+            segments,
+            &project_snapshot,
+            output_info,
+            duration_secs,
+        );
+
+        audio_buffer.set_playhead(playhead);
+
+        let mut playhead_rx_for_stream = playhead_rx.clone();
+        let mut last_video_playhead = playhead;
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |buffer: &mut [T], _info| {
-                    let project = project.borrow();
-                    audio_renderer.render(&project);
-                    audio_renderer.fill(buffer);
+                    if playhead_rx_for_stream.has_changed().unwrap_or(false) {
+                        let video_playhead = *playhead_rx_for_stream.borrow_and_update();
+                        let jump = (video_playhead - last_video_playhead).abs();
 
-                    if project.audio.mute {
-                        for sample in buffer.iter_mut() {
-                            *sample = T::EQUILIBRIUM;
+                        if jump > 0.05 {
+                            audio_buffer.set_playhead(video_playhead);
                         }
+
+                        last_video_playhead = video_playhead;
                     }
+
+                    audio_buffer.fill(buffer);
                 },
-                |_| {},
+                |err| eprintln!("Audio stream error: {err}"),
                 None,
             )
-            .unwrap();
+            .map_err(|e| MediaError::TaskLaunch(format!("Failed to build audio stream: {e}")))?;
+
+        info!("Pre-rendered audio stream created successfully");
 
         Ok((stop_rx, stream))
     }

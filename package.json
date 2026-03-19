@@ -1,41 +1,65 @@
 {
-  "type": "module",
-  "scripts": {
-    "build": "dotenv -e .env -- turbo run build",
-    "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
-    "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
-    "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
-    "dev:web": "pnpm dev --filter=!@cap/desktop",
-    "dev:desktop": "pnpm run --filter=@cap/desktop dev",
-    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
-    "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "db:push": "(pnpm run docker:up &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run db:push",
-    "db:generate": "dotenv -e .env -- turbo run db:generate",
-    "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
-    "typecheck": "pnpm tsc -b",
-    "docker:up": "turbo run docker:up",
-    "docker:stop": "turbo run docker:stop",
-    "docker:clean": "turbo run docker:clean",
-    "cap-setup": "node --env-file .env scripts/setup.js"
-  },
-  "devDependencies": {
-    "@turbo/gen": "^1.9.7",
-    "dotenv-cli": "latest",
-    "eslint": "^7.32.0",
-    "extract-zip": "^2.0.1",
-    "prettier": "^2.5.1",
-    "turbo": "^2.3.4",
-    "typescript": "^5.7.2"
-  },
-  "packageManager": "pnpm@10.5.2",
-  "name": "cap",
-  "engines": {
-    "node": "20"
-  },
-  "pnpm": {
-    "patchedDependencies": {
-      "@kobalte/core@0.13.7": "patches/@kobalte__core@0.13.7.patch"
-    }
-  }
+	"type": "module",
+	"scripts": {
+		"build": "dotenv -e .env -- turbo run build",
+		"build:web": "turbo run build:web",
+		"build:web:docker": "pnpm run --filter=@cap/web build:docker",
+		"cap-setup": "dotenv -e .env -- node scripts/setup.js",
+		"analytics:migrate-dub": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --dry-run",
+		"analytics:migrate-dub:apply": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --apply",
+		"analytics:setup": "dotenv -e .env -- node scripts/analytics/setup-analytics.js",
+		"analytics:check": "dotenv -e .env -- node scripts/analytics/check-analytics.js",
+		"analytics:delete-all": "dotenv -e .env -- node scripts/analytics/delete-all-data.js",
+		"analytics:populate-test": "dotenv -e .env -- node scripts/analytics/populate-test-data.js",
+		"db:generate": "dotenv -e .env -- pnpm --filter @cap/database db:generate",
+		"db:push": "dotenv -e .env -- pnpm --filter @cap/database db:push",
+		"db:studio": "dotenv -e .env -- pnpm --filter @cap/database db:studio",
+		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+		"dev:desktop": "pnpm run --filter=@cap/desktop dev",
+		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
+		"dev:web": "pnpm dev --filter=!@cap/desktop",
+		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+		"docker:clean": "turbo run docker:clean",
+		"docker:stop": "turbo run docker:stop",
+		"docker:up": "turbo run docker:up",
+		"format": "pnpm exec biome check --write",
+		"lint": "pnpm exec biome lint",
+		"tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
+		"typecheck": "pnpm tsc -b",
+		"test": "turbo run test",
+		"test:web": "pnpm --filter=@cap/web test",
+		"test:discover": "pnpm with-env cargo run -p cap-test -- discover",
+		"test:matrix": "pnpm with-env cargo run -p cap-test -- matrix",
+		"test:matrix:quick": "pnpm with-env cargo run -p cap-test -- matrix --quick",
+		"test:matrix:exhaustive": "pnpm with-env cargo run -p cap-test -- matrix --exhaustive",
+		"test:synthetic": "pnpm with-env cargo run -p cap-test -- synthetic",
+		"test:benchmark": "pnpm with-env cargo run -p cap-test -- benchmark",
+		"test:suite:recording": "pnpm with-env cargo run -p cap-test -- suite recording",
+		"test:suite:encoding": "pnpm with-env cargo run -p cap-test -- suite encoding",
+		"test:suite:playback": "pnpm with-env cargo run -p cap-test -- suite playback",
+		"test:suite:sync": "pnpm with-env cargo run -p cap-test -- suite sync",
+		"test:desktop:memory": "pnpm --dir apps/desktop test:memory",
+		"test:desktop:memory:unit": "pnpm --dir apps/desktop test:memory:unit",
+		"web": "pnpm --filter=@cap/web",
+		"env-setup": "node scripts/env-cli.js",
+		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",
+		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf",
+		"lgtm-otel": "docker run -p 3010:3000 -p 4317:4317 -p 4318:4318 --rm -it docker.io/grafana/otel-lgtm",
+		"with-env": "dotenv -e .env --"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.2.0",
+		"@clack/prompts": "^0.10.0",
+		"@effect/language-service": "^0.44.0",
+		"dotenv-cli": "latest",
+		"mysql2": "^3.15.2",
+		"tsdown": "^0.15.6",
+		"turbo": "^2.3.4",
+		"typescript": "^5.8.3"
+	},
+	"packageManager": "pnpm@10.5.2",
+	"name": "cap",
+	"engines": {
+		"node": ">=20"
+	}
 }

@@ -1,13 +1,17 @@
 {
-  "extends": "../config/base.tsconfig.json",
-  "include": ["src"],
-  "exclude": ["dist", "build", "node_modules"],
-  "compilerOptions": {
-    "rootDir": "src",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"],
-      "@/utils/*": ["src/utils/*"]
-    }
-  }
+	"extends": "../config/base.tsconfig.json",
+	"include": ["src"],
+	"exclude": ["dist", "build", "node_modules"],
+	"compilerOptions": {
+		"rootDir": "src",
+		"baseUrl": ".",
+		"composite": true,
+		"outDir": "dist",
+		"noEmit": false,
+		"emitDeclarationOnly": true,
+		"paths": {
+			"@/*": ["./src/*"],
+			"@/utils/*": ["src/utils/*"]
+		}
+	}
 }

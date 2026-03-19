@@ -1,0 +1,31 @@
+{
+	"name": "@cap/web-cluster",
+	"type": "module",
+	"scripts": {
+		"dev_": "pnpm dotenv -e ../../.env -- concurrently \"deno run --allow-all --watch ./src/runner/index.ts\" \"deno run --allow-all --watch ./src/shard-manager.ts\"",
+		"build": "pnpm run --filter @cap/web-cluster^... build",
+		"build:docker": "cd ../.. && docker build -f apps/web-cluster/Dockerfile -t ghcr.io/brendonovich/cap-web-cluster:latest ."
+	},
+	"dependencies": {
+		"@cap/web-backend": "workspace:*",
+		"@cap/web-domain": "workspace:*",
+		"@effect/cluster": "^0.50.4",
+		"@effect/opentelemetry": "^0.58.0",
+		"@effect/platform": "^0.92.1",
+		"@effect/platform-node": "^0.98.3",
+		"@effect/platform-node-shared": "^0.51.4",
+		"@effect/rpc": "^0.71.0",
+		"@effect/sql-mysql2": "^0.47.0",
+		"@effect/workflow": "^0.11.3",
+		"@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
+		"@opentelemetry/sdk-trace-base": "^2.1.0",
+		"effect": "^3.18.4",
+		"rolldown": "1.0.0-beta.42",
+		"tsdown": "^0.15.6",
+		"tsup": "^8.5.0"
+	},
+	"devDependencies": {
+		"concurrently": "^9.2.1",
+		"dotenv-cli": "^10.0.0"
+	}
+}

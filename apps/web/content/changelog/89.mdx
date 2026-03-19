@@ -1,0 +1,18 @@
+---
+title: Recording Resilience, Screenshot Hotkeys & Redesigned Device Selection
+app: Cap Desktop
+publishedAt: "2026-02-12"
+version: 0.4.6
+image:
+---
+
+- **Recording resilience and health monitoring** — Cap now monitors the entire recording pipeline for issues in real time. If your camera disconnects, microphone drops out, or audio gaps are detected, the recording continues gracefully with automatic silence insertion and reconnection. A degraded state indicator lets you know when something needs attention without interrupting your flow.
+- **Screenshot hotkeys** — Added configurable keyboard shortcuts for capturing your entire display, a specific window, or a selected area. These can be customized in the hotkeys section of Settings.
+- **Smarter screenshot editor** — Window captures now use RGBA with rounded corners for a more polished look. Increasing padding or corner rounding automatically enables the background fill so your screenshot looks great without extra clicks. Styling controls are always visible in the header for faster editing.
+- **Redesigned device selection** — Camera and microphone inputs are now chosen through a new overlay that displays device details like format, sample rate, and wireless status. The macOS main window features native squircle corners and traffic light controls for a more integrated feel.
+- **More reliable uploads** — Failed upload chunks are now automatically retried with network recovery logic. Chunk sizes were reduced and concurrency increased for faster, more resilient uploads to S3.
+- **Improved audio handling** — Added runtime resampling and silence generation for microphones, higher buffer timeouts for wireless audio sources, and graceful handling of high channel count devices (e.g., 34-channel audio interfaces). Windows now falls back to a default audio config when no output device is available.
+- **Instant mode optimizations** — Instant mode recordings now use a lower bitrate and shorter keyframe interval for smaller files and faster uploads. Encoder channel pressure is tracked to prevent frame drops, and disk space is checked before recording starts.
+- **Better macOS window management** — Windows are now backed by NSPanel for proper state management, with position persistence across sessions for both the main and camera windows. The prewarmed overlays system was replaced with a cleaner panel-based approach.
+- **Camera recovery and lifecycle** — Recordings continue even if the camera disconnects mid-capture, with automatic reconnection when the device becomes available again. Camera preview pause/resume and a large camera preset for camera-only mode were also added.
+- **Windows recording improvements** — Added frame scaling to handle resolution changes mid-recording, improved system audio resiliency, and replaced panicking code paths with proper error propagation throughout the Windows capture and encoding pipeline.

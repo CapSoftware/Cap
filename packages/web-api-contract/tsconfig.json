@@ -1,0 +1,9 @@
+{
+	"extends": "../config/base.tsconfig.json",
+	"exclude": ["node_modules"],
+	"include": ["**/*.ts", "**/*.tsx"],
+	"compilerOptions": {
+		"baseUrl": ".",
+		"moduleResolution": "bundler"
+	}
+}

@@ -132,16 +132,21 @@ jobs:
     if: ${{ needs.draft.outputs.needs_release == 'true' }}
     permissions:
       contents: write
+      actions: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
         settings:
           - target: x86_64-apple-darwin
-            runner: macos-latest
+            runner: macos-latest-xlarge
           - target: aarch64-apple-darwin
-            runner: macos-latest
+            runner: macos-latest-xlarge
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -151,13 +156,13 @@ jobs:
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
       - uses: apple-actions/import-codesign-certs@v2
-        if: ${{ matrix.settings.runner == 'macos-latest' }}
+        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify certificate
-        if: ${{ matrix.settings.runner == 'macos-latest' }}
+        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
@@ -165,24 +170,11 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust-cache
         with:
-          shared-key: ${{ matrix.settings.target }}
+          target: ${{ matrix.settings.target }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.5.2
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install
+      - uses: ./.github/actions/setup-js
 
       - name: Create .env file in root
         run: |
@@ -191,26 +183,16 @@ jobs:
           echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
           echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
           echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo 'NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
-          echo 'NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
-          echo 'VITE_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
-          echo 'VITE_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
+          echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}' >> .env
+          echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
-
-      - name: Copy .env to apps/desktop
-        run: cp .env apps/desktop/.env
-
-      - name: Output .env file
-        run: cat apps/desktop/.env
 
       - name: Build app
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
+          pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
@@ -227,20 +209,94 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Upload unsigned Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        id: upload_unsigned_windows_installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-installer
+          path: target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request
+        if: ${{ runner.os == 'Windows' }}
+        id: submit_signpath_signing_request
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-windows-installer
+
+      - name: Restore signed Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $signedDir = "signed-windows-installer"
+          $bundleDir = "target/${{ matrix.settings.target }}/release/bundle/nsis"
+
+          if (-not (Test-Path $signedDir)) {
+            throw "Signed artifact directory '$signedDir' not found."
+          }
+
+          $executables = Get-ChildItem -Path $signedDir -Filter *.exe -Recurse
+          if (-not $executables) {
+            throw "No signed executables found in '$signedDir'."
+          }
+
+          Write-Host "Copying signed executables to: $bundleDir"
+          Copy-Item -Path (Join-Path $signedDir '*.exe') -Destination $bundleDir -Force
+
+          Write-Host "Files in bundle directory after signing:"
+          Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
+
+      - name: Re-sign Windows installer for Tauri updater
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          BUNDLE_DIR="../../target/${{ matrix.settings.target }}/release/bundle/nsis"
+          for exe in "$BUNDLE_DIR"/*.exe; do
+            echo "Re-signing $(basename "$exe") for Tauri updater..."
+            rm -f "${exe}.sig"
+            pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
+          done
+          echo "Signature files after re-signing:"
+          ls -la "$BUNDLE_DIR"/*.sig
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
         with:
+          working-directory: apps/desktop
           command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
+        env:
+          TAURI_BUNDLE_PATH: ../..
+
+      - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
 
       - name: Upload debug symbols to Sentry
-        if: ${{ matrix.settings.runner == 'macos-latest' }}
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        working-directory: target
         run: |
-          curl -sL https://sentry.io/get-cli/ | bash
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} Cap.dSYM
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/Cap.dSYM
+
+      - name: Upload debug symbols to Sentry
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
 
   done:
     needs: [draft, build]
@@ -263,7 +319,7 @@ jobs:
                 body: JSON.stringify({
                   type: "release-done",
                   interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ steps.read_version.outputs.value }}",
+                  version: "${{ needs.draft.outputs.version }}",
                   releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
                   cnReleaseId
                 }),

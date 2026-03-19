@@ -1,161 +1,306 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
-import { createOptionsQuery } from "~/utils/queries";
-import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import Cropper from "~/components/Cropper";
-import { createStore } from "solid-js/store";
-import { type Crop } from "~/utils/tauri";
+import { createEventListener } from "@solid-primitives/event-listener";
+import { createScheduled, debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
-import { Tooltip } from "@kobalte/core";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { Menu } from "@tauri-apps/api/menu";
+import {
+	getCurrentWebviewWindow,
+	WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
+import {
+	CROP_ZERO,
+	type CropBounds,
+	Cropper,
+	type CropperRef,
+	createCropOptionsMenuItems,
+	type Ratio,
+} from "~/components/Cropper";
+import SelectionHint from "~/components/selection-hint";
+import { createOptionsQuery } from "~/utils/queries";
+import type { DisplayId } from "~/utils/tauri";
+import { emitTo } from "~/utils/tauriSpectaHack";
+import IconLucideExpand from "~icons/lucide/expand";
+
+const MIN_SIZE = { width: 150, height: 150 };
 
 export default function CaptureArea() {
-  const { options, setOptions } = createOptionsQuery();
-  const webview = getCurrentWebviewWindow();
+	const webview = getCurrentWebviewWindow();
 
-  const [state, setState] = makePersisted(
-    createStore({
-      showGrid: true,
-    }),
-    { name: "captureArea" }
-  );
+	const setPendingState = (pending: boolean) =>
+		// events.setCaptureAreaPending(webview).emitTo("main", pending);
+		emitTo(webview, "setCaptureAreaPending", "main", pending);
 
-  const setPendingState = (pending: boolean) =>
-    webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
+	onMount(async () => {
+		setPendingState(true);
+		const unlisten = await webview.onCloseRequested(() =>
+			setPendingState(false),
+		);
+		onCleanup(() => unlisten());
+	});
 
-  let unlisten: () => void | undefined;
-  onMount(async () => {
-    setPendingState(true);
-    unlisten = await webview.onCloseRequested(() => setPendingState(false));
-  });
-  onCleanup(() => unlisten?.());
+	const [state, setState] = makePersisted(
+		createStore<{
+			snapToRatio: boolean;
+			lastSelectedBounds: { screenId: DisplayId; bounds: CropBounds }[];
+		}>({ snapToRatio: true, lastSelectedBounds: [] }),
+		{
+			name: "capture-area",
+		},
+	);
 
-  const [windowSize, setWindowSize] = createSignal({
-    x: window.innerWidth,
-    y: window.innerHeight,
-  });
+	createEventListener(window, "keydown", (e) => {
+		if (e.key === "Escape") close();
+		else if (e.key === "Enter") handleConfirm();
+	});
 
-  onMount(() => {
-    createEventListenerMap(window, {
-      resize: () =>
-        setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
-      keydown: (e) => {
-        if (e.key === "Escape") close();
-        else if (e.key === "Enter") handleConfirm();
-      },
-    });
-  });
+	let cropperRef: CropperRef | undefined;
 
-  const [crop, setCrop] = createStore<Crop>({
-    size: { x: 0, y: 0 },
-    position: { x: 0, y: 0 },
-  });
+	const [crop, setCrop] = createSignal(CROP_ZERO);
 
-  async function handleConfirm() {
-    const target = options.data?.captureTarget;
-    if (!options.data || !target || target.variant !== "screen") return;
-    setPendingState(false);
+	const scheduled = createScheduled((fn) => debounce(fn, 50));
 
-    setOptions.mutate({
-      ...options.data,
-      captureTarget: {
-        variant: "area",
-        screen: target.id,
-        bounds: {
-          x: crop.position.x,
-          y: crop.position.y,
-          width: crop.size.x,
-          height: crop.size.y,
-        },
-      },
-    });
+	const isValid = createMemo((p: boolean = true) => {
+		const b = crop();
+		return scheduled()
+			? b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height
+			: p;
+	});
 
-    close();
-  }
+	const { rawOptions, setOptions } = createOptionsQuery();
 
-  const [visible, setVisible] = createSignal(true);
-  function close() {
-    setVisible(false);
-    setTimeout(async () => {
-      (await WebviewWindow.getByLabel("main"))?.unminimize();
-      setPendingState(false);
-      webview.close();
-    }, 250);
-  }
+	const hasStoredSelection = createMemo(() => {
+		const target = rawOptions.captureTarget;
+		if (target.variant !== "display") return false;
+		return (
+			state.lastSelectedBounds?.some((entry) => entry.screenId === target.id) ??
+			false
+		);
+	});
 
-  return (
-    <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
-      <div class="fixed w-full z-50 flex items-center justify-center">
-        <Transition
-          appear
-          enterActiveClass="fade-in animate-in slide-in-from-top-6"
-          exitActiveClass="fade-out animate-out slide-out-to-top-6"
-        >
-          <Show when={visible()}>
-            <div class="transition-all ease-out duration-300 absolute w-auto h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 top-11">
-              <button
-                class="py-[0.25rem] px-2 text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
-                type="button"
-                onClick={close}
-              >
-                <IconCapCircleX class="size-5" />
-              </button>
-              <Tooltip.Root openDelay={500}>
-                <Tooltip.Trigger tabIndex={-1}>
-                  <button
-                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-200 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${
-                      state.showGrid
-                        ? "bg-gray-200 text-blue-300"
-                        : "text-gray-500 opacity-50"
-                    }`}
-                    type="button"
-                    onClick={() => setState("showGrid", (v) => !v)}
-                  >
-                    <IconCapPadding class="size-5" />
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Portal>
-                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in delay-1000 duration-500">
-                    Rule of Thirds
-                    <Tooltip.Arrow class="fill-gray-500" />
-                  </Tooltip.Content>
-                </Tooltip.Portal>
-              </Tooltip.Root>
-              <div class="flex flex-row flex-grow justify-center gap-2">
-                <button
-                  class="text-blue-300 px-2 dark:text-blue-300 gap-[0.25rem] hover:bg-blue-50 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
-                  type="button"
-                  onClick={handleConfirm}
-                >
-                  <IconCapCircleCheck class="size-5" />
-                  <span class="font-[500] text-[0.875rem]">
-                    Confirm selection
-                  </span>
-                </button>
-              </div>
-            </div>
-          </Show>
-        </Transition>
-      </div>
+	async function handleConfirm() {
+		const currentBounds = cropperRef?.bounds();
+		if (!currentBounds) throw new Error("Cropper not initialized");
+		if (
+			currentBounds.width < MIN_SIZE.width ||
+			currentBounds.height < MIN_SIZE.height
+		)
+			return;
 
-      <Transition
-        appear
-        enterActiveClass="fade-in animate-in"
-        exitActiveClass="fade-out animate-out"
-      >
-        <Show when={visible()}>
-          <Cropper
-            class="transition-all duration-300"
-            value={crop}
-            onCropChange={setCrop}
-            showGuideLines={state.showGrid}
-            mappedSize={{ x: windowSize().x, y: windowSize().y }}
-          />
-        </Show>
-      </Transition>
-    </div>
-  );
+		const target = rawOptions.captureTarget;
+		if (target.variant !== "display") return;
+
+		const existingIndex = state.lastSelectedBounds?.findIndex(
+			(item) => item.screenId === target.id,
+		);
+
+		if (existingIndex >= 0) {
+			setState("lastSelectedBounds", existingIndex, {
+				screenId: target.id,
+				bounds: currentBounds,
+			});
+		} else {
+			setState("lastSelectedBounds", [
+				...state.lastSelectedBounds,
+				{ screenId: target.id, bounds: currentBounds },
+			]);
+		}
+
+		const b = crop();
+		setOptions(
+			"captureTarget",
+			reconcile({
+				variant: "area",
+				screen: target.id,
+				bounds: {
+					position: { x: b.x, y: b.y },
+					size: { width: b.width, height: b.height },
+				},
+			}),
+		);
+
+		close();
+	}
+
+	const [visible, setVisible] = createSignal(true);
+
+	const showSelectionHint = createMemo(() => {
+		if (!visible()) return false;
+		if (hasStoredSelection()) return false;
+		const bounds = crop();
+		return bounds.width <= 1 && bounds.height <= 1;
+	});
+	function close() {
+		setVisible(false);
+		setTimeout(async () => {
+			(await WebviewWindow.getByLabel("main"))?.unminimize();
+			setPendingState(false);
+			webview.close();
+		}, 250);
+	}
+
+	const [aspect, setAspect] = createSignal<Ratio | null>(null);
+
+	function reset() {
+		cropperRef?.reset();
+		setAspect(null);
+
+		const target = rawOptions.captureTarget;
+		if (target.variant !== "display") return;
+		setState("lastSelectedBounds", (values) =>
+			values?.filter((v) => v.screenId !== target.id),
+		);
+	}
+
+	async function showCropOptionsMenu(e: UIEvent, positionAtCursor = false) {
+		e.preventDefault();
+		const items = createCropOptionsMenuItems({
+			aspect: aspect(),
+			snapToRatioEnabled: state.snapToRatio,
+			onAspectSet: setAspect,
+			onSnapToRatioSet: (enabled) => setState("snapToRatio", enabled),
+		});
+		const menu = await Menu.new({ items });
+		let pos: LogicalPosition | undefined;
+		if (!positionAtCursor) {
+			const rect = (e.target as HTMLDivElement).getBoundingClientRect();
+			pos = new LogicalPosition(rect.x, rect.y + 50);
+		}
+		await menu.popup(pos);
+		await menu.close();
+	}
+
+	return (
+		<div class="overflow-hidden w-screen h-screen fixed">
+			<div class="flex fixed z-50 justify-center items-center w-full">
+				<Transition
+					appear
+					enterClass="-translate-y-5 scale-75 opacity-0 blur-lg"
+					enterActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.175,0.885,0.12,1.175)]"
+					enterToClass="translate-y-0 scale-100 opacity-100"
+					exitClass="translate-y-0 scale-100 opacity-100"
+					exitActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.275,0.05,0.22,1.3)]"
+					exitToClass="-translate-y-5 scale-75 opacity-0 blur-lg"
+				>
+					<Show when={visible()}>
+						<div
+							class="scale-100 flex items-center p-1 gap-2 absolute w-auto h-14 rounded-full top-12"
+							classList={{ "flex-row-reverse": ostype() === "windows" }}
+						>
+							<button
+								title="Close"
+								class="group flex items-center justify-center size-12 text-gray-11 shadow-xl shadow-black/30 bg-gray-1 border border-gray-5 hover:bg-gray-4 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
+								type="button"
+								onClick={close}
+							>
+								<IconLucideX class="group-active:scale-90 transition-transform size-5 *:pointer-events-none" />
+							</button>
+							<div class="flex items-center h-full gap-2">
+								<div class="flex items-center justify-between gap-1 px-[3px] size-full shadow-xl shadow-black/30 bg-gray-1 border border-gray-5 rounded-full">
+									<button
+										title="Reset"
+										type="button"
+										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
+										onClick={reset}
+									>
+										<IconLucideRotateCcw class="group-active:scale-90 transition-transform size-5 *:pointer-events-none" />
+									</button>
+									<div class="inline-block my-3 w-[1px] self-stretch bg-gray-3" />
+									<button
+										title="Fill"
+										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
+										type="button"
+										onClick={() => cropperRef?.fill()}
+									>
+										<IconLucideExpand class="group-active:scale-90 transition-transform size-5 *:pointer-events-none" />
+									</button>
+									<div class="inline-block my-3 w-[1px] self-stretch bg-gray-3" />
+									<button
+										title="Aspect Ratio"
+										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
+										type="button"
+										onMouseDown={showCropOptionsMenu}
+										onClick={showCropOptionsMenu}
+									>
+										<div class="relative size-5 pointer-events-none">
+											<Show when={!aspect()}>
+												<IconLucideRatio class="group-active:scale-90 transition-transform size-5 pointer-events-none *:pointer-events-none" />
+											</Show>
+											<Transition
+												enterClass="scale-50 opacity-0 blur-md"
+												enterActiveClass="duration-200 [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)]"
+												enterToClass="scale-100 opacity-100 blur-0"
+												exitClass="opacity-0"
+												exitActiveClass="duration-0"
+												exitToClass="opacity-0"
+											>
+												<Show when={aspect()} keyed>
+													{(ratio) => (
+														<span class="absolute inset-0 flex items-center justify-center text-[13px] text font-medium leading-none tracking-tight text-blue-10 pointer-events-none">
+															{ratio[0]}:{ratio[1]}
+														</span>
+													)}
+												</Show>
+											</Transition>
+										</div>
+									</button>
+								</div>
+
+								<div class="h-full transition-all duration-300 ease-out">
+									<button
+										class="group flex items-center justify-center px-3 h-full min-w-28 border border-gray-5 rounded-full gap-2 text-blue-10 disabled:text-gray-10 bg-gray-1 shadow-xl shadow-black/30 duration-200 enabled:hover:bg-blue-2 enabled:hover:border-blue-5 enabled:active:bg-blue-3 disabled:opacity-90 disabled:cursor-not-allowed disabled:bg-gray-3 disabled:border-gray-4 cursor-default"
+										type="button"
+										disabled={!isValid()}
+										onClick={handleConfirm}
+									>
+										<div
+											class="flex gap-2"
+											classList={{
+												"group-active:scale-95 transition-transform": isValid(),
+											}}
+										>
+											<IconLucideCheck class="size-5 *:pointer-events-none" />
+											<span class="font-medium text-sm">Confirm</span>
+										</div>
+									</button>
+								</div>
+							</div>
+						</div>
+					</Show>
+				</Transition>
+			</div>
+
+			<SelectionHint show={showSelectionHint()} />
+
+			<Transition
+				appear
+				enterActiveClass="fade-in animate-in duration-500"
+				exitActiveClass="fade-out animate-out"
+			>
+				<Show when={visible()}>
+					<Cropper
+						ref={cropperRef}
+						aspectRatio={aspect() ?? undefined}
+						showBounds={true}
+						onCropChange={setCrop}
+						snapToRatioEnabled={state.snapToRatio}
+						initialCrop={() => {
+							const target = rawOptions.captureTarget;
+							if (target.variant === "display")
+								return (
+									state.lastSelectedBounds?.find(
+										(m) => m.screenId === target.id,
+									)?.bounds ?? CROP_ZERO
+								);
+							return CROP_ZERO;
+						}}
+						onContextMenu={(e) => showCropOptionsMenu(e, true)}
+					/>
+				</Show>
+			</Transition>
+		</div>
+	);
 }

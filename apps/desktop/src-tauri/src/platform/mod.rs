@@ -3,16 +3,15 @@ use specta::Type;
 #[cfg(target_os = "windows")]
 pub mod win;
 
-#[cfg(target_os = "windows")]
-pub use win::*;
-
 #[cfg(target_os = "macos")]
 pub mod macos;
 
 #[cfg(target_os = "macos")]
 pub use macos::*;
+use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 #[repr(isize)]
 pub enum HapticPattern {
     Alignment = 0,
@@ -22,6 +21,7 @@ pub enum HapticPattern {
 }
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 #[repr(usize)]
 pub enum HapticPerformanceTime {
     Default = 0,
@@ -32,9 +32,10 @@ pub enum HapticPerformanceTime {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub fn perform_haptic_feedback(
-    pattern: Option<HapticPattern>,
-    time: Option<HapticPerformanceTime>,
+    _pattern: Option<HapticPattern>,
+    _time: Option<HapticPerformanceTime>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     unsafe {
@@ -44,12 +45,32 @@ pub fn perform_haptic_feedback(
         };
 
         NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
-            NSHapticFeedbackPattern(pattern.unwrap_or_default() as isize),
-            NSHapticFeedbackPerformanceTime(time.unwrap_or_default() as usize),
+            NSHapticFeedbackPattern(_pattern.unwrap_or_default() as isize),
+            NSHapticFeedbackPerformanceTime(_time.unwrap_or_default() as usize),
         );
         Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
     Err("Haptics are only supported on macOS.".into())
+}
+
+/// Check if system audio capture is supported on the current platform and OS version.
+/// On macOS, system audio capture requires macOS 13.0 or later.
+/// On Windows/Linux, this may have different requirements.
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub fn is_system_audio_capture_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        scap_screencapturekit::is_system_audio_supported()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // On Windows/Linux, we assume system audio capture is available
+        // This can be refined later based on platform-specific requirements
+        true
+    }
 }

@@ -22,15 +22,16 @@ macro_rules! fail {
     ($name:literal) => {
         #[cfg(debug_assertions)]
         {
+            const NAME: &'static str = concat!(env!("CARGO_PKG_NAME"), "::", $name);
+
             $crate::private::inventory::submit! {
-                $crate::Fail { name: $name }
+                $crate::Fail { name: NAME }
             }
 
-            let name: &str = $name;
-            let should_fail = $crate::private::should_fail(name);
+            let should_fail = $crate::private::should_fail(NAME);
 
             if should_fail {
-                panic!("Purposely panicked at '{name}'")
+                panic!("Purposely panicked at '{NAME}'")
             }
         }
     };
@@ -41,16 +42,37 @@ macro_rules! fail_err {
     ($name:literal, $value:expr) => {
         #[cfg(debug_assertions)]
         {
+            const NAME: &'static str = concat!(env!("CARGO_PKG_NAME"), "::", $name);
+
             $crate::private::inventory::submit! {
-                $crate::Fail { name: $name }
+                $crate::Fail { name: NAME }
             }
 
-            let name: &str = $name;
-            let should_fail = $crate::private::should_fail(name);
+            let should_fail = $crate::private::should_fail(NAME);
 
             if should_fail {
-                eprintln!("Purposely Err'd at '{name}'");
+                eprintln!("Purposely Err'd at '{NAME}'");
                 Err($value)?;
+            }
+        }
+    };
+}
+#[macro_export]
+macro_rules! fail_ret {
+    ($name:literal) => {
+        #[cfg(debug_assertions)]
+        {
+            const NAME: &'static str = concat!(env!("CARGO_PKG_NAME"), "::", $name);
+
+            $crate::private::inventory::submit! {
+                $crate::Fail { name: NAME }
+            }
+
+            let should_fail = $crate::private::should_fail(NAME);
+
+            if should_fail {
+                eprintln!("Purposely returned at '{NAME}'");
+                return;
             }
         }
     };

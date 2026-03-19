@@ -1,184 +1,407 @@
-import { Button, LogoBadge } from "@cap/ui";
-import { videos } from "@cap/database/schema";
+"use client";
+
+import { buildEnv, NODE_ENV } from "@cap/env";
+import { Button } from "@cap/ui";
+import {
+	faChartSimple,
+	faChevronDown,
+	faLock,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Check, Clock, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
-import { userSelectProps } from "@cap/database/auth/session";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { toast } from "react-hot-toast";
-import { Copy, Loader2 } from "lucide-react";
-import JSZip from "jszip";
-import { saveAs } from "file-saver";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { editTitle } from "@/actions/videos/edit-title";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
+import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { Tooltip } from "@/components/Tooltip";
+import { UpgradeModal } from "@/components/UpgradeModal";
+import { usePublicEnv } from "@/utils/public-env";
+import type { VideoData } from "../types";
 
 export const ShareHeader = ({
-  data,
-  user,
-  individualFiles,
+	data,
+	customDomain,
+	domainVerified,
+	sharedOrganizations = [],
+	sharedSpaces = [],
+	spacesData = null,
 }: {
-  data: typeof videos.$inferSelect;
-  user: typeof userSelectProps | null;
-  individualFiles?: {
-    fileName: string;
-    url: string;
-  }[];
+	data: VideoData;
+	customDomain?: string | null;
+	domainVerified?: boolean;
+	sharedOrganizations?: { id: string; name: string }[];
+	userOrganizations?: { id: string; name: string }[];
+	sharedSpaces?: {
+		id: string;
+		name: string;
+		iconUrl?: string;
+		organizationId: string;
+	}[];
+	userSpaces?: {
+		id: string;
+		name: string;
+		iconUrl?: string;
+		organizationId: string;
+	}[];
+	spacesData?: Spaces[] | null;
 }) => {
-  const { push, refresh } = useRouter();
-  const [isEditing, setIsEditing] = useState(false);
-  const [title, setTitle] = useState(data.name);
-  const [isDownloading, setIsDownloading] = useState(false);
+	const user = useCurrentUser();
+	const { push, refresh } = useRouter();
+	const [isEditing, setIsEditing] = useState(false);
+	const [title, setTitle] = useState(data.name);
+	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [linkCopied, setLinkCopied] = useState(false);
+	const [showCopyOptions, setShowCopyOptions] = useState(false);
+	const [capturedTime, setCapturedTime] = useState(0);
+	const copyOptionsRef = useRef<HTMLDivElement>(null);
 
-  const handleBlur = async () => {
-    setIsEditing(false);
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, videoId: data.id }),
-      }
-    );
+	useEffect(() => {
+		if (!showCopyOptions) return;
+		const handler = (e: MouseEvent) => {
+			if (
+				copyOptionsRef.current &&
+				!copyOptionsRef.current.contains(e.target as Node)
+			) {
+				setShowCopyOptions(false);
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [showCopyOptions]);
 
-    if (response.status === 429) {
-      toast.error("Too many requests - please try again later.");
-      return;
-    }
+	const contextData = useDashboardContext();
+	const contextSharedSpaces = contextData?.sharedSpaces || null;
+	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-    if (!response.ok) {
-      toast.error("Failed to update title - please try again.");
-      return;
-    }
+	const isOwner = user && user.id === data.owner.id;
 
-    toast.success("Video title updated");
+	const { webUrl } = usePublicEnv();
 
-    refresh();
-  };
+	useEffect(() => {
+		setTitle(data.name);
+	}, [data.name]);
 
-  const handleKeyDown = async (event: { key: string }) => {
-    if (event.key === "Enter") {
-      handleBlur();
-    }
-  };
+	const handleBlur = async () => {
+		setIsEditing(false);
+		const next = title.trim();
+		if (next === "" || next === data.name) return;
+		try {
+			await editTitle(data.id, title);
+			toast.success("Video title updated");
+			refresh();
+		} catch (error) {
+			if (error instanceof Error) {
+				toast.error(error.message);
+			} else {
+				toast.error("Failed to update title - please try again.");
+			}
+		}
+	};
 
-  const downloadZip = async () => {
-    if (!individualFiles) return;
+	const handleKeyDown = async (event: { key: string }) => {
+		if (event.key === "Enter") {
+			handleBlur();
+		}
+	};
 
-    setIsDownloading(true);
-    const zip = new JSZip();
+	const getVideoLink = () => {
+		if (NODE_ENV === "development" && customDomain && domainVerified) {
+			return `https://${customDomain}/s/${data.id}`;
+		} else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+			return `${webUrl}/s/${data.id}`;
+		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+			return `https://${customDomain}/s/${data.id}`;
+		} else if (
+			buildEnv.NEXT_PUBLIC_IS_CAP &&
+			!customDomain &&
+			!domainVerified
+		) {
+			return `https://cap.link/${data.id}`;
+		} else {
+			return `${webUrl}/s/${data.id}`;
+		}
+	};
 
-    try {
-      for (const file of individualFiles) {
-        const response = await fetch(file.url);
-        const blob = await response.blob();
-        zip.file(file.fileName, blob);
-      }
+	const getDisplayLink = () => {
+		if (NODE_ENV === "development" && customDomain && domainVerified) {
+			return `${customDomain}/s/${data.id}`;
+		} else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+			return `${webUrl}/s/${data.id}`;
+		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+			return `${customDomain}/s/${data.id}`;
+		} else if (
+			buildEnv.NEXT_PUBLIC_IS_CAP &&
+			!customDomain &&
+			!domainVerified
+		) {
+			return `cap.link/${data.id}`;
+		} else {
+			return `${webUrl}/s/${data.id}`;
+		}
+	};
 
-      const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, `${data.id}.zip`);
-    } catch (error) {
-      console.error("Error downloading zip:", error);
-      toast.error("Failed to download files. Please try again.");
-    } finally {
-      setIsDownloading(false);
-    }
-  };
+	const formatTimestamp = (seconds: number): string => {
+		const h = Math.floor(seconds / 3600);
+		const m = Math.floor((seconds % 3600) / 60);
+		const s = seconds % 60;
+		if (h > 0)
+			return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+		return `${m}:${String(s).padStart(2, "0")}`;
+	};
 
-  return (
-    <>
-      <div>
-        <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
-          <div className="md:flex items-center md:justify-between md:space-x-6">
-            <div className="mb-3 md:mb-0">
-              <div className="flex items-center space-x-3">
-                {isEditing ? (
-                  <input
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    onBlur={handleBlur}
-                    onKeyDown={handleKeyDown}
-                    autoFocus
-                    className="text-xl sm:text-2xl font-semibold"
-                  />
-                ) : (
-                  <h1
-                    className="text-xl sm:text-2xl"
-                    onClick={() => {
-                      if (
-                        user !== null &&
-                        user.id.toString() === data.ownerId
-                      ) {
-                        setIsEditing(true);
-                      }
-                    }}
-                  >
-                    {title}
-                  </h1>
-                )}
-              </div>
-              <p className="text-gray-400 text-sm">
-                {moment(data.createdAt).fromNow()}
-              </p>
-            </div>
-          </div>
-          {(user !== null ||
-            (individualFiles && individualFiles.length > 0)) && (
-            <div className="flex items-center space-x-2">
-              {individualFiles && individualFiles.length > 0 && (
-                <div>
-                  <Button
-                    variant="gray"
-                    onClick={downloadZip}
-                    disabled={isDownloading}
-                  >
-                    {isDownloading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Downloading...
-                      </>
-                    ) : (
-                      "Download Assets"
-                    )}
-                  </Button>
-                </div>
-              )}
-              <Button
-                variant="gray"
-                className="hover:bg-gray-300"
-                onClick={() => {
-                  if (
-                    clientEnv.NEXT_PUBLIC_IS_CAP &&
-                    NODE_ENV === "production"
-                  ) {
-                    navigator.clipboard.writeText(
-                      `https://cap.link/${data.id}`
-                    );
-                  } else {
-                    navigator.clipboard.writeText(
-                      `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`
-                    );
-                  }
-                  toast.success("Link copied to clipboard!");
-                }}
-              >
-                {clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-                  ? `cap.link/${data.id}`
-                  : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`}
-                <Copy className="ml-2 h-4 w-4" />
-              </Button>
-              {user !== null && (
-                <div className="hidden md:flex">
-                  <Button
-                    onClick={() => {
-                      push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
-                    }}
-                  >
-                    Go to Dashboard
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  );
+	const handleCopyClick = () => {
+		const video = document.querySelector("video");
+		const currentTime = video ? Math.floor(video.currentTime) : 0;
+
+		if (currentTime > 3) {
+			setCapturedTime(currentTime);
+			setShowCopyOptions(true);
+		} else {
+			navigator.clipboard.writeText(getVideoLink());
+			setLinkCopied(true);
+			setTimeout(() => setLinkCopied(false), 2000);
+		}
+	};
+
+	const handleCopyLink = (withTimestamp: boolean) => {
+		const link = withTimestamp
+			? `${getVideoLink()}?t=${capturedTime}`
+			: getVideoLink();
+		navigator.clipboard.writeText(link);
+		setShowCopyOptions(false);
+		setLinkCopied(true);
+		setTimeout(() => setLinkCopied(false), 2000);
+	};
+
+	const handleSharingUpdated = () => {
+		refresh();
+	};
+
+	const renderSharedStatus = () => {
+		if (isOwner) {
+			const hasSpaceSharing =
+				sharedOrganizations?.length > 0 || effectiveSharedSpaces?.length > 0;
+			const isPublic = data.public;
+
+			if (!hasSpaceSharing && !isPublic) {
+				return (
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
+						onClick={() => setIsSharingDialogOpen(true)}
+					>
+						Not shared{" "}
+						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+					</Button>
+				);
+			} else {
+				return (
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
+						onClick={() => setIsSharingDialogOpen(true)}
+					>
+						Shared{" "}
+						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+					</Button>
+				);
+			}
+		} else {
+			return (
+				<Button
+					className="px-3 pointer-events-none w-fit"
+					size="xs"
+					variant="outline"
+				>
+					Shared with you
+				</Button>
+			);
+		}
+	};
+
+	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+
+	return (
+		<>
+			{userIsOwnerAndNotPro && (
+				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
+					<p className="text-center text-gray-12">
+						Shareable links are limited to 5 mins on the free plan.
+					</p>
+					<Button
+						type="button"
+						onClick={() => setUpgradeModalOpen(true)}
+						size="sm"
+						variant="blue"
+					>
+						Upgrade To Cap Pro
+					</Button>
+				</div>
+			)}
+			<SharingDialog
+				isOpen={isSharingDialogOpen}
+				onClose={() => setIsSharingDialogOpen(false)}
+				capId={data.id}
+				capName={data.name}
+				sharedSpaces={effectiveSharedSpaces || []}
+				onSharingUpdated={handleSharingUpdated}
+				isPublic={data.public}
+				spacesData={spacesData}
+				hasPassword={!!data.hasPassword}
+				onPasswordUpdated={() => refresh()}
+				user={user}
+				onUpgradeRequest={setUpgradeModalOpen}
+			/>
+			<div className="mt-8">
+				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
+					<div className="items-center md:flex md:justify-between md:space-x-6">
+						<div className="space-y-3">
+							<div className="flex flex-col lg:min-w-[400px]">
+								{isEditing ? (
+									<input
+										value={title}
+										onChange={(e) => setTitle(e.target.value)}
+										onBlur={handleBlur}
+										onKeyDown={handleKeyDown}
+										className="w-full text-xl sm:text-2xl"
+									/>
+								) : (
+									<h1
+										className="text-xl sm:text-2xl"
+										onClick={() => {
+											if (isOwner) {
+												setIsEditing(true);
+											}
+										}}
+									>
+										{title}
+									</h1>
+								)}
+							</div>
+							<div className="flex gap-7 items-center">
+								<div className="flex gap-2 items-center">
+									{data.name && (
+										<SignedImageUrl
+											name={data.name}
+											image={data.owner.image}
+											className="size-8"
+											letterClass="text-base"
+										/>
+									)}
+									<div className="flex flex-col text-left">
+										<p className="text-sm text-gray-12">{data.owner.name}</p>
+										<p className="text-xs text-gray-10">
+											{moment(data.createdAt).fromNow()}
+										</p>
+									</div>
+								</div>
+								{user && renderSharedStatus()}
+							</div>
+						</div>
+					</div>
+					{user !== null && (
+						<div className="flex space-x-2">
+							<div>
+								<div className="flex gap-2 items-center">
+									{data.hasPassword && (
+										<FontAwesomeIcon
+											className="text-amber-600 size-4"
+											icon={faLock}
+										/>
+									)}
+									<div className="relative" ref={copyOptionsRef}>
+										<Button variant="white" onClick={handleCopyClick}>
+											{getDisplayLink()}
+											{linkCopied ? (
+												<Check className="ml-2 w-4 h-4 svgpathanimation" />
+											) : (
+												<Copy className="ml-2 w-4 h-4" />
+											)}
+										</Button>
+										{showCopyOptions && (
+											<div className="absolute right-0 top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-white shadow-lg">
+												<button
+													type="button"
+													className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+													onClick={() => handleCopyLink(false)}
+												>
+													<Copy className="w-3.5 h-3.5 shrink-0" />
+													Copy link
+												</button>
+												<button
+													type="button"
+													className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+													onClick={() => handleCopyLink(true)}
+												>
+													<Clock className="w-3.5 h-3.5 shrink-0" />
+													Copy link at {formatTimestamp(capturedTime)}
+												</button>
+											</div>
+										)}
+									</div>
+								</div>
+								{userIsOwnerAndNotPro && (
+									<button
+										type="button"
+										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
+										onClick={() => setUpgradeModalOpen(true)}
+									>
+										<Globe2 className="mr-1 w-4 h-4" />
+										Connect a custom domain
+									</button>
+								)}
+							</div>
+							{user !== null && (
+								<div className="hidden md:flex gap-2">
+									{isOwner && (
+										<Tooltip
+											content="View analytics"
+											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+											delayDuration={100}
+										>
+											<Button
+												variant="gray"
+												className="rounded-full flex items-center justify-center"
+												onClick={() => {
+													push(`/dashboard/analytics?capId=${data.id}`);
+												}}
+											>
+												<FontAwesomeIcon
+													className="size-4 text-gray-12"
+													icon={faChartSimple}
+												/>
+											</Button>
+										</Tooltip>
+									)}
+									<Button
+										onClick={() => {
+											push("/dashboard/caps?page=1");
+										}}
+									>
+										<span className="hidden text-sm text-white lg:block">
+											Go to
+										</span>{" "}
+										Dashboard
+									</Button>
+								</div>
+							)}
+						</div>
+					)}
+				</div>
+			</div>
+			<UpgradeModal
+				open={upgradeModalOpen}
+				onOpenChange={setUpgradeModalOpen}
+			/>
+		</>
+	);
 };

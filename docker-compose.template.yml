@@ -1,0 +1,90 @@
+name: cap-so-docker-template
+
+# THIS IS A TEMPLATE FOR DOCKER COMPOSE FILES
+# IT IS NOT MEANT FOR PRODUCTION DEPLOYMENT WITHOUT MODIFICATIONS TO ENVIRONMENT VARIABLES
+# IT IS MEANT FOR LOCAL EVALUATION AND DEVELOPMENT PURPOSES ONLY
+
+services:
+  cap-web:
+    container_name: cap-web
+    image: ghcr.io/capsoftware/cap-web:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
+      WEB_URL: http://localhost:3000
+      NEXTAUTH_URL: http://localhost:3000
+      # CHANGE THESE TO YOUR OWN VALUES
+      DATABASE_ENCRYPTION_KEY: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
+      NEXTAUTH_SECRET: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
+      # CHANGE THESE TO MATCH YOUR MINIO or S3 STORAGE SETUP
+      CAP_AWS_ACCESS_KEY: capS3root
+      CAP_AWS_SECRET_KEY: capS3root
+      CAP_AWS_BUCKET: capso
+      CAP_AWS_REGION: us-east-1
+      S3_PUBLIC_ENDPOINT: http://localhost:3902
+      S3_INTERNAL_ENDPOINT: http://minio:3902
+      MEDIA_SERVER_URL: http://cap-media-server:3456
+      # CHANGE THESE TO YOUR OWN VALUES
+      MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
+
+    ports:
+      - 3000:3000
+
+  ps-mysql:
+    container_name: cap-primary-db
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      # CHANGE THESE TO YOUR OWN VALUES - BE SURE TO SET A PASSWORD FOR THE ROOT USER
+      MYSQL_DATABASE: planetscale
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    command:
+      [
+        "--max_connections=1000",
+        "--default-authentication-plugin=mysql_native_password",
+      ]
+    ports:
+      - "3306:3306"
+    volumes:
+      - ps-mysql:/var/lib/mysql
+
+  cap-media-server:
+    container_name: cap-media-server
+    build:
+      context: ./apps/media-server
+      dockerfile: Dockerfile.standalone
+    restart: unless-stopped
+    environment:
+      PORT: 3456
+    ports:
+      - "3456:3456"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3456/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Local S3 Strorage
+  minio:
+    container_name: cap-minio-storage
+    image: "bitnami/minio:latest"
+    restart: unless-stopped
+    ports:
+      - "3902:3902"
+      - "3903:3903"
+    environment:
+      - MINIO_API_PORT_NUMBER=3902
+      - MINIO_CONSOLE_PORT_NUMBER=3903
+      # CHANGE THESE TO YOUR OWN VALUES
+      - MINIO_ROOT_USER=capS3root
+      - MINIO_ROOT_PASSWORD=capS3root
+    volumes:
+      - minio-data:/bitnami/minio/data
+      - minio-certs:/certs
+volumes:
+  ps-mysql:
+  # REMOVE THESE IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
+  minio-data:
+  minio-certs:

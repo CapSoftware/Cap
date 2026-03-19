@@ -1,75 +1,184 @@
+#![allow(dead_code)]
+
+use ffmpeg::{format, frame, sys::AVHWDeviceType};
 use std::{
-    cell::LazyCell,
+    cell::RefCell,
     collections::BTreeMap,
     path::PathBuf,
-    sync::{mpsc, Arc},
+    rc::Rc,
+    sync::{Arc, mpsc},
 };
-
-use ffmpeg::{
-    codec::{self, Capabilities},
-    format, frame, rescale, software, Codec, Rescale,
-};
-use ffmpeg_hw_device::{CodecContextExt, CodecExt, HwDevice};
-use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
-use log::debug;
 use tokio::sync::oneshot;
+use tracing::info;
 
-use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use crate::{DecodedFrame, PixelFormat};
+#[cfg(target_os = "windows")]
+use cap_video_decode::FrameTextures;
+
+use super::{
+    DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage,
+    frame_converter::FrameConverter, pts_to_frame,
+};
 
 #[derive(Clone)]
-struct CachedFrame {
-    data: CachedFrameData,
+struct ProcessedFrame {
+    number: u32,
+    data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    y_stride: u32,
+    uv_stride: u32,
 }
 
-impl CachedFrame {
-    fn process(&mut self, decoder: &codec::decoder::Video) -> Arc<Vec<u8>> {
-        match &mut self.data {
-            CachedFrameData::Raw(frame) => {
-                let rgb_frame = if frame.format() != format::Pixel::RGBA {
-                    // Reinitialize the scaler with the new input format
-                    let mut scaler = software::converter(
-                        (decoder.width(), decoder.height()),
-                        frame.format(),
-                        format::Pixel::RGBA,
-                    )
-                    .unwrap();
-
-                    let mut rgb_frame = frame::Video::empty();
-                    scaler.run(&frame, &mut rgb_frame).unwrap();
-                    rgb_frame
-                } else {
-                    std::mem::replace(frame, frame::Video::empty())
-                };
-
-                let width = rgb_frame.width() as usize;
-                let height = rgb_frame.height() as usize;
-                let stride = rgb_frame.stride(0);
-                let data = rgb_frame.data(0);
-
-                let expected_size = width * height * 4;
-
-                let mut frame_buffer = Vec::with_capacity(expected_size);
-
-                // account for stride > width
-                for line_data in data.chunks_exact(stride) {
-                    frame_buffer.extend_from_slice(&line_data[0..width * 4]);
-                }
-
-                let data = Arc::new(frame_buffer);
-
-                self.data = CachedFrameData::Processed(data.clone());
-
-                data
+impl ProcessedFrame {
+    fn to_decoded_frame(&self) -> DecodedFrame {
+        match self.format {
+            PixelFormat::Rgba => {
+                DecodedFrame::new_with_arc(Arc::clone(&self.data), self.width, self.height)
             }
-            CachedFrameData::Processed(data) => data.clone(),
+            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
+                Arc::clone(&self.data),
+                self.width,
+                self.height,
+                self.y_stride,
+                self.uv_stride,
+            ),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
+                Arc::clone(&self.data),
+                self.width,
+                self.height,
+                self.y_stride,
+                self.uv_stride,
+            ),
         }
     }
 }
 
 #[derive(Clone)]
-enum CachedFrameData {
-    Raw(frame::Video),
-    Processed(Arc<Vec<u8>>),
+struct OutputFrame {
+    number: u32,
+    frame: DecodedFrame,
+}
+
+struct PendingRequest {
+    time: f32,
+    frame: u32,
+    reply: oneshot::Sender<DecodedFrame>,
+}
+
+fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
+    let height = frame.height();
+
+    match frame.format() {
+        format::Pixel::YUV420P => {
+            let y_stride = frame.stride(0) as u32;
+            let u_stride = frame.stride(1) as u32;
+            let v_stride = frame.stride(2) as u32;
+
+            let y_size = (y_stride * height) as usize;
+            let uv_height = height / 2;
+            let u_size = (u_stride * uv_height) as usize;
+            let v_size = (v_stride * uv_height) as usize;
+
+            let mut data = Vec::with_capacity(y_size + u_size + v_size);
+            data.extend_from_slice(&frame.data(0)[..y_size]);
+            data.extend_from_slice(&frame.data(1)[..u_size]);
+            data.extend_from_slice(&frame.data(2)[..v_size]);
+
+            Some((data, PixelFormat::Yuv420p, y_stride, u_stride))
+        }
+        format::Pixel::NV12 => {
+            let y_stride = frame.stride(0) as u32;
+            let uv_stride = frame.stride(1) as u32;
+
+            let y_size = (y_stride * height) as usize;
+            let uv_size = (uv_stride * (height / 2)) as usize;
+
+            let mut data = Vec::with_capacity(y_size + uv_size);
+            data.extend_from_slice(&frame.data(0)[..y_size]);
+            data.extend_from_slice(&frame.data(1)[..uv_size]);
+
+            Some((data, PixelFormat::Nv12, y_stride, uv_stride))
+        }
+        _ => None,
+    }
+}
+
+impl CachedFrame {
+    fn process_cpu(&mut self, converter: &mut FrameConverter) -> ProcessedFrame {
+        match self {
+            Self::Raw { frame, number } => {
+                let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
+                    extract_yuv_planes(frame)
+                {
+                    ProcessedFrame {
+                        data: Arc::new(yuv_data),
+                        number: *number,
+                        width: frame.width(),
+                        height: frame.height(),
+                        format: pixel_format,
+                        y_stride,
+                        uv_stride,
+                    }
+                } else {
+                    let frame_buffer = converter.convert(frame);
+                    ProcessedFrame {
+                        data: Arc::new(frame_buffer),
+                        number: *number,
+                        width: frame.width(),
+                        height: frame.height(),
+                        format: PixelFormat::Rgba,
+                        y_stride: frame.width() * 4,
+                        uv_stride: 0,
+                    }
+                };
+
+                *self = Self::Processed(data.clone());
+
+                data
+            }
+            Self::Processed(data) => data.clone(),
+            #[cfg(target_os = "windows")]
+            Self::Gpu { .. } => unreachable!(),
+        }
+    }
+
+    fn produce(&mut self, converter: &mut FrameConverter) -> OutputFrame {
+        match self {
+            #[cfg(target_os = "windows")]
+            Self::Gpu { frame, number, .. } => OutputFrame {
+                number: *number,
+                frame: frame.clone(),
+            },
+            Self::Raw { .. } => {
+                let data = self.process_cpu(converter);
+                OutputFrame {
+                    number: data.number,
+                    frame: data.to_decoded_frame(),
+                }
+            }
+            Self::Processed(data) => OutputFrame {
+                number: data.number,
+                frame: data.clone().to_decoded_frame(),
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+enum CachedFrame {
+    Raw {
+        frame: frame::Video,
+        number: u32,
+    },
+    Processed(ProcessedFrame),
+    #[cfg(target_os = "windows")]
+    Gpu {
+        frame: DecodedFrame,
+        number: u32,
+        textures: Arc<FrameTextures>,
+    },
 }
 
 pub struct FfmpegDecoder;
@@ -80,319 +189,780 @@ impl FfmpegDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
-        ready_tx: oneshot::Sender<Result<(), String>>,
-    ) {
+        ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
+    ) -> Result<(), String> {
+        Self::spawn_with_hw_config(name, path, fps, rx, ready_tx, true)
+    }
+
+    pub fn spawn_with_hw_config(
+        name: &'static str,
+        path: PathBuf,
+        fps: u32,
+        rx: mpsc::Receiver<VideoDecoderMessage>,
+        ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
+        use_hw_acceleration: bool,
+    ) -> Result<(), String> {
         std::thread::spawn(move || {
-            let mut input = ffmpeg::format::input(&path).unwrap();
-
-            let input_stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Video)
-                .ok_or("Could not find a video stream")
-                .unwrap();
-
-            let decoder_codec =
-                find_decoder(&input, &input_stream, input_stream.parameters().id()).unwrap();
-
-            let mut context = codec::context::Context::new_with_codec(decoder_codec);
-            context.set_parameters(input_stream.parameters()).unwrap();
-
-            let input_stream_index = input_stream.index();
-            let time_base = input_stream.time_base();
-            let frame_rate = input_stream.rate();
-
-            // Create a decoder for the video stream
-            let mut decoder = context.decoder().video().unwrap();
-
-            {
-                use codec::threading::{Config, Type};
-
-                let capabilities = decoder_codec.capabilities();
-
-                if capabilities.intersects(Capabilities::FRAME_THREADS) {
-                    decoder.set_threading(Config::kind(Type::Frame));
-                } else if capabilities.intersects(Capabilities::SLICE_THREADS) {
-                    decoder.set_threading(Config::kind(Type::Slice));
-                } else {
-                    decoder.set_threading(Config::count(1));
+            let hw_device_type = if use_hw_acceleration {
+                #[cfg(target_os = "windows")]
+                {
+                    Some(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA)
                 }
-            }
-
-            let width = decoder.width();
-            let height = decoder.height();
-
-            let exceeds_common_hw_limits = width > 4096 || height > 4096;
-
-            let mut hw_device = if exceeds_common_hw_limits {
-                debug!("Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration");
-                None
+                #[cfg(target_os = "macos")]
+                {
+                    Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                {
+                    None
+                }
             } else {
-                let hw_device_types = if cfg!(target_os = "macos") {
-                    [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
-                } else {
-                    [
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
-                    ]
-                    .as_slice()
-                };
-
-                hw_device_types
-                    .iter()
-                    .find_map(|&typ| decoder.try_use_hw_device(typ).ok())
+                None
             };
-            let hw_device = hw_device.as_ref();
+            let mut this = match cap_video_decode::FFmpegDecoder::new(path.clone(), hw_device_type)
+            {
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+                Ok(v) => {
+                    let is_hw = v.is_hardware_accelerated();
+                    let width = v.decoder().width();
+                    let height = v.decoder().height();
+                    info!(
+                        "FFmpeg decoder created for '{}': {}x{}, hw_accel={}",
+                        name, width, height, is_hw
+                    );
+                    v
+                }
+            };
 
-            if hw_device.is_none() && !exceeds_common_hw_limits {
-                debug!("No hardware acceleration available, falling back to software decoding");
-            }
-
-            let mut temp_frame = ffmpeg::frame::Video::empty();
-
-            // let mut packets = input.packets().peekable();
-
-            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
+            let time_base = this.decoder().time_base();
+            let start_time = this.start_time();
+            let video_width = this.decoder().width();
+            let video_height = this.decoder().height();
+            let is_hw = this.is_hardware_accelerated();
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
-            // active frame is a frame that triggered decode.
-            // frames that are within render_more_margin of this frame won't trigger decode.
             let mut last_active_frame = None::<u32>;
 
-            let mut last_decoded_frame = None::<u32>;
-            let mut last_sent_frame = None::<(u32, DecodedFrame)>;
+            let last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
+            let first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
 
-            let mut peekable_requests = PeekableReceiver { rx, peeked: None };
+            let mut frames = this.frames();
+            let mut converter = FrameConverter::new();
 
-            let mut packets = input.packets().peekable();
+            let first_frame_result = (&mut frames).flatten().next();
 
-            let _ = ready_tx.send(Ok(()));
+            if first_frame_result.is_none() && is_hw {
+                let mut sw_this = match cap_video_decode::FFmpegDecoder::new(path.clone(), None) {
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("Software fallback failed: {e}")));
+                        return;
+                    }
+                    Ok(v) => v,
+                };
 
-            while let Ok(r) = peekable_requests.recv() {
-                match r {
-                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
-                        // sender.send(black_frame.clone()).ok();
-                        // continue;
+                let sw_time_base = sw_this.decoder().time_base();
+                let sw_start_time = sw_this.start_time();
 
-                        let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                            let data = cached.process(&decoder);
+                let mut sw_cache = BTreeMap::<u32, CachedFrame>::new();
+                let mut sw_last_active_frame = None::<u32>;
+                let sw_last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
+                let sw_first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
+                let mut sw_frames = sw_this.frames();
+                let mut sw_converter = FrameConverter::new();
 
-                            sender.send(data.clone()).ok();
-                            last_sent_frame = Some((requested_frame, data));
+                if let Some(frame) = (&mut sw_frames).flatten().next() {
+                    let current_frame =
+                        pts_to_frame(frame.pts().unwrap_or(0) - sw_start_time, sw_time_base, fps);
+                    let mut cache_frame = CachedFrame::Raw {
+                        frame,
+                        number: current_frame,
+                    };
+                    let output = cache_frame.produce(&mut sw_converter);
+                    sw_cache.insert(current_frame, cache_frame);
+                    *sw_first_ever_frame.borrow_mut() = Some(output.clone());
+                    *sw_last_sent_frame.borrow_mut() = Some(output);
+                }
+
+                let sw_decoder_type = DecoderType::FFmpegSoftware;
+                let sw_init_result = DecoderInitResult {
+                    width: video_width,
+                    height: video_height,
+                    decoder_type: sw_decoder_type,
+                };
+                let _ = ready_tx.send(Ok(sw_init_result));
+
+                while let Ok(r) = rx.recv() {
+                    const MAX_FRAME_TOLERANCE: u32 = 2;
+
+                    let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+                    let mut push_request =
+                        |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
+                            if reply.is_closed() {
+                                return;
+                            }
+
+                            let requested_time = requested_time.max(0.0);
+                            let requested_frame = (requested_time * fps as f32).floor() as u32;
+
+                            pending_requests.push(PendingRequest {
+                                time: requested_time,
+                                frame: requested_frame,
+                                reply,
+                            });
+                        };
+
+                    match r {
+                        VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                            push_request(requested_time, reply);
+                        }
+                    }
+
+                    while let Ok(msg) = rx.try_recv() {
+                        match msg {
+                            VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                                push_request(requested_time, reply);
+                            }
+                        }
+                    }
+
+                    pending_requests.sort_by_key(|r| r.frame);
+
+                    for PendingRequest {
+                        time: requested_time,
+                        frame: requested_frame,
+                        reply,
+                    } in pending_requests
+                    {
+                        if reply.is_closed() {
                             continue;
-                        } else {
-                            Some(sender)
+                        }
+
+                        let last_sent_number =
+                            sw_last_sent_frame.borrow().as_ref().map(|f| f.number);
+                        let is_backward_seek = last_sent_number
+                            .map(|last| requested_frame < last)
+                            .unwrap_or(false);
+
+                        if let Some(cached) = sw_cache.get_mut(&requested_frame) {
+                            let data = cached.produce(&mut sw_converter);
+                            if reply.send(data.frame.clone()).is_err() {
+                                log::warn!(
+                                    "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
+                                );
+                            }
+                            *sw_last_sent_frame.borrow_mut() = Some(data);
+                            continue;
+                        }
+
+                        if is_backward_seek {
+                            let best_cached_frame = sw_cache
+                                .range(..=requested_frame)
+                                .next_back()
+                                .filter(|(k, _)| {
+                                    requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                                })
+                                .map(|(k, _)| *k);
+
+                            if let Some(frame_num) = best_cached_frame
+                                && let Some(cached) = sw_cache.get_mut(&frame_num)
+                            {
+                                let data = cached.produce(&mut sw_converter);
+                                *sw_last_sent_frame.borrow_mut() = Some(data.clone());
+                                let _ = reply.send(data.frame);
+                                continue;
+                            }
+
+                            if requested_frame <= MAX_FRAME_TOLERANCE
+                                && let Some(first_frame) = sw_first_ever_frame.borrow().clone()
+                            {
+                                *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                                let _ = reply.send(first_frame.frame);
+                                continue;
+                            }
+
+                            let _ = sw_this.reset(requested_time);
+                            sw_frames = sw_this.frames();
+                            *sw_last_sent_frame.borrow_mut() = None;
+                            sw_cache.clear();
+                        }
+
+                        if reply.is_closed() {
+                            continue;
+                        }
+
+                        let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                        let reply_for_respond = reply_cell.clone();
+
+                        let mut respond = {
+                            let last_sent_frame = sw_last_sent_frame.clone();
+                            Some(move |data: OutputFrame| {
+                                let frame_number = data.number;
+                                *last_sent_frame.borrow_mut() = Some(data.clone());
+                                if let Some(reply) = reply_for_respond.borrow_mut().take()
+                                    && reply.send(data.frame).is_err()
+                                {
+                                    log::warn!(
+                                        "Failed to send decoded frame {frame_number}: receiver dropped"
+                                    );
+                                }
+                            })
                         };
 
                         let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                         let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
-                        if requested_frame == 0
-                            || last_sent_frame
-                                .as_ref()
-                                .map(|last| {
-                                    requested_frame < last.0 ||
-                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                requested_frame - last.0 > FRAME_CACHE_SIZE as u32
-                                })
-                                .unwrap_or(true)
-                        {
-                            let timestamp_us =
-                                ((requested_frame as f32 / frame_rate.numerator() as f32)
-                                    * 1_000_000.0) as i64;
-                            let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
+                        let is_far_forward = sw_last_sent_frame.borrow().as_ref().map_or_else(
+                            || {
+                                if sw_first_ever_frame.borrow().is_some() {
+                                    let first_frame_num = sw_first_ever_frame
+                                        .borrow()
+                                        .as_ref()
+                                        .map(|f| f.number)
+                                        .unwrap_or(0);
+                                    requested_frame.saturating_sub(first_frame_num)
+                                        > FRAME_CACHE_SIZE as u32
+                                } else {
+                                    requested_frame != 0
+                                }
+                            },
+                            |last| {
+                                requested_frame.saturating_sub(last.number)
+                                    > FRAME_CACHE_SIZE as u32
+                            },
+                        );
 
-                            debug!("seeking to {}", position);
-                            decoder.flush();
-                            input.seek(position, ..position).unwrap();
-                            last_decoded_frame = None;
-
-                            packets = input.packets().peekable();
+                        if is_far_forward {
+                            let _ = sw_this.reset(requested_time);
+                            sw_frames = sw_this.frames();
+                            *sw_last_sent_frame.borrow_mut() = None;
+                            sw_cache.clear();
                         }
 
-                        last_active_frame = Some(requested_frame);
+                        let mut exit = false;
 
-                        loop {
-                            if peekable_requests.peek().is_some() {
+                        for frame in &mut sw_frames {
+                            if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                                respond.take();
                                 break;
                             }
-                            let Some((stream, packet)) = packets.next() else {
-                                // handles the case where the cache doesn't contain a frame so we fallback to the previously sent one
-                                if let Some(last_sent_frame) = &last_sent_frame {
-                                    if last_sent_frame.0 < requested_frame {
-                                        sender.take().map(|s| s.send(last_sent_frame.1.clone()));
-                                    }
-                                }
 
-                                sender.take().map(|s| s.send(black_frame.clone()));
-                                break;
+                            let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                                continue;
                             };
 
-                            if stream.index() == input_stream_index {
-                                let start_offset = stream.start_time();
+                            let Some(pts) = frame.pts() else {
+                                continue;
+                            };
+                            let current_frame =
+                                pts_to_frame(pts - sw_start_time, sw_time_base, fps);
 
-                                let _ = decoder.send_packet(&packet);
+                            let mut cache_frame = CachedFrame::Raw {
+                                frame,
+                                number: current_frame,
+                            };
 
-                                let mut exit = false;
+                            if sw_first_ever_frame.borrow().is_none() {
+                                let output = cache_frame.produce(&mut sw_converter);
+                                *sw_first_ever_frame.borrow_mut() = Some(output);
+                            }
 
-                                while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                    let current_frame = pts_to_frame(
-                                        temp_frame.pts().unwrap() - start_offset,
-                                        time_base,
-                                        fps,
-                                    );
+                            if let Some(most_recent_prev_frame) =
+                                sw_cache.iter_mut().rev().find(|v| {
+                                    *v.0 <= requested_frame
+                                        && requested_frame.saturating_sub(*v.0)
+                                            <= MAX_FRAME_TOLERANCE
+                                })
+                                && let Some(respond) = respond.take()
+                            {
+                                let output = most_recent_prev_frame.1.produce(&mut sw_converter);
+                                *sw_last_sent_frame.borrow_mut() = Some(output.clone());
+                                (respond)(output);
+                            }
 
-                                    // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
-                                    if let Some((last_decoded_frame, sender)) = last_decoded_frame
-                                        .filter(|last_decoded_frame| {
-                                            requested_frame > *last_decoded_frame
-                                                && requested_frame < current_frame
-                                        })
-                                        .and_then(|l| Some((l, sender.take()?)))
-                                    {
-                                        let data = cache
-                                            .get_mut(&last_decoded_frame)
-                                            .map(|f| f.process(&decoder))
-                                            .unwrap_or_else(|| black_frame.clone());
+                            let exceeds_cache_bounds = current_frame > cache_max;
+                            let too_small_for_cache_bounds = current_frame < cache_min;
 
-                                        last_sent_frame = Some((last_decoded_frame, data.clone()));
-                                        sender.send(data).ok();
-                                    }
+                            let cache_frame = if !too_small_for_cache_bounds {
+                                cache_frame.produce(&mut sw_converter);
 
-                                    last_decoded_frame = Some(current_frame);
-
-                                    let exceeds_cache_bounds = current_frame > cache_max;
-                                    let too_small_for_cache_bounds = current_frame < cache_min;
-
-                                    let frame = hw_device
-                                        .and_then(|d| d.get_hwframe(&temp_frame))
-                                        .unwrap_or(std::mem::replace(
-                                            &mut temp_frame,
-                                            frame::Video::empty(),
-                                        ));
-
-                                    if !too_small_for_cache_bounds {
-                                        let mut cache_frame = CachedFrame {
-                                            data: CachedFrameData::Raw(frame),
-                                        };
-
-                                        if current_frame == requested_frame {
-                                            if let Some(sender) = sender.take() {
-                                                let data = cache_frame.process(&decoder);
-                                                last_sent_frame =
-                                                    Some((current_frame, data.clone()));
-                                                sender.send(data).ok();
-
-                                                break;
-                                            }
-                                        }
-
-                                        if cache.len() >= FRAME_CACHE_SIZE {
-                                            if let Some(last_active_frame) = &last_active_frame {
-                                                let frame = if requested_frame > *last_active_frame
-                                                {
-                                                    *cache.keys().next().unwrap()
-                                                } else if requested_frame < *last_active_frame {
-                                                    *cache.keys().next_back().unwrap()
-                                                } else {
-                                                    let min = *cache.keys().min().unwrap();
-                                                    let max = *cache.keys().max().unwrap();
-
-                                                    if current_frame > max {
-                                                        min
-                                                    } else {
-                                                        max
-                                                    }
-                                                };
-
-                                                cache.remove(&frame);
-                                            } else {
-                                                cache.clear()
-                                            }
-                                        }
-
-                                        cache.insert(current_frame, cache_frame);
-                                    }
-
-                                    exit = exit || exceeds_cache_bounds;
-                                }
-
-                                if exit {
+                                if current_frame == requested_frame
+                                    && let Some(respond) = respond.take()
+                                {
+                                    let output = cache_frame.produce(&mut sw_converter);
+                                    (respond)(output);
                                     break;
                                 }
+
+                                if sw_cache.len() >= FRAME_CACHE_SIZE {
+                                    if let Some(last_active_frame) = &sw_last_active_frame {
+                                        let frame = if requested_frame > *last_active_frame {
+                                            *sw_cache.keys().next().unwrap()
+                                        } else if requested_frame < *last_active_frame {
+                                            *sw_cache.keys().next_back().unwrap()
+                                        } else {
+                                            let min = *sw_cache.keys().min().unwrap();
+                                            let max = *sw_cache.keys().max().unwrap();
+                                            if current_frame > max { min } else { max }
+                                        };
+                                        sw_cache.remove(&frame);
+                                    } else {
+                                        sw_cache.clear()
+                                    }
+                                }
+
+                                sw_cache.insert(current_frame, cache_frame);
+                                sw_cache.get_mut(&current_frame).unwrap()
+                            } else {
+                                &mut cache_frame
+                            };
+
+                            if current_frame > requested_frame && respond.is_some() {
+                                let last_sent_frame_clone = sw_last_sent_frame.borrow().clone();
+
+                                if let Some((respond, last_frame)) = last_sent_frame_clone
+                                    .filter(|l| {
+                                        requested_frame.saturating_sub(l.number)
+                                            <= MAX_FRAME_TOLERANCE
+                                    })
+                                    .and_then(|l| Some((respond.take()?, l)))
+                                {
+                                    (respond)(last_frame);
+                                } else if let Some(respond) = respond.take() {
+                                    let output = cache_frame.produce(&mut sw_converter);
+                                    *sw_last_sent_frame.borrow_mut() = Some(output.clone());
+                                    (respond)(output);
+                                }
+                            }
+
+                            exit = exit || exceeds_cache_bounds;
+
+                            if exit {
+                                break;
                             }
                         }
 
-                        if let Some((sender, last_sent_frame)) =
-                            sender.take().zip(last_sent_frame.clone())
+                        sw_last_active_frame = Some(requested_frame);
+
+                        if let Some(respond) = respond.take() {
+                            let best_cached = sw_cache
+                                .range(..=requested_frame)
+                                .next_back()
+                                .filter(|(k, _)| {
+                                    requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                                })
+                                .map(|(_, v)| v);
+
+                            if let Some(cached) = best_cached {
+                                let output = cached.clone().produce(&mut sw_converter);
+                                *sw_last_sent_frame.borrow_mut() = Some(output.clone());
+                                (respond)(output);
+                            } else {
+                                let last_frame_clone = sw_last_sent_frame.borrow().clone();
+                                let first_frame_clone = sw_first_ever_frame.borrow().clone();
+                                if let Some(last_frame) = last_frame_clone {
+                                    (respond)(last_frame);
+                                } else if let Some(first_frame) = first_frame_clone {
+                                    (respond)(first_frame);
+                                } else {
+                                    let black_frame_data =
+                                        vec![0u8; (video_width * video_height * 4) as usize];
+                                    let black_frame = OutputFrame {
+                                        number: requested_frame,
+                                        frame: DecodedFrame::new_with_arc(
+                                            Arc::new(black_frame_data),
+                                            video_width,
+                                            video_height,
+                                        ),
+                                    };
+                                    (respond)(black_frame);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return;
+            }
+
+            if let Some(frame) = first_frame_result {
+                let current_frame =
+                    pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
+                let mut cache_frame = CachedFrame::Raw {
+                    frame,
+                    number: current_frame,
+                };
+                let output = cache_frame.produce(&mut converter);
+
+                cache.insert(current_frame, cache_frame);
+                *first_ever_frame.borrow_mut() = Some(output.clone());
+                *last_sent_frame.borrow_mut() = Some(output);
+                info!(
+                    "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
+                    name, current_frame, video_width, video_height
+                );
+            }
+
+            let decoder_type = if is_hw {
+                DecoderType::FFmpegHardware
+            } else {
+                DecoderType::FFmpegSoftware
+            };
+            let init_result = DecoderInitResult {
+                width: video_width,
+                height: video_height,
+                decoder_type,
+            };
+            let _ = ready_tx.send(Ok(init_result));
+
+            while let Ok(r) = rx.recv() {
+                const MAX_FRAME_TOLERANCE: u32 = 2;
+
+                let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+                let mut push_request =
+                    |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
+                        if reply.is_closed() {
+                            return;
+                        }
+
+                        let requested_time = requested_time.max(0.0);
+                        let requested_frame = (requested_time * fps as f32).floor() as u32;
+
+                        pending_requests.push(PendingRequest {
+                            time: requested_time,
+                            frame: requested_frame,
+                            reply,
+                        });
+                    };
+
+                match r {
+                    VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                        push_request(requested_time, reply);
+                    }
+                }
+
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        VideoDecoderMessage::GetFrame(requested_time, reply) => {
+                            push_request(requested_time, reply);
+                        }
+                    }
+                }
+
+                pending_requests.sort_by_key(|r| r.frame);
+
+                for PendingRequest {
+                    time: requested_time,
+                    frame: requested_frame,
+                    reply,
+                } in pending_requests
+                {
+                    if reply.is_closed() {
+                        continue;
+                    }
+
+                    let last_sent_number = last_sent_frame.borrow().as_ref().map(|f| f.number);
+                    let is_backward_seek = last_sent_number
+                        .map(|last| requested_frame < last)
+                        .unwrap_or(false);
+
+                    if let Some(cached) = cache.get_mut(&requested_frame) {
+                        let data = cached.produce(&mut converter);
+
+                        if reply.send(data.frame.clone()).is_err() {
+                            log::warn!(
+                                "FFmpeg '{name}': Failed to send cached frame {requested_frame}: receiver dropped"
+                            );
+                        }
+                        *last_sent_frame.borrow_mut() = Some(data);
+                        continue;
+                    }
+
+                    if is_backward_seek {
+                        let best_cached_frame = cache
+                            .range(..=requested_frame)
+                            .next_back()
+                            .filter(|(k, _)| {
+                                requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                            })
+                            .map(|(k, _)| *k);
+
+                        if let Some(frame_num) = best_cached_frame
+                            && let Some(cached) = cache.get_mut(&frame_num)
                         {
-                            sender.send(last_sent_frame.1).ok();
+                            let data = cached.produce(&mut converter);
+                            *last_sent_frame.borrow_mut() = Some(data.clone());
+                            let _ = reply.send(data.frame);
+                            continue;
+                        }
+
+                        if requested_frame <= MAX_FRAME_TOLERANCE
+                            && let Some(first_frame) = first_ever_frame.borrow().clone()
+                        {
+                            *last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                            let _ = reply.send(first_frame.frame);
+                            continue;
+                        }
+
+                        let _ = this.reset(requested_time);
+                        frames = this.frames();
+                        *last_sent_frame.borrow_mut() = None;
+                        cache.clear();
+                    }
+
+                    if reply.is_closed() {
+                        continue;
+                    }
+
+                    let reply_cell = Rc::new(RefCell::new(Some(reply)));
+                    let reply_for_respond = reply_cell.clone();
+
+                    let mut respond = {
+                        let last_sent_frame = last_sent_frame.clone();
+                        Some(move |data: OutputFrame| {
+                            let frame_number = data.number;
+                            *last_sent_frame.borrow_mut() = Some(data.clone());
+                            if let Some(reply) = reply_for_respond.borrow_mut().take()
+                                && reply.send(data.frame).is_err()
+                            {
+                                log::warn!(
+                                    "Failed to send decoded frame {frame_number}: receiver dropped"
+                                );
+                            }
+                        })
+                    };
+
+                    let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                    let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
+
+                    let is_far_forward = last_sent_frame.borrow().as_ref().map_or_else(
+                        || {
+                            if first_ever_frame.borrow().is_some() {
+                                let first_frame_num = first_ever_frame
+                                    .borrow()
+                                    .as_ref()
+                                    .map(|f| f.number)
+                                    .unwrap_or(0);
+                                requested_frame.saturating_sub(first_frame_num)
+                                    > FRAME_CACHE_SIZE as u32
+                            } else {
+                                requested_frame != 0
+                            }
+                        },
+                        |last| {
+                            requested_frame.saturating_sub(last.number) > FRAME_CACHE_SIZE as u32
+                        },
+                    );
+
+                    if is_far_forward {
+                        let _ = this.reset(requested_time);
+                        frames = this.frames();
+                        *last_sent_frame.borrow_mut() = None;
+                        cache.clear();
+                    }
+
+                    let mut exit = false;
+
+                    for frame in &mut frames {
+                        if reply_cell.borrow().as_ref().is_none_or(|r| r.is_closed()) {
+                            respond.take();
+                            break;
+                        }
+
+                        let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                            continue;
+                        };
+
+                        let Some(pts) = frame.pts() else {
+                            continue;
+                        };
+                        let current_frame = pts_to_frame(pts - start_time, time_base, fps);
+
+                        let mut cache_frame = CachedFrame::Raw {
+                            frame,
+                            number: current_frame,
+                        };
+
+                        if first_ever_frame.borrow().is_none() {
+                            let output = cache_frame.produce(&mut converter);
+                            *first_ever_frame.borrow_mut() = Some(output);
+                        }
+
+                        if let Some(most_recent_prev_frame) = cache.iter_mut().rev().find(|v| {
+                            *v.0 <= requested_frame
+                                && requested_frame.saturating_sub(*v.0) <= MAX_FRAME_TOLERANCE
+                        }) && let Some(respond) = respond.take()
+                        {
+                            let output = most_recent_prev_frame.1.produce(&mut converter);
+                            *last_sent_frame.borrow_mut() = Some(output.clone());
+                            (respond)(output);
+                        }
+
+                        let exceeds_cache_bounds = current_frame > cache_max;
+                        let too_small_for_cache_bounds = current_frame < cache_min;
+
+                        let cache_frame = if !too_small_for_cache_bounds {
+                            cache_frame.produce(&mut converter);
+
+                            if current_frame == requested_frame
+                                && let Some(respond) = respond.take()
+                            {
+                                let output = cache_frame.produce(&mut converter);
+                                (respond)(output);
+
+                                break;
+                            }
+
+                            if cache.len() >= FRAME_CACHE_SIZE {
+                                if let Some(last_active_frame) = &last_active_frame {
+                                    let frame = if requested_frame > *last_active_frame {
+                                        *cache.keys().next().unwrap()
+                                    } else if requested_frame < *last_active_frame {
+                                        *cache.keys().next_back().unwrap()
+                                    } else {
+                                        let min = *cache.keys().min().unwrap();
+                                        let max = *cache.keys().max().unwrap();
+
+                                        if current_frame > max { min } else { max }
+                                    };
+
+                                    cache.remove(&frame);
+                                } else {
+                                    cache.clear()
+                                }
+                            }
+
+                            cache.insert(current_frame, cache_frame);
+                            cache.get_mut(&current_frame).unwrap()
+                        } else {
+                            &mut cache_frame
+                        };
+
+                        if current_frame > requested_frame && respond.is_some() {
+                            let last_sent_frame_clone = last_sent_frame.borrow().clone();
+
+                            if let Some((respond, last_frame)) = last_sent_frame_clone
+                                .filter(|l| {
+                                    requested_frame.saturating_sub(l.number) <= MAX_FRAME_TOLERANCE
+                                })
+                                .and_then(|l| Some((respond.take()?, l)))
+                            {
+                                (respond)(last_frame);
+                            } else if let Some(respond) = respond.take() {
+                                let output = cache_frame.produce(&mut converter);
+                                *last_sent_frame.borrow_mut() = Some(output.clone());
+                                (respond)(output);
+                            }
+                        }
+
+                        exit = exit || exceeds_cache_bounds;
+
+                        if exit {
+                            break;
+                        }
+                    }
+
+                    last_active_frame = Some(requested_frame);
+
+                    if let Some(respond) = respond.take() {
+                        let best_cached = cache
+                            .range(..=requested_frame)
+                            .next_back()
+                            .filter(|(k, _)| {
+                                requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                            })
+                            .map(|(_, v)| v);
+
+                        if let Some(cached) = best_cached {
+                            let output = cached.clone().produce(&mut converter);
+                            *last_sent_frame.borrow_mut() = Some(output.clone());
+                            (respond)(output);
+                        } else {
+                            let last_frame_clone = last_sent_frame.borrow().clone();
+                            let first_frame_clone = first_ever_frame.borrow().clone();
+                            if let Some(last_frame) = last_frame_clone {
+                                (respond)(last_frame);
+                            } else if let Some(first_frame) = first_frame_clone {
+                                (respond)(first_frame);
+                            } else {
+                                let black_frame_data =
+                                    vec![0u8; (video_width * video_height * 4) as usize];
+                                let black_frame = OutputFrame {
+                                    number: requested_frame,
+                                    frame: DecodedFrame::new_with_arc(
+                                        Arc::new(black_frame_data),
+                                        video_width,
+                                        video_height,
+                                    ),
+                                };
+                                (respond)(black_frame);
+                            }
                         }
                     }
                 }
             }
         });
+
+        Ok(())
     }
 }
 
-pub fn find_decoder(
-    s: &format::context::Input,
-    st: &format::stream::Stream,
-    codec_id: codec::Id,
-) -> Option<Codec> {
-    unsafe {
-        use ffmpeg::media::Type;
-        let codec = match st.parameters().medium() {
-            Type::Video => Some((*s.as_ptr()).video_codec),
-            Type::Audio => Some((*s.as_ptr()).audio_codec),
-            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
-            _ => None,
-        };
+// pub fn find_decoder(
+//     s: &format::context::Input,
+//     st: &format::stream::Stream,
+//     codec_id: codec::Id,
+// ) -> Option<Codec> {
+//     unsafe {
+//         use ffmpeg::media::Type;
+//         let codec = match st.parameters().medium() {
+//             Type::Video => Some((*s.as_ptr()).video_codec),
+//             Type::Audio => Some((*s.as_ptr()).audio_codec),
+//             Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
+//             _ => None,
+//         };
 
-        if let Some(codec) = codec {
-            if !codec.is_null() {
-                return Some(Codec::wrap(codec));
-            }
-        }
+//         if let Some(codec) = codec {
+//             if !codec.is_null() {
+//                 return Some(Codec::wrap(codec));
+//             }
+//         }
 
-        let found = avcodec_find_decoder(codec_id.into());
+//         let found = avcodec_find_decoder(codec_id.into());
 
-        if found.is_null() {
-            return None;
-        }
-        Some(Codec::wrap(found))
-    }
-}
+//         if found.is_null() {
+//             return None;
+//         }
+//         Some(Codec::wrap(found))
+//     }
+// }
 
-struct PeekableReceiver<T> {
-    rx: mpsc::Receiver<T>,
-    peeked: Option<T>,
-}
+// struct PeekableReceiver<T> {
+//     rx: mpsc::Receiver<T>,
+//     peeked: Option<T>,
+// }
 
-impl<T> PeekableReceiver<T> {
-    fn peek(&mut self) -> Option<&T> {
-        if self.peeked.is_some() {
-            self.peeked.as_ref()
-        } else {
-            match self.rx.try_recv() {
-                Ok(value) => {
-                    self.peeked = Some(value);
-                    self.peeked.as_ref()
-                }
-                Err(_) => None,
-            }
-        }
-    }
+// impl<T> PeekableReceiver<T> {
+//     fn peek(&mut self) -> Option<&T> {
+//         if self.peeked.is_some() {
+//             self.peeked.as_ref()
+//         } else {
+//             match self.rx.try_recv() {
+//                 Ok(value) => {
+//                     self.peeked = Some(value);
+//                     self.peeked.as_ref()
+//                 }
+//                 Err(_) => None,
+//             }
+//         }
+//     }
 
-    fn recv(&mut self) -> Result<T, mpsc::RecvError> {
-        if let Some(value) = self.peeked.take() {
-            Ok(value)
-        } else {
-            self.rx.recv()
-        }
-    }
-}
+//     fn recv(&mut self) -> Result<T, mpsc::RecvError> {
+//         if let Some(value) = self.peeked.take() {
+//             Ok(value)
+//         } else {
+//             self.rx.recv()
+//         }
+//     }
+// }

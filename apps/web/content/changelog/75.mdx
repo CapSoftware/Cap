@@ -1,0 +1,22 @@
+---
+
+title: ~16% faster exports, Improved audio sync, macOS Tahoe assets & Across the board reliability improvements
+app: Cap Desktop
+publishedAt: "2025-10-18"
+version: 0.3.74
+image:
+------
+
+* **Quicker exports** — export pipeline optimizations cut total export time by ~**16%**
+* **macOS Tahoe support** — high-quality SVG Tahoe cursor icons, and fresh macOS Tahoe wallpapers
+* **Bluetooth playback fixed** — improved audio latency handling & lag on wireless headphones
+* **Fixed audio device selection** — better mic device detection (e.g., AirPods now appear reliably)
+* **Snappier uploads** — optimistic presigned URLs reduce upload latency
+* **New uploader** — the **new uploader** is now on by default for **Instant Mode**, increasing upload reliability
+* **Safer pausing** — enforce monotonic PTS for audio/video to prevent corruption after pauses in Instant Mode
+* **Zoom workflow upgrades** — split **Zoom** and **Scene** segments, fixed an issue with clicking zooms segments on long recordings, and you can now drag to create new zoom segments;
+* **Multi-monitor improvements** — tighter Target Select overlay bounds and corrected List View in the new recording picker (enable via Settings > Experimental)
+* **Stabler capture/encode** — don't abort if the capturer stalls, proper DXVA2 hardware decode on Windows, and handle "no frames" from screen capture
+* **Hide inactive cursor** — you can now set cursor idle time in the editor, automatically hiding the cursor after X amount of seconds with a smooth fade
+* **Editor UX touches** — scissors cursor shows when the Clip tool is active
+* **Quality of life** — On Windows, the main window now re-opens after closing Settings/Editor

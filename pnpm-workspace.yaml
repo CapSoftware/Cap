@@ -2,3 +2,5 @@ packages:
   - "apps/*"
   - "packages/*"
   - "crates/tauri-plugin-*"
+  - "infra"
+  - "scripts/orgIdBackfill"

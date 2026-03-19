@@ -1,37 +1,52 @@
-import { clientEnv, serverEnv } from "@cap/env";
-import { JSXElementConstructor, ReactElement } from "react";
+import { buildEnv, serverEnv } from "@cap/env";
+import type { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
 
-export const resend = serverEnv.RESEND_API_KEY
-  ? new Resend(serverEnv.RESEND_API_KEY)
-  : null;
+export const resend = () =>
+	serverEnv().RESEND_API_KEY ? new Resend(serverEnv().RESEND_API_KEY) : null;
 
 export const sendEmail = async ({
-  email,
-  subject,
-  react,
-  marketing,
-  test,
+	email,
+	subject,
+	react,
+	marketing,
+	test,
+	scheduledAt,
+	cc,
+	replyTo,
+	fromOverride,
 }: {
-  email: string;
-  subject: string;
-  react: ReactElement<any, string | JSXElementConstructor<any>>;
-  marketing?: boolean;
-  test?: boolean;
+	email: string;
+	subject: string;
+	react: ReactElement<any, string | JSXElementConstructor<any>>;
+	marketing?: boolean;
+	test?: boolean;
+	scheduledAt?: string;
+	cc?: string | string[];
+	replyTo?: string;
+	fromOverride?: string;
 }) => {
-  if (!resend) {
-    console.info(`Email to ${email} with subject ${subject} sent from Cap`);
-    return Promise.resolve();
-  }
+	const r = resend();
+	if (!r) {
+		return Promise.resolve();
+	}
 
-  return resend.emails.send({
-    from: marketing
-      ? "Richie from Cap.so <richie@cap.so>"
-      : clientEnv.NEXT_PUBLIC_IS_CAP
-      ? "Cap Auth <no-reply@auth.cap.so>"
-      : `auth@${clientEnv.NEXT_PUBLIC_WEB_URL}`,
-    to: test ? "delivered@resend.dev" : email,
-    subject,
-    react,
-  }) as any;
+	if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
+	let from;
+
+	if (fromOverride) from = fromOverride;
+	else if (marketing) from = "Richie from Cap <richie@send.cap.so>";
+	else if (buildEnv.NEXT_PUBLIC_IS_CAP)
+		from = "Cap Auth <no-reply@auth.cap.so>";
+	else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
+
+	return r.emails.send({
+		from,
+		to: test ? "delivered@resend.dev" : email,
+		subject,
+		react,
+		scheduledAt,
+		cc: test ? undefined : cc,
+		replyTo: replyTo,
+	}) as any;
 };

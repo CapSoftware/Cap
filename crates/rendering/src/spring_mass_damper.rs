@@ -1,5 +1,12 @@
 use cap_project::XY;
 
+#[derive(Clone, Copy)]
+pub struct SpringMassDamperSimulationConfig {
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+}
+
 pub struct SpringMassDamperSimulation {
     tension: f32,
     mass: f32,
@@ -9,18 +16,81 @@ pub struct SpringMassDamperSimulation {
     pub target_position: XY<f32>,
 }
 
-const SIMULATION_TICK: f32 = 1000.0 / 60.0;
+const REST_VELOCITY_THRESHOLD: f32 = 0.0001;
+const REST_DISPLACEMENT_THRESHOLD: f32 = 0.00001;
+
+fn solve_spring_1d(displacement: f32, velocity: f32, t: f32, omega0: f32, zeta: f32) -> (f32, f32) {
+    const CRITICAL_EPSILON: f32 = 0.01;
+
+    if zeta < 1.0 - CRITICAL_EPSILON {
+        let omega_d = omega0 * (1.0 - zeta * zeta).sqrt();
+        let decay = (-zeta * omega0 * t).exp();
+        let cos_term = (omega_d * t).cos();
+        let sin_term = (omega_d * t).sin();
+
+        let a = displacement;
+        let b = (velocity + displacement * zeta * omega0) / omega_d.max(1e-4);
+
+        let new_disp = decay * (a * cos_term + b * sin_term);
+        let new_vel = decay
+            * ((b * omega_d - a * zeta * omega0) * cos_term
+                - (a * omega_d + b * zeta * omega0) * sin_term);
+
+        (new_disp, new_vel)
+    } else if zeta > 1.0 + CRITICAL_EPSILON {
+        let sqrt_term = (zeta * zeta - 1.0).sqrt();
+        let s1 = -omega0 * (zeta - sqrt_term);
+        let s2 = -omega0 * (zeta + sqrt_term);
+        let denom = s1 - s2;
+
+        if denom.abs() < 1e-10 {
+            let s_avg = 0.5 * (s1 + s2);
+            let decay = (s_avg * t).exp();
+            let new_disp = decay * (displacement + (velocity - displacement * s_avg) * t);
+            let new_vel = decay
+                * ((velocity - displacement * s_avg)
+                    + s_avg * (displacement + (velocity - displacement * s_avg) * t));
+            (new_disp, new_vel)
+        } else {
+            let c1 = (velocity - displacement * s2) / denom;
+            let c2 = displacement - c1;
+
+            let e1 = (s1 * t).exp();
+            let e2 = (s2 * t).exp();
+
+            let new_disp = c1 * e1 + c2 * e2;
+            let new_vel = c1 * s1 * e1 + c2 * s2 * e2;
+
+            (new_disp, new_vel)
+        }
+    } else {
+        let decay = (-omega0 * t).exp();
+        let a = displacement;
+        let b = velocity + displacement * omega0;
+
+        let new_disp = decay * (a + b * t);
+        let new_vel = decay * (b - omega0 * (a + b * t));
+
+        (new_disp, new_vel)
+    }
+}
 
 impl SpringMassDamperSimulation {
-    pub fn new(tension: f32, mass: f32, friction: f32) -> Self {
+    pub fn new(config: SpringMassDamperSimulationConfig) -> Self {
         Self {
-            tension,
-            mass,
-            friction,
+            tension: config.tension,
+            mass: config.mass,
+            friction: config.friction,
             position: XY::new(0.0, 0.0),
             velocity: XY::new(0.0, 0.0),
             target_position: XY::new(0.0, 0.0),
         }
+    }
+
+    pub fn set_config(&mut self, config: SpringMassDamperSimulationConfig) {
+        self.tension = config.tension;
+        self.mass = config.mass;
+        self.friction = config.friction;
     }
 
     pub fn set_position(&mut self, position: XY<f32>) {
@@ -33,33 +103,37 @@ impl SpringMassDamperSimulation {
         self.target_position = target_position;
     }
 
-    pub fn run(&mut self, dt: f32) -> XY<f32> {
-        if dt == 0.0 {
+    pub fn run(&mut self, dt_ms: f32) -> XY<f32> {
+        if dt_ms <= 0.0 {
             return self.position;
         }
 
-        let mut t = 0.0;
+        let t = dt_ms / 1000.0;
+        let mass = self.mass.max(0.001);
+        let stiffness = self.tension;
+        let damping = self.friction;
 
-        loop {
-            let d = self.target_position - self.position;
-            let spring_force = d * self.tension;
+        let omega0 = (stiffness / mass).sqrt();
+        let zeta = damping / (2.0 * (stiffness * mass).sqrt());
 
-            let damping_force = self.velocity * -self.friction;
+        let disp_x = self.position.x - self.target_position.x;
+        let disp_y = self.position.y - self.target_position.y;
 
-            let total_force = spring_force + damping_force;
+        let (new_disp_x, new_vel_x) = solve_spring_1d(disp_x, self.velocity.x, t, omega0, zeta);
+        let (new_disp_y, new_vel_y) = solve_spring_1d(disp_y, self.velocity.y, t, omega0, zeta);
 
-            let accel = total_force / self.mass.max(0.001);
+        self.position = XY::new(
+            self.target_position.x + new_disp_x,
+            self.target_position.y + new_disp_y,
+        );
+        self.velocity = XY::new(new_vel_x, new_vel_y);
 
-            let tick = (SIMULATION_TICK / 1000.0).min(dt - t);
+        let disp_mag = (new_disp_x * new_disp_x + new_disp_y * new_disp_y).sqrt();
+        let vel_mag = (new_vel_x * new_vel_x + new_vel_y * new_vel_y).sqrt();
 
-            self.velocity = self.velocity + accel * tick;
-            self.position = self.position + self.velocity * tick;
-
-            if t >= dt {
-                break;
-            }
-
-            t = (t + SIMULATION_TICK).min(dt);
+        if disp_mag < REST_DISPLACEMENT_THRESHOLD && vel_mag < REST_VELOCITY_THRESHOLD {
+            self.position = self.target_position;
+            self.velocity = XY::new(0.0, 0.0);
         }
 
         self.position

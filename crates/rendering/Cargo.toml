@@ -1,30 +1,65 @@
 [package]
 name = "cap-rendering"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
+cap-video-decode = { path = "../video-decode" }
+cap-cursor-info = { path = "../cursor-info" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true
-ffmpeg-sys-next.workspace = true
-futures = "0.3.30"
+futures = { workspace = true }
 futures-intrusive = "0.5.0"
+rayon = "1.10"
 image = "0.25.2"
 log = "0.4"
-serde = "1.0.209"
+serde = { workspace = true }
+serde_json = "1.0"
 specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
+glyphon = "0.9.0"
+tracing.workspace = true
+resvg = "0.45"
+tiny-skia = "0.11"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "5.0"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true
+metal = "0.31"
+objc2 = "0.6"
+wgpu-hal = { workspace = true, features = ["metal"] }
+wgpu-core.workspace = true
+foreign-types = "0.5"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu-hal = { workspace = true, features = ["dx12"] }
+wgpu-core.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Threading",
+] }
+windows_0_58 = { package = "windows", version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

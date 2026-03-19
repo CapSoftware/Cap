@@ -1,0 +1,170 @@
+---
+title: "Embeds"
+summary: "Embed Cap recordings in websites and apps"
+tags: "Sharing, Integration"
+---
+
+Cap recordings can be embedded directly in websites, documentation, blogs, and web applications using a simple iframe. Embeds let your audience watch recordings inline without leaving the page.
+
+## Embed URL Format
+
+Every Cap recording has a dedicated embed URL:
+
+```
+https://cap.so/embed/[video-id]
+```
+
+If you are self-hosting Cap, replace `Cap.so` with your custom domain:
+
+```
+https://your-domain.com/embed/[video-id]
+```
+
+You can find the video ID in your recording's share link. For example, if your share link is `https://cap.so/s/abc123`, the embed URL would be `https://cap.so/embed/abc123`.
+
+## Basic Embed
+
+Add this HTML to any webpage to embed a Cap recording:
+
+```html
+<iframe
+  src="https://cap.so/embed/[video-id]"
+  frameborder="0"
+  allowfullscreen
+  width="100%"
+  height="450"
+></iframe>
+```
+
+Replace `[video-id]` with your actual video ID.
+
+## Responsive Embed
+
+To make your embed responsive and maintain the correct aspect ratio across screen sizes, wrap the iframe in a container with a percentage-based padding:
+
+```html
+<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden;">
+  <iframe
+    src="https://cap.so/embed/[video-id]"
+    frameborder="0"
+    allowfullscreen
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: 8px;"
+  ></iframe>
+</div>
+```
+
+The `padding-bottom: 56.25%` value creates a 16:9 aspect ratio container. Adjust this value if your recordings use a different aspect ratio:
+
+| Aspect Ratio | Padding Bottom |
+|--------------|---------------|
+| 16:9 | 56.25% |
+| 4:3 | 75% |
+| 21:9 | 42.86% |
+| 1:1 | 100% |
+
+## Embed in MDX / React
+
+If you are using MDX or a React-based site (Next.js, Gatsby, Docusaurus), you can embed directly with JSX:
+
+```jsx
+<div style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
+  <iframe
+    src="https://cap.so/embed/your-video-id"
+    frameBorder="0"
+    allowFullScreen
+    style={{
+      position: "absolute",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      borderRadius: "8px",
+    }}
+  />
+</div>
+```
+
+## Embed Parameters
+
+You can customize the embed behavior by adding the `autoplay` query parameter to the embed URL.
+
+### Autoplay
+
+Start playing the video automatically when the page loads:
+
+```
+https://cap.so/embed/[video-id]?autoplay=true
+```
+
+**Note**: Most browsers require the video to be muted for autoplay to work. The viewer can unmute manually.
+
+## Embedding in Common Platforms
+
+### Notion
+
+1. In your Notion page, type `/embed`.
+2. Select **Embed**.
+3. Paste the embed URL: `https://cap.so/embed/[video-id]`
+4. The embed will render inline in your Notion page.
+
+### WordPress
+
+Use the HTML block in the WordPress editor:
+
+1. Add a new **Custom HTML** block.
+2. Paste the responsive embed code from above.
+3. Preview or publish the page.
+
+### GitHub README / Wiki
+
+GitHub Markdown does not support iframes directly. Instead, link to the recording's share page:
+
+```markdown
+[Watch the recording](https://cap.so/s/[video-id])
+```
+
+Direct image embedding of thumbnails is not supported, as the thumbnail API returns JSON rather than a direct image.
+
+### Confluence
+
+1. Add an **iframe** macro to your Confluence page.
+2. Set the URL to `https://cap.so/embed/[video-id]`.
+3. Set the width to 100% and height to an appropriate value (e.g., 450px).
+
+### HTML Email
+
+Most email clients do not support iframes. Instead of embedding, include a text link to the recording's share page:
+
+```html
+<a href="https://cap.so/s/[video-id]">Watch recording</a>
+```
+
+Direct image embedding of thumbnails is not supported, as the thumbnail API returns JSON rather than a direct image.
+
+## Styling Tips
+
+- **Border radius** - Add `border-radius` to the iframe style for rounded corners that match your site design.
+- **Max width** - Set a `max-width` on the container to prevent the embed from becoming too wide on large screens.
+- **Shadow** - Add `box-shadow` to the container for a subtle depth effect that makes the embed stand out.
+- **Margin** - Add vertical margin to give the embed breathing room within your content.
+
+```html
+<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 800px; margin: 2rem auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border-radius: 12px;">
+  <iframe
+    src="https://cap.so/embed/[video-id]"
+    frameborder="0"
+    allowfullscreen
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: 12px;"
+  ></iframe>
+</div>
+```
+
+## Troubleshooting
+
+**Embed is not loading**: Verify the video ID is correct and the recording has not been deleted. Check that the embed URL uses `https://`.
+
+**Embed is blocked**: Some corporate networks or browser extensions block iframes. Ask the viewer to try a different network or disable iframe-blocking extensions.
+
+**Aspect ratio looks wrong**: Adjust the `padding-bottom` percentage in the responsive container to match your recording's actual aspect ratio.
+
+**Password-protected videos**: Embeds of password-protected recordings will show a password prompt. The viewer must enter the correct password to watch.

@@ -1,168 +1,243 @@
-import { Router, useCurrentMatches } from "@solidjs/router";
-import { FileRoutes } from "@solidjs/start/router";
-import {
-  createEffect,
-  ErrorBoundary,
-  onCleanup,
-  onMount,
-  Suspense,
-} from "solid-js";
+import { Route, Router, useCurrentMatches } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import {
+	getCurrentWebviewWindow,
+	type WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
+import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
-import titlebar from "./utils/titlebar-state";
+import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import { generalSettingsStore } from "./store";
-import { commands, type AppTheme } from "./utils/tauri";
-import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import { Button } from "@cap/ui-solid";
-import { Toaster } from "solid-toast";
 import { initAnonymousUser } from "./utils/analytics";
+import { type AppTheme, commands } from "./utils/tauri";
+import titlebar from "./utils/titlebar-state";
+
+const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
+const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
+const SetupPage = lazy(() => import("./routes/(window-chrome)/setup"));
+const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
+const SettingsGeneralPage = lazy(
+	() => import("./routes/(window-chrome)/settings/general"),
+);
+const SettingsRecordingsPage = lazy(
+	() => import("./routes/(window-chrome)/settings/recordings"),
+);
+const SettingsScreenshotsPage = lazy(
+	() => import("./routes/(window-chrome)/settings/screenshots"),
+);
+const SettingsHotkeysPage = lazy(
+	() => import("./routes/(window-chrome)/settings/hotkeys"),
+);
+const SettingsChangelogPage = lazy(
+	() => import("./routes/(window-chrome)/settings/changelog"),
+);
+const SettingsFeedbackPage = lazy(
+	() => import("./routes/(window-chrome)/settings/feedback"),
+);
+const SettingsExperimentalPage = lazy(
+	() => import("./routes/(window-chrome)/settings/experimental"),
+);
+const SettingsLicensePage = lazy(
+	() => import("./routes/(window-chrome)/settings/license"),
+);
+const SettingsIntegrationsPage = lazy(
+	() => import("./routes/(window-chrome)/settings/integrations"),
+);
+const SettingsS3ConfigPage = lazy(
+	() => import("./routes/(window-chrome)/settings/integrations/s3-config"),
+);
+const UpgradePage = lazy(() => import("./routes/(window-chrome)/upgrade"));
+const UpdatePage = lazy(() => import("./routes/(window-chrome)/update"));
+const CameraPage = lazy(() => import("./routes/camera"));
+const CaptureAreaPage = lazy(() => import("./routes/capture-area"));
+const DebugPage = lazy(() => import("./routes/debug"));
+const EditorPage = lazy(() => import("./routes/editor"));
+const InProgressRecordingPage = lazy(
+	() => import("./routes/in-progress-recording"),
+);
+const ModeSelectPage = lazy(() => import("./routes/mode-select"));
+const NotificationsPage = lazy(() => import("./routes/notifications"));
+const RecordingsOverlayPage = lazy(() => import("./routes/recordings-overlay"));
+const ScreenshotEditorPage = lazy(() => import("./routes/screenshot-editor"));
+const TargetSelectOverlayPage = lazy(
+	() => import("./routes/target-select-overlay"),
+);
+const WindowCaptureOccluderPage = lazy(
+	() => import("./routes/window-capture-occluder"),
+);
 
 const queryClient = new QueryClient({
-  defaultOptions: {
-    mutations: {
-      onError: (e) => {
-        message(`An error occured, here are the details:\n${e}`);
-      },
-    },
-  },
+	defaultOptions: {
+		queries: {
+			refetchOnWindowFocus: false,
+			refetchOnReconnect: false,
+		},
+		mutations: {
+			onError: (e) => {
+				message(`Error\n${e}`);
+			},
+		},
+	},
 });
 
 export default function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <Suspense>
-        <Inner />
-      </Suspense>
-    </QueryClientProvider>
-  );
+	return (
+		<QueryClientProvider client={queryClient}>
+			<Suspense>
+				<Inner />
+			</Suspense>
+		</QueryClientProvider>
+	);
 }
 
 function Inner() {
-  const currentWindow = getCurrentWebviewWindow();
-  createThemeListener(currentWindow);
+	const currentWindow = getCurrentWebviewWindow();
+	createThemeListener(currentWindow);
 
-  onMount(() => {
-    initAnonymousUser();
-  });
+	onMount(() => {
+		initAnonymousUser();
+	});
 
-  return (
-    <>
-      <Toaster
-        position="top-right"
-        containerStyle={{
-          "margin-top": titlebar.height,
-        }}
-        toastOptions={{
-          duration: 3500,
-          style: {
-            padding: "8px 16px",
-            "border-radius": "15px",
-            "font-size": "1rem",
-          },
-        }}
-      />
-      <ErrorBoundary
-        fallback={(e: Error) => {
-          console.error(e);
-          return (
-            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4 max-sm:gap-y-2 px-8 text-center">
-              <IconCapLogo class="max-sm:size-16" />
-              <h1 class="text-[--text-primary] text-3xl max-sm:text-xl font-bold">
-                An Error Occured
-              </h1>
-              <p class="max-sm:text-sm mb-2">
-                We're very sorry, but something has gone wrong.
-              </p>
-              <div class="flex max-sm:flex-col flex-row max-sm:gap-2 gap-4">
-                <Button
-                  onClick={() => {
-                    writeText(`${e.toString()}\n\n${e.stack}`);
-                  }}
-                >
-                  Copy Error to Clipboard
-                </Button>
-                <Button
-                  onClick={() => {
-                    location.reload();
-                  }}
-                  variant="secondary"
-                >
-                  Reload
-                </Button>
-              </div>
-            </div>
-          );
-        }}
-      >
-        <Router
-          root={(props) => {
-            const matches = useCurrentMatches();
+	return (
+		<>
+			<Toaster
+				position="bottom-right"
+				containerStyle={{
+					"margin-top": titlebar.height,
+				}}
+				toastOptions={{
+					duration: 3500,
+					style: {
+						padding: "8px 16px",
+						"border-radius": "15px",
+						"border-color": "var(--gray-200)",
+						"border-width": "1px",
+						"font-size": "1rem",
+						"background-color": "var(--gray-50)",
+						color: "var(--text-secondary)",
+					},
+				}}
+			/>
+			<CapErrorBoundary>
+				<Router
+					root={(props) => {
+						const matches = useCurrentMatches();
 
-            onMount(() => {
-              for (const match of matches()) {
-                if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-              }
+						onMount(() => {
+							for (const match of matches()) {
+								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+							}
 
-              currentWindow.show();
-            });
+							if (location.pathname !== "/camera") currentWindow.show();
+						});
 
-            return (
-              <Suspense
-                fallback={
-                  (() => {
-                    console.log("Root suspense fallback showing");
-                  }) as any
-                }
-              >
-                {props.children}
-              </Suspense>
-            );
-          }}
-        >
-          <FileRoutes />
-        </Router>
-      </ErrorBoundary>
-    </>
-  );
+						return (
+							<Suspense
+								fallback={
+									(() => {
+										console.log("Root suspense fallback showing");
+									}) as any
+								}
+							>
+								{props.children}
+							</Suspense>
+						);
+					}}
+				>
+					<Route path="/" component={WindowChromeLayout}>
+						<Route path="/" component={NewMainPage} />
+						<Route path="/setup" component={SetupPage} />
+						<Route path="/settings" component={SettingsLayout}>
+							<Route path="/" component={SettingsGeneralPage} />
+							<Route path="/general" component={SettingsGeneralPage} />
+							<Route path="/recordings" component={SettingsRecordingsPage} />
+							<Route path="/screenshots" component={SettingsScreenshotsPage} />
+							<Route path="/hotkeys" component={SettingsHotkeysPage} />
+							<Route path="/changelog" component={SettingsChangelogPage} />
+							<Route path="/feedback" component={SettingsFeedbackPage} />
+							<Route
+								path="/experimental"
+								component={SettingsExperimentalPage}
+							/>
+							<Route path="/license" component={SettingsLicensePage} />
+							<Route
+								path="/integrations"
+								component={SettingsIntegrationsPage}
+							/>
+							<Route
+								path="/integrations/s3-config"
+								component={SettingsS3ConfigPage}
+							/>
+						</Route>
+						<Route path="/upgrade" component={UpgradePage} />
+						<Route path="/update" component={UpdatePage} />
+					</Route>
+					<Route path="/camera" component={CameraPage} />
+					<Route path="/capture-area" component={CaptureAreaPage} />
+					<Route path="/debug" component={DebugPage} />
+					<Route path="/editor" component={EditorPage} />
+					<Route
+						path="/in-progress-recording"
+						component={InProgressRecordingPage}
+					/>
+					<Route path="/mode-select" component={ModeSelectPage} />
+					<Route path="/notifications" component={NotificationsPage} />
+					<Route path="/recordings-overlay" component={RecordingsOverlayPage} />
+					<Route path="/screenshot-editor" component={ScreenshotEditorPage} />
+					<Route
+						path="/target-select-overlay"
+						component={TargetSelectOverlayPage}
+					/>
+					<Route
+						path="/window-capture-occluder"
+						component={WindowCaptureOccluderPage}
+					/>
+				</Router>
+			</CapErrorBoundary>
+		</>
+	);
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {
-  const generalSettings = generalSettingsStore.createQuery();
+	const generalSettings = generalSettingsStore.createQuery();
 
-  createEffect(() => {
-    update(generalSettings.data?.theme ?? null);
-  });
+	createEffect(() => {
+		update(generalSettings.data?.theme ?? null);
+	});
 
-  onMount(async () => {
-    const unlisten = await currentWindow.onThemeChanged((_) =>
-      update(generalSettings.data?.theme)
-    );
-    onCleanup(() => unlisten?.());
-  });
+	onMount(async () => {
+		const unlisten = await currentWindow.onThemeChanged((_) =>
+			update(generalSettings.data?.theme),
+		);
+		onCleanup(() => unlisten?.());
+	});
 
-  function update(appTheme: AppTheme | null | undefined) {
-    if (appTheme === undefined || appTheme === null) return;
-    if (
-      location.pathname === "/camera" ||
-      location.pathname === "/prev-recordings"
-    )
-      return;
+	function update(appTheme: AppTheme | null | undefined) {
+		if (location.pathname === "/camera") return;
 
-    commands.setTheme(appTheme).then(() => {
-      document.documentElement.classList.toggle(
-        "dark",
-        appTheme === "dark" ||
-          window.matchMedia("(prefers-color-scheme: dark)").matches
-      );
-    });
-  }
+		if (appTheme === undefined || appTheme === null) return;
+
+		const isDark =
+			appTheme === "dark" ||
+			(appTheme === "system" &&
+				window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+		try {
+			if (appTheme === "system") {
+				localStorage.removeItem("cap-theme");
+			} else {
+				localStorage.setItem("cap-theme", appTheme);
+			}
+		} catch {}
+
+		commands.setTheme(appTheme).then(() => {
+			document.documentElement.classList.toggle("dark", isDark);
+		});
+	}
 }

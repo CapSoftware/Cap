@@ -4,6 +4,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
+use tracing::error;
 
 #[derive(Serialize, Deserialize, Type, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -22,15 +23,26 @@ pub struct Preset {
 impl PresetsStore {
     fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         match app.store("store").map(|s| s.get("presets")) {
-            Ok(Some(store)) => {
-                // Handle potential deserialization errors gracefully
-                match serde_json::from_value(store) {
-                    Ok(settings) => Ok(Some(settings)),
-                    Err(_) => Err("Failed to deserialize presets store".to_string()),
+            Ok(Some(store)) => match serde_json::from_value(store.clone()) {
+                Ok(settings) => Ok(Some(settings)),
+                Err(e) => {
+                    error!(
+                        "Failed to deserialize presets store: {}. Raw value: {}",
+                        e,
+                        serde_json::to_string_pretty(&store).unwrap_or_default()
+                    );
+                    Ok(None)
                 }
-            }
+            },
             _ => Ok(None),
         }
+    }
+
+    pub fn clear(app: &AppHandle<Wry>) -> Result<(), String> {
+        let store = app.store("store").map_err(|e| e.to_string())?;
+        store.delete("presets");
+        store.save().map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn get_default_preset(app: &AppHandle<Wry>) -> Result<Option<Preset>, String> {
@@ -45,6 +57,7 @@ impl PresetsStore {
         Ok(this.presets.get(default_i as usize).cloned())
     }
 
+    #[allow(unused)]
     pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
         let Ok(store) = app.store("store") else {
             return Err("Store not found".to_string());
@@ -58,6 +71,7 @@ impl PresetsStore {
 }
 
 impl Preset {
+    #[allow(unused)]
     fn resolve(&self, timeline: TimelineConfiguration) -> ProjectConfiguration {
         let mut ret = self.config.clone();
         ret.timeline = Some(timeline);

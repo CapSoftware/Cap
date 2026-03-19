@@ -1,15 +1,17 @@
 mod record;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    io::{Write, stdout},
+    path::PathBuf,
+};
 
-use cap_editor::create_segments;
-use cap_media::sources::get_target_fps;
-use cap_project::{RecordingMeta, XY};
-use cap_rendering::RenderVideoConstants;
+use cap_export::ExporterBase;
+use cap_project::XY;
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
 use serde_json::json;
 use tracing::*;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 struct Cli {
@@ -49,13 +51,32 @@ enum RecordCommands {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    // let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
+        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
+    ));
+
+    registry
+        // .with(layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(true),
+        )
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Export(e) => e.run().await,
+        Commands::Export(e) => {
+            if let Err(e) = e.run().await {
+                eprint!("Export failed: {e}")
+            }
+        }
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Screens) => {
-                let screens = cap_media::sources::list_screens();
+                let screens = cap_recording::screen_capture::list_displays();
 
                 for (i, (screen, target)) in screens.iter().enumerate() {
                     println!(
@@ -67,12 +88,12 @@ screen {}:
                         i,
                         screen.id,
                         screen.name,
-                        get_target_fps(target).unwrap()
+                        target.refresh_rate()
                     );
                 }
             }
             Some(RecordCommands::Windows) => {
-                let windows = cap_media::sources::list_windows();
+                let windows = cap_recording::screen_capture::list_windows();
 
                 for (i, (window, target)) in windows.iter().enumerate() {
                     println!(
@@ -84,39 +105,35 @@ window {}:
                         i,
                         window.id,
                         window.name,
-                        get_target_fps(target).unwrap()
+                        target.display().unwrap().refresh_rate()
                     );
                 }
             }
             Some(RecordCommands::Cameras) => {
-                use nokhwa::{
-                    pixel_format::RgbAFormat,
-                    utils::{ApiBackend, RequestedFormat, RequestedFormatType},
-                    Camera,
-                };
-
-                let cameras = nokhwa::query(ApiBackend::Auto).unwrap();
+                let cameras = cap_camera::list_cameras().collect::<Vec<_>>();
 
                 let mut info = vec![];
                 for camera_info in cameras {
-                    let format = RequestedFormat::new::<RgbAFormat>(
-                        RequestedFormatType::AbsoluteHighestFrameRate,
-                    );
+                    // let format = RequestedFormat::new::<RgbAFormat>(
+                    //     RequestedFormatType::AbsoluteHighestFrameRate,
+                    // );
 
-                    let Ok(mut camera) = Camera::new(camera_info.index().clone(), format) else {
-                        continue;
-                    };
+                    // let Ok(mut camera) = Camera::new(camera_info.index().clone(), format) else {
+                    //     continue;
+                    // };
 
                     info.push(json!({
-                        "index": camera_info.index().to_string(),
-                        "name": camera_info.human_name(),
-                        "pixel_format": camera.frame_format(),
-                        "formats":  camera
-                        		.compatible_camera_formats()
-                          	.unwrap()
-                           	.into_iter()
-                            .map(|f| format!("{}x{}@{}fps", f.resolution().x(), f.resolution().y(), f.frame_rate()))
-                            .collect::<Vec<_>>()
+                        // "model_id": camera_info.model_id().to_string(),
+                        "display_name": camera_info.display_name()
+                        // "index": camera_info.index().to_string(),
+                        // "name": camera_info.human_name(),
+                        // "pixel_format": camera.frame_format(),
+                        // "formats":  camera
+                        // 		.compatible_camera_formats()
+                        //   	.unwrap()
+                        //    	.into_iter()
+                        //     .map(|f| format!("{}x{}@{}fps", f.resolution().x(), f.resolution().y(), f.frame_rate()))
+                        //     .collect::<Vec<_>>()
                     }));
                 }
 
@@ -125,7 +142,6 @@ window {}:
             None => {
                 args.run().await?;
             }
-            _ => {}
         },
     }
 
@@ -139,61 +155,40 @@ struct Export {
 }
 
 impl Export {
-    async fn run(self) {
-        let project = serde_json::from_reader(
-            std::fs::File::open(self.project_path.join("project-config.json")).unwrap(),
-        )
-        .unwrap();
+    async fn run(self) -> Result<(), String> {
+        let exporter_base = ExporterBase::builder(self.project_path)
+            .build()
+            .await
+            .map_err(|v| format!("Exporter build error: {v}"))?;
 
-        let recording_meta = RecordingMeta::load_for_project(&self.project_path).unwrap();
-        let meta = recording_meta.studio_meta().unwrap();
-        let recordings = cap_rendering::ProjectRecordings::new(&recording_meta.project_path, meta);
+        let mut stdout = stdout();
 
-        let render_options = cap_rendering::RenderOptions {
-            screen_size: XY::new(
-                recordings.segments[0].display.width,
-                recordings.segments[0].display.height,
-            ),
-            camera_size: recordings.segments[0]
-                .camera
-                .as_ref()
-                .map(|c| XY::new(c.width, c.height)),
-        };
-        let render_constants = Arc::new(
-            RenderVideoConstants::new(render_options, &recording_meta, meta)
-                .await
-                .unwrap(),
-        );
+        let exporter_output_path = cap_export::mp4::Mp4ExportSettings {
+            fps: 60,
+            resolution_base: XY::new(1920, 1080),
+            compression: cap_export::mp4::ExportCompression::Maximum,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+        }
+        .export(exporter_base, move |_f| {
+            // print!("\rrendered frame {f}");
 
-        let segments = create_segments(&recording_meta, meta).await.unwrap();
-
-        let fps = meta.max_fps();
-        let project_output_path = self.project_path.join("output/result.mp4");
-        let exporter = cap_export::Exporter::new(
-            project,
-            project_output_path.clone(),
-            |_| {},
-            self.project_path.clone(),
-            recording_meta,
-            render_constants,
-            &segments,
-            fps,
-            XY::new(1920, 1080),
-            true,
-        )
+            stdout.flush().unwrap();
+            true
+        })
         .await
-        .unwrap();
-
-        exporter.export_with_custom_muxer().await.unwrap();
+        .map_err(|v| format!("Exporter error: {v}"))?;
 
         let output_path = if let Some(output_path) = self.output_path {
-            std::fs::copy(&project_output_path, &output_path).unwrap();
+            std::fs::copy(&exporter_output_path, &output_path).unwrap();
             output_path
         } else {
-            project_output_path
+            exporter_output_path
         };
 
-        println!("Exported video to '{}'", output_path.display());
+        info!("Exported video to '{}'", output_path.display());
+
+        Ok(())
     }
 }
 

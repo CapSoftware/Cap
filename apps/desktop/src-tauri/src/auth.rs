@@ -6,15 +6,25 @@ use tauri_plugin_store::StoreExt;
 
 use web_api::ManagerExt;
 
-use crate::web_api;
+use crate::{
+    api::{self, Organization},
+    web_api,
+};
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct AuthStore {
-    pub token: String,
+    pub secret: AuthSecret,
     pub user_id: Option<String>,
-    pub expires: i32,
     pub plan: Option<Plan>,
-    pub intercom_hash: Option<String>,
+    #[serde(default)]
+    pub organizations: Vec<Organization>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug)]
+#[serde(untagged)]
+pub enum AuthSecret {
+    ApiKey { api_key: String },
+    Session { token: String, expires: i32 },
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -51,10 +61,10 @@ impl AuthStore {
             return Err("User not authenticated".to_string());
         };
 
-        if let Some(plan) = &auth.plan {
-            if plan.manual {
-                return Ok(());
-            }
+        if let Some(plan) = &auth.plan
+            && plan.manual
+        {
+            return Ok(());
         }
 
         let mut auth = auth;
@@ -63,10 +73,10 @@ impl AuthStore {
             auth.user_id.as_deref().unwrap_or("unknown")
         );
         let response = app
-            .authed_api_request(|client| client.get(web_api::make_url("/api/desktop/plan")))
+            .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
             .await
             .map_err(|e| {
-                println!("Failed to fetch plan: {}", e);
+                println!("Failed to fetch plan: {e}");
                 e.to_string()
             })?;
         println!("Plan fetch response status: {}", response.status());
@@ -79,7 +89,6 @@ impl AuthStore {
         #[derive(Deserialize)]
         struct Response {
             upgraded: bool,
-            intercom_hash: Option<String>,
         }
 
         let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
@@ -87,9 +96,11 @@ impl AuthStore {
         auth.plan = Some(Plan {
             upgraded: plan_response.upgraded,
             last_checked: chrono::Utc::now().timestamp() as i32,
-            manual: auth.plan.as_ref().map_or(false, |p| p.manual),
+            manual: auth.plan.as_ref().is_some_and(|p| p.manual),
         });
-        auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
+        auth.organizations = api::fetch_organizations(app)
+            .await
+            .map_err(|e| e.to_string())?;
 
         Self::set(app, Some(auth))?;
 
@@ -108,16 +119,7 @@ impl AuthStore {
             return Err("Store not found".to_string());
         };
 
-        let value = value.map(|mut auth| {
-            // Set expiration to 100 years in the future
-            auth.expires = (chrono::Utc::now() + chrono::Duration::days(36500)).timestamp() as i32;
-            auth
-        });
-
         store.set("auth", json!(value));
         store.save().map_err(|e| e.to_string())
     }
 }
-
-#[derive(specta::Type, serde::Serialize, tauri_specta::Event, Debug, Clone, serde::Deserialize)]
-pub struct AuthenticationInvalid;

@@ -1,28 +1,33 @@
 "use client";
 
-import * as React from "react";
-import * as SwitchPrimitives from "@radix-ui/react-switch";
-
 import { classNames } from "@cap/utils";
+import * as SwitchPrimitives from "@radix-ui/react-switch";
+import * as React from "react";
 
 const Switch = React.forwardRef<
-  React.ElementRef<typeof SwitchPrimitives.Root>,
-  React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root>
+	React.ElementRef<typeof SwitchPrimitives.Root>,
+	React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root>
 >(({ className, ...props }, ref) => (
-  <SwitchPrimitives.Root
-    className={classNames(
-      "peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-blue-400",
-      className
-    )}
-    {...props}
-    ref={ref}
-  >
-    <SwitchPrimitives.Thumb
-      className={classNames(
-        "pointer-events-none block h-4 w-4 rounded-full bg-white shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border border-gray-400"
-      )}
-    />
-  </SwitchPrimitives.Root>
+	<SwitchPrimitives.Root
+		className={classNames(
+			"peer inline-flex shrink-0 cursor-pointer items-center rounded-full border-transparent transition-colors",
+			"w-11 h-6 p-[0.125rem]",
+			"bg-gray-5 data-[state=checked]:bg-blue-500",
+			"focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500",
+			"disabled:cursor-not-allowed disabled:opacity-40 disabled:bg-gray-4",
+			className,
+		)}
+		{...props}
+		ref={ref}
+	>
+		<SwitchPrimitives.Thumb
+			className={classNames(
+				"pointer-events-none block rounded-full bg-white shadow-md",
+				"size-5 transition-transform",
+				"data-[state=checked]:translate-x-[calc(100%)] data-[state=unchecked]:translate-x-0",
+			)}
+		/>
+	</SwitchPrimitives.Root>
 ));
 Switch.displayName = SwitchPrimitives.Root.displayName;
 

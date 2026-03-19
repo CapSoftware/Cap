@@ -12,7 +12,7 @@
 /// (Electron) https://github.com/electron/electron/blob/38512efd25a159ddc64a54c22ef9eb6dd60064ec/shell/browser/native_window_mac.mm#L1454
 ///
 use objc::{msg_send, sel, sel_impl};
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{Rng, distributions::Alphanumeric};
 use tauri::{Emitter, LogicalPosition, Runtime, Window};
 
 pub struct UnsafeWindowHandle(pub *mut std::ffi::c_void);
@@ -70,12 +70,15 @@ pub fn position_window_controls(
 
 pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>) {
     use cocoa::appkit::NSWindow;
-    use cocoa::base::{id, BOOL};
+    use cocoa::base::{BOOL, id};
     use cocoa::foundation::NSUInteger;
     use objc::runtime::{Object, Sel};
     use std::ffi::c_void;
 
-    let ns_win = window.ns_window().expect("Failed to create window handle");
+    let Ok(ns_win) = window.ns_window() else {
+        tracing::warn!("Failed to get window handle for delegate setup");
+        return;
+    };
 
     // Do the initial positioning
     position_window_controls(UnsafeWindowHandle(ns_win), &controls_inset);
@@ -111,15 +114,14 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         extern "C" fn on_window_did_resize<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    position_window_controls(
-                        UnsafeWindowHandle(
-                            state
-                                .window
-                                .ns_window()
-                                .expect("Failed to get handle to NSWindow"),
-                        ),
-                        &state.controls_inset,
-                    );
+                    if let Ok(window_handle) = state.window.ns_window() {
+                        position_window_controls(
+                            UnsafeWindowHandle(window_handle),
+                            &state.controls_inset,
+                        );
+                    } else {
+                        tracing::warn!("Failed to get handle to NSWindow during resize");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -206,10 +208,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("did-enter-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("did-enter-fullscreen", ()) {
+                        tracing::warn!("Failed to emit did-enter-fullscreen: {err}");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -223,10 +224,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("will-enter-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("will-enter-fullscreen", ()) {
+                        tracing::warn!("Failed to emit will-enter-fullscreen: {err}");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -240,20 +240,18 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("did-exit-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("did-exit-fullscreen", ()) {
+                        tracing::warn!("Failed to emit did-exit-fullscreen: {err}");
+                    }
 
-                    position_window_controls(
-                        UnsafeWindowHandle(
-                            state
-                                .window
-                                .ns_window()
-                                .expect("Failed to get handle to NSWindow"),
-                        ),
-                        &state.controls_inset,
-                    );
+                    if let Ok(window_handle) = state.window.ns_window() {
+                        position_window_controls(
+                            UnsafeWindowHandle(window_handle),
+                            &state.controls_inset,
+                        );
+                    } else {
+                        tracing::warn!("Failed to get handle to NSWindow after exiting fullscreen");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -267,10 +265,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         ) {
             unsafe {
                 with_window_state(this, |state: &mut WindowState<R>| {
-                    state
-                        .window
-                        .emit("will-exit-fullscreen", ())
-                        .expect("Failed to emit event");
+                    if let Err(err) = state.window.emit("will-exit-fullscreen", ()) {
+                        tracing::warn!("Failed to emit will-exit-fullscreen: {err}");
+                    }
                 });
 
                 let super_del: id = *this.get_ivar("super_delegate");
@@ -326,33 +323,33 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
 
         // We need to ensure we have a unique delegate name, otherwise we will panic while trying to create a duplicate
         // delegate with the same name.
-        let delegate_name = format!("windowDelegate_cap_{}_{}", window_label, random_str);
+        let delegate_name = format!("windowDelegate_cap_{window_label}_{random_str}");
 
         ns_win_id.setDelegate_(cocoa::delegate!(&delegate_name, {
             window: id = ns_win_id,
             app_box: *mut c_void = app_box,
             toolbar: id = cocoa::base::nil,
             super_delegate: id = current_delegate,
-            (windowShouldClose:) => on_window_should_close as extern fn(&Object, Sel, id) -> BOOL,
-            (windowWillClose:) => on_window_will_close as extern fn(&Object, Sel, id),
-            (windowDidResize:) => on_window_did_resize::<R> as extern fn(&Object, Sel, id),
-            (windowDidMove:) => on_window_did_move as extern fn(&Object, Sel, id),
-            (windowDidChangeBackingProperties:) => on_window_did_change_backing_properties as extern fn(&Object, Sel, id),
-            (windowDidBecomeKey:) => on_window_did_become_key as extern fn(&Object, Sel, id),
-            (windowDidResignKey:) => on_window_did_resign_key as extern fn(&Object, Sel, id),
-            (draggingEntered:) => on_dragging_entered as extern fn(&Object, Sel, id) -> BOOL,
-            (prepareForDragOperation:) => on_prepare_for_drag_operation as extern fn(&Object, Sel, id) -> BOOL,
-            (performDragOperation:) => on_perform_drag_operation as extern fn(&Object, Sel, id) -> BOOL,
-            (concludeDragOperation:) => on_conclude_drag_operation as extern fn(&Object, Sel, id),
-            (draggingExited:) => on_dragging_exited as extern fn(&Object, Sel, id),
-            (window:willUseFullScreenPresentationOptions:) => on_window_will_use_full_screen_presentation_options as extern fn(&Object, Sel, id, NSUInteger) -> NSUInteger,
-            (windowDidEnterFullScreen:) => on_window_did_enter_full_screen::<R> as extern fn(&Object, Sel, id),
-            (windowWillEnterFullScreen:) => on_window_will_enter_full_screen::<R> as extern fn(&Object, Sel, id),
-            (windowDidExitFullScreen:) => on_window_did_exit_full_screen::<R> as extern fn(&Object, Sel, id),
-            (windowWillExitFullScreen:) => on_window_will_exit_full_screen::<R> as extern fn(&Object, Sel, id),
-            (windowDidFailToEnterFullScreen:) => on_window_did_fail_to_enter_full_screen as extern fn(&Object, Sel, id),
-            (effectiveAppearanceDidChange:) => on_effective_appearance_did_change as extern fn(&Object, Sel, id),
-            (effectiveAppearanceDidChangedOnMainThread:) => on_effective_appearance_did_changed_on_main_thread as extern fn(&Object, Sel, id)
+            (windowShouldClose:) => on_window_should_close as extern "C" fn(&Object, Sel, id) -> BOOL,
+            (windowWillClose:) => on_window_will_close as extern "C" fn(&Object, Sel, id),
+            (windowDidResize:) => on_window_did_resize::<R> as extern "C" fn(&Object, Sel, id),
+            (windowDidMove:) => on_window_did_move as extern "C" fn(&Object, Sel, id),
+            (windowDidChangeBackingProperties:) => on_window_did_change_backing_properties as extern "C" fn(&Object, Sel, id),
+            (windowDidBecomeKey:) => on_window_did_become_key as extern "C" fn(&Object, Sel, id),
+            (windowDidResignKey:) => on_window_did_resign_key as extern "C" fn(&Object, Sel, id),
+            (draggingEntered:) => on_dragging_entered as extern "C" fn(&Object, Sel, id) -> BOOL,
+            (prepareForDragOperation:) => on_prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+            (performDragOperation:) => on_perform_drag_operation as extern "C" fn(&Object, Sel, id) -> BOOL,
+            (concludeDragOperation:) => on_conclude_drag_operation as extern "C" fn(&Object, Sel, id),
+            (draggingExited:) => on_dragging_exited as extern "C" fn(&Object, Sel, id),
+            (window:willUseFullScreenPresentationOptions:) => on_window_will_use_full_screen_presentation_options as extern "C" fn(&Object, Sel, id, NSUInteger) -> NSUInteger,
+            (windowDidEnterFullScreen:) => on_window_did_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+            (windowWillEnterFullScreen:) => on_window_will_enter_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+            (windowDidExitFullScreen:) => on_window_did_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+            (windowWillExitFullScreen:) => on_window_will_exit_full_screen::<R> as extern "C" fn(&Object, Sel, id),
+            (windowDidFailToEnterFullScreen:) => on_window_did_fail_to_enter_full_screen as extern "C" fn(&Object, Sel, id),
+            (effectiveAppearanceDidChange:) => on_effective_appearance_did_change as extern "C" fn(&Object, Sel, id),
+            (effectiveAppearanceDidChangedOnMainThread:) => on_effective_appearance_did_changed_on_main_thread as extern "C" fn(&Object, Sel, id)
         }))
     }
 }

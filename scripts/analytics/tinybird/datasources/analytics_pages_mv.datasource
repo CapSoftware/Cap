@@ -1,0 +1,17 @@
+DESCRIPTION >
+    Aggregated page views per tenant/path.
+
+SCHEMA >
+	tenant_id LowCardinality(String),
+	date Date,
+	pathname String,
+	country LowCardinality(String),
+	region LowCardinality(String),
+	city LowCardinality(String),
+	visits AggregateFunction(uniq, String)
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(date)
+ENGINE_SORTING_KEY (tenant_id, date, country, city, pathname)
+ENGINE_TTL date + INTERVAL 90 DAY
+ENGINE_SETTINGS index_granularity = 256
