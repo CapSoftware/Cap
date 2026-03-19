@@ -41,6 +41,14 @@ pub enum BackgroundSource {
         to: Color,
         #[serde(default = "default_gradient_angle")]
         angle: u16,
+        #[serde(default)]
+        noise_intensity: Option<f32>,
+        #[serde(default)]
+        noise_scale: Option<f32>,
+        #[serde(default)]
+        animated: Option<bool>,
+        #[serde(default)]
+        animation_speed: Option<f32>,
     },
 }
 
