@@ -2010,7 +2010,6 @@ fn generate_zoom_segments_from_clicks_impl(
     let min_segment_duration = config.min_segment_duration;
     let movement_event_distance_threshold = config.movement_event_distance_threshold;
     let movement_window_distance_threshold = config.movement_window_distance_threshold;
-    let auto_zoom_amount = config.zoom_amount;
     let dead_zone_radius = config.dead_zone_radius;
 
     if max_duration <= 0.0 {
@@ -2302,7 +2301,8 @@ fn generate_zoom_segments_from_clicks_impl(
                 }
             }
         }
-        let t = (max_dist / config.intensity_spatial_scale).clamp(0.0, 1.0);
+        let scale = config.intensity_spatial_scale.max(f64::EPSILON);
+        let t = (max_dist / scale).clamp(0.0, 1.0);
         config.max_zoom_amount + t * (config.min_zoom_amount - config.max_zoom_amount)
     }
 
@@ -2390,9 +2390,14 @@ fn project_config_from_recording(
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
-    let settings = GeneralSettingsStore::get(app)
-        .unwrap_or(None)
-        .unwrap_or_default();
+    let settings = match GeneralSettingsStore::get(app) {
+        Ok(Some(s)) => s,
+        Ok(None) => GeneralSettingsStore::default(),
+        Err(e) => {
+            tracing::error!("Failed to load general settings for project config: {e}");
+            GeneralSettingsStore::default()
+        }
+    };
 
     let mut config = default_config.unwrap_or_default();
 
@@ -2430,7 +2435,7 @@ fn project_config_from_recording(
         generate_zoom_segments_from_clicks(
             completed_recording,
             recordings,
-            &settings.auto_zoom_config,
+            &settings.auto_zoom_config.validated(),
         )
     } else {
         Vec::new()
@@ -2699,11 +2704,7 @@ mod tests {
                 active_modifiers: vec![],
             },
         ];
-        let moves = vec![
-            move_event(500.0, 0.1, 0.1),
-            move_event(999.0, 0.5, 0.5),
-            move_event(1500.0, 0.9, 0.9),
-        ];
+        let moves = vec![move_event(999.0, 0.5, 0.5)];
 
         let config = cap_project::AutoZoomConfig {
             ignore_right_clicks: true,
@@ -2712,14 +2713,9 @@ mod tests {
 
         let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
 
-        let has_click_segment = segments.iter().any(|s| {
-            let click_time_secs = 1.0;
-            s.start <= click_time_secs && s.end >= click_time_secs
-        });
-
         assert!(
-            !has_click_segment,
-            "right-click should be filtered out when ignore_right_clicks is true"
+            segments.is_empty(),
+            "right-click only input should produce no segments when ignore_right_clicks is true"
         );
     }
 

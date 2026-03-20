@@ -197,6 +197,10 @@ pub fn apply_edge_snap_to_focus(
     let zoom_amount = segment.amount;
     let edge_snap_ratio = segment.edge_snap_ratio;
 
+    if zoom_amount < f64::EPSILON || edge_snap_ratio <= 0.0 {
+        return focus;
+    }
+
     let viewport_half = 0.5 / zoom_amount;
     let snap_threshold = edge_snap_ratio / zoom_amount;
 

@@ -88,14 +88,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		},
 	);
 
-	const handleConfigChange = <K extends keyof AutoZoomConfig>(
+	const handleConfigChange = async <K extends keyof AutoZoomConfig>(
 		key: K,
 		value: AutoZoomConfig[K],
 	) => {
 		setSettings("autoZoomConfig", key, value);
-		generalSettingsStore.set({
-			autoZoomConfig: { ...settings.autoZoomConfig, [key]: value },
-		});
+		try {
+			await generalSettingsStore.set({
+				autoZoomConfig: { ...settings.autoZoomConfig, [key]: value },
+			});
+		} catch (e) {
+			console.error("Failed to persist auto-zoom config:", e);
+		}
 	};
 
 	const handleChange = async <K extends keyof typeof settings>(

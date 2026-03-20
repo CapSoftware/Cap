@@ -2116,14 +2116,20 @@ async fn generate_zoom_segments_from_clicks(
     app: AppHandle,
     editor_instance: WindowEditorInstance,
 ) -> Result<Vec<ZoomSegment>, String> {
-    let settings = GeneralSettingsStore::get(&app)
-        .unwrap_or(None)
-        .unwrap_or_default();
+    let settings = match GeneralSettingsStore::get(&app) {
+        Ok(Some(s)) => s,
+        Ok(None) => GeneralSettingsStore::default(),
+        Err(e) => {
+            tracing::error!("Failed to load general settings for zoom generation: {e}");
+            GeneralSettingsStore::default()
+        }
+    };
+    let config = settings.auto_zoom_config.validated();
     let meta = editor_instance.meta();
     let recordings = &editor_instance.recordings;
 
     let zoom_segments =
-        recording::generate_zoom_segments_for_project(meta, recordings, &settings.auto_zoom_config);
+        recording::generate_zoom_segments_for_project(meta, recordings, &config);
 
     Ok(zoom_segments)
 }

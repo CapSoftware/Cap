@@ -498,6 +498,17 @@ impl AutoZoomConfig {
     fn default_edge_snap_enabled() -> bool {
         true
     }
+
+    pub fn validated(mut self) -> Self {
+        self.min_zoom_amount = self.min_zoom_amount.max(1.0);
+        self.max_zoom_amount = self.max_zoom_amount.max(1.0);
+        if self.min_zoom_amount > self.max_zoom_amount {
+            std::mem::swap(&mut self.min_zoom_amount, &mut self.max_zoom_amount);
+        }
+        self.zoom_amount = self.zoom_amount.max(1.0);
+        self.intensity_spatial_scale = self.intensity_spatial_scale.max(0.001);
+        self
+    }
 }
 
 impl Default for AutoZoomConfig {
