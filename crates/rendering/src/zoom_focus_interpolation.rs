@@ -80,6 +80,8 @@ impl ZoomFocusInterpolator {
         sim.set_velocity(XY::new(0.0, 0.0));
         sim.set_target_position(initial_pos);
 
+        let mut last_committed_target = initial_pos;
+
         let mut events = vec![SmoothedFocusEvent {
             time: 0.0,
             position: initial_pos,
@@ -99,7 +101,17 @@ impl ZoomFocusInterpolator {
                     cursor.position.coord.x as f32,
                     cursor.position.coord.y as f32,
                 );
-                sim.set_target_position(target);
+                let dx = target.x - last_committed_target.x;
+                let dy = target.y - last_committed_target.y;
+                let dead_zone_radius = if self.screen_spring.dead_zone_radius.is_finite() && self.screen_spring.dead_zone_radius > 0.0 {
+                    self.screen_spring.dead_zone_radius
+                } else {
+                    0.0
+                };
+                if dx * dx + dy * dy > dead_zone_radius * dead_zone_radius {
+                    last_committed_target = target;
+                    sim.set_target_position(target);
+                }
             }
 
             sim.run(SAMPLE_INTERVAL_MS as f32);
@@ -212,4 +224,118 @@ pub fn apply_edge_snap_to_focus(
     };
 
     Coord::new(XY::new(snap_axis(position.0), snap_axis(position.1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::CursorMoveEvent;
+
+    fn make_cursor_events(moves: Vec<(f64, f64, f64)>) -> CursorEvents {
+        CursorEvents {
+            clicks: vec![],
+            moves: moves
+                .into_iter()
+                .map(|(t, x, y)| CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: "default".to_string(),
+                    time_ms: t,
+                    x,
+                    y,
+                })
+                .collect(),
+        }
+    }
+
+    fn run_interpolator(
+        cursor_events: &CursorEvents,
+        dead_zone_radius: f32,
+        duration_secs: f64,
+        sample_times: &[f32],
+    ) -> Vec<(f64, f64)> {
+        let spring = ScreenMovementSpring {
+            dead_zone_radius,
+            ..Default::default()
+        };
+        let mut interp = ZoomFocusInterpolator::new(cursor_events, None, spring, duration_secs);
+        interp.precompute();
+        sample_times
+            .iter()
+            .map(|&t| {
+                let c = interp.interpolate(t);
+                (c.x, c.y)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dead_zone_suppresses_micro_jitter() {
+        let moves: Vec<(f64, f64, f64)> = (0..100)
+            .map(|i| {
+                let t = i as f64 * 20.0;
+                let jitter = (i % 3) as f64 * 0.005;
+                (t, 0.5 + jitter, 0.5 - jitter)
+            })
+            .collect();
+        let events = make_cursor_events(moves);
+
+        let sample_times: Vec<f32> = (0..50).map(|i| i as f32 * 0.04).collect();
+
+        let with_dead_zone = run_interpolator(&events, 0.03, 2.0, &sample_times);
+        let without_dead_zone = run_interpolator(&events, 0.0, 2.0, &sample_times);
+
+        let variance = |pts: &[(f64, f64)]| -> f64 {
+            let mean_x = pts.iter().map(|p| p.0).sum::<f64>() / pts.len() as f64;
+            let mean_y = pts.iter().map(|p| p.1).sum::<f64>() / pts.len() as f64;
+            pts.iter()
+                .map(|p| (p.0 - mean_x).powi(2) + (p.1 - mean_y).powi(2))
+                .sum::<f64>()
+                / pts.len() as f64
+        };
+
+        assert!(
+            variance(&with_dead_zone) <= variance(&without_dead_zone),
+            "dead zone should reduce variance from jitter"
+        );
+    }
+
+    #[test]
+    fn dead_zone_zero_preserves_behavior() {
+        let moves = vec![(0.0, 0.3, 0.3), (500.0, 0.5, 0.5), (1000.0, 0.7, 0.7)];
+        let events = make_cursor_events(moves);
+        let sample_times: Vec<f32> = (0..20).map(|i| i as f32 * 0.1).collect();
+
+        let result = run_interpolator(&events, 0.0, 2.0, &sample_times);
+
+        let last = result.last().unwrap();
+        assert!(
+            (last.0 - 0.7).abs() < 0.05,
+            "with dead_zone=0, spring should track final cursor position, got {}",
+            last.0
+        );
+        assert!(
+            (last.1 - 0.7).abs() < 0.05,
+            "with dead_zone=0, spring should track final cursor position, got {}",
+            last.1
+        );
+    }
+
+    #[test]
+    fn dead_zone_allows_large_movements() {
+        let moves = vec![(0.0, 0.2, 0.2), (500.0, 0.5, 0.5), (1000.0, 0.8, 0.8)];
+        let events = make_cursor_events(moves);
+        let sample_times = vec![0.0, 0.5, 1.0, 1.5];
+
+        let positions = run_interpolator(&events, 0.03, 2.0, &sample_times);
+
+        let start = positions[0];
+        let end = positions[positions.len() - 1];
+        let dist = ((end.0 - start.0).powi(2) + (end.1 - start.1).powi(2)).sqrt();
+
+        assert!(
+            dist > 0.2,
+            "large cursor movements should be tracked even with dead zone, got dist={}",
+            dist
+        );
+    }
 }
