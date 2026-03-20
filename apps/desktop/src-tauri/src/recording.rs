@@ -1989,29 +1989,28 @@ async fn finalize_studio_recording(
     Ok(())
 }
 
-/// Core logic for generating zoom segments based on mouse click events.
-/// This is an experimental feature that automatically creates zoom effects
-/// around user interactions to highlight important moments.
 fn generate_zoom_segments_from_clicks_impl(
     mut clicks: Vec<CursorClickEvent>,
     mut moves: Vec<CursorMoveEvent>,
     max_duration: f64,
+    config: &cap_project::AutoZoomConfig,
 ) -> Vec<ZoomSegment> {
     const STOP_PADDING_SECONDS: f64 = 0.5;
-    const CLICK_GROUP_TIME_THRESHOLD_SECS: f64 = 2.5;
-    const CLICK_GROUP_SPATIAL_THRESHOLD: f64 = 0.15;
-    const CLICK_PRE_PADDING: f64 = 0.4;
-    const CLICK_POST_PADDING: f64 = 1.8;
-    const MOVEMENT_PRE_PADDING: f64 = 0.3;
-    const MOVEMENT_POST_PADDING: f64 = 1.5;
-    const MERGE_GAP_THRESHOLD: f64 = 0.8;
-    const MIN_SEGMENT_DURATION: f64 = 1.0;
     const MOVEMENT_WINDOW_SECONDS: f64 = 1.5;
-    const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.02;
-    const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.08;
-    const AUTO_ZOOM_AMOUNT: f64 = 1.5;
     const SHAKE_FILTER_THRESHOLD: f64 = 0.33;
     const SHAKE_FILTER_WINDOW_MS: f64 = 150.0;
+
+    let click_group_time_threshold_secs = config.click_group_time_threshold;
+    let click_group_spatial_threshold = config.click_group_spatial_threshold;
+    let click_pre_padding = config.click_pre_padding;
+    let click_post_padding = config.click_post_padding;
+    let movement_pre_padding = config.movement_pre_padding;
+    let movement_post_padding = config.movement_post_padding;
+    let merge_gap_threshold = config.merge_gap_threshold;
+    let min_segment_duration = config.min_segment_duration;
+    let movement_event_distance_threshold = config.movement_event_distance_threshold;
+    let movement_window_distance_threshold = config.movement_window_distance_threshold;
+    let dead_zone_radius = config.dead_zone_radius;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -2027,6 +2026,10 @@ fn generate_zoom_segments_from_clicks_impl(
         return Vec::new();
     }
 
+    if config.ignore_right_clicks {
+        clicks.retain(|c| c.cursor_num == 0);
+    }
+
     clicks.sort_by(|a, b| {
         a.time_ms
             .partial_cmp(&b.time_ms)
@@ -2037,6 +2040,32 @@ fn generate_zoom_segments_from_clicks_impl(
             .partial_cmp(&b.time_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    if config.double_click_threshold_ms > 0.0 {
+        let mut i = 0;
+        while i < clicks.len() {
+            if !clicks[i].down {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < clicks.len() {
+                if !clicks[j].down {
+                    j += 1;
+                    continue;
+                }
+                if clicks[j].time_ms - clicks[i].time_ms > config.double_click_threshold_ms {
+                    break;
+                }
+                if clicks[j].cursor_num == clicks[i].cursor_num {
+                    clicks.remove(j);
+                } else {
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+    }
 
     while let Some(index) = clicks.iter().rposition(|c| c.down) {
         let time_secs = clicks[index].time_ms / 1000.0;
@@ -2073,16 +2102,16 @@ fn generate_zoom_segments_from_clicks_impl(
 
         let mut found_group = false;
         for group in click_groups.iter_mut() {
-            let can_join = group.iter().any(|&group_idx| {
+            let time_and_spatial = group.iter().any(|&group_idx| {
                 let group_click = &clicks[group_idx];
                 let group_time = group_click.time_ms / 1000.0;
-                let time_close = (click_time - group_time).abs() < CLICK_GROUP_TIME_THRESHOLD_SECS;
+                let time_close = (click_time - group_time).abs() < click_group_time_threshold_secs;
 
                 let spatial_close = match (click_pos, click_positions.get(&group_idx)) {
                     (Some((x1, y1)), Some((x2, y2))) => {
                         let dx = x1 - x2;
                         let dy = y1 - y2;
-                        (dx * dx + dy * dy).sqrt() < CLICK_GROUP_SPATIAL_THRESHOLD
+                        (dx * dx + dy * dy).sqrt() < click_group_spatial_threshold
                     }
                     _ => true,
                 };
@@ -2090,7 +2119,25 @@ fn generate_zoom_segments_from_clicks_impl(
                 time_close && spatial_close
             });
 
-            if can_join {
+            let in_dead_zone = dead_zone_radius > 0.0 && click_pos.is_some() && {
+                let (cx, cy) = click_pos.unwrap();
+                let group_positions: Vec<(f64, f64)> = group
+                    .iter()
+                    .filter_map(|&gi| click_positions.get(&gi).copied())
+                    .collect();
+                if group_positions.is_empty() {
+                    false
+                } else {
+                    let count = group_positions.len() as f64;
+                    let centroid_x = group_positions.iter().map(|(x, _)| x).sum::<f64>() / count;
+                    let centroid_y = group_positions.iter().map(|(_, y)| y).sum::<f64>() / count;
+                    let dx = cx - centroid_x;
+                    let dy = cy - centroid_y;
+                    (dx * dx + dy * dy).sqrt() < dead_zone_radius
+                }
+            };
+
+            if time_and_spatial || in_dead_zone {
                 group.push(*idx);
                 found_group = true;
                 break;
@@ -2102,7 +2149,7 @@ fn generate_zoom_segments_from_clicks_impl(
         }
     }
 
-    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    let mut intervals: Vec<(f64, f64, Vec<(f64, f64)>)> = Vec::new();
 
     for group in click_groups {
         if group.is_empty() {
@@ -2116,11 +2163,15 @@ fn generate_zoom_segments_from_clicks_impl(
         let group_start = times.iter().cloned().fold(f64::INFINITY, f64::min);
         let group_end = times.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
-        let start = (group_start - CLICK_PRE_PADDING).max(0.0);
-        let end = (group_end + CLICK_POST_PADDING).min(activity_end_limit);
+        let start = (group_start - click_pre_padding).max(0.0);
+        let end = (group_end + click_post_padding).min(activity_end_limit);
 
         if end > start {
-            intervals.push((start, end));
+            let positions: Vec<(f64, f64)> = group
+                .iter()
+                .filter_map(|&idx| click_positions.get(&idx).copied())
+                .collect();
+            intervals.push((start, end, positions));
         }
     }
 
@@ -2199,18 +2250,18 @@ fn generate_zoom_segments_from_clicks_impl(
             window_distance = 0.0;
         }
 
-        let significant_movement = distance >= MOVEMENT_EVENT_DISTANCE_THRESHOLD
-            || window_distance >= MOVEMENT_WINDOW_DISTANCE_THRESHOLD;
+        let significant_movement = distance >= movement_event_distance_threshold
+            || window_distance >= movement_window_distance_threshold;
 
         if !significant_movement {
             continue;
         }
 
-        let start = (time - MOVEMENT_PRE_PADDING).max(0.0);
-        let end = (time + MOVEMENT_POST_PADDING).min(activity_end_limit);
+        let start = (time - movement_pre_padding).max(0.0);
+        let end = (time + movement_post_padding).min(activity_end_limit);
 
         if end > start {
-            intervals.push((start, end));
+            intervals.push((start, end, vec![]));
         }
     }
 
@@ -2220,46 +2271,68 @@ fn generate_zoom_segments_from_clicks_impl(
 
     intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    for interval in intervals {
+    let mut merged: Vec<(f64, f64, Vec<(f64, f64)>)> = Vec::new();
+    for (start, end, positions) in intervals {
         if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + MERGE_GAP_THRESHOLD
+            && start <= last.1 + merge_gap_threshold
         {
-            last.1 = last.1.max(interval.1);
+            last.1 = last.1.max(end);
+            last.2.extend(positions);
             continue;
         }
-        merged.push(interval);
+        merged.push((start, end, positions));
+    }
+
+    fn compute_zoom_amount(positions: &[(f64, f64)], config: &cap_project::AutoZoomConfig) -> f64 {
+        if (config.max_zoom_amount - config.min_zoom_amount).abs() < f64::EPSILON {
+            return config.zoom_amount;
+        }
+        if positions.len() < 2 {
+            return config.max_zoom_amount;
+        }
+        let mut max_dist = 0.0_f64;
+        for i in 0..positions.len() {
+            for j in (i + 1)..positions.len() {
+                let dx = positions[i].0 - positions[j].0;
+                let dy = positions[i].1 - positions[j].1;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > max_dist {
+                    max_dist = dist;
+                }
+            }
+        }
+        let scale = config.intensity_spatial_scale.max(f64::EPSILON);
+        let t = (max_dist / scale).clamp(0.0, 1.0);
+        config.max_zoom_amount + t * (config.min_zoom_amount - config.max_zoom_amount)
     }
 
     merged
         .into_iter()
-        .filter_map(|(start, end)| {
+        .filter_map(|(start, end, positions)| {
             let duration = end - start;
-            if duration < MIN_SEGMENT_DURATION {
+            if duration < min_segment_duration {
                 return None;
             }
 
             Some(ZoomSegment {
                 start,
                 end,
-                amount: AUTO_ZOOM_AMOUNT,
+                amount: compute_zoom_amount(&positions, config),
                 mode: ZoomMode::Auto,
                 glide_direction: GlideDirection::None,
                 glide_speed: 0.5,
                 instant_animation: false,
-                edge_snap_ratio: 0.25,
+                edge_snap_ratio: if config.edge_snap_enabled { 0.25 } else { 0.0 },
             })
         })
         .collect()
 }
 
-/// Generates zoom segments based on mouse click events during recording.
-/// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
     recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
+    config: &cap_project::AutoZoomConfig,
 ) -> Vec<ZoomSegment> {
-    // Build a temporary RecordingMeta so we can use the common implementation
     let recording_meta = RecordingMeta {
         platform: None,
         project_path: recording.project_path.clone(),
@@ -2269,14 +2342,13 @@ pub fn generate_zoom_segments_from_clicks(
         upload: None,
     };
 
-    generate_zoom_segments_for_project(&recording_meta, recordings)
+    generate_zoom_segments_for_project(&recording_meta, recordings, config)
 }
 
-/// Generates zoom segments from clicks for an existing project.
-/// Used in the editor context where we have RecordingMeta.
 pub fn generate_zoom_segments_for_project(
     recording_meta: &RecordingMeta,
     recordings: &ProjectRecordingsMeta,
+    config: &cap_project::AutoZoomConfig,
 ) -> Vec<ZoomSegment> {
     let RecordingMetaInner::Studio(studio_meta) = &recording_meta.inner else {
         return Vec::new();
@@ -2309,7 +2381,7 @@ pub fn generate_zoom_segments_for_project(
         }
     }
 
-    generate_zoom_segments_from_clicks_impl(all_clicks, all_moves, recordings.duration())
+    generate_zoom_segments_from_clicks_impl(all_clicks, all_moves, recordings.duration(), config)
 }
 
 fn project_config_from_recording(
@@ -2318,9 +2390,14 @@ fn project_config_from_recording(
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
-    let settings = GeneralSettingsStore::get(app)
-        .unwrap_or(None)
-        .unwrap_or_default();
+    let settings = match GeneralSettingsStore::get(app) {
+        Ok(Some(s)) => s,
+        Ok(None) => GeneralSettingsStore::default(),
+        Err(e) => {
+            tracing::error!("Failed to load general settings for project config: {e}");
+            GeneralSettingsStore::default()
+        }
+    };
 
     let mut config = default_config.unwrap_or_default();
 
@@ -2355,7 +2432,11 @@ fn project_config_from_recording(
         .collect::<Vec<_>>();
 
     let zoom_segments = if settings.auto_zoom_on_clicks {
-        generate_zoom_segments_from_clicks(completed_recording, recordings)
+        generate_zoom_segments_from_clicks(
+            completed_recording,
+            recordings,
+            &settings.auto_zoom_config.validated(),
+        )
     } else {
         Vec::new()
     };
@@ -2429,8 +2510,12 @@ mod tests {
 
     #[test]
     fn skips_trailing_stop_click() {
-        let segments =
-            generate_zoom_segments_from_clicks_impl(vec![click_event(11_900.0)], vec![], 12.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            vec![click_event(11_900.0)],
+            vec![],
+            12.0,
+            &cap_project::AutoZoomConfig::default(),
+        );
 
         assert!(
             segments.is_empty(),
@@ -2447,7 +2532,12 @@ mod tests {
             move_event(1_940.0, 0.74, 0.78),
         ];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            clicks,
+            moves,
+            20.0,
+            &cap_project::AutoZoomConfig::default(),
+        );
 
         assert!(
             !segments.is_empty(),
@@ -2469,11 +2559,296 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), jitter_moves, 15.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            Vec::new(),
+            jitter_moves,
+            15.0,
+            &cap_project::AutoZoomConfig::default(),
+        );
 
         assert!(
             segments.is_empty(),
             "small jitter should not generate segments"
+        );
+    }
+
+    #[test]
+    fn dead_zone_merges_nearby_clicks() {
+        let clicks = vec![click_event(1_000.0), click_event(5_000.0)];
+        let moves = vec![move_event(999.0, 0.5, 0.5), move_event(4_999.0, 0.55, 0.55)];
+
+        let config = cap_project::AutoZoomConfig {
+            dead_zone_radius: 0.1,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            segments.len() <= 1,
+            "nearby clicks within dead zone should merge into at most 1 segment, got {}",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn dead_zone_allows_distant_clicks() {
+        let clicks = vec![click_event(1_000.0), click_event(5_000.0)];
+        let moves = vec![move_event(999.0, 0.2, 0.2), move_event(4_999.0, 0.8, 0.8)];
+
+        let config = cap_project::AutoZoomConfig {
+            dead_zone_radius: 0.1,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert_eq!(
+            segments.len(),
+            2,
+            "distant clicks outside dead zone should produce 2 separate segments, got {}",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn dead_zone_zero_disables() {
+        let clicks = vec![click_event(1_000.0), click_event(5_000.0)];
+        let moves = vec![move_event(999.0, 0.5, 0.5), move_event(4_999.0, 0.55, 0.55)];
+
+        let config = cap_project::AutoZoomConfig {
+            dead_zone_radius: 0.0,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert_eq!(
+            segments.len(),
+            2,
+            "with dead_zone_radius=0.0, nearby clicks should produce 2 segments, got {}",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn double_click_deduplication() {
+        let double_clicks = vec![
+            CursorClickEvent {
+                down: true,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1000.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1050.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: true,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1200.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 0,
+                cursor_id: "default".to_string(),
+                time_ms: 1250.0,
+                active_modifiers: vec![],
+            },
+        ];
+        let moves = vec![move_event(999.0, 0.5, 0.5)];
+
+        let config = cap_project::AutoZoomConfig {
+            double_click_threshold_ms: 400.0,
+            ..Default::default()
+        };
+
+        let double_segments =
+            generate_zoom_segments_from_clicks_impl(double_clicks, moves.clone(), 20.0, &config);
+
+        let single_clicks = vec![click_event(1000.0)];
+        let single_segments =
+            generate_zoom_segments_from_clicks_impl(single_clicks, moves, 20.0, &config);
+
+        assert_eq!(
+            double_segments.len(),
+            single_segments.len(),
+            "double-click should be deduped to same segment count as single click: double={}, single={}",
+            double_segments.len(),
+            single_segments.len()
+        );
+    }
+
+    #[test]
+    fn right_click_ignored() {
+        let clicks = vec![
+            CursorClickEvent {
+                down: true,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1000.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1050.0,
+                active_modifiers: vec![],
+            },
+        ];
+        let moves = vec![move_event(999.0, 0.5, 0.5)];
+
+        let config = cap_project::AutoZoomConfig {
+            ignore_right_clicks: true,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            segments.is_empty(),
+            "right-click only input should produce no segments when ignore_right_clicks is true"
+        );
+    }
+
+    #[test]
+    fn intensity_tight_cluster_zooms_more() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(1_500.0),
+            click_event(2_000.0),
+        ];
+        let moves = vec![
+            move_event(999.0, 0.50, 0.50),
+            move_event(1_499.0, 0.51, 0.51),
+            move_event(1_999.0, 0.52, 0.52),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            min_zoom_amount: 1.2,
+            max_zoom_amount: 2.5,
+            intensity_spatial_scale: 0.3,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            !segments.is_empty(),
+            "tight cluster should produce at least one segment"
+        );
+        assert!(
+            segments[0].amount > 2.0,
+            "tight cluster should zoom near max, got {}",
+            segments[0].amount
+        );
+    }
+
+    #[test]
+    fn intensity_spread_activity_zooms_less() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(1_500.0),
+            click_event(2_000.0),
+        ];
+        let moves = vec![
+            move_event(999.0, 0.1, 0.1),
+            move_event(1_499.0, 0.5, 0.5),
+            move_event(1_999.0, 0.9, 0.9),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            min_zoom_amount: 1.2,
+            max_zoom_amount: 2.5,
+            intensity_spatial_scale: 0.3,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            !segments.is_empty(),
+            "spread activity should produce at least one segment"
+        );
+        for segment in &segments {
+            assert!(
+                segment.amount < 1.8,
+                "spread activity should zoom closer to min, got {}",
+                segment.amount
+            );
+        }
+    }
+
+    #[test]
+    fn intensity_disabled_when_equal() {
+        let clicks = vec![
+            click_event(1_000.0),
+            click_event(1_500.0),
+            click_event(2_000.0),
+        ];
+        let moves = vec![
+            move_event(999.0, 0.50, 0.50),
+            move_event(1_499.0, 0.51, 0.51),
+            move_event(1_999.0, 0.52, 0.52),
+        ];
+
+        let config = cap_project::AutoZoomConfig {
+            min_zoom_amount: 1.5,
+            max_zoom_amount: 1.5,
+            zoom_amount: 1.5,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(!segments.is_empty(), "should produce at least one segment");
+        for segment in &segments {
+            assert!(
+                (segment.amount - 1.5).abs() < f64::EPSILON,
+                "when min == max, all segments should get exactly 1.5x, got {}",
+                segment.amount
+            );
+        }
+    }
+
+    #[test]
+    fn right_click_allowed_when_disabled() {
+        let clicks = vec![
+            CursorClickEvent {
+                down: true,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1000.0,
+                active_modifiers: vec![],
+            },
+            CursorClickEvent {
+                down: false,
+                cursor_num: 1,
+                cursor_id: "default".to_string(),
+                time_ms: 1050.0,
+                active_modifiers: vec![],
+            },
+        ];
+        let moves = vec![move_event(999.0, 0.5, 0.5)];
+
+        let config = cap_project::AutoZoomConfig {
+            ignore_right_clicks: false,
+            ..Default::default()
+        };
+
+        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, &config);
+
+        assert!(
+            !segments.is_empty(),
+            "right-click should produce segments when ignore_right_clicks is false"
         );
     }
 }

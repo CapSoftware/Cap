@@ -463,6 +463,87 @@ impl Default for ScreenMovementSpring {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoZoomConfig {
+    pub zoom_amount: f64,
+    pub click_group_time_threshold: f64,
+    pub click_group_spatial_threshold: f64,
+    pub click_pre_padding: f64,
+    pub click_post_padding: f64,
+    pub movement_pre_padding: f64,
+    pub movement_post_padding: f64,
+    pub merge_gap_threshold: f64,
+    pub min_segment_duration: f64,
+    pub movement_event_distance_threshold: f64,
+    pub movement_window_distance_threshold: f64,
+    pub dead_zone_radius: f64,
+    pub double_click_threshold_ms: f64,
+    pub ignore_right_clicks: bool,
+    #[serde(default = "AutoZoomConfig::default_min_zoom_amount")]
+    pub min_zoom_amount: f64,
+    #[serde(default = "AutoZoomConfig::default_max_zoom_amount")]
+    pub max_zoom_amount: f64,
+    #[serde(default = "AutoZoomConfig::default_intensity_spatial_scale")]
+    pub intensity_spatial_scale: f64,
+    #[serde(default = "AutoZoomConfig::default_edge_snap_enabled")]
+    pub edge_snap_enabled: bool,
+}
+
+impl AutoZoomConfig {
+    fn default_min_zoom_amount() -> f64 {
+        1.2
+    }
+
+    fn default_max_zoom_amount() -> f64 {
+        2.5
+    }
+
+    fn default_intensity_spatial_scale() -> f64 {
+        0.3
+    }
+
+    fn default_edge_snap_enabled() -> bool {
+        true
+    }
+
+    pub fn validated(mut self) -> Self {
+        self.min_zoom_amount = self.min_zoom_amount.max(1.0);
+        self.max_zoom_amount = self.max_zoom_amount.max(1.0);
+        if self.min_zoom_amount > self.max_zoom_amount {
+            std::mem::swap(&mut self.min_zoom_amount, &mut self.max_zoom_amount);
+        }
+        self.zoom_amount = self.zoom_amount.max(1.0);
+        self.intensity_spatial_scale = self.intensity_spatial_scale.max(0.001);
+        self
+    }
+}
+
+impl Default for AutoZoomConfig {
+    fn default() -> Self {
+        Self {
+            zoom_amount: 1.5,
+            click_group_time_threshold: 2.5,
+            click_group_spatial_threshold: 0.15,
+            click_pre_padding: 0.4,
+            click_post_padding: 1.8,
+            movement_pre_padding: 0.3,
+            movement_post_padding: 1.5,
+            merge_gap_threshold: 0.8,
+            min_segment_duration: 1.0,
+            movement_event_distance_threshold: 0.02,
+            movement_window_distance_threshold: 0.08,
+            dead_zone_radius: 0.1,
+            double_click_threshold_ms: 400.0,
+            ignore_right_clicks: true,
+            min_zoom_amount: Self::default_min_zoom_amount(),
+            max_zoom_amount: Self::default_max_zoom_amount(),
+            intensity_spatial_scale: Self::default_intensity_spatial_scale(),
+            edge_snap_enabled: Self::default_edge_snap_enabled(),
+        }
+    }
+}
+
 impl CursorAnimationStyle {
     pub fn preset(self) -> Option<CursorSmoothingPreset> {
         match self {

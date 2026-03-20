@@ -189,7 +189,6 @@ impl ZoomFocusInterpolator {
     }
 }
 
-#[allow(dead_code)]
 pub fn apply_edge_snap_to_focus(
     focus: Coord<RawDisplayUVSpace>,
     segment: &ZoomSegment,
@@ -197,6 +196,10 @@ pub fn apply_edge_snap_to_focus(
     let position = (focus.x, focus.y);
     let zoom_amount = segment.amount;
     let edge_snap_ratio = segment.edge_snap_ratio;
+
+    if zoom_amount < f64::EPSILON || edge_snap_ratio <= 0.0 {
+        return focus;
+    }
 
     let viewport_half = 0.5 / zoom_amount;
     let snap_threshold = edge_snap_ratio / zoom_amount;
