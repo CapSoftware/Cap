@@ -4079,6 +4079,12 @@ async fn create_editor_instance_impl(
                 is_software_adapter: shared.is_software_adapter,
             });
 
+    let avatar_mode = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|s| s.avatar_mode)
+        .unwrap_or(false);
+
     let instance = {
         let app = app.clone();
         EditorInstance::new(
@@ -4088,6 +4094,7 @@ async fn create_editor_instance_impl(
             },
             frame_cb,
             shared_device,
+            avatar_mode,
         )
         .await?
     };

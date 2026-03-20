@@ -1,4 +1,5 @@
 use crate::editor_window::{OptionalWindowEditorInstance, WindowEditorInstance};
+use crate::general_settings::GeneralSettingsStore;
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
@@ -48,9 +49,11 @@ async fn do_export(
     settings: &ExportSettings,
     progress: &tauri::ipc::Channel<FramesRendered>,
     force_ffmpeg: bool,
+    avatar_mode: bool,
 ) -> Result<PathBuf, String> {
     let exporter_base = ExporterBase::builder(project_path.to_path_buf())
         .with_force_ffmpeg_decoder(force_ffmpeg)
+        .with_avatar_mode(avatar_mode)
         .build()
         .await
         .map_err(|e| e.to_string())?;
@@ -99,14 +102,21 @@ fn is_frame_decode_error(error: &str) -> bool {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(progress, editor))]
+#[instrument(skip(app, progress, editor))]
 pub async fn export_video(
+    app: tauri::AppHandle,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let force_ffmpeg = false;
+
+    let avatar_mode = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|s| s.avatar_mode)
+        .unwrap_or(false);
 
     let _guard = if let Some(ref ed) = *editor {
         ed.export_active.store(true, Ordering::Release);
@@ -116,7 +126,14 @@ pub async fn export_video(
         None
     };
 
-    let result = do_export(&project_path, &settings, &progress, force_ffmpeg).await;
+    let result = do_export(
+        &project_path,
+        &settings,
+        &progress,
+        force_ffmpeg,
+        avatar_mode,
+    )
+    .await;
 
     match result {
         Ok(path) => {
@@ -129,7 +146,8 @@ pub async fn export_video(
                 e
             );
 
-            let retry_result = do_export(&project_path, &settings, &progress, true).await;
+            let retry_result =
+                do_export(&project_path, &settings, &progress, true, avatar_mode).await;
 
             match retry_result {
                 Ok(path) => {
@@ -253,6 +271,7 @@ fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
 #[specta::specta]
 #[instrument(skip_all)]
 pub async fn generate_export_preview(
+    app: tauri::AppHandle,
     project_path: PathBuf,
     frame_time: f64,
     settings: ExportPreviewSettings,
@@ -260,6 +279,12 @@ pub async fn generate_export_preview(
     use base64::{Engine, engine::general_purpose::STANDARD};
     use cap_editor::create_segments;
     use std::time::Instant;
+
+    let avatar_mode = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|s| s.avatar_mode)
+        .unwrap_or(false);
 
     let recording_meta = RecordingMeta::load_for_project(&project_path)
         .map_err(|e| format!("Failed to load recording meta: {e}"))?;
@@ -275,15 +300,17 @@ pub async fn generate_export_preview(
             .map_err(|e| format!("Failed to load recordings: {e}"))?,
     );
 
-    let render_constants = Arc::new(
-        RenderVideoConstants::new(
+    let render_constants = {
+        let mut rc = RenderVideoConstants::new(
             &recordings.segments,
             recording_meta.clone(),
             (**studio_meta).clone(),
         )
         .await
-        .map_err(|e| format!("Failed to create render constants: {e}"))?,
-    );
+        .map_err(|e| format!("Failed to create render constants: {e}"))?;
+        rc.options.avatar_mode = avatar_mode;
+        Arc::new(rc)
+    };
 
     let segments = create_segments(&recording_meta, studio_meta, false)
         .await
@@ -358,6 +385,10 @@ pub async fn generate_export_preview(
         &render_constants.queue,
         render_constants.is_software_adapter,
     );
+
+    if render_constants.options.avatar_mode {
+        layers.set_avatar_enabled(&render_constants.device, true);
+    }
 
     let frame = frame_renderer
         .render_immediate(
@@ -504,6 +535,10 @@ pub async fn generate_export_preview_fast(
         &editor.render_constants.queue,
         editor.render_constants.is_software_adapter,
     );
+
+    if editor.render_constants.options.avatar_mode {
+        layers.set_avatar_enabled(&editor.render_constants.device, true);
+    }
 
     let frame = frame_renderer
         .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)

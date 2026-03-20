@@ -49,11 +49,14 @@ pub fn start_renderer_layers_creation(
     std::thread::Builder::new()
         .name("renderer-layers-init".into())
         .spawn(move || {
-            let layers = RendererLayers::new_with_options(
+            let mut layers = RendererLayers::new_with_options(
                 &constants.device,
                 &constants.queue,
                 constants.is_software_adapter,
             );
+            if constants.options.avatar_mode {
+                layers.set_avatar_enabled(&constants.device, true);
+            }
             let _ = layers_tx.send(layers);
         })
         .expect("failed to spawn renderer layers init thread");

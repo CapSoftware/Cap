@@ -96,6 +96,7 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
         shared_device: Option<SharedWgpuDevice>,
+        avatar_mode: bool,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
@@ -251,22 +252,24 @@ impl EditorInstance {
         )?);
 
         let render_constants = if let Some(shared) = shared_device {
-            let rc = RenderVideoConstants::new_with_device(
+            let mut rc = RenderVideoConstants::new_with_device(
                 shared,
                 &recordings.segments,
                 recording_meta.clone(),
                 (**meta).clone(),
             )
             .map_err(|e| format!("Failed to create render constants: {e}"))?;
+            rc.options.avatar_mode = avatar_mode;
             Arc::new(rc)
         } else {
-            let rc = RenderVideoConstants::new(
+            let mut rc = RenderVideoConstants::new(
                 &recordings.segments,
                 recording_meta.clone(),
                 (**meta).clone(),
             )
             .await
             .map_err(|e| format!("Failed to create render constants: {e}"))?;
+            rc.options.avatar_mode = avatar_mode;
             Arc::new(rc)
         };
 

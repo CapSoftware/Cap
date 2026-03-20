@@ -20,7 +20,7 @@ use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
 pub mod avatar;
-mod avatar_smoothing;
+pub mod avatar_smoothing;
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
@@ -41,6 +41,7 @@ pub mod yuv_converter;
 mod zoom;
 pub mod zoom_focus_interpolation;
 
+pub use cap_face_tracking;
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame};
@@ -127,6 +128,7 @@ fn rounding_type_value(style: CornerStyle) -> f32 {
 pub struct RenderOptions {
     pub camera_size: Option<XY<u32>>,
     pub screen_size: XY<u32>,
+    pub avatar_mode: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -435,6 +437,10 @@ pub async fn render_video_to_channel(
         constants.is_software_adapter,
     );
 
+    if constants.options.avatar_mode {
+        layers.set_avatar_enabled(&constants.device, true);
+    }
+
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
         let camera_dims = first_segment.decoders.camera_video_dimensions();
@@ -726,6 +732,10 @@ pub async fn render_video_to_channel_nv12(
         &constants.queue,
         constants.is_software_adapter,
     );
+
+    if constants.options.avatar_mode {
+        layers.set_avatar_enabled(&constants.device, true);
+    }
 
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
@@ -1080,6 +1090,7 @@ impl RenderVideoConstants {
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
+            avatar_mode: false,
         };
 
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
@@ -1138,6 +1149,7 @@ impl RenderVideoConstants {
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
+            avatar_mode: false,
         };
 
         let instance = create_wgpu_instance().await;

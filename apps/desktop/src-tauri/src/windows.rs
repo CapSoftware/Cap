@@ -694,10 +694,15 @@ impl ShowCapWindow {
                         };
 
                         if enable_native_camera_preview {
+                            let avatar_mode = GeneralSettingsStore::get(app)
+                                .ok()
+                                .flatten()
+                                .map(|s| s.avatar_mode)
+                                .unwrap_or(false);
                             let camera_feed = app_state.camera_feed.clone();
                             if let Err(err) = app_state
                                 .camera_preview
-                                .init_window(window.clone(), camera_feed)
+                                .init_window(window.clone(), camera_feed, avatar_mode)
                                 .await
                             {
                                 error!(
@@ -774,10 +779,15 @@ impl ShowCapWindow {
                     };
 
                     if enable_native_camera_preview && !app_state.camera_preview.is_initialized() {
+                        let avatar_mode = GeneralSettingsStore::get(app)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.avatar_mode)
+                            .unwrap_or(false);
                         let camera_feed = app_state.camera_feed.clone();
                         if let Err(err) = app_state
                             .camera_preview
-                            .init_window(window.clone(), camera_feed)
+                            .init_window(window.clone(), camera_feed, avatar_mode)
                             .await
                         {
                             error!(
@@ -1670,10 +1680,15 @@ impl ShowCapWindow {
                     }
 
                     if enable_native_camera_preview {
+                        let avatar_mode = GeneralSettingsStore::get(app)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.avatar_mode)
+                            .unwrap_or(false);
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
                             .camera_preview
-                            .init_window(window.clone(), camera_feed)
+                            .init_window(window.clone(), camera_feed, avatar_mode)
                             .await
                         {
                             error!(

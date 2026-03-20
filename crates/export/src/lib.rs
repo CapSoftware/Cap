@@ -53,6 +53,7 @@ pub struct ExporterBuilder {
     config: Option<ProjectConfiguration>,
     output_path: Option<PathBuf>,
     force_ffmpeg_decoder: bool,
+    avatar_mode: bool,
 }
 
 impl ExporterBuilder {
@@ -68,6 +69,11 @@ impl ExporterBuilder {
 
     pub fn with_force_ffmpeg_decoder(mut self, force: bool) -> Self {
         self.force_ffmpeg_decoder = force;
+        self
+    }
+
+    pub fn with_avatar_mode(mut self, avatar_mode: bool) -> Self {
+        self.avatar_mode = avatar_mode;
         self
     }
 
@@ -91,15 +97,17 @@ impl ExporterBuilder {
                 .map_err(Error::RecordingsMeta)?,
         );
 
-        let render_constants = Arc::new(
-            RenderVideoConstants::new(
+        let render_constants = {
+            let mut rc = RenderVideoConstants::new(
                 &recordings.segments,
                 recording_meta.clone(),
                 studio_meta.clone(),
             )
             .await
-            .map_err(Error::RendererSetup)?,
-        );
+            .map_err(Error::RendererSetup)?;
+            rc.options.avatar_mode = self.avatar_mode;
+            Arc::new(rc)
+        };
 
         let segments =
             cap_editor::create_segments(&recording_meta, studio_meta, self.force_ffmpeg_decoder)
@@ -157,6 +165,7 @@ impl ExporterBase {
             config: None,
             output_path: None,
             force_ffmpeg_decoder: false,
+            avatar_mode: false,
         }
     }
 }

@@ -14,7 +14,7 @@ pub struct AvatarUniforms {
     pub breathing_phase: f32,
     pub bounce: f32,
     pub bg_color: [f32; 4],
-    pub _padding: [f32; 2],
+    pub _padding: [f32; 4],
 }
 
 impl Default for AvatarUniforms {
@@ -27,7 +27,7 @@ impl Default for AvatarUniforms {
             breathing_phase: 0.0,
             bounce: 0.0,
             bg_color: [0.15, 0.15, 0.18, 1.0],
-            _padding: [0.0; 2],
+            _padding: [0.0; 4],
         }
     }
 }
@@ -253,7 +253,7 @@ impl AvatarRenderer {
             breathing_phase,
             bounce,
             bg_color: [0.15, 0.15, 0.18, 1.0],
-            _padding: [0.0; 2],
+            _padding: [0.0; 4],
         };
 
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::bytes_of(&uniforms));

@@ -6,7 +6,7 @@ struct AvatarUniforms {
     breathing_phase: f32,
     bounce: f32,
     bg_color: vec4<f32>,
-    _padding: vec2<f32>,
+    _padding: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: AvatarUniforms;
