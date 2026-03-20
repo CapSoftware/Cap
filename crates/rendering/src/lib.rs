@@ -20,6 +20,7 @@ use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
 pub mod avatar;
+mod avatar_smoothing;
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
@@ -2611,6 +2612,7 @@ pub struct RendererLayers {
     avatar_face_pose: cap_face_tracking::FacePose,
     avatar_enabled: bool,
     face_tracker: Option<cap_face_tracking::FaceTracker>,
+    face_pose_smoother: Option<avatar_smoothing::FacePoseSmoother>,
 }
 
 impl RendererLayers {
@@ -2654,6 +2656,7 @@ impl RendererLayers {
             avatar_face_pose: cap_face_tracking::FacePose::default(),
             avatar_enabled: false,
             face_tracker: None,
+            face_pose_smoother: None,
         }
     }
 
@@ -2686,6 +2689,7 @@ impl RendererLayers {
         if enabled && self.avatar.is_none() {
             self.avatar = Some(crate::avatar::AvatarRenderer::new(device));
             self.face_tracker = Some(cap_face_tracking::FaceTracker::new());
+            self.face_pose_smoother = Some(avatar_smoothing::FacePoseSmoother::new());
         }
     }
 
@@ -2737,7 +2741,11 @@ impl RendererLayers {
                         camera_frame.width(),
                         camera_frame.height(),
                     );
-                    self.avatar_face_pose = raw_pose;
+                    if let Some(ref mut smoother) = self.face_pose_smoother {
+                        self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
+                    } else {
+                        self.avatar_face_pose = raw_pose;
+                    }
                 }
             }
             if let Some(ref mut avatar) = self.avatar {
@@ -2855,7 +2863,11 @@ impl RendererLayers {
                         camera_frame.width(),
                         camera_frame.height(),
                     );
-                    self.avatar_face_pose = raw_pose;
+                    if let Some(ref mut smoother) = self.face_pose_smoother {
+                        self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
+                    } else {
+                        self.avatar_face_pose = raw_pose;
+                    }
                 }
             }
             if let Some(ref mut avatar) = self.avatar {
