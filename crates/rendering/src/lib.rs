@@ -3055,6 +3055,7 @@ impl RendererLayers {
                         camera_frame.data(),
                         camera_frame.width(),
                         camera_frame.height(),
+                        camera_frame.width() as usize * 4,
                     );
                     if let Some(ref mut smoother) = self.face_pose_smoother {
                         self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
@@ -3177,6 +3178,7 @@ impl RendererLayers {
                         camera_frame.data(),
                         camera_frame.width(),
                         camera_frame.height(),
+                        camera_frame.width() as usize * 4,
                     );
                     if let Some(ref mut smoother) = self.face_pose_smoother {
                         self.avatar_face_pose = smoother.update(&raw_pose, 33.0);

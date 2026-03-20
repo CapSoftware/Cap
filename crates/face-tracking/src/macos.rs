@@ -14,23 +14,26 @@ impl FaceTracker {
         Self { landmarks_request }
     }
 
-    pub fn track(&mut self, rgba_data: &[u8], width: u32, height: u32) -> FacePose {
-        match self.track_inner(rgba_data, width, height) {
+    pub fn track(&mut self, rgba_data: &[u8], width: u32, height: u32, stride: usize) -> FacePose {
+        match self.track_inner(rgba_data, width, height, stride) {
             Some(pose) => pose,
             None => FacePose::default(),
         }
     }
 
-    fn track_inner(&mut self, rgba_data: &[u8], width: u32, height: u32) -> Option<FacePose> {
+    fn track_inner(&mut self, rgba_data: &[u8], width: u32, height: u32, stride: usize) -> Option<FacePose> {
         let w = width as usize;
         let h = height as usize;
-        let src_row_bytes = w * 4;
+        let src_row_bytes = if stride > 0 { stride } else { w * 4 };
         let expected_len = src_row_bytes * h;
         if rgba_data.len() < expected_len {
             tracing::warn!(
-                "RGBA data too small: {} < {}",
+                "RGBA data too small: {} < {} (w={}, h={}, stride={})",
                 rgba_data.len(),
-                expected_len
+                expected_len,
+                w,
+                h,
+                src_row_bytes
             );
             return None;
         }

@@ -24,7 +24,7 @@ impl FaceTracker {
         Self
     }
 
-    pub fn track(&mut self, _rgba_data: &[u8], _width: u32, _height: u32) -> FacePose {
+    pub fn track(&mut self, _rgba_data: &[u8], _width: u32, _height: u32, _stride: usize) -> FacePose {
         FacePose::default()
     }
 }

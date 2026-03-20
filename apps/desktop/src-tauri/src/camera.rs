@@ -781,6 +781,7 @@ impl Renderer {
                                 tracking_frame.data(0),
                                 tracking_width,
                                 tracking_height,
+                                tracking_frame.stride(0),
                             );
                             if let Some(ref mut smoother) = self.face_pose_smoother {
                                 self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
