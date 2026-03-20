@@ -26,8 +26,16 @@ import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createLazySignal } from "~/utils/socket";
+import { createRive } from "~/utils/rive";
 import { commands, events } from "~/utils/tauri";
 import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
+
+let avatarRivAsset: string | undefined;
+try {
+	avatarRivAsset = new URL("../assets/rive/avatar.riv", import.meta.url).href;
+} catch {
+	avatarRivAsset = undefined;
+}
 
 type CameraWindowShape = "round" | "square" | "full";
 type CameraWindowState = {
@@ -101,7 +109,11 @@ export default function () {
 	const isNativePreviewEnabled =
 		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
 		false;
-	const avatarMode = () => generalSettings.data?.avatarMode ?? false;
+	const avatarMode = () => {
+		const val = generalSettings.data?.avatarMode ?? false;
+		console.log("[Camera] avatarMode =", val, "nativePreview =", isNativePreviewEnabled);
+		return val;
+	};
 
 	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
 
@@ -212,7 +224,7 @@ function drawClawdShape(ctx: CanvasRenderingContext2D, s: number, pad: number) {
 }
 
 function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
-	let canvasRef: HTMLCanvasElement | undefined;
+	let fallbackCanvasRef: HTMLCanvasElement | undefined;
 	const [faceData, setFaceData] = createSignal({
 		headPitch: 0,
 		headYaw: 0,
@@ -222,9 +234,33 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		rightEyeOpen: 1,
 		confidence: 0,
 	});
+	const [useRive, setUseRive] = createSignal(false);
+
+	let riveInputs: Record<string, { value: number | boolean }> = {};
+
+	const { rive, RiveComponent } = createRive(() => ({
+		src: avatarRivAsset,
+		autoplay: true,
+		stateMachines: "State Machine 1",
+		onLoad: () => {
+			console.log("[Camera] Rive avatar loaded");
+			const inputs = rive()?.stateMachineInputs("State Machine 1");
+			if (inputs) {
+				for (const input of inputs) {
+					riveInputs[input.name] = input;
+				}
+				console.log("[Camera] Rive inputs:", Object.keys(riveInputs));
+			}
+			setUseRive(true);
+		},
+		onLoadError: () => {
+			console.log("[Camera] Rive load failed, using Canvas2D fallback");
+			setUseRive(false);
+		},
+	}));
 
 	createTauriEventListener(events.faceTrackingUpdate, (payload) => {
-		setFaceData({
+		const data = {
 			headPitch: payload.head_pitch,
 			headYaw: payload.head_yaw,
 			headRoll: payload.head_roll,
@@ -232,90 +268,80 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			leftEyeOpen: payload.left_eye_open,
 			rightEyeOpen: payload.right_eye_open,
 			confidence: payload.confidence,
-		});
+		};
+		setFaceData(data);
+
+		if (useRive()) {
+			if (riveInputs.mouth_open) riveInputs.mouth_open.value = data.mouthOpen;
+			if (riveInputs.left_eye_open) riveInputs.left_eye_open.value = data.leftEyeOpen;
+			if (riveInputs.right_eye_open) riveInputs.right_eye_open.value = data.rightEyeOpen;
+			if (riveInputs.head_yaw) riveInputs.head_yaw.value = data.headYaw;
+			if (riveInputs.head_pitch) riveInputs.head_pitch.value = data.headPitch;
+			if (riveInputs.head_roll) riveInputs.head_roll.value = data.headRoll;
+		}
 	});
 
 	onMount(() => {
 		getCurrentWindow().show();
 
-		if (!canvasRef) return;
-		const ctx = canvasRef.getContext("2d");
-		if (!ctx) return;
+		if (!useRive()) {
+			const canvas = fallbackCanvasRef;
+			if (!canvas) return;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
 
-		let animationId: number;
+			let animationId: number;
+			const draw = () => {
+				if (!canvas || useRive()) return;
+				const data = faceData();
+				const w = canvas.width;
+				const h = canvas.height;
+				ctx.clearRect(0, 0, w, h);
 
-		const draw = () => {
-			if (!canvasRef) return;
-			const data = faceData();
-			const w = canvasRef.width;
-			const h = canvasRef.height;
-			ctx.clearRect(0, 0, w, h);
+				ctx.fillStyle = "#262629";
+				ctx.fillRect(0, 0, w, h);
 
-			ctx.fillStyle = "#262629";
-			ctx.fillRect(0, 0, w, h);
+				ctx.save();
+				ctx.translate(w / 2, h / 2);
+				ctx.rotate(data.headRoll * 0.25);
+				ctx.translate(data.headYaw * 15, data.headPitch * 10);
 
-			ctx.save();
-			ctx.translate(w / 2, h / 2);
+				const breath = 1 + Math.sin(Date.now() * 0.003) * 0.01;
+				ctx.scale(breath, breath);
 
-			ctx.rotate(data.headRoll * 0.25);
-			ctx.translate(data.headYaw * 15, data.headPitch * 10);
+				const s = Math.min(w, h) * 0.35;
 
-			const breath = 1 + Math.sin(Date.now() * 0.003) * 0.01;
-			ctx.scale(breath, breath);
+				ctx.fillStyle = "#FFFFFF";
+				drawClawdShape(ctx, s, 4);
+				ctx.fillStyle = "#D4845A";
+				drawClawdShape(ctx, s, 0);
 
-			const s = Math.min(w, h) * 0.35;
+				const eyeY = -s * 0.2;
+				const eyeSpacing = s * 0.35;
+				const eyeSize = s * 0.14;
 
-			ctx.fillStyle = "#FFFFFF";
-			drawClawdShape(ctx, s, 4);
+				ctx.fillStyle = "#111111";
+				const leftEyeH = eyeSize * Math.max(data.leftEyeOpen, 0.08);
+				ctx.fillRect(-eyeSpacing - eyeSize / 2, eyeY - leftEyeH / 2, eyeSize, leftEyeH);
+				const rightEyeH = eyeSize * Math.max(data.rightEyeOpen, 0.08);
+				ctx.fillRect(eyeSpacing - eyeSize / 2, eyeY - rightEyeH / 2, eyeSize, rightEyeH);
 
-			ctx.fillStyle = "#D4845A";
-			drawClawdShape(ctx, s, 0);
+				if (data.mouthOpen > 0.05) {
+					const mouthH = data.mouthOpen * s * 0.2;
+					const mouthW = s * 0.2;
+					const mouthY = s * 0.35;
+					ctx.fillStyle = "#2A1508";
+					ctx.beginPath();
+					ctx.roundRect(-mouthW / 2, mouthY - mouthH / 2, mouthW, mouthH, mouthH * 0.3);
+					ctx.fill();
+				}
 
-			const eyeY = -s * 0.2;
-			const eyeSpacing = s * 0.35;
-			const eyeSize = s * 0.14;
-
-			ctx.fillStyle = "#111111";
-			const leftEyeH = eyeSize * Math.max(data.leftEyeOpen, 0.08);
-			ctx.fillRect(
-				-eyeSpacing - eyeSize / 2,
-				eyeY - leftEyeH / 2,
-				eyeSize,
-				leftEyeH,
-			);
-			const rightEyeH = eyeSize * Math.max(data.rightEyeOpen, 0.08);
-			ctx.fillRect(
-				eyeSpacing - eyeSize / 2,
-				eyeY - rightEyeH / 2,
-				eyeSize,
-				rightEyeH,
-			);
-
-			if (data.mouthOpen > 0.05) {
-				const mouthH = data.mouthOpen * s * 0.2;
-				const mouthW = s * 0.2;
-				const mouthY = s * 0.35;
-				ctx.fillStyle = "#2A1508";
-				ctx.beginPath();
-				ctx.roundRect(
-					-mouthW / 2,
-					mouthY - mouthH / 2,
-					mouthW,
-					mouthH,
-					mouthH * 0.3,
-				);
-				ctx.fill();
-			}
-
-			ctx.restore();
+				ctx.restore();
+				animationId = requestAnimationFrame(draw);
+			};
 			animationId = requestAnimationFrame(draw);
-		};
-
-		animationId = requestAnimationFrame(draw);
-
-		onCleanup(() => {
-			cancelAnimationFrame(animationId);
-		});
+			onCleanup(() => cancelAnimationFrame(animationId));
+		}
 	});
 
 	return (
@@ -326,14 +352,25 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<Show when={props.disconnected()}>
 				<CameraDisconnectedOverlay />
 			</Show>
-			<canvas
-				ref={canvasRef}
-				width={512}
-				height={512}
-				data-tauri-drag-region
-				class="w-full h-full"
-				style={{ "border-radius": "50%" }}
-			/>
+			<Show
+				when={useRive()}
+				fallback={
+					<canvas
+						ref={fallbackCanvasRef}
+						width={512}
+						height={512}
+						data-tauri-drag-region
+						class="w-full h-full"
+						style={{ "border-radius": "50%" }}
+					/>
+				}
+			>
+				<RiveComponent
+					data-tauri-drag-region
+					class="w-full h-full"
+					style={{ "border-radius": "50%" }}
+				/>
+			</Show>
 		</div>
 	);
 }
