@@ -3191,6 +3191,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             import::VideoImportProgress,
             SetCaptureAreaPending,
             DevicesUpdated,
+            camera::FaceTrackingUpdate,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

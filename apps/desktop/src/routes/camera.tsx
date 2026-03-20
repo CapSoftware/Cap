@@ -101,6 +101,7 @@ export default function () {
 	const isNativePreviewEnabled =
 		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
 		false;
+	const avatarMode = () => generalSettings.data?.avatarMode ?? false;
 
 	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
 
@@ -169,12 +170,171 @@ export default function () {
 	return (
 		<RecordingOptionsProvider>
 			<Show
-				when={isNativePreviewEnabled}
-				fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}
+				when={avatarMode()}
+				fallback={
+					<Show
+						when={isNativePreviewEnabled}
+						fallback={
+							<LegacyCameraPreviewPage disconnected={cameraDisconnected} />
+						}
+					>
+						<NativeCameraPreviewPage disconnected={cameraDisconnected} />
+					</Show>
+				}
 			>
-				<NativeCameraPreviewPage disconnected={cameraDisconnected} />
+				<AvatarCameraPreviewPage disconnected={cameraDisconnected} />
 			</Show>
 		</RecordingOptionsProvider>
+	);
+}
+
+function drawClawdShape(ctx: CanvasRenderingContext2D, s: number, pad: number) {
+	ctx.beginPath();
+	ctx.rect(
+		-s * 0.48 - pad,
+		-s * 0.42 - pad,
+		s * 0.96 + pad * 2,
+		s * 0.84 + pad * 2,
+	);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(-s * 0.65 - pad, -s * 0.35 - pad, s * 0.2 + pad, s * 0.3 + pad * 2);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(s * 0.45, -s * 0.35 - pad, s * 0.2 + pad, s * 0.3 + pad * 2);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(-s * 0.38 - pad, s * 0.42, s * 0.28 + pad, s * 0.28 + pad);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(s * 0.1, s * 0.42, s * 0.28 + pad, s * 0.28 + pad);
+	ctx.fill();
+}
+
+function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+	let canvasRef: HTMLCanvasElement | undefined;
+	const [faceData, setFaceData] = createSignal({
+		headPitch: 0,
+		headYaw: 0,
+		headRoll: 0,
+		mouthOpen: 0,
+		leftEyeOpen: 1,
+		rightEyeOpen: 1,
+		confidence: 0,
+	});
+
+	createTauriEventListener(events.faceTrackingUpdate, (payload) => {
+		setFaceData({
+			headPitch: payload.head_pitch,
+			headYaw: payload.head_yaw,
+			headRoll: payload.head_roll,
+			mouthOpen: payload.mouth_open,
+			leftEyeOpen: payload.left_eye_open,
+			rightEyeOpen: payload.right_eye_open,
+			confidence: payload.confidence,
+		});
+	});
+
+	onMount(() => {
+		getCurrentWindow().show();
+
+		if (!canvasRef) return;
+		const ctx = canvasRef.getContext("2d");
+		if (!ctx) return;
+
+		let animationId: number;
+
+		const draw = () => {
+			if (!canvasRef) return;
+			const data = faceData();
+			const w = canvasRef.width;
+			const h = canvasRef.height;
+			ctx.clearRect(0, 0, w, h);
+
+			ctx.fillStyle = "#262629";
+			ctx.fillRect(0, 0, w, h);
+
+			ctx.save();
+			ctx.translate(w / 2, h / 2);
+
+			ctx.rotate(data.headRoll * 0.25);
+			ctx.translate(data.headYaw * 15, data.headPitch * 10);
+
+			const breath = 1 + Math.sin(Date.now() * 0.003) * 0.01;
+			ctx.scale(breath, breath);
+
+			const s = Math.min(w, h) * 0.35;
+
+			ctx.fillStyle = "#FFFFFF";
+			drawClawdShape(ctx, s, 4);
+
+			ctx.fillStyle = "#D4845A";
+			drawClawdShape(ctx, s, 0);
+
+			const eyeY = -s * 0.2;
+			const eyeSpacing = s * 0.35;
+			const eyeSize = s * 0.14;
+
+			ctx.fillStyle = "#111111";
+			const leftEyeH = eyeSize * Math.max(data.leftEyeOpen, 0.08);
+			ctx.fillRect(
+				-eyeSpacing - eyeSize / 2,
+				eyeY - leftEyeH / 2,
+				eyeSize,
+				leftEyeH,
+			);
+			const rightEyeH = eyeSize * Math.max(data.rightEyeOpen, 0.08);
+			ctx.fillRect(
+				eyeSpacing - eyeSize / 2,
+				eyeY - rightEyeH / 2,
+				eyeSize,
+				rightEyeH,
+			);
+
+			if (data.mouthOpen > 0.05) {
+				const mouthH = data.mouthOpen * s * 0.2;
+				const mouthW = s * 0.2;
+				const mouthY = s * 0.35;
+				ctx.fillStyle = "#2A1508";
+				ctx.beginPath();
+				ctx.roundRect(
+					-mouthW / 2,
+					mouthY - mouthH / 2,
+					mouthW,
+					mouthH,
+					mouthH * 0.3,
+				);
+				ctx.fill();
+			}
+
+			ctx.restore();
+			animationId = requestAnimationFrame(draw);
+		};
+
+		animationId = requestAnimationFrame(draw);
+
+		onCleanup(() => {
+			cancelAnimationFrame(animationId);
+		});
+	});
+
+	return (
+		<div
+			data-tauri-drag-region
+			class="flex relative flex-col w-screen h-screen cursor-move"
+		>
+			<Show when={props.disconnected()}>
+				<CameraDisconnectedOverlay />
+			</Show>
+			<canvas
+				ref={canvasRef}
+				width={512}
+				height={512}
+				data-tauri-drag-region
+				class="w-full h-full"
+				style={{ "border-radius": "50%" }}
+			/>
+		</div>
 	);
 }
 

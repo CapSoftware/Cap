@@ -18,7 +18,8 @@ use std::{
     },
     thread,
 };
-use tauri::{LogicalPosition, LogicalSize, PhysicalSize, WebviewWindow};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow};
+use tauri_specta::Event;
 use tokio::{
     runtime::Runtime,
     sync::{broadcast, oneshot},
@@ -27,6 +28,17 @@ use tokio::{
 };
 use tracing::{error, info, trace, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
+
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct FaceTrackingUpdate {
+    pub head_pitch: f32,
+    pub head_yaw: f32,
+    pub head_roll: f32,
+    pub mouth_open: f32,
+    pub left_eye_open: f32,
+    pub right_eye_open: f32,
+    pub confidence: f32,
+}
 
 static TOOLBAR_HEIGHT: f32 = 56.0;
 
@@ -776,6 +788,18 @@ impl Renderer {
                                 self.avatar_face_pose = raw_pose;
                             }
                         }
+
+                        FaceTrackingUpdate {
+                            head_pitch: self.avatar_face_pose.head_pitch,
+                            head_yaw: self.avatar_face_pose.head_yaw,
+                            head_roll: self.avatar_face_pose.head_roll,
+                            mouth_open: self.avatar_face_pose.mouth_open,
+                            left_eye_open: self.avatar_face_pose.left_eye_open,
+                            right_eye_open: self.avatar_face_pose.right_eye_open,
+                            confidence: self.avatar_face_pose.confidence,
+                        }
+                        .emit(window.app_handle())
+                        .ok();
 
                         let avatar_size = cap_rendering::avatar::AvatarRenderer::size();
                         let avatar_rgba = if let Some(ref mut avatar) = self.avatar_renderer {
