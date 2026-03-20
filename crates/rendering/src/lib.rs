@@ -2607,6 +2607,9 @@ pub struct RendererLayers {
     mask: MaskLayer,
     text: TextLayer,
     captions: CaptionsLayer,
+    avatar: Option<crate::avatar::AvatarRenderer>,
+    avatar_face_pose: crate::avatar::FacePose,
+    avatar_enabled: bool,
 }
 
 impl RendererLayers {
@@ -2646,6 +2649,9 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+            avatar: None,
+            avatar_face_pose: crate::avatar::FacePose::default(),
+            avatar_enabled: false,
         }
     }
 
@@ -2671,6 +2677,17 @@ impl RendererLayers {
             self.camera_only
                 .prepare_for_video_dimensions(device, cw, ch);
         }
+    }
+
+    pub fn set_avatar_enabled(&mut self, device: &wgpu::Device, enabled: bool) {
+        self.avatar_enabled = enabled;
+        if enabled && self.avatar.is_none() {
+            self.avatar = Some(crate::avatar::AvatarRenderer::new(device));
+        }
+    }
+
+    pub fn set_avatar_face_pose(&mut self, pose: crate::avatar::FacePose) {
+        self.avatar_face_pose = pose;
     }
 
     pub async fn prepare(
@@ -2709,29 +2726,58 @@ impl RendererLayers {
             constants,
         );
 
-        self.camera.prepare(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-        );
-
-        self.camera_only.prepare(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-        );
+        if self.avatar_enabled {
+            if let Some(ref mut avatar) = self.avatar {
+                avatar.render(
+                    &constants.device,
+                    &constants.queue,
+                    &self.avatar_face_pose,
+                    1.0 / 30.0,
+                );
+                let avatar_size = crate::avatar::AvatarRenderer::size();
+                let avatar_frame = decoder::DecodedFrame::new(
+                    avatar.output_rgba().to_vec(),
+                    avatar_size,
+                    avatar_size,
+                );
+                let avatar_xy = XY::new(avatar_size, avatar_size);
+                self.camera.prepare(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                );
+                self.camera_only.prepare(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera_only,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                );
+            }
+        } else {
+            self.camera.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+            );
+            self.camera_only.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera_only,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+            );
+        }
 
         self.text.prepare(
             &constants.device,
@@ -2788,31 +2834,62 @@ impl RendererLayers {
             constants,
         );
 
-        self.camera.prepare_with_encoder(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-            encoder,
-        );
-
-        self.camera_only.prepare_with_encoder(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-            encoder,
-        );
+        if self.avatar_enabled {
+            if let Some(ref mut avatar) = self.avatar {
+                avatar.render(
+                    &constants.device,
+                    &constants.queue,
+                    &self.avatar_face_pose,
+                    1.0 / 30.0,
+                );
+                let avatar_size = crate::avatar::AvatarRenderer::size();
+                let avatar_frame = decoder::DecodedFrame::new(
+                    avatar.output_rgba().to_vec(),
+                    avatar_size,
+                    avatar_size,
+                );
+                let avatar_xy = XY::new(avatar_size, avatar_size);
+                self.camera.prepare_with_encoder(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                    encoder,
+                );
+                self.camera_only.prepare_with_encoder(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera_only,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                    encoder,
+                );
+            }
+        } else {
+            self.camera.prepare_with_encoder(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+                encoder,
+            );
+            self.camera_only.prepare_with_encoder(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera_only,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+                encoder,
+            );
+        }
 
         self.text.prepare(
             &constants.device,
