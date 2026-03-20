@@ -1,18 +1,8 @@
 use bytemuck::{Pod, Zeroable};
+pub use cap_face_tracking::FacePose;
 use wgpu::util::DeviceExt;
 
 const AVATAR_SIZE: u32 = 512;
-
-#[derive(Clone, Debug, Default)]
-pub struct FacePose {
-    pub head_pitch: f32,
-    pub head_yaw: f32,
-    pub head_roll: f32,
-    pub mouth_open: f32,
-    pub left_eye_open: f32,
-    pub right_eye_open: f32,
-    pub confidence: f32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]

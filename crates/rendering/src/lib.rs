@@ -2608,8 +2608,9 @@ pub struct RendererLayers {
     text: TextLayer,
     captions: CaptionsLayer,
     avatar: Option<crate::avatar::AvatarRenderer>,
-    avatar_face_pose: crate::avatar::FacePose,
+    avatar_face_pose: cap_face_tracking::FacePose,
     avatar_enabled: bool,
+    face_tracker: Option<cap_face_tracking::FaceTracker>,
 }
 
 impl RendererLayers {
@@ -2650,8 +2651,9 @@ impl RendererLayers {
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
             avatar: None,
-            avatar_face_pose: crate::avatar::FacePose::default(),
+            avatar_face_pose: cap_face_tracking::FacePose::default(),
             avatar_enabled: false,
+            face_tracker: None,
         }
     }
 
@@ -2683,10 +2685,11 @@ impl RendererLayers {
         self.avatar_enabled = enabled;
         if enabled && self.avatar.is_none() {
             self.avatar = Some(crate::avatar::AvatarRenderer::new(device));
+            self.face_tracker = Some(cap_face_tracking::FaceTracker::new());
         }
     }
 
-    pub fn set_avatar_face_pose(&mut self, pose: crate::avatar::FacePose) {
+    pub fn set_avatar_face_pose(&mut self, pose: cap_face_tracking::FacePose) {
         self.avatar_face_pose = pose;
     }
 
@@ -2727,6 +2730,16 @@ impl RendererLayers {
         );
 
         if self.avatar_enabled {
+            if let Some(ref mut face_tracker) = self.face_tracker {
+                if let Some(camera_frame) = segment_frames.camera_frame.as_ref() {
+                    let raw_pose = face_tracker.track(
+                        camera_frame.data(),
+                        camera_frame.width(),
+                        camera_frame.height(),
+                    );
+                    self.avatar_face_pose = raw_pose;
+                }
+            }
             if let Some(ref mut avatar) = self.avatar {
                 avatar.render(
                     &constants.device,
@@ -2835,6 +2848,16 @@ impl RendererLayers {
         );
 
         if self.avatar_enabled {
+            if let Some(ref mut face_tracker) = self.face_tracker {
+                if let Some(camera_frame) = segment_frames.camera_frame.as_ref() {
+                    let raw_pose = face_tracker.track(
+                        camera_frame.data(),
+                        camera_frame.width(),
+                        camera_frame.height(),
+                    );
+                    self.avatar_face_pose = raw_pose;
+                }
+            }
             if let Some(ref mut avatar) = self.avatar {
                 avatar.render(
                     &constants.device,
