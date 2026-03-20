@@ -19,6 +19,7 @@ use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
+pub mod avatar;
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
