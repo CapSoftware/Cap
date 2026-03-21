@@ -83,7 +83,7 @@ impl Renderer {
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
 
-        let (tx, rx) = mpsc::channel(8);
+        let (tx, rx) = mpsc::channel(64);
 
         let this = Self {
             rx,
@@ -150,6 +150,7 @@ impl Renderer {
                 continue;
             };
 
+            let mut drained_count = 0u32;
             let queue_drain_start = Instant::now();
             while let Ok(msg) = self.rx.try_recv() {
                 match msg {
@@ -166,6 +167,7 @@ impl Renderer {
                             finished,
                             cursor,
                         };
+                        drained_count += 1;
                     }
                     RendererMessage::Stop { finished } => {
                         let _ = current.finished.send(());
@@ -176,6 +178,10 @@ impl Renderer {
                 if queue_drain_start.elapsed().as_millis() > 5 {
                     break;
                 }
+            }
+
+            if drained_count > 0 {
+                let _ = frame_renderer.flush_pipeline_nv12().await;
             }
 
             match frame_renderer
@@ -208,13 +214,28 @@ impl RendererHandle {
         cursor: Arc<CursorEvents>,
     ) {
         let (finished_tx, _finished_rx) = oneshot::channel();
-
         let _ = self.tx.try_send(RendererMessage::RenderFrame {
             segment_frames,
             uniforms,
             finished: finished_tx,
             cursor,
         });
+    }
+
+    pub fn render_frame_blocking(
+        &self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: Arc<CursorEvents>,
+    ) {
+        let (finished_tx, _finished_rx) = oneshot::channel();
+        let msg = RendererMessage::RenderFrame {
+            segment_frames,
+            uniforms,
+            finished: finished_tx,
+            cursor,
+        };
+        let _ = self.tx.blocking_send(msg);
     }
 
     pub async fn stop(&self) {
