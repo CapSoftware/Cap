@@ -11,17 +11,18 @@ use crate::{
     STANDARD_CURSOR_HEIGHT, zoom::InterpolatedZoom,
 };
 
-const CURSOR_CLICK_DURATION: f64 = 0.25;
+const CURSOR_CLICK_DURATION: f64 = 0.13;
 const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
-const CLICK_SHRINK_SIZE: f32 = 0.7;
+const CLICK_SHRINK_SIZE: f32 = 0.8;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
+const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
 const CURSOR_VECTOR_CAP: f32 = 320.0;
 const CURSOR_MIN_MOTION_NORMALIZED: f32 = 0.01;
 const CURSOR_MIN_MOTION_PX: f32 = 1.0;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
-const CURSOR_MULTIPLIER: f32 = 3.0;
-const CURSOR_MAX_STRENGTH: f32 = 5.0;
+const CURSOR_MULTIPLIER: f32 = 1.0;
+const CURSOR_MAX_STRENGTH: f32 = 2.0;
 const VELOCITY_BLEND_RATIO: f32 = 0.7;
 
 /// The size to render the svg to.
@@ -494,9 +495,9 @@ impl CursorLayer {
                 cursor_opacity,
             ],
             rotation_params: [
-                uniforms.project.cursor.rotation_amount,
-                uniforms.project.cursor.base_rotation,
                 0.0,
+                uniforms.project.cursor.base_rotation,
+                uniforms.cursor_x_axis_tilt_radians,
                 0.0,
             ],
         };
@@ -572,6 +573,15 @@ fn compute_cursor_idle_opacity(
         return 1.0;
     }
 
+    let has_upcoming_move = cursor.moves.iter().any(|e| {
+        e.time_ms > current_time_ms
+            && e.time_ms - current_time_ms <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS
+    });
+
+    if has_upcoming_move {
+        return 1.0;
+    }
+
     let Some(last_index) = cursor
         .moves
         .iter()
@@ -634,46 +644,36 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
         t * t * (3.0 - 2.0 * t)
     }
 
-    let mut prev_i = None;
+    let next_click = clicks.iter().find(|c| c.time_ms > time_ms);
 
-    for (i, clicks) in clicks.windows(2).enumerate() {
-        let left = &clicks[0];
-        let right = &clicks[1];
+    if let Some(next) = next_click {
+        if next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
+            return smoothstep(
+                0.0,
+                CURSOR_CLICK_DURATION_MS as f32,
+                (next.time_ms - time_ms) as f32,
+            );
+        }
 
-        if left.time_ms <= time_ms && right.time_ms > time_ms {
-            prev_i = Some(i);
-            break;
+        if !next.down {
+            return 0.0;
         }
     }
 
-    let Some(prev_i) = prev_i else {
-        return 1.0;
-    };
+    let prev_click = clicks.iter().rev().find(|c| c.time_ms <= time_ms);
 
-    let prev = &clicks[prev_i];
+    if let Some(prev) = prev_click {
+        if prev.down {
+            return 0.0;
+        }
 
-    if prev.down {
-        return 0.0;
-    }
-
-    if !prev.down && time_ms - prev.time_ms <= CURSOR_CLICK_DURATION_MS {
-        return smoothstep(
-            0.0,
-            CURSOR_CLICK_DURATION_MS as f32,
-            (time_ms - prev.time_ms) as f32,
-        );
-    }
-
-    if let Some(next) = clicks.get(prev_i + 1)
-        && !prev.down
-        && next.down
-        && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS
-    {
-        return smoothstep(
-            0.0,
-            CURSOR_CLICK_DURATION_MS as f32,
-            (time_ms - next.time_ms).abs() as f32,
-        );
+        if !prev.down && time_ms - prev.time_ms <= CURSOR_CLICK_DURATION_MS {
+            return smoothstep(
+                0.0,
+                CURSOR_CLICK_DURATION_MS as f32,
+                (time_ms - prev.time_ms) as f32,
+            );
+        }
     }
 
     1.0
