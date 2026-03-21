@@ -20,8 +20,7 @@ var t_cursor: texture_2d<f32>;
 @group(0) @binding(2)
 var s_cursor: sampler;
 
-const MAX_ROTATION_RADIANS: f32 = 0.25;
-const ROTATION_VELOCITY_SCALE: f32 = 0.003;
+const MAX_ROTATION_RADIANS: f32 = 0.34906584;
 
 fn rotate_point(p: vec2<f32>, center: vec2<f32>, angle: f32) -> vec2<f32> {
     let cos_a = cos(angle);
@@ -53,13 +52,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let screen_pos = uniforms.position_size.xy;
     let cursor_size = uniforms.position_size.zw;
 
-    let rotation_amount = uniforms.rotation_params.x;
     let base_rotation = uniforms.rotation_params.y;
+    let x_movement_tilt = uniforms.rotation_params.z;
 
-    let motion_x = uniforms.motion_vector_strength.x;
-    let normalized_velocity = clamp(motion_x * ROTATION_VELOCITY_SCALE, -1.0, 1.0);
-    let velocity_rotation = normalized_velocity * MAX_ROTATION_RADIANS * rotation_amount;
-    let rotation_angle = velocity_rotation + base_rotation;
+    let clamped_tilt = clamp(x_movement_tilt, -MAX_ROTATION_RADIANS, MAX_ROTATION_RADIANS);
+    let rotation_angle = clamped_tilt + base_rotation;
 
     let pivot = vec2<f32>(0.0, 0.0);
     let rotated_pos = rotate_point(pos, pivot, rotation_angle);
@@ -87,50 +84,26 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let cursor_size = uniforms.position_size.zw;
-    let blur_offset_uv = motion_vec * 0.45 / cursor_size;
-    let blur_len = length(blur_offset_uv);
+    let velocity_uv = motion_vec / cursor_size;
+    let vel_len = length(velocity_uv);
 
-    if (blur_len < 0.005) {
+    if (vel_len < 0.005) {
         return textureSample(t_cursor, s_cursor, input.uv) * opacity;
     }
 
-    let num_samples = 24;
-    var color_sum = vec4<f32>(0.0);
-    var alpha_sum = 0.0;
-    var weight_sum = 0.0;
+    let kernel_size = 21;
+    let k = kernel_size - 1;
+    let offset_base = -vel_len / 2.0 / vel_len - 0.5;
 
-    let blur_center = 0.3;
-    let blur_spread = 2.5;
+    var color = textureSample(t_cursor, s_cursor, input.uv);
 
-    for (var i = 0; i < num_samples; i++) {
-        let t = f32(i) / f32(num_samples - 1);
-        let centered_t = t - blur_center;
-        let sample_offset = blur_offset_uv * centered_t;
-        let sample_uv = input.uv + sample_offset;
-
-        let gauss_t = centered_t * blur_spread;
-        var weight = exp(-gauss_t * gauss_t);
-
-        if (centered_t > 0.0) {
-            weight *= 1.0 + centered_t * 0.3;
-        }
-
-        let sample_color = textureSample(t_cursor, s_cursor, sample_uv);
-        let premul_rgb = sample_color.rgb * sample_color.a;
-        color_sum += vec4<f32>(premul_rgb * weight, 0.0);
-        alpha_sum += sample_color.a * weight;
-        weight_sum += weight;
+    for (var i = 0; i < 20; i++) {
+        let bias = velocity_uv * (f32(i) / f32(k) + offset_base);
+        let sample_uv = input.uv + bias;
+        color += textureSample(t_cursor, s_cursor, sample_uv);
     }
 
-    let avg_alpha = alpha_sum / max(weight_sum, 0.001);
-    var final_color: vec4<f32>;
-    if (avg_alpha > 0.001) {
-        let final_rgb = color_sum.rgb / max(alpha_sum, 0.001);
-        final_color = vec4<f32>(final_rgb, avg_alpha);
-    } else {
-        final_color = vec4<f32>(0.0);
-    }
-
-    final_color *= opacity;
-    return final_color;
+    color = color / f32(kernel_size);
+    color *= opacity;
+    return color;
 }
