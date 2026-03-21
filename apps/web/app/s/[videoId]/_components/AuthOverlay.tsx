@@ -137,7 +137,12 @@ const StepOne = ({
 }) => {
 	const videoId = useParams().videoId;
 	const handleGoogleSignIn = () => {
-		trackEvent("auth_started", { method: "google", is_signup: true });
+		trackEvent("auth_started", {
+			method: "google",
+			is_signup: false,
+			auth_surface: "share_overlay",
+			video_id: videoId,
+		});
 		setLoading(true);
 		signIn("google", {
 			redirect: false,
@@ -153,8 +158,15 @@ const StepOne = ({
 				if (!email) return;
 
 				setLoading(true);
+				const normalizedEmail = email.trim().toLowerCase();
+				trackEvent("auth_started", {
+					method: "email",
+					is_signup: false,
+					auth_surface: "share_overlay",
+					video_id: videoId,
+				});
 				signIn("email", {
-					email: email.trim().toLowerCase(),
+					email: normalizedEmail,
 					redirect: false,
 				})
 					.then((res) => {
@@ -163,6 +175,13 @@ const StepOne = ({
 							setEmailSent(true);
 							setStep(2);
 							setLastResendTime(Date.now());
+							trackEvent("auth_email_sent", {
+								method: "email",
+								is_signup: false,
+								auth_surface: "share_overlay",
+								email_domain: normalizedEmail.split("@")[1],
+								video_id: videoId,
+							});
 							toast.success("Email sent - check your inbox!");
 						} else {
 							toast.error("Error sending email - try again?");
