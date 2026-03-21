@@ -380,7 +380,7 @@ All Rust code must respect these workspace-level lints defined in `Cargo.toml`. 
 **Clippy lints (all denied — code MUST NOT contain these patterns):**
 - `dbg_macro` — Never use `dbg!()` in code; use proper logging (`tracing::debug!`, etc.) instead.
 - `let_underscore_future` — Never write `let _ = async_fn()` which silently drops futures; await or explicitly handle them.
-- `unchecked_duration_subtraction` — Use `duration.saturating_sub(other)` instead of `duration - other` to avoid panics on underflow.
+- `unchecked_time_subtraction` — Use `duration.saturating_sub(other)` instead of `duration - other` to avoid panics on underflow.
 - `collapsible_if` — Merge nested `if` statements: write `if a && b { }` instead of `if a { if b { } }`.
 - `clone_on_copy` — Don't call `.clone()` on `Copy` types (integers, bools, etc.); just copy them directly.
 - `redundant_closure` — Use function references directly: `iter.map(foo)` instead of `iter.map(|x| foo(x))`.

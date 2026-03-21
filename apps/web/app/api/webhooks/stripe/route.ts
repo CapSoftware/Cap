@@ -334,7 +334,12 @@ export const POST = async (req: Request) => {
 							price_id: subscription.items.data[0]?.price.id,
 							quantity: inviteQuota,
 							is_onboarding: session.metadata?.isOnBoarding === "true",
-							platform: session.metadata?.platform === "web",
+							platform:
+								session.metadata?.platform === "desktop"
+									? "desktop"
+									: session.metadata?.platform === "web"
+										? "web"
+										: "unknown",
 							is_first_purchase: isFirstPurchase,
 							is_guest_checkout: isGuestCheckout,
 						},

@@ -624,7 +624,6 @@ export function createImageDataWS(
 	let renderFrameCount = 0;
 	let minFrameTime = Number.MAX_VALUE;
 	let maxFrameTime = 0;
-
 	const getLocalFpsStats = (): FpsStats => ({
 		fps:
 			frameCount > 0 && frameTimeSum > 0
@@ -699,7 +698,6 @@ export function createImageDataWS(
 				const yStride = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
-				const frameNumber = meta.getUint32(12, true);
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;
@@ -765,7 +763,6 @@ export function createImageDataWS(
 				const yStride = meta.getUint32(0, true);
 				const height = meta.getUint32(4, true);
 				const width = meta.getUint32(8, true);
-				const frameNumber = meta.getUint32(12, true);
 
 				if (width > 0 && height > 0) {
 					const ySize = yStride * height;

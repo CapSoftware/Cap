@@ -1,3 +1,4 @@
+use super::core::{BlockingThreadFinish, combine_finish_errors, wait_for_blocking_thread_finish};
 use crate::output_pipeline::win::{CameraBuffers, NativeCameraFrame, upload_mf_buffer_to_texture};
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, fragmentation};
 use anyhow::{Context, anyhow};
@@ -231,6 +232,8 @@ impl Muxer for WindowsSegmentedCameraMuxer {
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
         let segment_path = self.current_segment_path();
         let segment_start = self.segment_start_time;
+        let mut finish_error = None;
+        let mut final_segment = None;
 
         if let Some(mut state) = self.current_state.take() {
             if let Err(e) = state.video_tx.send(None) {
@@ -238,26 +241,19 @@ impl Muxer for WindowsSegmentedCameraMuxer {
             }
 
             if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "Camera encoder thread panicked during finish: {:?}",
-                                panic_payload
-                            );
-                        }
-                        break;
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    Duration::from_secs(5),
+                    "Camera encoder thread",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    BlockingThreadFinish::Failed(error) => {
+                        finish_error = Some(error);
                     }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Camera encoder thread did not finish within {:?}, abandoning",
-                            timeout
-                        );
-                        break;
+                    BlockingThreadFinish::TimedOut(error) => {
+                        self.write_in_progress_manifest();
+                        return Ok(Err(error));
                     }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
 
@@ -265,7 +261,13 @@ impl Muxer for WindowsSegmentedCameraMuxer {
                 .output
                 .lock()
                 .map_err(|_| anyhow!("Failed to lock output"))?;
-            output.write_trailer()?;
+            if let Err(error) = output.write_trailer() {
+                let error = anyhow!("Failed to write camera trailer: {error:#}");
+                finish_error = Some(match finish_error.take() {
+                    Some(existing) => combine_finish_errors(existing, error),
+                    None => error,
+                });
+            }
 
             fragmentation::sync_file(&segment_path);
 
@@ -273,7 +275,7 @@ impl Muxer for WindowsSegmentedCameraMuxer {
                 let final_duration = timestamp.saturating_sub(start);
                 let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
 
-                self.completed_segments.push(SegmentInfo {
+                final_segment = Some(SegmentInfo {
                     path: segment_path,
                     index: self.current_index,
                     duration: final_duration,
@@ -282,7 +284,19 @@ impl Muxer for WindowsSegmentedCameraMuxer {
             }
         }
 
-        self.finalize_manifest();
+        if let Some(error) = finish_error {
+            self.write_in_progress_manifest();
+            return Ok(Err(error));
+        }
+
+        if let Some(segment) = final_segment {
+            self.completed_segments.push(segment);
+        }
+
+        if let Err(error) = self.finalize_manifest() {
+            self.write_in_progress_manifest();
+            return Ok(Err(error));
+        }
 
         Ok(Ok(()))
     }
@@ -326,7 +340,7 @@ impl WindowsSegmentedCameraMuxer {
         }
     }
 
-    fn finalize_manifest(&self) {
+    fn finalize_manifest(&self) -> anyhow::Result<()> {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
@@ -352,12 +366,12 @@ impl WindowsSegmentedCameraMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
-            warn!(
-                "Failed to write final manifest to {}: {e}",
+        fragmentation::atomic_write_json(&manifest_path, &manifest).map_err(|error| {
+            anyhow!(
+                "Failed to write final manifest to {}: {error}",
                 manifest_path.display()
-            );
-        }
+            )
+        })
     }
 
     fn create_segment(&mut self, first_frame: &NativeCameraFrame) -> anyhow::Result<()> {
@@ -643,6 +657,8 @@ impl WindowsSegmentedCameraMuxer {
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
         let completed_segment_path = self.current_segment_path();
+        let mut rotation_error = None;
+        let mut rotated_segment = None;
 
         if let Some(mut state) = self.current_state.take() {
             if let Err(e) = state.video_tx.send(None) {
@@ -650,26 +666,19 @@ impl WindowsSegmentedCameraMuxer {
             }
 
             if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "Camera encoder thread panicked during rotation: {:?}",
-                                panic_payload
-                            );
-                        }
-                        break;
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    Duration::from_secs(5),
+                    "Camera encoder thread during rotation",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    BlockingThreadFinish::Failed(error) => {
+                        rotation_error = Some(error);
                     }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Camera encoder thread did not finish within {:?} during rotation, abandoning",
-                            timeout
-                        );
-                        break;
+                    BlockingThreadFinish::TimedOut(error) => {
+                        self.write_in_progress_manifest();
+                        return Err(error);
                     }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
 
@@ -677,7 +686,13 @@ impl WindowsSegmentedCameraMuxer {
                 .output
                 .lock()
                 .map_err(|_| anyhow!("Failed to lock output"))?;
-            output.write_trailer()?;
+            if let Err(error) = output.write_trailer() {
+                let error = anyhow!("Failed to write rotated camera trailer: {error:#}");
+                rotation_error = Some(match rotation_error.take() {
+                    Some(existing) => combine_finish_errors(existing, error),
+                    None => error,
+                });
+            }
 
             fragmentation::sync_file(&completed_segment_path);
 
@@ -685,16 +700,24 @@ impl WindowsSegmentedCameraMuxer {
                 .ok()
                 .map(|m| m.len());
 
-            self.completed_segments.push(SegmentInfo {
+            rotated_segment = Some(SegmentInfo {
                 path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
                 file_size,
             });
-
-            self.write_manifest();
         }
 
+        if let Some(error) = rotation_error {
+            self.write_in_progress_manifest();
+            return Err(error);
+        }
+
+        if let Some(segment) = rotated_segment {
+            self.completed_segments.push(segment);
+        }
+
+        self.write_manifest();
         self.frame_drops.reset();
         self.current_index += 1;
         self.segment_start_time = Some(timestamp);
@@ -795,7 +818,7 @@ impl VideoMuxer for WindowsSegmentedCameraMuxer {
                     self.frame_drops.record_drop();
                 }
                 std::sync::mpsc::TrySendError::Disconnected(_) => {
-                    trace!("Camera encoder channel disconnected");
+                    return Err(anyhow!("Camera encoder channel disconnected"));
                 }
             }
         }

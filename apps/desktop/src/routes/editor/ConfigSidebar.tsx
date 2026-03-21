@@ -224,7 +224,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_CURSOR_MOTION_BLUR = 0.5;
+const DEFAULT_CURSOR_MOTION_BLUR = 1.0;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -617,6 +617,16 @@ export function ConfigSidebar() {
 								minValue={20}
 								maxValue={300}
 								step={1}
+							/>
+						</Field>
+						<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
+							<Slider
+								value={[project.cursor.rotationAmount ?? 0.15]}
+								onChange={(v) => setProject("cursor", "rotationAmount", v[0])}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
 							/>
 						</Field>
 						<Field

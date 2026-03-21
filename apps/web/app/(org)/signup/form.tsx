@@ -105,7 +105,11 @@ export function SignupForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = () => {
-		trackEvent("auth_started", { method: "google", is_signup: true });
+		trackEvent("auth_started", {
+			method: "google",
+			is_signup: true,
+			auth_surface: "signup",
+		});
 		signIn("google", {
 			...(next && next.length > 0 ? { callbackUrl: next } : {}),
 		});
@@ -268,6 +272,7 @@ export function SignupForm() {
 											trackEvent("auth_started", {
 												method: "email",
 												is_signup: true,
+												auth_surface: "signup",
 											});
 											const normalizedEmail = email.trim().toLowerCase();
 											signIn("email", {
@@ -284,6 +289,9 @@ export function SignupForm() {
 														setEmailSent(true);
 														setLastEmailSentTime(Date.now());
 														trackEvent("auth_email_sent", {
+															method: "email",
+															is_signup: true,
+															auth_surface: "signup",
 															email_domain: normalizedEmail.split("@")[1],
 														});
 														const params = new URLSearchParams({

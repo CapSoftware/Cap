@@ -27,19 +27,21 @@ use crate::output_pipeline::{
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
 use cap_project::{
-    CursorEvents, MultipleSegments, Platform, RecordingMeta, RecordingMetaInner,
+    CursorEvents, MultipleSegment, MultipleSegments, Platform, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, StudioRecordingStatus,
 };
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
+use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::watch;
+use tokio::{sync::watch, task::JoinHandle};
 use tracing::{Instrument, debug, error_span, info, trace, warn};
 
 #[allow(clippy::large_enum_variant)]
@@ -324,6 +326,8 @@ struct Pipeline {
     pub camera: Option<OutputPipeline>,
     pub system_audio: Option<OutputPipeline>,
     pub cursor: Option<CursorPipeline>,
+    pub track_failures: SharedTrackFailures,
+    pub watcher_task: Option<JoinHandle<()>>,
 }
 
 struct FinishedPipeline {
@@ -334,6 +338,136 @@ struct FinishedPipeline {
     pub camera: Option<FinishedOutputPipeline>,
     pub system_audio: Option<FinishedOutputPipeline>,
     pub cursor: Option<CursorPipeline>,
+    pub track_failures: Vec<TrackFailureRecord>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum RecordingTrackKind {
+    Display,
+    Microphone,
+    Camera,
+    SystemAudio,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum TrackFailureStage {
+    Runtime,
+    Stop,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TrackFailureRecord {
+    track: RecordingTrackKind,
+    stage: TrackFailureStage,
+    error: String,
+}
+
+type SharedTrackFailures = Arc<std::sync::Mutex<Vec<TrackFailureRecord>>>;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct RecordingFailureDiagnostics {
+    version: u32,
+    segments: Vec<SegmentFailureDiagnostics>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SegmentFailureDiagnostics {
+    segment_index: u32,
+    start: f64,
+    end: f64,
+    track_failures: Vec<TrackFailureRecord>,
+}
+
+struct SegmentOutput {
+    meta: MultipleSegment,
+    diagnostics: Option<SegmentFailureDiagnostics>,
+}
+
+fn record_track_failure(
+    failures: &SharedTrackFailures,
+    track: RecordingTrackKind,
+    stage: TrackFailureStage,
+    error: impl Into<String>,
+) {
+    let error = error.into();
+    match failures.lock() {
+        Ok(mut failures) => failures.push(TrackFailureRecord {
+            track,
+            stage,
+            error,
+        }),
+        Err(poisoned) => poisoned.into_inner().push(TrackFailureRecord {
+            track,
+            stage,
+            error,
+        }),
+    }
+}
+
+fn take_track_failures(failures: &SharedTrackFailures) -> Vec<TrackFailureRecord> {
+    match failures.lock() {
+        Ok(mut failures) => std::mem::take(&mut *failures),
+        Err(poisoned) => {
+            let mut failures = poisoned.into_inner();
+            std::mem::take(&mut *failures)
+        }
+    }
+}
+
+fn has_track_failure(failures: &SharedTrackFailures, track: RecordingTrackKind) -> bool {
+    match failures.lock() {
+        Ok(failures) => failures.iter().any(|failure| failure.track == track),
+        Err(poisoned) => poisoned
+            .into_inner()
+            .iter()
+            .any(|failure| failure.track == track),
+    }
+}
+
+fn finalize_optional_track(
+    track: RecordingTrackKind,
+    result: Result<Option<FinishedOutputPipeline>, anyhow::Error>,
+    failures: &SharedTrackFailures,
+) -> Option<FinishedOutputPipeline> {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(?track, error = %error, "Optional recording track failed during stop");
+            if !has_track_failure(failures, track) {
+                record_track_failure(failures, track, TrackFailureStage::Stop, error.to_string());
+            }
+            None
+        }
+    }
+}
+
+fn build_recording_failure_diagnostics(
+    segments: &[SegmentFailureDiagnostics],
+) -> Option<RecordingFailureDiagnostics> {
+    if segments.is_empty() {
+        None
+    } else {
+        Some(RecordingFailureDiagnostics {
+            version: 1,
+            segments: segments.to_vec(),
+        })
+    }
+}
+
+fn write_recording_failure_diagnostics(
+    recording_dir: &Path,
+    diagnostics: &RecordingFailureDiagnostics,
+) -> Result<(), RecordingError> {
+    std::fs::write(
+        recording_dir.join("recording-diagnostics.json"),
+        serde_json::to_string_pretty(diagnostics)?,
+    )?;
+    Ok(())
 }
 
 impl Pipeline {
@@ -349,38 +483,72 @@ impl Pipeline {
             cursor.actor.stop();
         }
 
-        let system_audio = match system_audio.transpose() {
-            Ok(value) => value,
-            Err(err) => {
-                warn!("system audio pipeline failed during stop: {err:#}");
-                None
-            }
-        };
+        if let Some(watcher_task) = self.watcher_task.take()
+            && let Err(error) = watcher_task.await
+        {
+            warn!(error = %error, "Studio recording watcher task ended unexpectedly");
+        }
 
         Ok(FinishedPipeline {
             start_time: self.start_time,
-            screen: screen.context("screen")?,
-            microphone: microphone.transpose().context("microphone")?,
-            camera: camera.transpose().context("camera")?,
-            system_audio,
+            screen: screen.context("display")?,
+            microphone: finalize_optional_track(
+                RecordingTrackKind::Microphone,
+                microphone.transpose(),
+                &self.track_failures,
+            ),
+            camera: finalize_optional_track(
+                RecordingTrackKind::Camera,
+                camera.transpose(),
+                &self.track_failures,
+            ),
+            system_audio: finalize_optional_track(
+                RecordingTrackKind::SystemAudio,
+                system_audio.transpose(),
+                &self.track_failures,
+            ),
             cursor: self.cursor,
+            track_failures: take_track_failures(&self.track_failures),
         })
     }
 
-    fn spawn_watcher(&self, completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>) {
-        let mut futures = FuturesUnordered::new();
-        futures.push(self.screen.done_fut());
+    fn spawn_watcher(
+        &mut self,
+        completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
+    ) {
+        let mut futures = FuturesUnordered::<
+            Pin<
+                Box<
+                    dyn futures::Future<
+                            Output = (RecordingTrackKind, bool, Result<(), PipelineDoneError>),
+                        > + Send,
+                >,
+            >,
+        >::new();
+        futures.push(Box::pin({
+            let done_fut = self.screen.done_fut();
+            async move { (RecordingTrackKind::Display, true, done_fut.await) }
+        }));
 
         if let Some(ref microphone) = self.microphone {
-            futures.push(microphone.done_fut());
+            futures.push(Box::pin({
+                let done_fut = microphone.done_fut();
+                async move { (RecordingTrackKind::Microphone, false, done_fut.await) }
+            }));
         }
 
         if let Some(ref camera) = self.camera {
-            futures.push(camera.done_fut());
+            futures.push(Box::pin({
+                let done_fut = camera.done_fut();
+                async move { (RecordingTrackKind::Camera, false, done_fut.await) }
+            }));
         }
 
         if let Some(ref system_audio) = self.system_audio {
-            futures.push(system_audio.done_fut());
+            futures.push(Box::pin({
+                let done_fut = system_audio.done_fut();
+                async move { (RecordingTrackKind::SystemAudio, false, done_fut.await) }
+            }));
         }
 
         // Ensure non-video pipelines stop promptly when the video pipeline completes
@@ -405,15 +573,26 @@ impl Pipeline {
             });
         }
 
-        tokio::spawn(async move {
-            while let Some(res) = futures.next().await {
-                if let Err(err) = res
-                    && completion_tx.borrow().is_none()
-                {
-                    let _ = completion_tx.send(Some(Err(err)));
+        let track_failures = self.track_failures.clone();
+        self.watcher_task = Some(tokio::spawn(async move {
+            while let Some((track, required, res)) = futures.next().await {
+                if let Err(err) = res {
+                    if required {
+                        if completion_tx.borrow().is_none() {
+                            let _ = completion_tx.send(Some(Err(err)));
+                        }
+                    } else {
+                        warn!(?track, error = %err, "Optional recording track failed during runtime");
+                        record_track_failure(
+                            &track_failures,
+                            track,
+                            TrackFailureStage::Runtime,
+                            err.to_string(),
+                        );
+                    }
                 }
             }
-        });
+        }));
     }
 }
 
@@ -683,8 +862,10 @@ async fn stop_recording(
         }
     };
 
-    let segment_metas: Vec<_> = futures::stream::iter(segments)
-        .then(async |s| {
+    let segment_outputs: Vec<_> = segments
+        .into_iter()
+        .enumerate()
+        .map(|(segment_index, s)| {
             let to_start_time =
                 |timestamp: Timestamp| timestamp.signed_duration_since_secs(s.pipeline.start_time);
 
@@ -727,73 +908,91 @@ async fn stop_recording(
                 raw_display_start
             };
 
-            MultipleSegment {
-                display: VideoMeta {
-                    path: make_relative(&s.pipeline.screen.path),
-                    fps: s
-                        .pipeline
-                        .screen
-                        .video_info
-                        .map(|v| v.fps())
-                        .unwrap_or_else(|| {
+            let diagnostics =
+                (!s.pipeline.track_failures.is_empty()).then(|| SegmentFailureDiagnostics {
+                    segment_index: segment_index as u32,
+                    start: s.start,
+                    end: s.end,
+                    track_failures: s.pipeline.track_failures.clone(),
+                });
+
+            SegmentOutput {
+                meta: MultipleSegment {
+                    display: VideoMeta {
+                        path: make_relative(&s.pipeline.screen.path),
+                        fps: s
+                            .pipeline
+                            .screen
+                            .video_info
+                            .map(|v| v.fps())
+                            .unwrap_or_else(|| {
+                                tracing::warn!(
+                                    "Screen video_info missing, using default fps: {}",
+                                    DEFAULT_FPS
+                                );
+                                DEFAULT_FPS
+                            }),
+                        start_time: Some(display_start_time),
+                        device_id: None,
+                    },
+                    camera: s.pipeline.camera.map(|camera| VideoMeta {
+                        path: make_relative(&camera.path),
+                        fps: camera.video_info.map(|v| v.fps()).unwrap_or_else(|| {
                             tracing::warn!(
-                                "Screen video_info missing, using default fps: {}",
+                                "Camera video_info missing, using default fps: {}",
                                 DEFAULT_FPS
                             );
                             DEFAULT_FPS
                         }),
-                    start_time: Some(display_start_time),
-                    device_id: None,
-                },
-                camera: s.pipeline.camera.map(|camera| VideoMeta {
-                    path: make_relative(&camera.path),
-                    fps: camera.video_info.map(|v| v.fps()).unwrap_or_else(|| {
-                        tracing::warn!(
-                            "Camera video_info missing, using default fps: {}",
-                            DEFAULT_FPS
-                        );
-                        DEFAULT_FPS
+                        start_time: camera_start_time,
+                        device_id: s.camera_device_id.clone(),
                     }),
-                    start_time: camera_start_time,
-                    device_id: s.camera_device_id.clone(),
-                }),
-                mic: s.pipeline.microphone.map(|mic| AudioMeta {
-                    path: make_relative(&mic.path),
-                    start_time: mic_start_time,
-                    device_id: s.mic_device_id.clone(),
-                }),
-                system_audio: s.pipeline.system_audio.map(|audio| {
-                    let raw_sys_start = to_start_time(audio.first_timestamp);
-                    let sys_start_time = if let Some(mic_start) = mic_start_time {
-                        let sync_offset = raw_sys_start - mic_start;
-                        if sync_offset.abs() > 0.030 {
-                            mic_start
+                    mic: s.pipeline.microphone.map(|mic| AudioMeta {
+                        path: make_relative(&mic.path),
+                        start_time: mic_start_time,
+                        device_id: s.mic_device_id.clone(),
+                    }),
+                    system_audio: s.pipeline.system_audio.map(|audio| {
+                        let raw_sys_start = to_start_time(audio.first_timestamp);
+                        let sys_start_time = if let Some(mic_start) = mic_start_time {
+                            let sync_offset = raw_sys_start - mic_start;
+                            if sync_offset.abs() > 0.030 {
+                                mic_start
+                            } else {
+                                raw_sys_start
+                            }
                         } else {
-                            raw_sys_start
+                            let sync_offset = raw_sys_start - display_start_time;
+                            if sync_offset.abs() > 0.030 {
+                                display_start_time
+                            } else {
+                                raw_sys_start
+                            }
+                        };
+                        AudioMeta {
+                            path: make_relative(&audio.path),
+                            start_time: Some(sys_start_time),
+                            device_id: None,
                         }
-                    } else {
-                        let sync_offset = raw_sys_start - display_start_time;
-                        if sync_offset.abs() > 0.030 {
-                            display_start_time
-                        } else {
-                            raw_sys_start
-                        }
-                    };
-                    AudioMeta {
-                        path: make_relative(&audio.path),
-                        start_time: Some(sys_start_time),
-                        device_id: None,
-                    }
-                }),
-                cursor: s
-                    .pipeline
-                    .cursor
-                    .as_ref()
-                    .map(|cursor| make_relative(&cursor.output_path)),
+                    }),
+                    cursor: s
+                        .pipeline
+                        .cursor
+                        .as_ref()
+                        .map(|cursor| make_relative(&cursor.output_path)),
+                },
+                diagnostics,
             }
         })
-        .collect::<Vec<_>>()
-        .await;
+        .collect();
+    let segment_failure_diagnostics: Vec<_> = segment_outputs
+        .iter()
+        .filter_map(|segment| segment.diagnostics.clone())
+        .collect();
+    let segment_metas: Vec<_> = segment_outputs
+        .into_iter()
+        .map(|segment| segment.meta)
+        .collect();
 
     let needs_remux = if fragmented {
         segment_metas.iter().any(|seg| {
@@ -837,6 +1036,16 @@ async fn stop_recording(
     project_config
         .write(&recording_dir)
         .map_err(RecordingError::from)?;
+
+    if let Some(diagnostics) = build_recording_failure_diagnostics(&segment_failure_diagnostics)
+        && let Err(error) = write_recording_failure_diagnostics(&recording_dir, &diagnostics)
+    {
+        warn!(
+            error = %error,
+            path = %recording_dir.join("recording-diagnostics.json").display(),
+            "Failed to persist recording diagnostics sidecar"
+        );
+    }
 
     Ok(CompletedRecording {
         project_path: recording_dir,
@@ -891,7 +1100,7 @@ impl SegmentPipelineFactory {
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
         let segment_start_time = Timestamps::now();
-        let pipeline = create_segment_pipeline(
+        let mut pipeline = create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
@@ -1261,6 +1470,8 @@ async fn create_segment_pipeline(
         camera,
         cursor,
         system_audio,
+        track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+        watcher_task: None,
     })
 }
 
@@ -1298,4 +1509,431 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
 
     meta.save_for_project()
         .map_err(|e| anyhow!("Failed to save in-progress meta: {:?}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output_pipeline::{
+        AudioMuxer, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
+        ChannelVideoSourceConfig, Muxer, TaskPool, VideoFrame, VideoMuxer,
+    };
+
+    fn test_finished_output_pipeline() -> FinishedOutputPipeline {
+        let timestamps = Timestamps::now();
+        test_finished_output_pipeline_at(
+            PathBuf::from("track.mp4"),
+            Timestamp::Instant(timestamps.instant()),
+            None,
+            1,
+        )
+    }
+
+    fn test_finished_output_pipeline_at(
+        path: PathBuf,
+        first_timestamp: Timestamp,
+        video_info: Option<VideoInfo>,
+        video_frame_count: u64,
+    ) -> FinishedOutputPipeline {
+        FinishedOutputPipeline {
+            path,
+            first_timestamp,
+            video_info,
+            video_frame_count,
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct TestVideoFrame {
+        timestamp: Timestamp,
+    }
+
+    impl VideoFrame for TestVideoFrame {
+        fn timestamp(&self) -> Timestamp {
+            self.timestamp
+        }
+    }
+
+    struct SuccessfulVideoMuxer;
+
+    impl Muxer for SuccessfulVideoMuxer {
+        type Config = ();
+
+        fn setup(
+            _config: Self::Config,
+            _output_path: PathBuf,
+            _video_config: Option<VideoInfo>,
+            _audio_config: Option<cap_media_info::AudioInfo>,
+            _pause_flag: Arc<std::sync::atomic::AtomicBool>,
+            _tasks: &mut TaskPool,
+        ) -> impl Future<Output = anyhow::Result<Self>> + Send
+        where
+            Self: Sized,
+        {
+            async move { Ok(Self) }
+        }
+
+        fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for SuccessfulVideoMuxer {
+        fn send_audio_frame(
+            &mut self,
+            _frame: crate::output_pipeline::AudioFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl VideoMuxer for SuccessfulVideoMuxer {
+        type VideoFrame = TestVideoFrame;
+
+        fn send_video_frame(
+            &mut self,
+            _frame: Self::VideoFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct FailingAudioMuxerConfig {
+        fail_after_frame: u64,
+    }
+
+    struct FailingAudioMuxer {
+        fail_after_frame: u64,
+        sent_frames: u64,
+    }
+
+    impl Muxer for FailingAudioMuxer {
+        type Config = FailingAudioMuxerConfig;
+
+        fn setup(
+            config: Self::Config,
+            _output_path: PathBuf,
+            _video_config: Option<VideoInfo>,
+            _audio_config: Option<cap_media_info::AudioInfo>,
+            _pause_flag: Arc<std::sync::atomic::AtomicBool>,
+            _tasks: &mut TaskPool,
+        ) -> impl Future<Output = anyhow::Result<Self>> + Send
+        where
+            Self: Sized,
+        {
+            async move {
+                Ok(Self {
+                    fail_after_frame: config.fail_after_frame,
+                    sent_frames: 0,
+                })
+            }
+        }
+
+        fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for FailingAudioMuxer {
+        fn send_audio_frame(
+            &mut self,
+            _frame: crate::output_pipeline::AudioFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            self.sent_frames += 1;
+            if self.sent_frames >= self.fail_after_frame {
+                return Err(anyhow!("optional audio mux send failed"));
+            }
+            Ok(())
+        }
+    }
+
+    fn test_video_info() -> VideoInfo {
+        VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30)
+    }
+
+    fn test_audio_info() -> cap_media_info::AudioInfo {
+        cap_media_info::AudioInfo::new_raw(
+            cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+            48_000,
+            2,
+        )
+    }
+
+    #[test]
+    fn finalize_optional_track_records_stop_failure() {
+        let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let output = finalize_optional_track(
+            RecordingTrackKind::Camera,
+            Err(anyhow!("camera stop failed")),
+            &failures,
+        );
+
+        assert!(output.is_none());
+
+        let recorded = take_track_failures(&failures);
+        assert_eq!(
+            recorded,
+            vec![TrackFailureRecord {
+                track: RecordingTrackKind::Camera,
+                stage: TrackFailureStage::Stop,
+                error: "camera stop failed".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn finalize_optional_track_preserves_successful_track() {
+        let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let output = finalize_optional_track(
+            RecordingTrackKind::Microphone,
+            Ok(Some(test_finished_output_pipeline())),
+            &failures,
+        );
+
+        assert!(output.is_some());
+        assert!(take_track_failures(&failures).is_empty());
+    }
+
+    #[test]
+    fn finalize_optional_track_does_not_duplicate_runtime_failure() {
+        let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        record_track_failure(
+            &failures,
+            RecordingTrackKind::SystemAudio,
+            TrackFailureStage::Runtime,
+            "system audio writer failed",
+        );
+
+        let output = finalize_optional_track(
+            RecordingTrackKind::SystemAudio,
+            Err(anyhow!("system audio writer failed")),
+            &failures,
+        );
+
+        assert!(output.is_none());
+        assert_eq!(
+            take_track_failures(&failures),
+            vec![TrackFailureRecord {
+                track: RecordingTrackKind::SystemAudio,
+                stage: TrackFailureStage::Runtime,
+                error: "system audio writer failed".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn build_recording_failure_diagnostics_skips_clean_recordings() {
+        assert!(build_recording_failure_diagnostics(&[]).is_none());
+    }
+
+    #[test]
+    fn build_recording_failure_diagnostics_keeps_segment_failures() {
+        let diagnostics = build_recording_failure_diagnostics(&[SegmentFailureDiagnostics {
+            segment_index: 2,
+            start: 10.0,
+            end: 20.0,
+            track_failures: vec![
+                TrackFailureRecord {
+                    track: RecordingTrackKind::Microphone,
+                    stage: TrackFailureStage::Runtime,
+                    error: "microphone writer failed".to_string(),
+                },
+                TrackFailureRecord {
+                    track: RecordingTrackKind::SystemAudio,
+                    stage: TrackFailureStage::Stop,
+                    error: "system audio finalize failed".to_string(),
+                },
+            ],
+        }]);
+
+        assert_eq!(
+            diagnostics,
+            Some(RecordingFailureDiagnostics {
+                version: 1,
+                segments: vec![SegmentFailureDiagnostics {
+                    segment_index: 2,
+                    start: 10.0,
+                    end: 20.0,
+                    track_failures: vec![
+                        TrackFailureRecord {
+                            track: RecordingTrackKind::Microphone,
+                            stage: TrackFailureStage::Runtime,
+                            error: "microphone writer failed".to_string(),
+                        },
+                        TrackFailureRecord {
+                            track: RecordingTrackKind::SystemAudio,
+                            stage: TrackFailureStage::Stop,
+                            error: "system audio finalize failed".to_string(),
+                        },
+                    ],
+                }],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_recording_keeps_success_when_diagnostics_sidecar_write_fails() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let recording_dir = temp_dir.path().join("recording");
+        let start_time = Timestamps::now();
+        std::fs::create_dir_all(recording_dir.join("content"))
+            .expect("recording content dir should be created");
+        std::fs::create_dir_all(recording_dir.join("recording-diagnostics.json"))
+            .expect("diagnostics path should be pre-created as a directory");
+
+        let segment = RecordingSegment {
+            start: 0.0,
+            end: 1.0,
+            pipeline: FinishedPipeline {
+                start_time,
+                screen: test_finished_output_pipeline_at(
+                    recording_dir.join("content/display.mp4"),
+                    Timestamp::Instant(start_time.instant() + Duration::from_millis(33)),
+                    Some(test_video_info()),
+                    1,
+                ),
+                microphone: None,
+                camera: None,
+                system_audio: None,
+                cursor: None,
+                track_failures: vec![TrackFailureRecord {
+                    track: RecordingTrackKind::Microphone,
+                    stage: TrackFailureStage::Runtime,
+                    error: "microphone runtime failure".to_string(),
+                }],
+            },
+            camera_device_id: None,
+            mic_device_id: None,
+        };
+
+        let completed = stop_recording(
+            recording_dir.clone(),
+            vec![segment],
+            Default::default(),
+            false,
+        )
+        .await
+        .expect("diagnostics sidecar failure should not abort stop_recording");
+
+        assert_eq!(completed.project_path, recording_dir);
+        assert!(
+            completed.project_path.join("project-config.json").is_file(),
+            "project config should still be written"
+        );
+        assert!(
+            completed
+                .project_path
+                .join("recording-diagnostics.json")
+                .is_dir(),
+            "the pre-existing diagnostics directory should remain, proving the sidecar write failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_preserves_display_when_optional_track_fails_during_runtime() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let timestamps = Timestamps::now();
+        let (screen_tx, screen_rx) = flume::bounded(4);
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let (mut microphone_tx, microphone_rx) = futures::channel::mpsc::channel(4);
+
+        let screen = OutputPipeline::builder(temp_dir.path().join("display.mp4"))
+            .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                test_video_info(),
+                screen_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .expect("display pipeline should build");
+
+        let microphone = OutputPipeline::builder(temp_dir.path().join("audio-input.ogg"))
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                test_audio_info(),
+                microphone_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<FailingAudioMuxer>(FailingAudioMuxerConfig {
+                fail_after_frame: 1,
+            })
+            .await
+            .expect("microphone pipeline should build");
+        let microphone_done = microphone.done_fut();
+
+        let mut pipeline = Pipeline {
+            start_time: timestamps,
+            screen,
+            microphone: Some(microphone),
+            camera: None,
+            system_audio: None,
+            cursor: None,
+            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            watcher_task: None,
+        };
+        pipeline.spawn_watcher(completion_tx);
+
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(timestamps.instant() + Duration::from_millis(33)),
+            })
+            .await
+            .expect("display frame should send");
+        drop(screen_tx);
+
+        microphone_tx
+            .try_send(crate::output_pipeline::AudioFrame::new(
+                test_audio_info().empty_frame(960),
+                Timestamp::Instant(timestamps.instant() + Duration::from_millis(20)),
+            ))
+            .expect("microphone frame should send");
+        drop(microphone_tx);
+
+        let microphone_error = microphone_done
+            .await
+            .expect_err("optional microphone pipeline should fail at runtime");
+        assert!(
+            microphone_error
+                .to_string()
+                .contains("Audio muxer stopped accepting frames at frame 1"),
+            "runtime error should retain the mux send-failure context"
+        );
+
+        let finished = pipeline
+            .stop()
+            .await
+            .expect("display success should still allow the recording to stop cleanly");
+
+        assert_eq!(
+            finished.screen.video_frame_count, 1,
+            "display output should be preserved"
+        );
+        assert!(
+            finished.microphone.is_none(),
+            "optional microphone output should be dropped after runtime failure"
+        );
+        assert_eq!(
+            finished.track_failures.len(),
+            1,
+            "runtime failure should be recorded exactly once"
+        );
+        assert!(
+            completion_rx.borrow().is_none(),
+            "optional runtime failure should not publish a required-track completion error"
+        );
+        assert_eq!(
+            finished.track_failures[0].track,
+            RecordingTrackKind::Microphone
+        );
+        assert_eq!(finished.track_failures[0].stage, TrackFailureStage::Runtime);
+        assert!(
+            finished.track_failures[0]
+                .error
+                .contains("Audio muxer stopped accepting frames at frame 1"),
+            "recorded runtime failure should preserve the mux send-failure context"
+        );
+    }
 }

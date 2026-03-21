@@ -288,6 +288,7 @@ impl Playback {
                     let prefetch_time = frame_num as f64 / fps_f64;
 
                     if prefetch_time >= prefetch_duration {
+                        next_prefetch_frame = next_prefetch_frame.saturating_add(1);
                         break;
                     }
 
@@ -465,8 +466,13 @@ impl Playback {
             let mut last_stats_time = Instant::now();
             let stats_interval = Duration::from_secs(2);
 
-            let warmup_target_frames = 10usize;
-            let warmup_after_first_timeout = Duration::from_millis(500);
+            let is_mid_start = self.start_frame_number > 0;
+            let warmup_target_frames = if is_mid_start { 30 } else { 10 };
+            let warmup_after_first_timeout = if is_mid_start {
+                Duration::from_millis(800)
+            } else {
+                Duration::from_millis(500)
+            };
             let warmup_no_frames_timeout = Duration::from_secs(5);
             let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
@@ -492,12 +498,22 @@ impl Playback {
                     return;
                 }
 
-                match prefetch_rx.recv_timeout(Duration::from_millis(100)) {
+                match prefetch_rx.recv_timeout(Duration::from_millis(50)) {
                     Ok(prefetched) => {
                         if prefetched.frame_number >= frame_number {
                             prefetch_buffer.push_back(prefetched);
                             if first_frame_time.is_none() {
                                 first_frame_time = Some(Instant::now());
+                            }
+                        }
+                        while prefetch_buffer.len() < warmup_target_frames {
+                            match prefetch_rx.try_recv() {
+                                Ok(p) => {
+                                    if p.frame_number >= frame_number {
+                                        prefetch_buffer.push_back(p);
+                                    }
+                                }
+                                Err(_) => break,
                             }
                         }
                     }
@@ -555,15 +571,7 @@ impl Playback {
                     continue;
                 }
 
-                while prefetch_buffer
-                    .front()
-                    .is_some_and(|f| f.frame_number < frame_number)
-                {
-                    prefetch_buffer.pop_front();
-                }
-                if prefetch_buffer.len() >= PREFETCH_BUFFER_SIZE {
-                    prefetch_buffer.retain(|p| p.frame_number >= frame_number);
-                }
+                prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                 let drain_budget = 16usize;
                 let mut drained = 0usize;
                 while prefetch_buffer.len() < PREFETCH_BUFFER_SIZE && drained < drain_budget {
@@ -615,8 +623,19 @@ impl Playback {
                         let _ = frame_request_tx.send(frame_number);
 
                         let wait_ms = if total_frames_rendered < 15 { 100 } else { 50 };
-                        match prefetch_rx.recv_timeout(Duration::from_millis(wait_ms)) {
-                            Ok(prefetched) => {
+                        let prefetched_opt =
+                            match prefetch_rx.recv_timeout(Duration::from_millis(wait_ms)) {
+                                Ok(p) => Some(p),
+                                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                                    prefetch_rx.recv_timeout(Duration::from_millis(400)).ok()
+                                }
+                                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                                    break 'playback;
+                                }
+                            };
+
+                        match prefetched_opt {
+                            Some(prefetched) => {
                                 if prefetched.frame_number == frame_number {
                                     Some((
                                         Arc::new(prefetched.segment_frames),
@@ -636,16 +655,51 @@ impl Playback {
                                     continue;
                                 }
                             }
-                            Err(_) => {
+                            None => {
                                 frame_number = frame_number.saturating_add(1);
                                 total_frames_skipped += 1;
+                                let _ = frame_request_tx.send(frame_number);
+                                let _ = playback_position_tx.send(frame_number);
+                                if has_audio
+                                    && audio_playhead_tx
+                                        .send(frame_number as f64 / fps_f64)
+                                        .is_err()
+                                {
+                                    break 'playback;
+                                }
                                 continue;
                             }
                         }
                     } else {
-                        let _ = frame_request_tx.send(frame_number);
+                        let min_buffered = prefetch_buffer.iter().map(|p| p.frame_number).min();
+                        if let Some(next_available_frame) = min_buffered
+                            && next_available_frame > frame_number
+                        {
+                            let jumped = next_available_frame - frame_number;
+                            frame_number = next_available_frame;
+                            total_frames_skipped += jumped as u64;
+                            let _ = frame_request_tx.send(frame_number);
+                            let _ = playback_position_tx.send(frame_number);
+                            if has_audio
+                                && audio_playhead_tx
+                                    .send(frame_number as f64 / fps_f64)
+                                    .is_err()
+                            {
+                                break 'playback;
+                            }
+                            continue;
+                        }
                         frame_number = frame_number.saturating_add(1);
                         total_frames_skipped += 1;
+                        let _ = frame_request_tx.send(frame_number);
+                        let _ = playback_position_tx.send(frame_number);
+                        if has_audio
+                            && audio_playhead_tx
+                                .send(frame_number as f64 / fps_f64)
+                                .is_err()
+                        {
+                            break 'playback;
+                        }
                         continue;
                     }
                 };
@@ -675,8 +729,14 @@ impl Playback {
                     let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
                         segment_media.cursor.clone(),
                         cursor_smoothing,
+                        cached_project.cursor.click_spring_config(),
                         cached_project.screen_movement_spring,
                         duration,
+                        cached_project
+                            .timeline
+                            .as_ref()
+                            .map(|t| t.zoom_segments.as_slice())
+                            .unwrap_or(&[]),
                     );
 
                     let uniforms = ProjectUniforms::new(
@@ -691,7 +751,7 @@ impl Playback {
                         &zoom_focus_interpolator,
                     );
 
-                    self.renderer.render_frame(
+                    self.renderer.render_frame_blocking(
                         Arc::unwrap_or_clone(segment_frames),
                         uniforms,
                         segment_media.cursor.clone(),

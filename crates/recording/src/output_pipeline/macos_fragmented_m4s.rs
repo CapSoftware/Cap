@@ -1,3 +1,4 @@
+use super::core::{BlockingThreadFinish, combine_finish_errors, wait_for_blocking_thread_finish};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
     output_pipeline::NativeCameraFrame, screen_capture,
@@ -88,6 +89,52 @@ impl FrameDropTracker {
     }
 }
 
+fn finish_encoder_thread(
+    handle: JoinHandle<anyhow::Result<()>>,
+    label: &str,
+) -> BlockingThreadFinish {
+    wait_for_blocking_thread_finish(handle, Duration::from_secs(5), label)
+}
+
+fn finish_segmented_encoder(
+    mut state: EncoderState,
+    timestamp: Duration,
+    thread_label: &str,
+    finish_label: &str,
+) -> anyhow::Result<()> {
+    if let Err(error) = state.video_tx.send(None) {
+        trace!("{thread_label} channel already closed during finish: {error}");
+    }
+
+    let thread_result = state
+        .encoder_handle
+        .take()
+        .map(|handle| finish_encoder_thread(handle, thread_label))
+        .unwrap_or(BlockingThreadFinish::Clean);
+
+    let thread_error = match thread_result {
+        BlockingThreadFinish::Clean => None,
+        BlockingThreadFinish::Failed(error) => Some(error),
+        BlockingThreadFinish::TimedOut(error) => return Err(error),
+    };
+
+    let finalize_error = match state.encoder.lock() {
+        Ok(mut encoder) => encoder
+            .finish_with_timestamp(timestamp)
+            .map_err(|error| anyhow!("{finish_label}: {error:#}"))
+            .err(),
+        Err(_) => Some(anyhow!(
+            "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
+        )),
+    };
+
+    match (thread_error, finalize_error) {
+        (None, None) => Ok(()),
+        (Some(error), None) | (None, Some(error)) => Err(error),
+        (Some(primary), Some(secondary)) => Err(combine_finish_errors(primary, secondary)),
+    }
+}
+
 struct EncoderState {
     video_tx: SyncSender<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>,
     encoder: Arc<Mutex<SegmentedVideoEncoder>>,
@@ -174,54 +221,15 @@ impl Muxer for MacOSFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(mut state) = self.state.take() {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("M4S encoder channel already closed during finish: {e}");
-            }
-
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        match handle.join() {
-                            Err(panic_payload) => {
-                                warn!(
-                                    "M4S encoder thread panicked during finish: {:?}",
-                                    panic_payload
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                warn!("M4S encoder thread returned error: {e}");
-                            }
-                            Ok(Ok(())) => {}
-                        }
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "M4S encoder thread did not finish within {:?}, abandoning",
-                            timeout
-                        );
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
-
-            match state.encoder.lock() {
-                Ok(mut encoder) => {
-                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
-                        warn!("Failed to finish segmented encoder: {e}");
-                    }
-                }
-                Err(_) => {
-                    error!("Encoder mutex poisoned during finish - encoder thread likely panicked");
-                    return Ok(Err(anyhow!(
-                        "Encoder mutex poisoned - recording may be corrupt or incomplete"
-                    )));
-                }
-            }
+        if let Some(state) = self.state.take()
+            && let Err(error) = finish_segmented_encoder(
+                state,
+                timestamp,
+                "M4S encoder",
+                "Failed to finish segmented encoder",
+            )
+        {
+            return Ok(Err(error));
         }
 
         Ok(Ok(()))
@@ -405,7 +413,7 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
                         self.frame_drops.record_drop();
                     }
                     std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        trace!("M4S encoder channel disconnected");
+                        return Err(anyhow!("M4S encoder channel disconnected"));
                     }
                 },
             }
@@ -668,56 +676,15 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(mut state) = self.state.take() {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("M4S camera encoder channel already closed during finish: {e}");
-            }
-
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        match handle.join() {
-                            Err(panic_payload) => {
-                                warn!(
-                                    "M4S camera encoder thread panicked during finish: {:?}",
-                                    panic_payload
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                warn!("M4S camera encoder thread returned error: {e}");
-                            }
-                            Ok(Ok(())) => {}
-                        }
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "M4S camera encoder thread did not finish within {:?}, abandoning",
-                            timeout
-                        );
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
-
-            match state.encoder.lock() {
-                Ok(mut encoder) => {
-                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
-                        warn!("Failed to finish camera segmented encoder: {e}");
-                    }
-                }
-                Err(_) => {
-                    error!(
-                        "Camera encoder mutex poisoned during finish - encoder thread likely panicked"
-                    );
-                    return Ok(Err(anyhow!(
-                        "Camera encoder mutex poisoned - recording may be corrupt or incomplete"
-                    )));
-                }
-            }
+        if let Some(state) = self.state.take()
+            && let Err(error) = finish_segmented_encoder(
+                state,
+                timestamp,
+                "M4S camera encoder",
+                "Failed to finish camera segmented encoder",
+            )
+        {
+            return Ok(Err(error));
         }
 
         Ok(Ok(()))
@@ -903,7 +870,7 @@ impl VideoMuxer for MacOSFragmentedM4SCameraMuxer {
                         self.frame_drops.record_drop();
                     }
                     std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        trace!("M4S camera encoder channel disconnected");
+                        return Err(anyhow!("M4S camera encoder channel disconnected"));
                     }
                 },
             }
