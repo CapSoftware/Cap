@@ -107,9 +107,10 @@ impl<'a> CursorSpringContext<'a> {
     }
 
     fn has_imminent_click(&self, time_ms: f64) -> bool {
+        let idx = self.clicks[self.next_click_index..].partition_point(|c| c.time_ms <= time_ms);
         self.clicks
-            .iter()
-            .any(|c| c.time_ms > time_ms && c.time_ms - time_ms <= CLICK_SPRING_WINDOW_MS)
+            .get(self.next_click_index + idx)
+            .is_some_and(|c| c.time_ms - time_ms <= CLICK_SPRING_WINDOW_MS)
     }
 }
 
@@ -118,9 +119,8 @@ fn next_click_within(
     time_ms: f64,
     window_ms: f64,
 ) -> Option<&CursorClickEvent> {
-    clicks
-        .iter()
-        .find(|c| c.time_ms > time_ms && c.time_ms - time_ms <= window_ms)
+    let idx = clicks.partition_point(|c| c.time_ms <= time_ms);
+    clicks.get(idx).filter(|c| c.time_ms - time_ms <= window_ms)
 }
 
 fn position_at_time(moves: &[CursorMoveEvent], time_ms: f64) -> (f64, f64) {
@@ -269,10 +269,7 @@ pub fn interpolate_cursor_with_click_spring(
                 let dt = (delta_ms / 1000.0).max(0.000_1);
                 let velocity = XY::new(((next.x - c.x) as f32) / dt, ((next.y - c.y) as f32) / dt);
                 Some(InterpolatedCursorPosition {
-                    position: Coord::new(XY {
-                        x: c.x,
-                        y: c.y,
-                    }),
+                    position: Coord::new(XY { x: c.x, y: c.y }),
                     velocity,
                     cursor_id: c.cursor_id.clone(),
                 })
