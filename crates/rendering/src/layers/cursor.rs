@@ -573,10 +573,13 @@ fn compute_cursor_idle_opacity(
         return 1.0;
     }
 
-    let has_upcoming_move = cursor.moves.iter().any(|e| {
-        e.time_ms > current_time_ms
-            && e.time_ms - current_time_ms <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS
-    });
+    let idx = cursor
+        .moves
+        .partition_point(|e| e.time_ms <= current_time_ms);
+    let has_upcoming_move = cursor
+        .moves
+        .get(idx)
+        .is_some_and(|e| e.time_ms - current_time_ms <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS);
 
     if has_upcoming_move {
         return 1.0;
