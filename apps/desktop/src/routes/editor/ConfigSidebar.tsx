@@ -622,9 +622,7 @@ export function ConfigSidebar() {
 						<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
 							<Slider
 								value={[project.cursor.rotationAmount ?? 0.15]}
-								onChange={(v) =>
-									setProject("cursor", "rotationAmount" as any, v[0])
-								}
+								onChange={(v) => setProject("cursor", "rotationAmount", v[0])}
 								minValue={0}
 								maxValue={1}
 								step={0.01}
