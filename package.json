@@ -7,6 +7,7 @@
 		"cap-setup": "dotenv -e .env -- node scripts/setup.js",
 		"analytics:migrate-dub": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --dry-run",
 		"analytics:migrate-dub:apply": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --apply",
+		"analytics:posthog-growth": "dotenv -e .env -- node scripts/analytics/posthog-growth-audit.mjs",
 		"analytics:setup": "dotenv -e .env -- node scripts/analytics/setup-analytics.js",
 		"analytics:check": "dotenv -e .env -- node scripts/analytics/check-analytics.js",
 		"analytics:delete-all": "dotenv -e .env -- node scripts/analytics/delete-all-data.js",
