@@ -105,7 +105,11 @@ export function LoginForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = () => {
-		trackEvent("auth_started", { method: "google", is_signup: true });
+		trackEvent("auth_started", {
+			method: "google",
+			is_signup: false,
+			auth_surface: "login",
+		});
 		signIn("google", {
 			...(next && next.length > 0 ? { callbackUrl: next } : {}),
 		});
@@ -267,7 +271,8 @@ export function LoginForm() {
 											setLoading(true);
 											trackEvent("auth_started", {
 												method: "email",
-												is_signup: !oauthError,
+												is_signup: false,
+												auth_surface: "login",
 											});
 											const normalizedEmail = email.trim().toLowerCase();
 											signIn("email", {
@@ -284,6 +289,9 @@ export function LoginForm() {
 														setEmailSent(true);
 														setLastEmailSentTime(Date.now());
 														trackEvent("auth_email_sent", {
+															method: "email",
+															is_signup: false,
+															auth_surface: "login",
 															email_domain: normalizedEmail.split("@")[1],
 														});
 														const params = new URLSearchParams({
