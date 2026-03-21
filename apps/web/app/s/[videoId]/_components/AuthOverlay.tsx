@@ -135,7 +135,8 @@ const StepOne = ({
 	setLastResendTime: (time: number | null) => void;
 	emailId: string;
 }) => {
-	const videoId = useParams().videoId;
+	const rawVideoId = useParams().videoId;
+	const videoId = Array.isArray(rawVideoId) ? rawVideoId[0] : rawVideoId;
 	const handleGoogleSignIn = () => {
 		trackEvent("auth_started", {
 			method: "google",
@@ -179,7 +180,7 @@ const StepOne = ({
 								method: "email",
 								is_signup: false,
 								auth_surface: "share_overlay",
-								email_domain: normalizedEmail.split("@")[1],
+								email_domain: normalizedEmail.split("@").at(1),
 								video_id: videoId,
 							});
 							toast.success("Email sent - check your inbox!");
