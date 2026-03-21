@@ -2,7 +2,10 @@ use std::{
     sync::{OnceLock, PoisonError, RwLock},
     time::Duration,
 };
+use tauri::AppHandle;
 use tracing::error;
+
+use crate::auth::AuthStore;
 
 #[derive(Debug)]
 pub enum PostHogEvent {
@@ -22,36 +25,42 @@ pub enum PostHogEvent {
     },
 }
 
-impl From<PostHogEvent> for posthog_rs::Event {
-    fn from(event: PostHogEvent) -> Self {
-        match event {
-            PostHogEvent::MultipartUploadComplete {
-                duration,
-                length,
-                size,
-            } => {
-                let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-                e.insert_prop("duration", duration.as_secs())
-                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                    .ok();
-                e.insert_prop("length", length.as_secs())
-                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                    .ok();
-                e.insert_prop("size", size)
-                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                    .ok();
-                e
-            }
-            PostHogEvent::MultipartUploadFailed { duration, error } => {
-                let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
-                e.insert_prop("duration", duration.as_secs())
-                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                    .ok();
-                e.insert_prop("error", error)
-                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                    .ok();
-                e
-            }
+fn posthog_event(event: PostHogEvent, distinct_id: Option<&str>) -> posthog_rs::Event {
+    match event {
+        PostHogEvent::MultipartUploadComplete {
+            duration,
+            length,
+            size,
+        } => {
+            let mut e = match distinct_id {
+                Some(distinct_id) => {
+                    posthog_rs::Event::new("multipart_upload_complete", distinct_id)
+                }
+                None => posthog_rs::Event::new_anon("multipart_upload_complete"),
+            };
+            e.insert_prop("duration", duration.as_secs())
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
+            e.insert_prop("length", length.as_secs())
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
+            e.insert_prop("size", size)
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
+            e
+        }
+        PostHogEvent::MultipartUploadFailed { duration, error } => {
+            let mut e = match distinct_id {
+                Some(distinct_id) => posthog_rs::Event::new("multipart_upload_failed", distinct_id),
+                None => posthog_rs::Event::new_anon("multipart_upload_failed"),
+            };
+            e.insert_prop("duration", duration.as_secs())
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
+            e.insert_prop("error", error)
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
+            e
         }
     }
 }
@@ -76,10 +85,14 @@ pub fn set_server_url(url: &str) {
 
 static API_SERVER_IS_CAP_CLOUD: OnceLock<RwLock<Option<bool>>> = OnceLock::new();
 
-pub fn async_capture_event(event: PostHogEvent) {
+pub fn async_capture_event(app: &AppHandle, event: PostHogEvent) {
     if option_env!("VITE_POSTHOG_KEY").is_some() {
+        let distinct_id = AuthStore::get(app)
+            .ok()
+            .flatten()
+            .and_then(|auth| auth.user_id);
         tokio::spawn(async move {
-            let mut e: posthog_rs::Event = event.into();
+            let mut e = posthog_event(event, distinct_id.as_deref());
 
             e.insert_prop("cap_version", env!("CARGO_PKG_VERSION"))
                 .map_err(|err| error!("Error adding PostHog property: {err:?}"))
