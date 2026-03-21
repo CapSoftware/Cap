@@ -199,7 +199,7 @@ impl ZoomFocusInterpolator {
         let time_ms = time_secs * 1000.0;
         self.segment_clusters
             .iter()
-            .find(|sc| time_secs > sc.start_secs && time_secs <= sc.end_secs)
+            .find(|sc| time_secs >= sc.start_secs && time_secs <= sc.end_secs)
             .and_then(|sc| cluster_center_at_time(&sc.clusters, time_ms))
     }
 
