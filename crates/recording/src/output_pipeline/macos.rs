@@ -1,5 +1,8 @@
 use crate::{
-    output_pipeline::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer},
+    output_pipeline::{
+        AudioFrame, AudioMuxer, BlockingThreadFinish, Muxer, TaskPool, VideoFrame, VideoMuxer,
+        wait_for_blocking_thread_finish,
+    },
     sources::screen_capture,
 };
 use anyhow::anyhow;
@@ -73,20 +76,9 @@ fn wait_for_worker(
     timeout: Duration,
     worker_name: &str,
 ) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
-    loop {
-        if handle.is_finished() {
-            return match handle.join() {
-                Ok(res) => res,
-                Err(panic_payload) => Err(anyhow!("{worker_name} panicked: {panic_payload:?}")),
-            };
-        }
-
-        if start.elapsed() > timeout {
-            return Err(anyhow!("{worker_name} did not finish within {:?}", timeout));
-        }
-
-        std::thread::sleep(Duration::from_millis(50));
+    match wait_for_blocking_thread_finish(handle, timeout, worker_name) {
+        BlockingThreadFinish::Clean => Ok(()),
+        BlockingThreadFinish::Failed(error) | BlockingThreadFinish::TimedOut(error) => Err(error),
     }
 }
 
