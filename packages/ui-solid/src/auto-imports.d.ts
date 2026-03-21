@@ -93,6 +93,7 @@ declare global {
   const IconLucideRatio: typeof import('~icons/lucide/ratio.jsx')['default']
   const IconLucideRectangleHorizontal: typeof import('~icons/lucide/rectangle-horizontal.jsx')['default']
   const IconLucideRefreshCw: typeof import('~icons/lucide/refresh-cw.jsx')['default']
+  const IconLucideRotate3d: typeof import('~icons/lucide/rotate3d.jsx')['default']
   const IconLucideRotateCcw: typeof import('~icons/lucide/rotate-ccw.jsx')['default']
   const IconLucideRotateCw: typeof import('~icons/lucide/rotate-cw.jsx')['default']
   const IconLucideSave: typeof import('~icons/lucide/save.jsx')['default']
