@@ -356,8 +356,14 @@ impl ScreenshotEditorInstances {
                         let zoom_focus_interpolator = ZoomFocusInterpolator::new(
                             &cursor_events,
                             None,
+                            current_config.cursor.click_spring_config(),
                             current_config.screen_movement_spring,
                             0.0,
+                            current_config
+                                .timeline
+                                .as_ref()
+                                .map(|t| t.zoom_segments.as_slice())
+                                .unwrap_or(&[]),
                         );
 
                         let uniforms = ProjectUniforms::new(

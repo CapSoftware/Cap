@@ -482,8 +482,15 @@ async fn benchmark_playback(
         let zoom_focus_interpolator = ZoomFocusInterpolator::new(
             &segment_media.cursor,
             cursor_smoothing,
+            context.project.cursor.click_spring_config(),
             context.project.screen_movement_spring,
             duration,
+            context
+                .project
+                .timeline
+                .as_ref()
+                .map(|t| t.zoom_segments.as_slice())
+                .unwrap_or(&[]),
         );
 
         let uniforms = ProjectUniforms::new(
@@ -671,8 +678,15 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
     let zoom_focus_interpolator = ZoomFocusInterpolator::new(
         &segment_media.cursor,
         cursor_smoothing,
+        context.project.cursor.click_spring_config(),
         context.project.screen_movement_spring,
         duration,
+        context
+            .project
+            .timeline
+            .as_ref()
+            .map(|t| t.zoom_segments.as_slice())
+            .unwrap_or(&[]),
     );
     let uniforms = ProjectUniforms::new(
         &context.render_constants,
