@@ -698,12 +698,12 @@ impl MP4Encoder {
             dts: cm::Time::invalid(),
         };
 
-        let timed_frame = match pending.raw_frame.copy_with_new_timing(&[timing]) {
+        let timed_frame = match rebuild_video_sample_buf(&pending.raw_frame, timing) {
             Ok(f) => f,
             Err(e) => {
                 warn!(
                     ?e,
-                    "Failed to copy pending sample buffer with new timing, skipping frame"
+                    "Failed to rebuild pending sample buffer with new timing, skipping frame"
                 );
                 return Ok(());
             }
@@ -1139,7 +1139,11 @@ mod tests {
         path
     }
 
-    fn create_pixel_buffer_pool(width: usize, height: usize) -> arc::R<cidre::cv::PixelBufPool> {
+    fn create_pixel_buffer_pool_with_format(
+        width: usize,
+        height: usize,
+        pixel_format: cidre::cv::PixelFormat,
+    ) -> arc::R<cidre::cv::PixelBufPool> {
         use cidre::{cf, cv};
 
         let min_count_num = cf::Number::from_usize(8);
@@ -1158,7 +1162,7 @@ mod tests {
             cv::pixel_buffer::keys::height().as_ref(),
         ];
         let pixel_buf_attr_values: [&cf::Type; 3] = [
-            cv::PixelFormat::_420V.to_cf_number().as_ref(),
+            pixel_format.to_cf_number().as_ref(),
             width_num.as_ref(),
             height_num.as_ref(),
         ];
@@ -1166,6 +1170,10 @@ mod tests {
             cf::Dictionary::with_keys_values(&pixel_buf_attr_keys, &pixel_buf_attr_values).unwrap();
 
         cv::PixelBufPool::new(Some(pool_attrs.as_ref()), Some(pixel_buf_attrs.as_ref())).unwrap()
+    }
+
+    fn create_pixel_buffer_pool(width: usize, height: usize) -> arc::R<cidre::cv::PixelBufPool> {
+        create_pixel_buffer_pool_with_format(width, height, cidre::cv::PixelFormat::_420V)
     }
 
     fn create_test_video_frame(
@@ -1200,6 +1208,62 @@ mod tests {
         frame.data_mut(0).fill(0);
         frame.set_rate(sample_rate);
         frame
+    }
+
+    fn run_camera_encoder_scenario(
+        name: &str,
+        video_info: VideoInfo,
+        pool_format: cidre::cv::PixelFormat,
+        frame_timings: &[(i64, i64)],
+    ) -> Result<usize, String> {
+        let output = test_output_path(name);
+        let mut encoder =
+            MP4Encoder::init(output.clone(), video_info, None, None).map_err(|e| e.to_string())?;
+        let pool = create_pixel_buffer_pool_with_format(
+            video_info.width as usize,
+            video_info.height as usize,
+            pool_format,
+        );
+
+        let mut appended = 0usize;
+
+        for &(pts_us, duration_us) in frame_timings {
+            let frame = create_test_video_frame(&pool, pts_us, duration_us);
+            let timestamp = Duration::from_micros(pts_us.max(0) as u64);
+
+            match encoder.queue_video_frame(frame, timestamp) {
+                Ok(()) => appended += 1,
+                Err(QueueFrameError::NotReadyForMore) => {}
+                Err(QueueFrameError::WriterFailed(err)) => {
+                    let _ = std::fs::remove_file(&output);
+                    return Err(format!(
+                        "WriterFailed after {appended} frames at pts={pts_us}us: {err}"
+                    ));
+                }
+                Err(QueueFrameError::Failed) => {
+                    let _ = std::fs::remove_file(&output);
+                    return Err(format!("Failed after {appended} frames at pts={pts_us}us"));
+                }
+                Err(err) => {
+                    let _ = std::fs::remove_file(&output);
+                    return Err(format!(
+                        "Error after {appended} frames at pts={pts_us}us: {err}"
+                    ));
+                }
+            }
+        }
+
+        let end_pts_us = frame_timings
+            .last()
+            .map(|(pts, dur)| pts + dur)
+            .unwrap_or(1_000_000);
+        encoder
+            .finish(Some(Duration::from_micros(end_pts_us.max(0) as u64)))
+            .map_err(|e| e.to_string())?;
+
+        let _ = std::fs::remove_file(&output);
+
+        Ok(appended)
     }
 
     fn wireless_audio_config() -> cap_media_info::AudioInfo {
@@ -2317,6 +2381,130 @@ mod tests {
         );
     }
 
+    #[test]
+    fn raw_uyvy_camera_sample_bufs_do_not_fail_writer() {
+        let output = test_output_path("uyvy_camera_ok");
+
+        let (mut asset_writer, mut video_input) =
+            setup_raw_writer(&output, 1920, 1080, 60.0, true).unwrap();
+        let pool = create_pixel_buffer_pool_with_format(1920, 1080, cidre::cv::PixelFormat::_2VUY);
+
+        let timings: Vec<(i64, i64)> = (0..120i64).map(|i| (i * 16_666, 16_666)).collect();
+
+        let result = feed_frames_to_writer(&mut video_input, &asset_writer, &pool, &timings, 0);
+
+        let finish = finish_raw_writer(&mut video_input, &mut asset_writer, 120 * 16_666);
+
+        let _ = std::fs::remove_file(&output);
+
+        assert!(
+            result.is_ok() && finish.is_ok(),
+            "Raw UYVY camera sample buffers should append successfully. result={result:?} finish={finish:?}"
+        );
+    }
+
+    #[test]
+    fn camera_writer_scenario_matrix_1080p_uyvy() {
+        let video_60 = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::UYVY422, 1920, 1080, 60);
+        let frame_60 = 16_666i64;
+        let frame_30 = 33_333i64;
+
+        let clean_60: Vec<(i64, i64)> = (0..240i64).map(|i| (i * frame_60, frame_60)).collect();
+
+        let two_backward_anomalies_60: Vec<(i64, i64)> = (0..240i64)
+            .scan(0i64, |pts, i| {
+                let current = *pts;
+                let step = match i {
+                    4 => frame_60 - 49_000,
+                    5 => frame_60 - 14_000,
+                    _ => frame_60,
+                };
+                *pts = (*pts + step).max(0);
+                Some((current, frame_60))
+            })
+            .collect();
+
+        let bursty_60: Vec<(i64, i64)> = (0..240i64)
+            .scan(0i64, |pts, i| {
+                let current = *pts;
+                let step = match i % 12 {
+                    0 | 1 | 2 => 8_333,
+                    3 => 33_333,
+                    4 | 5 | 6 => 12_000,
+                    _ => frame_60,
+                };
+                *pts += step;
+                Some((current, frame_60))
+            })
+            .collect();
+
+        let duplicates_60: Vec<(i64, i64)> = (0..240i64)
+            .map(|i| {
+                let pts = if i == 60 || i == 61 {
+                    60 * frame_60
+                } else {
+                    i * frame_60
+                };
+                (pts, frame_60)
+            })
+            .collect();
+
+        let video_30 = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::UYVY422, 1920, 1080, 30);
+        let camera_overlay_like_30: Vec<(i64, i64)> = (0..180i64)
+            .scan(0i64, |pts, i| {
+                let current = *pts;
+                let step = match i % 10 {
+                    0 => 16_666,
+                    1 => 50_000,
+                    5 => 20_000,
+                    _ => frame_30,
+                };
+                *pts += step;
+                Some((current, frame_30))
+            })
+            .collect();
+
+        let scenarios = vec![
+            ("cam_clean_1080p60_uyvy", video_60, clean_60, true),
+            (
+                "cam_two_backward_1080p60_uyvy",
+                video_60,
+                two_backward_anomalies_60,
+                true,
+            ),
+            ("cam_bursty_1080p60_uyvy", video_60, bursty_60, true),
+            (
+                "cam_duplicate_pts_1080p60_uyvy",
+                video_60,
+                duplicates_60,
+                true,
+            ),
+            (
+                "cam_overlay_like_1080p30_uyvy",
+                video_30,
+                camera_overlay_like_30,
+                true,
+            ),
+        ];
+
+        for (name, video_info, timings, should_succeed) in scenarios {
+            let result = run_camera_encoder_scenario(
+                name,
+                video_info,
+                cidre::cv::PixelFormat::_2VUY,
+                &timings,
+            );
+            if should_succeed {
+                assert!(result.is_ok(), "{name} should succeed, got {result:?}");
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{name} should fail to reproduce writer rejection"
+                );
+            }
+        }
+    }
+
     fn generate_drift_timings(
         frame_count: usize,
         base_interval_us: i64,
@@ -3299,6 +3487,25 @@ impl SampleBufExt for cm::SampleBuf {
                 )
             })
         }
+    }
+}
+
+fn rebuild_video_sample_buf(
+    frame: &cm::SampleBuf,
+    timing: SampleTimingInfo,
+) -> os::Result<arc::R<cm::SampleBuf>> {
+    if let Some(image_buf) = frame.image_buf() {
+        let format_desc = cm::VideoFormatDesc::with_image_buf(image_buf)?;
+        cm::SampleBuf::with_image_buf(
+            image_buf,
+            true,
+            None,
+            std::ptr::null(),
+            &format_desc,
+            &timing,
+        )
+    } else {
+        frame.copy_with_new_timing(&[timing])
     }
 }
 
