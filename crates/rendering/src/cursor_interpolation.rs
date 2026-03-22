@@ -236,47 +236,105 @@ pub fn interpolate_cursor_with_click_spring(
         );
         interpolate_timeline(&timeline, time_ms)
     } else {
-        if cursor.moves[0].time_ms > time_ms {
-            let event = &cursor.moves[0];
-            return Some(InterpolatedCursorPosition {
-                position: Coord::new(XY {
-                    x: event.x,
-                    y: event.y,
-                }),
-                velocity: XY::new(0.0, 0.0),
-                cursor_id: event.cursor_id.clone(),
-            });
+        interpolate_raw_cursor(cursor, time_ms)
+    }
+}
+
+fn interpolate_raw_cursor(
+    cursor: &CursorEvents,
+    time_ms: f64,
+) -> Option<InterpolatedCursorPosition> {
+    if cursor.moves.is_empty() {
+        return None;
+    }
+
+    if cursor.moves[0].time_ms > time_ms {
+        let event = &cursor.moves[0];
+        return Some(InterpolatedCursorPosition {
+            position: Coord::new(XY {
+                x: event.x,
+                y: event.y,
+            }),
+            velocity: XY::new(0.0, 0.0),
+            cursor_id: event.cursor_id.clone(),
+        });
+    }
+
+    if let Some(event) = cursor.moves.last()
+        && event.time_ms <= time_ms
+    {
+        return Some(InterpolatedCursorPosition {
+            position: Coord::new(XY {
+                x: event.x,
+                y: event.y,
+            }),
+            velocity: XY::new(0.0, 0.0),
+            cursor_id: event.cursor_id.clone(),
+        });
+    }
+
+    cursor.moves.windows(2).find_map(|chunk| {
+        if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
+            let c = &chunk[0];
+            let next = &chunk[1];
+            let delta_ms = (next.time_ms - c.time_ms) as f32;
+            let dt = (delta_ms / 1000.0).max(0.000_1);
+            let velocity = XY::new(((next.x - c.x) as f32) / dt, ((next.y - c.y) as f32) / dt);
+            Some(InterpolatedCursorPosition {
+                position: Coord::new(XY { x: c.x, y: c.y }),
+                velocity,
+                cursor_id: c.cursor_id.clone(),
+            })
+        } else {
+            None
+        }
+    })
+}
+
+pub struct PrecomputedCursorTimeline {
+    timeline: Vec<SmoothedCursorEvent>,
+    raw_cursor: CursorEvents,
+    has_smoothing: bool,
+}
+
+impl PrecomputedCursorTimeline {
+    pub fn new(
+        cursor: &CursorEvents,
+        smoothing: Option<SpringMassDamperSimulationConfig>,
+        click_spring: Option<ClickSpringConfig>,
+    ) -> Self {
+        if cursor.moves.is_empty() || smoothing.is_none() {
+            return Self {
+                timeline: vec![],
+                raw_cursor: cursor.clone(),
+                has_smoothing: false,
+            };
         }
 
-        if let Some(event) = cursor.moves.last()
-            && event.time_ms <= time_ms
-        {
-            return Some(InterpolatedCursorPosition {
-                position: Coord::new(XY {
-                    x: event.x,
-                    y: event.y,
-                }),
-                velocity: XY::new(0.0, 0.0),
-                cursor_id: event.cursor_id.clone(),
-            });
-        }
+        let smoothing_config = smoothing.unwrap();
+        let filtered_moves = filter_cursor_shake(&cursor.moves);
+        let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
+        let timeline = build_smoothed_timeline(
+            cursor,
+            prepared_moves.as_ref(),
+            smoothing_config,
+            click_spring,
+        );
 
-        cursor.moves.windows(2).find_map(|chunk| {
-            if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
-                let c = &chunk[0];
-                let next = &chunk[1];
-                let delta_ms = (next.time_ms - c.time_ms) as f32;
-                let dt = (delta_ms / 1000.0).max(0.000_1);
-                let velocity = XY::new(((next.x - c.x) as f32) / dt, ((next.y - c.y) as f32) / dt);
-                Some(InterpolatedCursorPosition {
-                    position: Coord::new(XY { x: c.x, y: c.y }),
-                    velocity,
-                    cursor_id: c.cursor_id.clone(),
-                })
-            } else {
-                None
-            }
-        })
+        Self {
+            timeline,
+            raw_cursor: cursor.clone(),
+            has_smoothing: true,
+        }
+    }
+
+    pub fn interpolate(&self, time_secs: f32) -> Option<InterpolatedCursorPosition> {
+        let time_ms = (time_secs * 1000.0) as f64;
+        if self.has_smoothing {
+            interpolate_timeline(&self.timeline, time_ms)
+        } else {
+            interpolate_raw_cursor(&self.raw_cursor, time_ms)
+        }
     }
 }
 
