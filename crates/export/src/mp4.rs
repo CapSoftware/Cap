@@ -578,85 +578,80 @@ async fn export_render_to_channel(
     mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     project_path: PathBuf,
 ) -> Result<(), cap_rendering::RenderingError> {
-    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
+    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(2);
 
     let screenshot_project_path = project_path;
 
-    let forward_task = tokio::spawn(async move {
-        let mut first_frame_data: Option<FirstFrameNv12> = None;
-        let mut frame_count = 0u32;
-        let mut channel_frames_sent = 0u32;
+    let render_result = {
+        let render_future = cap_rendering::render_video_to_channel_nv12(
+            constants,
+            project,
+            tx_image_data,
+            recording_meta,
+            meta,
+            render_segments,
+            fps,
+            resolution_base,
+            recordings,
+            stop_after_frames_sent,
+            startup_breakdown_ms,
+        );
 
-        while let Some((frame, _frame_number)) = video_rx.recv().await {
-            if !(on_progress)(frame_count) {
-                return Err("Export cancelled".to_string());
+        let forward_future = async {
+            let mut first_frame_data: Option<FirstFrameNv12> = None;
+            let mut frame_count = 0u32;
+
+            while let Some((frame, _frame_number)) = video_rx.recv().await {
+                if !(on_progress)(frame_count) {
+                    return Err(cap_rendering::RenderingError::ImageLoadError(
+                        "Export cancelled".to_string(),
+                    ));
+                }
+
+                let export_frame = nv12_from_rendered_frame(frame);
+
+                if first_frame_data.is_none() {
+                    first_frame_data = Some(FirstFrameNv12 {
+                        data: export_frame.nv12_data.clone(),
+                        width: export_frame.width,
+                        height: export_frame.height,
+                        y_stride: export_frame.y_stride,
+                    });
+                }
+
+                if sender.send(export_frame).is_err() {
+                    warn!("Encoder dropped, stopping render forwarding");
+                    break;
+                }
+
+                frame_count += 1;
             }
 
-            let export_frame = nv12_from_rendered_frame(frame);
+            drop(sender);
 
-            if first_frame_data.is_none() {
-                first_frame_data = Some(FirstFrameNv12 {
-                    data: export_frame.nv12_data.clone(),
-                    width: export_frame.width,
-                    height: export_frame.height,
-                    y_stride: export_frame.y_stride,
+            if let Some(first) = first_frame_data {
+                let pp = screenshot_project_path;
+                tokio::task::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        save_screenshot_from_nv12(
+                            &first.data,
+                            first.width,
+                            first.height,
+                            first.y_stride,
+                            &pp,
+                        );
+                    })
+                    .await;
                 });
             }
 
-            if sender.send(export_frame).is_err() {
-                warn!("Encoder dropped, stopping render forwarding");
-                break;
-            }
+            Ok::<_, cap_rendering::RenderingError>(())
+        };
 
-            frame_count += 1;
-            channel_frames_sent += 1;
-            if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
-                break;
-            }
-        }
-
-        drop(sender);
-
-        if let Some(first) = first_frame_data {
-            let pp = screenshot_project_path;
-            tokio::task::spawn(async move {
-                let _ = tokio::task::spawn_blocking(move || {
-                    save_screenshot_from_nv12(
-                        &first.data,
-                        first.width,
-                        first.height,
-                        first.y_stride,
-                        &pp,
-                    );
-                })
-                .await;
-            });
-        }
-
-        Ok::<_, String>(())
-    });
-
-    let render_result = cap_rendering::render_video_to_channel_nv12(
-        constants,
-        project,
-        tx_image_data,
-        recording_meta,
-        meta,
-        render_segments,
-        fps,
-        resolution_base,
-        recordings,
-        stop_after_frames_sent,
-        startup_breakdown_ms,
-    )
-    .await;
-
-    let forward_result = forward_task.await;
+        tokio::try_join!(render_future, forward_future)
+    };
 
     render_result?;
-    forward_result
-        .map_err(|e| cap_rendering::RenderingError::ImageLoadError(e.to_string()))?
-        .map_err(|e| cap_rendering::RenderingError::ImageLoadError(e))?;
 
     Ok(())
 }
