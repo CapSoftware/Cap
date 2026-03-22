@@ -9,7 +9,10 @@ use cursor_interpolation::{
     InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::{RenderSession, finish_encoder, finish_encoder_nv12, flush_pending_readback};
+use frame_pipeline::{
+    NV12BufferPool, RenderSession, finish_encoder, finish_encoder_nv12, finish_encoder_nv12_pooled,
+    flush_pending_readback,
+};
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
@@ -2667,6 +2670,7 @@ pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
     nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
+    nv12_buffer_pool: NV12BufferPool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -2677,6 +2681,7 @@ impl<'a> FrameRenderer<'a> {
             constants,
             session: None,
             nv12_converter: None,
+            nv12_buffer_pool: NV12BufferPool::new(6),
         }
     }
 
@@ -2803,7 +2808,11 @@ impl<'a> FrameRenderer<'a> {
     ) -> Option<Result<frame_pipeline::Nv12RenderedFrame, RenderingError>> {
         let nv12_converter = self.nv12_converter.as_mut()?;
         let pending = nv12_converter.take_pending()?;
-        Some(pending.wait(&self.constants.device).await)
+        Some(
+            pending
+                .wait_with_pool(&self.constants.device, Some(&mut self.nv12_buffer_pool))
+                .await,
+        )
     }
 
     pub async fn render_nv12(
@@ -2874,13 +2883,14 @@ impl<'a> FrameRenderer<'a> {
                 &uniforms,
             );
 
-            match finish_encoder_nv12(
+            match finish_encoder_nv12_pooled(
                 session,
                 nv12_converter,
                 &self.constants.device,
                 &self.constants.queue,
                 &uniforms,
                 encoder,
+                Some(&mut self.nv12_buffer_pool),
             )
             .await
             {

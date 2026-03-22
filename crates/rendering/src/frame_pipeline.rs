@@ -7,6 +7,36 @@ use crate::{ProjectUniforms, RenderingError};
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 
+pub struct NV12BufferPool {
+    buffers: Vec<Vec<u8>>,
+    capacity: usize,
+}
+
+impl NV12BufferPool {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buffers: Vec::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn acquire(&mut self, size: usize) -> Vec<u8> {
+        if let Some(pos) = self.buffers.iter().position(|b| b.capacity() >= size) {
+            let mut buf = self.buffers.swap_remove(pos);
+            buf.clear();
+            buf
+        } else {
+            Vec::with_capacity(size)
+        }
+    }
+
+    pub fn release(&mut self, buf: Vec<u8>) {
+        if self.buffers.len() < self.capacity {
+            self.buffers.push(buf);
+        }
+    }
+}
+
 pub struct RgbaToNv12Converter {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -308,6 +338,14 @@ impl PendingNv12Readback {
         mut self,
         device: &wgpu::Device,
     ) -> Result<Nv12RenderedFrame, RenderingError> {
+        self.wait_with_pool(device, None).await
+    }
+
+    pub async fn wait_with_pool(
+        mut self,
+        device: &wgpu::Device,
+        buffer_pool: Option<&mut NV12BufferPool>,
+    ) -> Result<Nv12RenderedFrame, RenderingError> {
         let Some(mut rx) = self.rx.take() else {
             return Err(self.cancel());
         };
@@ -348,7 +386,16 @@ impl PendingNv12Readback {
 
         let buffer_slice = self.buffer.slice(..);
         let data = buffer_slice.get_mapped_range();
-        let nv12_data = Arc::new(data.to_vec());
+        let data_len = data.len();
+
+        let nv12_vec = if let Some(pool) = buffer_pool {
+            let mut buf = pool.acquire(data_len);
+            buf.extend_from_slice(&data);
+            buf
+        } else {
+            data.to_vec()
+        };
+        let nv12_data = Arc::new(nv12_vec);
 
         drop(data);
         self.buffer.unmap();
@@ -876,13 +923,37 @@ pub async fn finish_encoder_nv12(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
+    encoder: wgpu::CommandEncoder,
+) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
+    finish_encoder_nv12_pooled(
+        session,
+        nv12_converter,
+        device,
+        queue,
+        uniforms,
+        encoder,
+        None,
+    )
+    .await
+}
+
+pub async fn finish_encoder_nv12_pooled(
+    session: &mut RenderSession,
+    nv12_converter: &mut RgbaToNv12Converter,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    uniforms: &ProjectUniforms,
     mut encoder: wgpu::CommandEncoder,
+    mut buffer_pool: Option<&mut NV12BufferPool>,
 ) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
     let previous_frame = if let Some(prev) = nv12_converter.take_pending() {
-        Some(prev.wait(device).await?)
+        Some(
+            prev.wait_with_pool(device, buffer_pool.as_deref_mut())
+                .await?,
+        )
     } else {
         None
     };
