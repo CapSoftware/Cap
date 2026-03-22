@@ -3,7 +3,7 @@ use cap_editor::{AudioRenderer, get_audio_segments};
 use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
-use cap_rendering::{Nv12RenderedFrame, ProjectUniforms, RenderSegment};
+use cap_rendering::{GpuOutputFormat, Nv12RenderedFrame, ProjectUniforms, RenderSegment};
 use futures::FutureExt;
 use image::ImageBuffer;
 use serde::Deserialize;
@@ -152,16 +152,14 @@ impl Mp4ExportSettings {
         base: ExporterBase,
         output_size: (u32, u32),
         fps: u32,
-        mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
         mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
         let output_path = base.output_path.clone();
         let meta = &base.studio_meta;
 
-        let (tx_image_data, mut video_rx) =
-            tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(32);
-        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Nv12ExportFrame>(32);
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<ExportFrame>(4);
 
         let mut video_info =
             VideoInfo::from_raw(RawVideoFormat::Nv12, output_size.0, output_size.1, fps);
@@ -169,16 +167,15 @@ impl Mp4ExportSettings {
 
         let audio_segments = get_audio_segments(&base.segments);
 
-        let mut audio_renderer = audio_segments
+        let has_audio = audio_segments
             .first()
             .filter(|_| !base.project_config.audio.mute)
-            .map(|_| AudioRenderer::new(audio_segments.clone()));
-        let has_audio = audio_renderer.is_some();
+            .is_some();
 
-        let stop_after_frames_sent = mode.stop_after_frames_sent;
         let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;
         let nv12_render_startup_breakdown_ms = mode.nv12_render_startup_breakdown_ms;
 
+        let project_for_audio = base.project_config.clone();
         let pipeline_start_for_encoder = pipeline_start;
         let encoder_thread = tokio::task::spawn_blocking(move || {
             trace!("Creating MP4File encoder (NV12 path)");
@@ -206,6 +203,12 @@ impl Mp4ExportSettings {
 
             info!("Created MP4File encoder (NV12, external conversion, export settings)");
 
+            let mut audio_renderer = if has_audio {
+                Some(AudioRenderer::new(audio_segments))
+            } else {
+                None
+            };
+
             let mut reusable_frame = ffmpeg::frame::Video::new(
                 ffmpeg::format::Pixel::NV12,
                 output_size.0,
@@ -214,9 +217,42 @@ impl Mp4ExportSettings {
             let mut converted_frame: Option<ffmpeg::frame::Video> = None;
             let mut encoded_frames = 0u32;
             let encode_start = std::time::Instant::now();
+            let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
+            let fps_u64 = u64::from(fps);
+            let mut audio_sample_cursor = 0u64;
 
             while let Ok(input) = frame_rx.recv() {
-                fill_nv12_frame(&mut reusable_frame, &input);
+                if encoded_frames == 0 {
+                    if let Some(audio) = &mut audio_renderer {
+                        audio.set_playhead(0.0, &project_for_audio);
+                    }
+                }
+
+                let audio_frame = audio_renderer.as_mut().and_then(|audio| {
+                    let n = u64::from(input.frame_number);
+                    let end = ((n + 1) * sample_rate) / fps_u64;
+                    if end <= audio_sample_cursor {
+                        return None;
+                    }
+                    let pts = audio_sample_cursor as i64;
+                    let samples = (end - audio_sample_cursor) as usize;
+                    audio_sample_cursor = end;
+                    audio
+                        .render_frame(samples, &project_for_audio)
+                        .map(|mut frame| {
+                            frame.set_pts(Some(pts));
+                            frame
+                        })
+                });
+
+                fill_nv12_frame_direct(
+                    &mut reusable_frame,
+                    &input.nv12_data,
+                    input.width,
+                    input.height,
+                    input.y_stride,
+                    input.frame_number as i64,
+                );
                 encoder
                     .queue_video_frame_reusable(
                         &mut reusable_frame,
@@ -224,7 +260,7 @@ impl Mp4ExportSettings {
                         Duration::MAX,
                     )
                     .map_err(|err| err.to_string())?;
-                if let Some(audio) = input.audio {
+                if let Some(audio) = audio_frame {
                     encoder.queue_audio_frame(audio);
                 }
                 encoded_frames += 1;
@@ -263,149 +299,11 @@ impl Mp4ExportSettings {
         })
         .then(|r| async { r.map_err(|e| e.to_string()).and_then(|v| v) });
 
-        let render_task = tokio::spawn({
-            let project = base.project_config.clone();
-            let project_path = base.project_path.clone();
-            async move {
-                let mut frame_count = 0;
-                let mut first_frame_data: Option<FirstFrameNv12> = None;
-                let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
-                let fps_u64 = u64::from(fps);
-                let mut audio_sample_cursor = 0u64;
-                let mut consecutive_timeouts = 0u32;
-                const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
-
-                loop {
-                    let timeout_secs = if frame_count == 0 { 120 } else { 90 };
-                    let (frame, frame_number) = match tokio::time::timeout(
-                        Duration::from_secs(timeout_secs),
-                        video_rx.recv(),
-                    )
-                    .await
-                    {
-                        Err(_) => {
-                            consecutive_timeouts += 1;
-
-                            if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
-                                tracing::error!(
-                                    frame_count = frame_count,
-                                    timeout_secs = timeout_secs,
-                                    consecutive_timeouts = consecutive_timeouts,
-                                    "Export render_task timed out {} consecutive times - aborting",
-                                    MAX_CONSECUTIVE_TIMEOUTS
-                                );
-                                return Err(format!(
-                                    "Export timed out {MAX_CONSECUTIVE_TIMEOUTS} times consecutively after {timeout_secs}s each waiting for frame {frame_count} - GPU/decoder may be unresponsive"
-                                ));
-                            }
-
-                            tracing::warn!(
-                                frame_count = frame_count,
-                                timeout_secs = timeout_secs,
-                                consecutive_timeouts = consecutive_timeouts,
-                                "Frame receive timed out, waiting for next frame..."
-                            );
-                            continue;
-                        }
-                        Ok(Some(v)) => {
-                            consecutive_timeouts = 0;
-                            v
-                        }
-                        Ok(None) => {
-                            tracing::debug!(
-                                frame_count = frame_count,
-                                "Render channel closed - rendering complete"
-                            );
-                            break;
-                        }
-                    };
-
-                    if !(on_progress)(frame_count) {
-                        return Err("Export cancelled".to_string());
-                    }
-
-                    let frame_width = frame.width;
-                    let frame_height = frame.height;
-                    let nv12_data = ensure_nv12_data(frame);
-
-                    if frame_count == 0 {
-                        first_frame_data = Some(FirstFrameNv12 {
-                            data: nv12_data.clone(),
-                            width: frame_width,
-                            height: frame_height,
-                            y_stride: frame_width,
-                        });
-                        if let Some(audio) = &mut audio_renderer {
-                            audio.set_playhead(0.0, &project);
-                        }
-                    }
-
-                    let audio_frame = audio_renderer.as_mut().and_then(|audio| {
-                        let n = u64::from(frame_number);
-                        let end = ((n + 1) * sample_rate) / fps_u64;
-                        if end <= audio_sample_cursor {
-                            return None;
-                        }
-                        let pts = audio_sample_cursor as i64;
-                        let samples = (end - audio_sample_cursor) as usize;
-                        audio_sample_cursor = end;
-                        audio.render_frame(samples, &project).map(|mut frame| {
-                            frame.set_pts(Some(pts));
-                            frame
-                        })
-                    });
-
-                    if frame_tx
-                        .send(Nv12ExportFrame {
-                            audio: audio_frame,
-                            nv12_data,
-                            width: frame_width,
-                            height: frame_height,
-                            y_stride: frame_width,
-                            pts: frame_number as i64,
-                        })
-                        .is_err()
-                    {
-                        warn!("Renderer task sender dropped. Exiting");
-                        return Ok(());
-                    }
-
-                    frame_count += 1;
-                }
-
-                drop(frame_tx);
-
-                if let Some(first) = first_frame_data {
-                    let project_path = project_path.clone();
-                    let screenshot_task = tokio::task::spawn_blocking(move || {
-                        save_screenshot_from_nv12(
-                            &first.data,
-                            first.width,
-                            first.height,
-                            first.y_stride,
-                            &project_path,
-                        );
-                    });
-
-                    if let Err(e) = screenshot_task.await {
-                        warn!("Screenshot task failed: {e}");
-                    }
-                } else {
-                    warn!("No frames were processed, cannot save screenshot or thumbnail");
-                }
-
-                Ok::<_, String>(())
-            }
-        })
-        .then(|r| async {
-            r.map_err(|e| e.to_string())
-                .and_then(|v| v.map_err(|e| e.to_string()))
-        });
-
-        let render_video_task = cap_rendering::render_video_to_channel_nv12(
+        let stop_after_frames_sent = mode.stop_after_frames_sent;
+        let render_video_task = export_render_to_channel(
             &base.render_constants,
             &base.project_config,
-            tx_image_data,
+            frame_tx,
             &base.recording_meta,
             meta,
             base.segments
@@ -420,13 +318,23 @@ impl Mp4ExportSettings {
             &base.recordings,
             stop_after_frames_sent,
             nv12_render_startup_breakdown_ms,
+            on_progress,
+            base.project_path.clone(),
         )
         .then(|v| async { v.map_err(|e| e.to_string()) });
 
-        tokio::try_join!(encoder_thread, render_video_task, render_task)?;
+        tokio::try_join!(encoder_thread, render_video_task)?;
 
         Ok(output_path)
     }
+}
+
+struct ExportFrame {
+    nv12_data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    frame_number: u32,
 }
 
 struct FirstFrameNv12 {
@@ -436,20 +344,15 @@ struct FirstFrameNv12 {
     y_stride: u32,
 }
 
-struct Nv12ExportFrame {
-    nv12_data: Arc<Vec<u8>>,
-    width: u32,
-    height: u32,
-    y_stride: u32,
-    pts: i64,
-    audio: Option<ffmpeg::frame::Audio>,
-}
-
-fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Arc<Vec<u8>> {
-    use cap_rendering::GpuOutputFormat;
-
+fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
     if frame.format != GpuOutputFormat::Rgba {
-        return frame.data;
+        return ExportFrame {
+            width: frame.width,
+            height: frame.height,
+            y_stride: frame.y_stride,
+            frame_number: frame.frame_number,
+            nv12_data: frame.data,
+        };
     }
 
     tracing::warn!(
@@ -510,7 +413,13 @@ fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Arc<Vec<u8>> {
                 }
             }
 
-            return Arc::new(result);
+            return ExportFrame {
+                nv12_data: Arc::new(result),
+                width,
+                height,
+                y_stride: width,
+                frame_number: frame.frame_number,
+            };
         }
     }
 
@@ -518,20 +427,33 @@ fn ensure_nv12_data(frame: Nv12RenderedFrame) -> Arc<Vec<u8>> {
         frame_number = frame.frame_number,
         "swscale RGBA to NV12 conversion failed, using zeroed NV12"
     );
-    Arc::new(vec![0u8; width as usize * height as usize * 3 / 2])
+    ExportFrame {
+        nv12_data: Arc::new(vec![0u8; width as usize * height as usize * 3 / 2]),
+        width,
+        height,
+        y_stride: width,
+        frame_number: frame.frame_number,
+    }
 }
 
-fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
-    frame.set_pts(Some(input.pts));
+fn fill_nv12_frame_direct(
+    frame: &mut ffmpeg::frame::Video,
+    nv12_data: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    pts: i64,
+) {
+    frame.set_pts(Some(pts));
 
-    let width = input.width as usize;
-    let height = input.height as usize;
-    let y_stride = input.y_stride as usize;
+    let width = width as usize;
+    let height = height as usize;
+    let y_stride = y_stride as usize;
 
     let y_plane_size = y_stride * height;
-    let y_src = &input.nv12_data[..y_plane_size.min(input.nv12_data.len())];
-    let uv_src = if y_plane_size < input.nv12_data.len() {
-        &input.nv12_data[y_plane_size..]
+    let y_src = &nv12_data[..y_plane_size.min(nv12_data.len())];
+    let uv_src = if y_plane_size < nv12_data.len() {
+        &nv12_data[y_plane_size..]
     } else {
         &[]
     };
@@ -574,6 +496,28 @@ fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
     }
 }
 
+#[cfg(test)]
+struct Nv12ExportFrame {
+    nv12_data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    pts: i64,
+    audio: Option<ffmpeg::frame::Audio>,
+}
+
+#[cfg(test)]
+fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
+    fill_nv12_frame_direct(
+        frame,
+        &input.nv12_data,
+        input.width,
+        input.height,
+        input.y_stride,
+        input.pts,
+    );
+}
+
 fn save_screenshot_from_nv12(
     nv12_data: &[u8],
     width: u32,
@@ -613,6 +557,108 @@ fn save_screenshot_from_nv12(
 
     let screenshot_path = screenshots_dir.join("display.jpg");
     let _ = rgb_img.save(&screenshot_path);
+}
+
+use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
+use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
+
+#[allow(clippy::too_many_arguments)]
+async fn export_render_to_channel(
+    constants: &RenderVideoConstants,
+    project: &ProjectConfiguration,
+    sender: std::sync::mpsc::SyncSender<ExportFrame>,
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    render_segments: Vec<RenderSegment>,
+    fps: u32,
+    resolution_base: XY<u32>,
+    recordings: &ProjectRecordingsMeta,
+    stop_after_frames_sent: Option<u32>,
+    startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
+    mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    project_path: PathBuf,
+) -> Result<(), cap_rendering::RenderingError> {
+    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(4);
+
+    let screenshot_project_path = project_path;
+
+    let forward_task = tokio::spawn(async move {
+        let mut first_frame_data: Option<FirstFrameNv12> = None;
+        let mut frame_count = 0u32;
+        let mut channel_frames_sent = 0u32;
+
+        while let Some((frame, _frame_number)) = video_rx.recv().await {
+            if !(on_progress)(frame_count) {
+                return Err("Export cancelled".to_string());
+            }
+
+            let export_frame = nv12_from_rendered_frame(frame);
+
+            if first_frame_data.is_none() {
+                first_frame_data = Some(FirstFrameNv12 {
+                    data: export_frame.nv12_data.clone(),
+                    width: export_frame.width,
+                    height: export_frame.height,
+                    y_stride: export_frame.y_stride,
+                });
+            }
+
+            if sender.send(export_frame).is_err() {
+                warn!("Encoder dropped, stopping render forwarding");
+                break;
+            }
+
+            frame_count += 1;
+            channel_frames_sent += 1;
+            if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
+                break;
+            }
+        }
+
+        drop(sender);
+
+        if let Some(first) = first_frame_data {
+            let pp = screenshot_project_path;
+            tokio::task::spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    save_screenshot_from_nv12(
+                        &first.data,
+                        first.width,
+                        first.height,
+                        first.y_stride,
+                        &pp,
+                    );
+                })
+                .await;
+            });
+        }
+
+        Ok::<_, String>(())
+    });
+
+    let render_result = cap_rendering::render_video_to_channel_nv12(
+        constants,
+        project,
+        tx_image_data,
+        recording_meta,
+        meta,
+        render_segments,
+        fps,
+        resolution_base,
+        recordings,
+        stop_after_frames_sent,
+        startup_breakdown_ms,
+    )
+    .await;
+
+    let forward_result = forward_task.await;
+
+    render_result?;
+    forward_result
+        .map_err(|e| cap_rendering::RenderingError::ImageLoadError(e.to_string()))?
+        .map_err(|e| cap_rendering::RenderingError::ImageLoadError(e))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -689,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_nv12_data_passthrough_for_nv12_format() {
+    fn nv12_from_rendered_frame_passthrough_for_nv12_format() {
         use cap_rendering::{GpuOutputFormat, Nv12RenderedFrame};
 
         let data = vec![1u8, 2, 3, 4, 5, 6];
@@ -703,8 +749,8 @@ mod tests {
             format: GpuOutputFormat::Nv12,
         };
 
-        let result = ensure_nv12_data(frame);
-        assert_eq!(*result, data);
+        let result = nv12_from_rendered_frame(frame);
+        assert_eq!(*result.nv12_data, data);
     }
 
     #[test]
