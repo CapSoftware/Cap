@@ -334,10 +334,7 @@ impl PendingNv12Readback {
         RenderingError::BufferMapWaitingFailed
     }
 
-    pub async fn wait(
-        mut self,
-        device: &wgpu::Device,
-    ) -> Result<Nv12RenderedFrame, RenderingError> {
+    pub async fn wait(self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
         self.wait_with_pool(device, None).await
     }
 

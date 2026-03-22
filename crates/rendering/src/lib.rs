@@ -11,7 +11,7 @@ use cursor_interpolation::{
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::{
-    NV12BufferPool, RenderSession, finish_encoder, finish_encoder_nv12, finish_encoder_nv12_pooled,
+    NV12BufferPool, RenderSession, finish_encoder, finish_encoder_nv12_pooled,
     flush_pending_readback,
 };
 use futures::future::OptionFuture;
@@ -2171,7 +2171,7 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
-        cursor_events: &CursorEvents,
+        _cursor_events: &CursorEvents,
         segment_frames: &DecodedSegmentFrames,
         total_duration: f64,
         zoom_focus_interpolator: &ZoomFocusInterpolator,
