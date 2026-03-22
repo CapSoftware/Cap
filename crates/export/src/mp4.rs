@@ -222,10 +222,10 @@ impl Mp4ExportSettings {
             let mut audio_sample_cursor = 0u64;
 
             while let Ok(input) = frame_rx.recv() {
-                if encoded_frames == 0 {
-                    if let Some(audio) = &mut audio_renderer {
-                        audio.set_playhead(0.0, &project_for_audio);
-                    }
+                if encoded_frames == 0
+                    && let Some(audio) = &mut audio_renderer
+                {
+                    audio.set_playhead(0.0, &project_for_audio);
                 }
 
                 let audio_frame = audio_renderer.as_mut().and_then(|audio| {

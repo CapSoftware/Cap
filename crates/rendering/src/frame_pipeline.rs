@@ -9,14 +9,12 @@ const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 
 pub struct NV12BufferPool {
     buffers: Vec<Vec<u8>>,
-    capacity: usize,
 }
 
 impl NV12BufferPool {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(pre_alloc: usize) -> Self {
         Self {
-            buffers: Vec::with_capacity(capacity),
-            capacity,
+            buffers: Vec::with_capacity(pre_alloc),
         }
     }
 
@@ -27,12 +25,6 @@ impl NV12BufferPool {
             buf
         } else {
             Vec::with_capacity(size)
-        }
-    }
-
-    pub fn release(&mut self, buf: Vec<u8>) {
-        if self.buffers.len() < self.capacity {
-            self.buffers.push(buf);
         }
     }
 }
@@ -332,10 +324,6 @@ impl PendingNv12Readback {
     fn cancel(self) -> RenderingError {
         self.buffer.unmap();
         RenderingError::BufferMapWaitingFailed
-    }
-
-    pub async fn wait(self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
-        self.wait_with_pool(device, None).await
     }
 
     pub async fn wait_with_pool(
@@ -914,26 +902,6 @@ pub async fn finish_encoder(
     Ok(previous_frame)
 }
 
-pub async fn finish_encoder_nv12(
-    session: &mut RenderSession,
-    nv12_converter: &mut RgbaToNv12Converter,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    uniforms: &ProjectUniforms,
-    encoder: wgpu::CommandEncoder,
-) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
-    finish_encoder_nv12_pooled(
-        session,
-        nv12_converter,
-        device,
-        queue,
-        uniforms,
-        encoder,
-        None,
-    )
-    .await
-}
-
 pub async fn finish_encoder_nv12_pooled(
     session: &mut RenderSession,
     nv12_converter: &mut RgbaToNv12Converter,
@@ -941,16 +909,13 @@ pub async fn finish_encoder_nv12_pooled(
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
     mut encoder: wgpu::CommandEncoder,
-    mut buffer_pool: Option<&mut NV12BufferPool>,
+    buffer_pool: Option<&mut NV12BufferPool>,
 ) -> Result<Option<Nv12RenderedFrame>, RenderingError> {
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
     let previous_frame = if let Some(prev) = nv12_converter.take_pending() {
-        Some(
-            prev.wait_with_pool(device, buffer_pool.as_deref_mut())
-                .await?,
-        )
+        Some(prev.wait_with_pool(device, buffer_pool).await?)
     } else {
         None
     };
