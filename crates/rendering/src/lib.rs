@@ -479,6 +479,13 @@ pub async fn render_video_to_channel(
         })
         .collect();
 
+    let precomputed_cursor_timelines: Vec<PrecomputedCursorTimeline> = render_segments
+        .iter()
+        .map(|segment| {
+            PrecomputedCursorTimeline::new(&segment.cursor, cursor_smoothing, Some(click_spring))
+        })
+        .collect();
+
     let mut frame_number = 0;
 
     let mut frame_renderer = FrameRenderer::new(constants);
@@ -567,8 +574,9 @@ pub async fn render_video_to_channel(
             consecutive_failures = 0;
 
             let zoom_focus_interp = &zoom_focus_interpolators[segment_clip_index];
+            let precomputed_cursor = &precomputed_cursor_timelines[segment_clip_index];
 
-            let uniforms = ProjectUniforms::new(
+            let uniforms = ProjectUniforms::new_with_precomputed_cursor(
                 constants,
                 project,
                 current_frame_number,
@@ -578,6 +586,7 @@ pub async fn render_video_to_channel(
                 &segment_frames,
                 duration,
                 zoom_focus_interp,
+                precomputed_cursor,
             );
 
             let next_frame_number = frame_number;
