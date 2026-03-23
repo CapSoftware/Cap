@@ -27,6 +27,8 @@ impl Video {
                 .ok_or_else(|| "No video stream found".to_string())?;
             let stream_index = stream.index();
             let stream_time_base = stream.time_base();
+            let stream_duration = stream.duration();
+            let stream_frames = stream.frames();
 
             let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
                 .map_err(|e| format!("Failed to create decoder: {e}"))?
@@ -56,11 +58,9 @@ impl Video {
             };
 
             if duration <= 0.0 {
-                let stream_duration = stream.duration();
                 if stream_duration > 0 && stream_duration != i64::MIN {
-                    let time_base = stream.time_base();
-                    duration = (stream_duration as f64 * time_base.numerator() as f64)
-                        / time_base.denominator() as f64;
+                    duration = (stream_duration as f64 * stream_time_base.numerator() as f64)
+                        / stream_time_base.denominator() as f64;
                 }
             }
 
@@ -86,19 +86,16 @@ impl Video {
                 }
             }
 
-            if duration <= 0.0 {
-                let frames = stream.frames();
-                if frames > 0 && fps > 0.0 {
-                    duration = frames as f64 / fps;
-                }
+            if duration <= 0.0 && stream_frames > 0 && fps > 0.0 {
+                duration = stream_frames as f64 / fps;
             }
 
             if !duration.is_finite() || duration <= 0.0 {
                 tracing::warn!(
                     ?path,
                     container_duration,
-                    stream_duration = stream.duration(),
-                    frames = stream.frames(),
+                    stream_duration,
+                    frames = stream_frames,
                     fps,
                     "Failed to determine video duration; defaulting to zero"
                 );
