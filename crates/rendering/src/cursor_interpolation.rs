@@ -625,9 +625,8 @@ mod tests {
             .map(|i| cursor_move(i as f64 * 2.0, 0.5 + i as f64 * 1e-6, 0.5))
             .collect();
         let decimated = decimate_cursor_moves(&moves);
-        match decimated {
-            Cow::Owned(v) => assert!(v.len() < moves.len()),
-            Cow::Borrowed(_) => {}
+        if let Cow::Owned(v) = decimated {
+            assert!(v.len() < moves.len());
         }
     }
 
