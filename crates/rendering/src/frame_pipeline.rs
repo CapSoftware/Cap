@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::oneshot;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -8,24 +9,91 @@ use crate::{ProjectUniforms, RenderingError};
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 
 pub struct NV12BufferPool {
-    buffers: Vec<Vec<u8>>,
+    buffers: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+struct PooledNv12Buffer {
+    data: Vec<u8>,
+    pool: Option<Arc<Mutex<Vec<Vec<u8>>>>>,
+}
+
+impl Drop for PooledNv12Buffer {
+    fn drop(&mut self) {
+        let Some(pool) = self.pool.take() else {
+            return;
+        };
+
+        let mut data = std::mem::take(&mut self.data);
+        data.clear();
+
+        if let Ok(mut buffers) = pool.lock() {
+            buffers.push(data);
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SharedNv12Buffer(Arc<PooledNv12Buffer>);
+
+impl SharedNv12Buffer {
+    fn new(data: Vec<u8>, pool: Option<Arc<Mutex<Vec<Vec<u8>>>>>) -> Self {
+        Self(Arc::new(PooledNv12Buffer { data, pool }))
+    }
+
+    pub fn from_vec(data: Vec<u8>) -> Self {
+        Self::new(data, None)
+    }
+
+    pub fn from_arc_vec(data: Arc<Vec<u8>>) -> Self {
+        Self::from_vec(Arc::unwrap_or_clone(data))
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        match Arc::try_unwrap(self.0) {
+            Ok(mut inner) => {
+                inner.pool = None;
+                std::mem::take(&mut inner.data)
+            }
+            Err(shared) => shared.data.clone(),
+        }
+    }
+}
+
+impl AsRef<[u8]> for SharedNv12Buffer {
+    fn as_ref(&self) -> &[u8] {
+        &self.0.data
+    }
+}
+
+impl Deref for SharedNv12Buffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.data
+    }
 }
 
 impl NV12BufferPool {
     pub fn new(pre_alloc: usize) -> Self {
         Self {
-            buffers: Vec::with_capacity(pre_alloc),
+            buffers: Arc::new(Mutex::new(Vec::with_capacity(pre_alloc))),
         }
     }
 
-    pub fn acquire(&mut self, size: usize) -> Vec<u8> {
-        if let Some(pos) = self.buffers.iter().position(|b| b.capacity() >= size) {
-            let mut buf = self.buffers.swap_remove(pos);
+    pub fn acquire(&self, size: usize) -> Vec<u8> {
+        if let Ok(mut buffers) = self.buffers.lock()
+            && let Some(pos) = buffers.iter().position(|b| b.capacity() >= size)
+        {
+            let mut buf = buffers.swap_remove(pos);
             buf.clear();
-            buf
-        } else {
-            Vec::with_capacity(size)
+            return buf;
         }
+
+        Vec::with_capacity(size)
+    }
+
+    pub fn wrap(&self, data: Vec<u8>) -> SharedNv12Buffer {
+        SharedNv12Buffer::new(data, Some(Arc::clone(&self.buffers)))
     }
 }
 
@@ -373,14 +441,13 @@ impl PendingNv12Readback {
         let data = buffer_slice.get_mapped_range();
         let data_len = data.len();
 
-        let nv12_vec = if let Some(pool) = buffer_pool {
+        let nv12_data = if let Some(pool) = buffer_pool {
             let mut buf = pool.acquire(data_len);
             buf.extend_from_slice(&data);
-            buf
+            pool.wrap(buf)
         } else {
-            data.to_vec()
+            SharedNv12Buffer::from_vec(data.to_vec())
         };
-        let nv12_data = Arc::new(nv12_vec);
 
         drop(data);
         self.buffer.unmap();
@@ -407,7 +474,7 @@ pub enum GpuOutputFormat {
 }
 
 pub struct Nv12RenderedFrame {
-    pub data: Arc<Vec<u8>>,
+    pub data: SharedNv12Buffer,
     pub width: u32,
     pub height: u32,
     pub y_stride: u32,
@@ -430,7 +497,7 @@ impl Nv12RenderedFrame {
     }
 
     pub fn into_data(self) -> Vec<u8> {
-        Arc::unwrap_or_clone(self.data)
+        self.data.into_vec()
     }
 
     pub fn y_plane(&self) -> &[u8] {
@@ -948,7 +1015,7 @@ pub async fn finish_encoder_nv12_pooled(
     } else {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
         Ok(rgba_frame.map(|f| Nv12RenderedFrame {
-            data: f.data,
+            data: SharedNv12Buffer::from_arc_vec(f.data),
             width: f.width,
             height: f.height,
             y_stride: f.padded_bytes_per_row,
