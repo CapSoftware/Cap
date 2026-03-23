@@ -177,6 +177,25 @@ jobs:
         if: ${{ env.RUN_BUILD == 'true' }}
         uses: actions/checkout@v4
 
+      - name: Normalize Cargo version
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const cargoTomlPath = 'apps/desktop/src-tauri/Cargo.toml';
+          const contents = fs.readFileSync(cargoTomlPath, 'utf8');
+          const normalized = contents.replace(
+            /^version\s*=\s*"cap-v([^"]+)"$/m,
+            'version = "$1"',
+          );
+
+          if (normalized !== contents) {
+            fs.writeFileSync(cargoTomlPath, normalized);
+            console.log(`Normalized ${cargoTomlPath} to semver`);
+          }
+          NODE
+
       - name: Create API Key File
         if: ${{ env.RUN_BUILD == 'true' }}
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
