@@ -503,13 +503,8 @@ pub async fn start_recording(
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
                         )
-                        .with_fragmented(
-                            general_settings
-                                .as_ref()
-                                .map(|s| s.crash_recovery_recording)
-                                .unwrap_or_default(),
-                        )
-                        .with_max_fps(general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60));
+                        .with_fragmented(false)
+                        .with_max_fps(60);
 
                         #[cfg(target_os = "macos")]
                         {
