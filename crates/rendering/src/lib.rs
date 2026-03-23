@@ -50,7 +50,7 @@ pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
-pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame};
+pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
@@ -461,10 +461,22 @@ pub async fn render_video_to_channel(
 
     let click_spring = project.cursor.click_spring_config();
 
-    let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
+    let precomputed_cursor_timelines: Vec<Arc<PrecomputedCursorTimeline>> = render_segments
         .iter()
         .map(|segment| {
-            ZoomFocusInterpolator::new(
+            Arc::new(PrecomputedCursorTimeline::new(
+                &segment.cursor,
+                cursor_smoothing,
+                Some(click_spring),
+            ))
+        })
+        .collect();
+
+    let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
+        .iter()
+        .zip(precomputed_cursor_timelines.iter())
+        .map(|(segment, precomputed_cursor)| {
+            ZoomFocusInterpolator::new_with_precomputed_cursor(
                 &segment.cursor,
                 cursor_smoothing,
                 click_spring,
@@ -475,14 +487,8 @@ pub async fn render_video_to_channel(
                     .as_ref()
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
+                Some(precomputed_cursor.clone()),
             )
-        })
-        .collect();
-
-    let precomputed_cursor_timelines: Vec<PrecomputedCursorTimeline> = render_segments
-        .iter()
-        .map(|segment| {
-            PrecomputedCursorTimeline::new(&segment.cursor, cursor_smoothing, Some(click_spring))
         })
         .collect();
 
@@ -703,7 +709,11 @@ pub async fn render_video_to_channel(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "Frame decode failed after retries - using previous frame"
                 );
                 let mut fallback = last_frame.clone();
@@ -715,7 +725,11 @@ pub async fn render_video_to_channel(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "First frame decode failed after retries - cannot continue"
                 );
                 continue;
@@ -775,11 +789,23 @@ pub async fn render_video_to_channel_nv12(
 
     let click_spring = project.cursor.click_spring_config();
 
+    let precomputed_cursor_timelines: Vec<Arc<PrecomputedCursorTimeline>> = render_segments
+        .iter()
+        .map(|segment| {
+            Arc::new(PrecomputedCursorTimeline::new(
+                &segment.cursor,
+                cursor_smoothing,
+                Some(click_spring),
+            ))
+        })
+        .collect();
+
     let zoom_build_start = Instant::now();
     let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
         .iter()
-        .map(|segment| {
-            ZoomFocusInterpolator::new(
+        .zip(precomputed_cursor_timelines.iter())
+        .map(|(segment, precomputed_cursor)| {
+            ZoomFocusInterpolator::new_with_precomputed_cursor(
                 &segment.cursor,
                 cursor_smoothing,
                 click_spring,
@@ -790,6 +816,7 @@ pub async fn render_video_to_channel_nv12(
                     .as_ref()
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
+                Some(precomputed_cursor.clone()),
             )
         })
         .collect();
@@ -797,25 +824,6 @@ pub async fn render_video_to_channel_nv12(
         interp.ensure_precomputed_until(duration as f32 + 1.0);
     }
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
-
-    let cursor_smoothing_for_precompute =
-        (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
-            tension: project.cursor.tension,
-            mass: project.cursor.mass,
-            friction: project.cursor.friction,
-        });
-    let click_spring_for_precompute = project.cursor.click_spring_config();
-
-    let precomputed_cursor_timelines: Vec<PrecomputedCursorTimeline> = render_segments
-        .iter()
-        .map(|segment| {
-            PrecomputedCursorTimeline::new(
-                &segment.cursor,
-                cursor_smoothing_for_precompute,
-                Some(click_spring_for_precompute),
-            )
-        })
-        .collect();
 
     let mut frame_number = 0;
 
@@ -1149,7 +1157,11 @@ pub async fn render_video_to_channel_nv12(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "Frame decode failed after retries - using previous NV12 frame"
                 );
                 let mut fallback = last_frame.clone_metadata_with_data();
@@ -1166,7 +1178,11 @@ pub async fn render_video_to_channel_nv12(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "First frame decode failed after retries - cannot continue"
                 );
                 continue;
@@ -1194,7 +1210,8 @@ pub async fn render_video_to_channel_nv12(
     Ok(())
 }
 
-const DECODE_MAX_RETRIES: u32 = 5;
+const DECODE_MAX_RETRIES_INITIAL: u32 = 5;
+const DECODE_MAX_RETRIES_STEADY: u32 = 2;
 
 async fn decode_segment_frames_with_retry(
     decoders: &RecordingSegmentDecoders,
@@ -1206,13 +1223,18 @@ async fn decode_segment_frames_with_retry(
 ) -> Option<DecodedSegmentFrames> {
     let mut result = None;
     let mut retry_count = 0u32;
+    let max_retries = if is_initial_frame {
+        DECODE_MAX_RETRIES_INITIAL
+    } else {
+        DECODE_MAX_RETRIES_STEADY
+    };
 
-    while result.is_none() && retry_count < DECODE_MAX_RETRIES {
+    while result.is_none() && retry_count < max_retries {
         if retry_count > 0 {
             let delay = if is_initial_frame {
                 500 * (retry_count as u64 + 1)
             } else {
-                50 * retry_count as u64
+                10
             };
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
@@ -1229,7 +1251,7 @@ async fn decode_segment_frames_with_retry(
 
         if result.is_none() {
             retry_count += 1;
-            if retry_count < DECODE_MAX_RETRIES {
+            if retry_count < max_retries {
                 tracing::warn!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
@@ -2972,7 +2994,7 @@ impl<'a> FrameRenderer<'a> {
         }
 
         Ok(Some(frame_pipeline::Nv12RenderedFrame {
-            data: Arc::new(nv12_buf),
+            data: self.nv12_buffer_pool.wrap(nv12_buf),
             width,
             height,
             y_stride: width,
