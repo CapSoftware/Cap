@@ -366,7 +366,7 @@ impl ProjectRecordingsMeta {
                     .as_ref()
                     .map(|audio| Audio::new(audio.path.to_path(recording_path), 0.0))
                     .transpose()
-                    .expect("Failed to read audio");
+                    .map_err(|e| format!("audio / {e}"))?;
 
                 vec![SegmentRecordings {
                     display,
