@@ -57,6 +57,9 @@ impl Default for Platform {
 
         #[cfg(target_os = "macos")]
         return Self::MacOS;
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        return Self::Windows;
     }
 }
 

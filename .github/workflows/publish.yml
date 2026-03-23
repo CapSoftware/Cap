@@ -24,7 +24,6 @@ on:
         type: boolean
 
 env:
-  CN_APPLICATION: cap/cap
   APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
   SENTRY_ORG: cap-s2
   SENTRY_PROJECT: cap-desktop
@@ -35,7 +34,6 @@ jobs:
     outputs:
       version: ${{ steps.read_version.outputs.value }}
       needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
-      cn_release_stdout: ${{ steps.create_cn_release.outputs.stdout }}
       gh_release_url: ${{ steps.create_gh_release.outputs.url }}
     permissions:
       contents: write
@@ -100,13 +98,6 @@ jobs:
 
             await main();
 
-      - name: Create draft CN release
-        id: create_cn_release
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
-          api-key: ${{ secrets.CN_API_KEY }}
-
       - name: Create draft GH release
         id: create_gh_release
         # TODO: Change to stable version when available
@@ -124,7 +115,6 @@ jobs:
           script: |
             async function main() {
               const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
 
               const resp = await fetch(
                 "https://cap-discord-bot.brendonovich.workers.dev/github-workflow",
@@ -136,7 +126,6 @@ jobs:
                     version: "${{ steps.read_version.outputs.value }}",
                     releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
                     interactionId: "${{ inputs.interactionId }}",
-                    cnReleaseId,
                   }),
                   headers: {
                     "Content-Type": "application/json",
@@ -171,11 +160,11 @@ jobs:
             platform: macos
             arch: arm64
           - target: x86_64-pc-windows-msvc
-            runner: windows-latest-l
+            runner: windows-latest
             platform: windows
             arch: x64
           - target: aarch64-pc-windows-msvc
-            runner: windows-latest-l
+            runner: windows-latest
             platform: windows
             arch: arm64
     env:
@@ -187,6 +176,25 @@ jobs:
       - name: Checkout repository
         if: ${{ env.RUN_BUILD == 'true' }}
         uses: actions/checkout@v4
+
+      - name: Normalize Cargo version
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const cargoTomlPath = 'apps/desktop/src-tauri/Cargo.toml';
+          const contents = fs.readFileSync(cargoTomlPath, 'utf8');
+          const normalized = contents.replace(
+            /^version\s*=\s*"cap-v([^"]+)"$/m,
+            'version = "$1"',
+          );
+
+          if (normalized !== contents) {
+            fs.writeFileSync(cargoTomlPath, normalized);
+            console.log(`Normalized ${cargoTomlPath} to semver`);
+          }
+          NODE
 
       - name: Create API Key File
         if: ${{ env.RUN_BUILD == 'true' }}
@@ -297,15 +305,13 @@ jobs:
       #     Write-Host "Files in bundle directory after signing:"
       #     Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
 
-      - name: Upload assets
-        if: ${{ env.RUN_BUILD == 'true' }}
-        uses: crabnebula-dev/cloud-release@v0
+      - name: Upload Windows ARM installer artifact
+        if: ${{ env.RUN_BUILD == 'true' && matrix.settings.platform == 'windows' && matrix.settings.arch == 'arm64' }}
+        uses: actions/upload-artifact@v4
         with:
-          working-directory: apps/desktop
-          command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
-          api-key: ${{ secrets.CN_API_KEY }}
-        env:
-          TAURI_BUNDLE_PATH: ../..
+          name: windows-arm-installer
+          path: target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
       - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
         if: ${{ env.RUN_BUILD == 'true' }}
@@ -340,7 +346,6 @@ jobs:
           script: |
             async function main() {
               const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
 
               const resp = await fetch(
                 "https://cap-discord-bot.brendonovich.workers.dev/github-workflow",
@@ -351,7 +356,6 @@ jobs:
                     interactionId: "${{ inputs.interactionId }}",
                     version: "${{ needs.draft.outputs.version }}",
                     releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
-                    cnReleaseId,
                   }),
                   headers: {
                     "Content-Type": "application/json",
