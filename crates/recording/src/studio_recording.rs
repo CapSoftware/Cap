@@ -151,7 +151,7 @@ impl ActorBuilder {
             self.capture_target.clone(),
         )
         .with_system_audio(self.system_audio)
-        .with_max_output_size(self.max_fps);
+        .with_max_fps(self.max_fps);
 
         if let Some(mic_feed) = self.mic_feed {
             builder = builder.with_mic_feed(mic_feed);
