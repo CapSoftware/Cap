@@ -6,10 +6,14 @@ use cap_project::{
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{
-    InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
+    InterpolatedCursorPosition, PrecomputedCursorTimeline, interpolate_cursor,
+    interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::{RenderSession, finish_encoder, finish_encoder_nv12, flush_pending_readback};
+use frame_pipeline::{
+    NV12BufferPool, RenderSession, finish_encoder, finish_encoder_nv12_pooled,
+    flush_pending_readback,
+};
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
@@ -46,7 +50,7 @@ pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
-pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame};
+pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
@@ -457,10 +461,22 @@ pub async fn render_video_to_channel(
 
     let click_spring = project.cursor.click_spring_config();
 
-    let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
+    let precomputed_cursor_timelines: Vec<Arc<PrecomputedCursorTimeline>> = render_segments
         .iter()
         .map(|segment| {
-            ZoomFocusInterpolator::new(
+            Arc::new(PrecomputedCursorTimeline::new(
+                &segment.cursor,
+                cursor_smoothing,
+                Some(click_spring),
+            ))
+        })
+        .collect();
+
+    let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
+        .iter()
+        .zip(precomputed_cursor_timelines.iter())
+        .map(|(segment, precomputed_cursor)| {
+            ZoomFocusInterpolator::new_with_precomputed_cursor(
                 &segment.cursor,
                 cursor_smoothing,
                 click_spring,
@@ -471,6 +487,7 @@ pub async fn render_video_to_channel(
                     .as_ref()
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
+                Some(precomputed_cursor.clone()),
             )
         })
         .collect();
@@ -563,8 +580,9 @@ pub async fn render_video_to_channel(
             consecutive_failures = 0;
 
             let zoom_focus_interp = &zoom_focus_interpolators[segment_clip_index];
+            let precomputed_cursor = &precomputed_cursor_timelines[segment_clip_index];
 
-            let uniforms = ProjectUniforms::new(
+            let uniforms = ProjectUniforms::new_with_precomputed_cursor(
                 constants,
                 project,
                 current_frame_number,
@@ -574,6 +592,7 @@ pub async fn render_video_to_channel(
                 &segment_frames,
                 duration,
                 zoom_focus_interp,
+                precomputed_cursor,
             );
 
             let next_frame_number = frame_number;
@@ -690,7 +709,11 @@ pub async fn render_video_to_channel(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "Frame decode failed after retries - using previous frame"
                 );
                 let mut fallback = last_frame.clone();
@@ -702,7 +725,11 @@ pub async fn render_video_to_channel(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "First frame decode failed after retries - cannot continue"
                 );
                 continue;
@@ -762,11 +789,23 @@ pub async fn render_video_to_channel_nv12(
 
     let click_spring = project.cursor.click_spring_config();
 
+    let precomputed_cursor_timelines: Vec<Arc<PrecomputedCursorTimeline>> = render_segments
+        .iter()
+        .map(|segment| {
+            Arc::new(PrecomputedCursorTimeline::new(
+                &segment.cursor,
+                cursor_smoothing,
+                Some(click_spring),
+            ))
+        })
+        .collect();
+
     let zoom_build_start = Instant::now();
     let mut zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
         .iter()
-        .map(|segment| {
-            ZoomFocusInterpolator::new(
+        .zip(precomputed_cursor_timelines.iter())
+        .map(|(segment, precomputed_cursor)| {
+            ZoomFocusInterpolator::new_with_precomputed_cursor(
                 &segment.cursor,
                 cursor_smoothing,
                 click_spring,
@@ -777,9 +816,13 @@ pub async fn render_video_to_channel_nv12(
                     .as_ref()
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
+                Some(precomputed_cursor.clone()),
             )
         })
         .collect();
+    for interp in &mut zoom_focus_interpolators {
+        interp.ensure_precomputed_until(duration as f32 + 1.0);
+    }
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
     let mut frame_number = 0;
@@ -882,8 +925,9 @@ pub async fn render_video_to_channel_nv12(
             consecutive_failures = 0;
 
             let zoom_focus_interp = &zoom_focus_interpolators[segment_clip_index];
+            let precomputed_cursor = &precomputed_cursor_timelines[segment_clip_index];
 
-            let uniforms = ProjectUniforms::new(
+            let uniforms = ProjectUniforms::new_with_precomputed_cursor(
                 constants,
                 project,
                 current_frame_number,
@@ -893,6 +937,7 @@ pub async fn render_video_to_channel_nv12(
                 &segment_frames,
                 duration,
                 zoom_focus_interp,
+                precomputed_cursor,
             );
 
             let next_frame_number = frame_number;
@@ -1112,7 +1157,11 @@ pub async fn render_video_to_channel_nv12(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
                     consecutive_failures = consecutive_failures,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "Frame decode failed after retries - using previous NV12 frame"
                 );
                 let mut fallback = last_frame.clone_metadata_with_data();
@@ -1129,7 +1178,11 @@ pub async fn render_video_to_channel_nv12(
                 tracing::error!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
-                    max_retries = DECODE_MAX_RETRIES,
+                    max_retries = if is_initial_frame {
+                        DECODE_MAX_RETRIES_INITIAL
+                    } else {
+                        DECODE_MAX_RETRIES_STEADY
+                    },
                     "First frame decode failed after retries - cannot continue"
                 );
                 continue;
@@ -1157,7 +1210,8 @@ pub async fn render_video_to_channel_nv12(
     Ok(())
 }
 
-const DECODE_MAX_RETRIES: u32 = 5;
+const DECODE_MAX_RETRIES_INITIAL: u32 = 5;
+const DECODE_MAX_RETRIES_STEADY: u32 = 2;
 
 async fn decode_segment_frames_with_retry(
     decoders: &RecordingSegmentDecoders,
@@ -1169,13 +1223,18 @@ async fn decode_segment_frames_with_retry(
 ) -> Option<DecodedSegmentFrames> {
     let mut result = None;
     let mut retry_count = 0u32;
+    let max_retries = if is_initial_frame {
+        DECODE_MAX_RETRIES_INITIAL
+    } else {
+        DECODE_MAX_RETRIES_STEADY
+    };
 
-    while result.is_none() && retry_count < DECODE_MAX_RETRIES {
+    while result.is_none() && retry_count < max_retries {
         if retry_count > 0 {
             let delay = if is_initial_frame {
                 500 * (retry_count as u64 + 1)
             } else {
-                50 * retry_count as u64
+                10
             };
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
@@ -1192,7 +1251,7 @@ async fn decode_segment_frames_with_retry(
 
         if result.is_none() {
             retry_count += 1;
-            if retry_count < DECODE_MAX_RETRIES {
+            if retry_count < max_retries {
                 tracing::warn!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
@@ -2063,6 +2122,83 @@ impl ProjectUniforms {
         total_duration: f64,
         zoom_focus_interpolator: &ZoomFocusInterpolator,
     ) -> Self {
+        let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        });
+        let click_spring_cfg = project.cursor.click_spring_config();
+
+        let cursor_interp_fn = |time: f32| -> Option<InterpolatedCursorPosition> {
+            match cursor_smoothing {
+                Some(cfg) => interpolate_cursor_with_click_spring(
+                    cursor_events,
+                    time,
+                    Some(cfg),
+                    Some(click_spring_cfg),
+                ),
+                None => interpolate_cursor(cursor_events, time, None),
+            }
+        };
+
+        Self::new_inner(
+            constants,
+            project,
+            frame_number,
+            fps,
+            resolution_base,
+            cursor_events,
+            segment_frames,
+            total_duration,
+            zoom_focus_interpolator,
+            &cursor_interp_fn,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_precomputed_cursor(
+        constants: &RenderVideoConstants,
+        project: &ProjectConfiguration,
+        frame_number: u32,
+        fps: u32,
+        resolution_base: XY<u32>,
+        cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
+        total_duration: f64,
+        zoom_focus_interpolator: &ZoomFocusInterpolator,
+        precomputed_cursor: &PrecomputedCursorTimeline,
+    ) -> Self {
+        let cursor_interp_fn = |time: f32| -> Option<InterpolatedCursorPosition> {
+            precomputed_cursor.interpolate(time)
+        };
+
+        Self::new_inner(
+            constants,
+            project,
+            frame_number,
+            fps,
+            resolution_base,
+            cursor_events,
+            segment_frames,
+            total_duration,
+            zoom_focus_interpolator,
+            &cursor_interp_fn,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_inner(
+        constants: &RenderVideoConstants,
+        project: &ProjectConfiguration,
+        frame_number: u32,
+        fps: u32,
+        resolution_base: XY<u32>,
+        _cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
+        total_duration: f64,
+        zoom_focus_interpolator: &ZoomFocusInterpolator,
+        cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
+    ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
         let fps_f32 = fps as f32;
@@ -2099,44 +2235,10 @@ impl ProjectUniforms {
 
         let crop = Self::get_crop(options, project);
 
-        let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-            tension: project.cursor.tension,
-            mass: project.cursor.mass,
-            friction: project.cursor.friction,
-        });
-
-        let click_spring_cfg = project.cursor.click_spring_config();
-
-        let interpolated_cursor = match cursor_smoothing {
-            Some(cfg) => interpolate_cursor_with_click_spring(
-                cursor_events,
-                cursor_time_for_interp,
-                Some(cfg),
-                Some(click_spring_cfg),
-            ),
-            None => interpolate_cursor(cursor_events, cursor_time_for_interp, None),
-        };
-
-        let prev_interpolated_cursor = match cursor_smoothing {
-            Some(cfg) => interpolate_cursor_with_click_spring(
-                cursor_events,
-                prev_cursor_time_for_interp,
-                Some(cfg),
-                Some(click_spring_cfg),
-            ),
-            None => interpolate_cursor(cursor_events, prev_cursor_time_for_interp, None),
-        };
-
+        let interpolated_cursor = cursor_interp_fn(cursor_time_for_interp);
+        let prev_interpolated_cursor = cursor_interp_fn(prev_cursor_time_for_interp);
         let lookback_t = (cursor_time_for_interp - 0.4).max(0.0);
-        let past_cursor_for_tilt = match cursor_smoothing {
-            Some(cfg) => interpolate_cursor_with_click_spring(
-                cursor_events,
-                lookback_t,
-                Some(cfg),
-                Some(click_spring_cfg),
-            ),
-            None => interpolate_cursor(cursor_events, lookback_t, None),
-        };
+        let past_cursor_for_tilt = cursor_interp_fn(lookback_t);
 
         let cursor_x_axis_tilt_radians =
             if let (Some(cur), Some(past)) = (&interpolated_cursor, past_cursor_for_tilt) {
@@ -2202,15 +2304,7 @@ impl ProjectUniforms {
                 let boundary_recording_time = (current_recording_time as f64
                     - (frame_time as f64 - prev.end))
                     .clamp(0.0, prev.end) as f32;
-                match cursor_smoothing {
-                    Some(cfg) => interpolate_cursor_with_click_spring(
-                        cursor_events,
-                        boundary_recording_time,
-                        Some(cfg),
-                        Some(click_spring_cfg),
-                    ),
-                    None => interpolate_cursor(cursor_events, boundary_recording_time, None),
-                }
+                cursor_interp_fn(boundary_recording_time)
             })
             .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
 
@@ -2238,15 +2332,7 @@ impl ProjectUniforms {
                 let boundary_recording_time = (prev_recording_time as f64
                     - (prev_frame_time as f64 - prev.end))
                     .clamp(0.0, prev.end) as f32;
-                match cursor_smoothing {
-                    Some(cfg) => interpolate_cursor_with_click_spring(
-                        cursor_events,
-                        boundary_recording_time,
-                        Some(cfg),
-                        Some(click_spring_cfg),
-                    ),
-                    None => interpolate_cursor(cursor_events, boundary_recording_time, None),
-                }
+                cursor_interp_fn(boundary_recording_time)
             })
             .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
 
@@ -2667,6 +2753,7 @@ pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
     nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
+    nv12_buffer_pool: NV12BufferPool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -2677,6 +2764,7 @@ impl<'a> FrameRenderer<'a> {
             constants,
             session: None,
             nv12_converter: None,
+            nv12_buffer_pool: NV12BufferPool::new(6),
         }
     }
 
@@ -2803,10 +2891,120 @@ impl<'a> FrameRenderer<'a> {
     ) -> Option<Result<frame_pipeline::Nv12RenderedFrame, RenderingError>> {
         let nv12_converter = self.nv12_converter.as_mut()?;
         let pending = nv12_converter.take_pending()?;
-        Some(pending.wait(&self.constants.device).await)
+        Some(
+            pending
+                .wait_with_pool(&self.constants.device, Some(&mut self.nv12_buffer_pool))
+                .await,
+        )
     }
 
     pub async fn render_nv12(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        layers: &mut RendererLayers,
+    ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
+        if self.constants.is_software_adapter {
+            return self
+                .render_nv12_software_path(segment_frames, uniforms, cursor, layers)
+                .await;
+        }
+
+        self.render_nv12_gpu_path(segment_frames, uniforms, cursor, layers)
+            .await
+    }
+
+    async fn render_nv12_software_path(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        layers: &mut RendererLayers,
+    ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
+        let rgba_frame = self
+            .render(segment_frames, uniforms.clone(), cursor, layers)
+            .await?;
+
+        let Some(rgba_frame) = rgba_frame else {
+            return Ok(None);
+        };
+
+        let width = rgba_frame.width;
+        let height = rgba_frame.height;
+        let padded_bytes_per_row = rgba_frame.padded_bytes_per_row;
+        let frame_number = rgba_frame.frame_number;
+        let target_time_ns = rgba_frame.target_time_ns;
+
+        let nv12_size = (width as usize) * (height as usize) * 3 / 2;
+        let mut nv12_buf = self.nv12_buffer_pool.acquire(nv12_size);
+
+        let y_stride = width as usize;
+        let uv_stride = width as usize;
+        let y_plane_size = y_stride * height as usize;
+        let uv_plane_size = uv_stride * (height as usize / 2);
+        nv12_buf.resize(y_plane_size + uv_plane_size, 0);
+
+        let src_data = &rgba_frame.data;
+        let src_stride = padded_bytes_per_row as usize;
+
+        for row in 0..height as usize {
+            let src_row = &src_data[row * src_stride..row * src_stride + width as usize * 4];
+            let y_row = &mut nv12_buf[row * y_stride..(row + 1) * y_stride];
+            for col in 0..width as usize {
+                let r = src_row[col * 4] as i32;
+                let g = src_row[col * 4 + 1] as i32;
+                let b = src_row[col * 4 + 2] as i32;
+                y_row[col] = ((16 + ((65 * r + 129 * g + 25 * b + 128) >> 8)) as u8).clamp(16, 235);
+            }
+        }
+
+        let uv_offset = y_plane_size;
+        for row in 0..(height as usize / 2) {
+            let src_row0 =
+                &src_data[row * 2 * src_stride..row * 2 * src_stride + width as usize * 4];
+            let src_row1 = &src_data
+                [(row * 2 + 1) * src_stride..(row * 2 + 1) * src_stride + width as usize * 4];
+            let uv_row =
+                &mut nv12_buf[uv_offset + row * uv_stride..uv_offset + (row + 1) * uv_stride];
+            for col in 0..(width as usize / 2) {
+                let r = (src_row0[col * 8] as i32
+                    + src_row0[col * 8 + 4] as i32
+                    + src_row1[col * 8] as i32
+                    + src_row1[col * 8 + 4] as i32
+                    + 2)
+                    / 4;
+                let g = (src_row0[col * 8 + 1] as i32
+                    + src_row0[col * 8 + 5] as i32
+                    + src_row1[col * 8 + 1] as i32
+                    + src_row1[col * 8 + 5] as i32
+                    + 2)
+                    / 4;
+                let b = (src_row0[col * 8 + 2] as i32
+                    + src_row0[col * 8 + 6] as i32
+                    + src_row1[col * 8 + 2] as i32
+                    + src_row1[col * 8 + 6] as i32
+                    + 2)
+                    / 4;
+                uv_row[col * 2] =
+                    ((128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)) as u8).clamp(16, 240);
+                uv_row[col * 2 + 1] =
+                    ((128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)) as u8).clamp(16, 240);
+            }
+        }
+
+        Ok(Some(frame_pipeline::Nv12RenderedFrame {
+            data: self.nv12_buffer_pool.wrap(nv12_buf),
+            width,
+            height,
+            y_stride: width,
+            frame_number,
+            target_time_ns,
+            format: frame_pipeline::GpuOutputFormat::Nv12,
+        }))
+    }
+
+    async fn render_nv12_gpu_path(
         &mut self,
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
@@ -2874,13 +3072,14 @@ impl<'a> FrameRenderer<'a> {
                 &uniforms,
             );
 
-            match finish_encoder_nv12(
+            match finish_encoder_nv12_pooled(
                 session,
                 nv12_converter,
                 &self.constants.device,
                 &self.constants.queue,
                 &uniforms,
                 encoder,
+                Some(&mut self.nv12_buffer_pool),
             )
             .await
             {

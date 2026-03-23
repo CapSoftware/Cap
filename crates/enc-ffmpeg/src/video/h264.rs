@@ -776,6 +776,18 @@ fn get_codec_and_options(
                             _ => "veryfast",
                         },
                     );
+                    if !matches!(preset, H264Preset::Slow | H264Preset::Medium) {
+                        let thread_count = thread::available_parallelism()
+                            .map(|v| v.get())
+                            .unwrap_or(4);
+                        options.set("threads", &thread_count.to_string());
+                        options.set("rc-lookahead", "10");
+                        options.set("b-adapt", "1");
+                        options.set("aq-mode", "1");
+                        options.set("ref", "2");
+                        options.set("subme", "2");
+                        options.set("trellis", "0");
+                    }
                 } else {
                     options.set(
                         "preset",

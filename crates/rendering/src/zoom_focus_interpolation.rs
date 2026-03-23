@@ -3,7 +3,8 @@ use cap_project::{ClickSpringConfig, CursorEvents, ScreenMovementSpring, XY, Zoo
 use crate::{
     Coord, RawDisplayUVSpace,
     cursor_interpolation::{
-        InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
+        InterpolatedCursorPosition, PrecomputedCursorTimeline, interpolate_cursor,
+        interpolate_cursor_with_click_spring,
     },
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
@@ -130,6 +131,7 @@ pub struct ZoomFocusInterpolator {
     events: Option<Vec<SmoothedFocusEvent>>,
     precompute_sim: Option<ZoomFocusPrecomputeSim>,
     cursor_events: std::sync::Arc<CursorEvents>,
+    precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
     cursor_smoothing: Option<SpringMassDamperSimulationConfig>,
     click_spring: ClickSpringConfig,
     screen_spring: ScreenMovementSpring,
@@ -146,11 +148,32 @@ impl ZoomFocusInterpolator {
         duration_secs: f64,
         zoom_segments: &[ZoomSegment],
     ) -> Self {
+        Self::new_with_precomputed_cursor(
+            cursor_events,
+            cursor_smoothing,
+            click_spring,
+            screen_spring,
+            duration_secs,
+            zoom_segments,
+            None,
+        )
+    }
+
+    pub fn new_with_precomputed_cursor(
+        cursor_events: &CursorEvents,
+        cursor_smoothing: Option<SpringMassDamperSimulationConfig>,
+        click_spring: ClickSpringConfig,
+        screen_spring: ScreenMovementSpring,
+        duration_secs: f64,
+        zoom_segments: &[ZoomSegment],
+        precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
+    ) -> Self {
         let segment_clusters = Self::build_segment_clusters(cursor_events, zoom_segments);
         Self {
             events: None,
             precompute_sim: None,
             cursor_events: std::sync::Arc::new(cursor_events.clone()),
+            precomputed_cursor,
             cursor_smoothing,
             click_spring,
             screen_spring,
@@ -167,11 +190,32 @@ impl ZoomFocusInterpolator {
         duration_secs: f64,
         zoom_segments: &[ZoomSegment],
     ) -> Self {
+        Self::new_arc_with_precomputed_cursor(
+            cursor_events,
+            cursor_smoothing,
+            click_spring,
+            screen_spring,
+            duration_secs,
+            zoom_segments,
+            None,
+        )
+    }
+
+    pub fn new_arc_with_precomputed_cursor(
+        cursor_events: std::sync::Arc<CursorEvents>,
+        cursor_smoothing: Option<SpringMassDamperSimulationConfig>,
+        click_spring: ClickSpringConfig,
+        screen_spring: ScreenMovementSpring,
+        duration_secs: f64,
+        zoom_segments: &[ZoomSegment],
+        precomputed_cursor: Option<std::sync::Arc<PrecomputedCursorTimeline>>,
+    ) -> Self {
         let segment_clusters = Self::build_segment_clusters(cursor_events.as_ref(), zoom_segments);
         Self {
             events: None,
             precompute_sim: None,
             cursor_events,
+            precomputed_cursor,
             cursor_smoothing,
             click_spring,
             screen_spring,
@@ -204,6 +248,10 @@ impl ZoomFocusInterpolator {
     }
 
     fn interpolate_cursor_at(&self, time_secs: f32) -> Option<InterpolatedCursorPosition> {
+        if let Some(precomputed_cursor) = self.precomputed_cursor.as_ref() {
+            return precomputed_cursor.interpolate(time_secs);
+        }
+
         match self.cursor_smoothing {
             Some(cfg) => interpolate_cursor_with_click_spring(
                 self.cursor_events.as_ref(),

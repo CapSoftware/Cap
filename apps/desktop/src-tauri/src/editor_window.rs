@@ -37,7 +37,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
                         GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                     };
                     WSFrame {
-                        data: frame.data,
+                        data: Arc::new(frame.data.into_vec()),
                         width: frame.width,
                         height: frame.height,
                         stride: frame.y_stride,
@@ -254,7 +254,7 @@ impl EditorInstances {
                                     GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
                                 };
                                 WSFrame {
-                                    data: frame.data,
+                                    data: Arc::new(frame.data.into_vec()),
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.y_stride,
