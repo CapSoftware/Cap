@@ -47,7 +47,7 @@ impl ActorHandle {
     }
 
     pub async fn is_paused(&self) -> anyhow::Result<bool> {
-        Ok(false)
+        self.inner.is_paused().await
     }
 }
 
