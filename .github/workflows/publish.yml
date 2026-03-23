@@ -237,21 +237,26 @@ jobs:
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
-      - name: Normalize Tauri signing key
+      - name: Prepare Tauri build config
         if: ${{ env.RUN_BUILD == 'true' }}
         shell: node {0}
         env:
           RAW_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           const fs = require("node:fs");
+          const path = require("node:path");
+
+          const workspace = process.env.GITHUB_WORKSPACE;
+          const sourceConfigPath = path.join(workspace, "apps/desktop/src-tauri/tauri.prod.conf.json");
+          const buildConfigPath = path.join(workspace, "apps/desktop/src-tauri/tauri.build.conf.json");
+          const config = JSON.parse(fs.readFileSync(sourceConfigPath, "utf8"));
 
           const raw = (process.env.RAW_TAURI_SIGNING_PRIVATE_KEY || "").trim();
-          if (!raw) {
-            throw new Error("Missing TAURI_SIGNING_PRIVATE_KEY secret.");
-          }
+          const candidates = raw
+            ? new Set([raw, raw.replace(/\\n/g, "\n")])
+            : new Set();
 
-          const candidates = new Set([raw, raw.replace(/\\n/g, "\n")]);
-          if (/^[A-Za-z0-9+/=\r\n]+$/.test(raw) && !raw.includes("untrusted comment:")) {
+          if (raw && /^[A-Za-z0-9+/=\r\n]+$/.test(raw) && !raw.includes("untrusted comment:")) {
             try {
               const decoded = Buffer.from(raw.replace(/\s+/g, ""), "base64").toString("utf8");
               candidates.add(decoded);
@@ -265,23 +270,28 @@ jobs:
               value.toLowerCase().includes("minisign secret key"),
           );
 
-          if (!key) {
-            throw new Error(
-              "TAURI_SIGNING_PRIVATE_KEY is not a valid minisign secret key. Ensure the secret contains the full private key text (or base64 of it), including the untrusted comment line.",
+          if (key) {
+            fs.appendFileSync(
+              process.env.GITHUB_ENV,
+              `TAURI_SIGNING_PRIVATE_KEY<<__TAURI_KEY__\n${key}\n__TAURI_KEY__\n`,
             );
+          } else {
+            config.plugins ??= {};
+            config.plugins.updater ??= {};
+            config.plugins.updater.active = false;
+
+            config.bundle ??= {};
+            config.bundle.createUpdaterArtifacts = false;
           }
 
-          fs.appendFileSync(
-            process.env.GITHUB_ENV,
-            `TAURI_SIGNING_PRIVATE_KEY<<__TAURI_KEY__\n${key}\n__TAURI_KEY__\n`,
-          );
+          fs.writeFileSync(buildConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 
       - name: Build app
         if: ${{ env.RUN_BUILD == 'true' }}
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
+          pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.build.conf.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
