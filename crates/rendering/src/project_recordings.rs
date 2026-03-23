@@ -19,12 +19,16 @@ pub struct Video {
 impl Video {
     pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
         fn inner(path: &Path, start_time: f64) -> Result<Video, String> {
-            let input =
+            let mut input =
                 ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {e}"))?;
             let stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Video)
                 .ok_or_else(|| "No video stream found".to_string())?;
+            let stream_index = stream.index();
+            let stream_time_base = stream.time_base();
+            let stream_duration = stream.duration();
+            let stream_frames = stream.frames();
 
             let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
                 .map_err(|e| format!("Failed to create decoder: {e}"))?
@@ -54,18 +58,16 @@ impl Video {
             };
 
             if duration <= 0.0 {
-                let stream_duration = stream.duration();
                 if stream_duration > 0 && stream_duration != i64::MIN {
-                    let time_base = stream.time_base();
-                    duration = (stream_duration as f64 * time_base.numerator() as f64)
-                        / time_base.denominator() as f64;
+                    duration = (stream_duration as f64 * stream_time_base.numerator() as f64)
+                        / stream_time_base.denominator() as f64;
                 }
             }
 
             if duration <= 0.0 {
                 let mut last_ts: i64 = -1;
                 for (s, packet) in input.packets() {
-                    if s.index() == stream.index() {
+                    if s.index() == stream_index {
                         if let Some(pts) = packet.pts() {
                             if pts > last_ts {
                                 last_ts = pts;
@@ -79,24 +81,21 @@ impl Video {
                 }
 
                 if last_ts >= 0 {
-                    let tb = stream.time_base();
-                    duration = (last_ts as f64 * tb.numerator() as f64) / tb.denominator() as f64;
+                    duration = (last_ts as f64 * stream_time_base.numerator() as f64)
+                        / stream_time_base.denominator() as f64;
                 }
             }
 
-            if duration <= 0.0 {
-                let frames = stream.frames();
-                if frames > 0 && fps > 0.0 {
-                    duration = frames as f64 / fps;
-                }
+            if duration <= 0.0 && stream_frames > 0 && fps > 0.0 {
+                duration = stream_frames as f64 / fps;
             }
 
             if !duration.is_finite() || duration <= 0.0 {
                 tracing::warn!(
                     ?path,
                     container_duration,
-                    stream_duration = stream.duration(),
-                    frames = stream.frames(),
+                    stream_duration,
+                    frames = stream_frames,
                     fps,
                     "Failed to determine video duration; defaulting to zero"
                 );

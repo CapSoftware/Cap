@@ -44,7 +44,7 @@ use crate::{
     auth::AuthStore,
     create_screenshot,
     general_settings::{
-        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
+        GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
     },
     open_external_link,
     presets::PresetsStore,
@@ -502,7 +502,9 @@ pub async fn start_recording(
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
-                        );
+                        )
+                        .with_fragmented(false)
+                        .with_max_fps(60);
 
                         #[cfg(target_os = "macos")]
                         {
