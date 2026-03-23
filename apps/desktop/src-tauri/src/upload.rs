@@ -146,22 +146,25 @@ pub async fn upload_video(
 
     emit_upload_complete(app, &video_id);
 
-    async_capture_event(match &video_result {
-        Ok(meta) => PostHogEvent::MultipartUploadComplete {
-            duration: start.elapsed(),
-            length: meta
-                .as_ref()
-                .map(|v| Duration::from_secs(v.duration_in_secs as u64))
-                .unwrap_or_default(),
-            size: std::fs::metadata(file_path)
-                .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
-                .unwrap_or_default(),
+    async_capture_event(
+        app,
+        match &video_result {
+            Ok(meta) => PostHogEvent::MultipartUploadComplete {
+                duration: start.elapsed(),
+                length: meta
+                    .as_ref()
+                    .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                    .unwrap_or_default(),
+                size: std::fs::metadata(file_path)
+                    .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                    .unwrap_or_default(),
+            },
+            Err(err) => PostHogEvent::MultipartUploadFailed {
+                duration: start.elapsed(),
+                error: err.to_string(),
+            },
         },
-        Err(err) => PostHogEvent::MultipartUploadFailed {
-            duration: start.elapsed(),
-            error: err.to_string(),
-        },
-    });
+    );
 
     let _ = (video_result?, thumbnail_result?);
 
@@ -399,29 +402,32 @@ impl InstantMultipartUpload {
             handle: spawn_actor(async move {
                 let start = Instant::now();
                 let result = Self::run(
-                    app,
+                    app.clone(),
                     file_path.clone(),
                     pre_created_video,
                     recording_dir,
                     realtime_upload_done,
                 )
                 .await;
-                async_capture_event(match &result {
-                    Ok(meta) => PostHogEvent::MultipartUploadComplete {
-                        duration: start.elapsed(),
-                        length: meta
-                            .as_ref()
-                            .map(|v| Duration::from_secs(v.duration_in_secs as u64))
-                            .unwrap_or_default(),
-                        size: std::fs::metadata(file_path)
-                            .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
-                            .unwrap_or_default(),
+                async_capture_event(
+                    &app,
+                    match &result {
+                        Ok(meta) => PostHogEvent::MultipartUploadComplete {
+                            duration: start.elapsed(),
+                            length: meta
+                                .as_ref()
+                                .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                                .unwrap_or_default(),
+                            size: std::fs::metadata(file_path)
+                                .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                                .unwrap_or_default(),
+                        },
+                        Err(err) => PostHogEvent::MultipartUploadFailed {
+                            duration: start.elapsed(),
+                            error: err.to_string(),
+                        },
                     },
-                    Err(err) => PostHogEvent::MultipartUploadFailed {
-                        duration: start.elapsed(),
-                        error: err.to_string(),
-                    },
-                });
+                );
 
                 result.map(|_| ())
             }),

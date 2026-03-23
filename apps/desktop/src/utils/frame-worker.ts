@@ -417,7 +417,6 @@ function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
 	if (renderMode !== "webgpu" || !webgpuRenderer) return false;
 
 	let latest: { bytes: Uint8Array; release: () => void } | null = null;
-	let drained = 0;
 
 	for (let i = 0; i < maxDrain; i += 1) {
 		const borrowed = consumer.borrow(0);
@@ -427,7 +426,6 @@ function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
 			latest.release();
 		}
 		latest = { bytes: borrowed.data, release: borrowed.release };
-		drained += 1;
 	}
 
 	if (!latest) return false;

@@ -497,15 +497,19 @@ impl AVAssetReaderDecoder {
     }
 
     fn select_best_decoder(&mut self, requested_time: f32) -> (usize, bool) {
-        let (best_id, _distance, needs_reset) =
-            self.pool_manager.find_best_decoder_for_time(requested_time);
+        let decoder_count = self.decoders.len();
+        let (best_id, _distance, needs_reset) = self
+            .pool_manager
+            .find_best_decoder_for_time(requested_time, decoder_count);
 
-        let decoder_idx = best_id.min(self.decoders.len().saturating_sub(1));
+        let decoder_idx = best_id.min(decoder_count.saturating_sub(1));
 
         if needs_reset && decoder_idx < self.decoders.len() {
             self.decoders[decoder_idx].reset(requested_time);
-            self.pool_manager
-                .update_decoder_position(best_id, self.decoders[decoder_idx].current_position());
+            self.pool_manager.update_decoder_position(
+                decoder_idx,
+                self.decoders[decoder_idx].current_position(),
+            );
         }
 
         self.active_decoder_idx = decoder_idx;
@@ -667,7 +671,6 @@ impl AVAssetReaderDecoder {
                         pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
 
                     let position_secs = current_frame as f32 / fps as f32;
-                    last_decoded_position = Some(position_secs);
 
                     let Some(frame) = frame.image_buf() else {
                         tracing::debug!(
@@ -676,6 +679,8 @@ impl AVAssetReaderDecoder {
                         );
                         continue;
                     };
+
+                    last_decoded_position = Some(position_secs);
 
                     let cache_frame = CachedFrame::new(&processor, frame.retained(), current_frame);
 
@@ -721,15 +726,30 @@ impl AVAssetReaderDecoder {
                                     let _ = req.sender.send(data.to_decoded_frame());
                                 } else {
                                     const MAX_FALLBACK_DISTANCE: u32 = 90;
+                                    const MAX_FORWARD_FALLBACK_DISTANCE: u32 = 1;
 
-                                    let nearest = cache
-                                        .range(..=req.frame)
-                                        .next_back()
-                                        .or_else(|| cache.range(req.frame..).next());
+                                    let nearest = if is_scrubbing {
+                                        cache
+                                            .range(..=req.frame)
+                                            .next_back()
+                                            .or_else(|| cache.range(req.frame..).next())
+                                    } else {
+                                        cache
+                                            .range(req.frame..)
+                                            .next()
+                                            .or_else(|| cache.range(..=req.frame).next_back())
+                                    };
 
                                     if let Some((&frame_num, cached)) = nearest {
+                                        let is_forward_or_equal = frame_num >= req.frame;
                                         let distance = req.frame.abs_diff(frame_num);
-                                        if distance <= MAX_FALLBACK_DISTANCE {
+                                        let is_allowed = if is_scrubbing {
+                                            distance <= MAX_FALLBACK_DISTANCE
+                                        } else {
+                                            is_forward_or_equal
+                                                && distance <= MAX_FORWARD_FALLBACK_DISTANCE
+                                        };
+                                        if is_allowed {
                                             let _ =
                                                 req.sender.send(cached.data().to_decoded_frame());
                                         }
@@ -819,8 +839,11 @@ impl AVAssetReaderDecoder {
                 }
             }
 
-            if let Some(pos) = last_decoded_position {
-                this.pool_manager.update_decoder_position(decoder_idx, pos);
+            if let Some(last_pos) = last_decoded_position {
+                let max_req_time = max_requested_frame as f32 / fps as f32;
+                let capped = last_pos.min(max_req_time);
+                this.pool_manager
+                    .update_decoder_position(decoder_idx, capped);
             }
 
             let mut unfulfilled_count = 0u32;
@@ -837,34 +860,63 @@ impl AVAssetReaderDecoder {
                     const MAX_FALLBACK_DISTANCE: u32 = 90;
                     const MAX_FALLBACK_DISTANCE_EOF: u32 = 300;
                     const MAX_FALLBACK_DISTANCE_NEAR_END: u32 = 180;
+                    const MAX_FORWARD_FALLBACK_DISTANCE: u32 = 1;
+
+                    let allow_relaxed_fallback = is_scrubbing
+                        || near_video_end
+                        || decoder_at_eof
+                        || decoder_returned_no_frames;
 
                     let fallback_distance = if decoder_at_eof || decoder_returned_no_frames {
                         MAX_FALLBACK_DISTANCE_EOF
                     } else if near_video_end {
                         MAX_FALLBACK_DISTANCE_NEAR_END
+                    } else if !allow_relaxed_fallback {
+                        MAX_FORWARD_FALLBACK_DISTANCE
                     } else {
                         MAX_FALLBACK_DISTANCE
                     };
 
-                    let nearest = cache
-                        .range(..=req.frame)
-                        .next_back()
-                        .or_else(|| cache.range(req.frame..).next());
+                    let nearest = if allow_relaxed_fallback {
+                        cache
+                            .range(..=req.frame)
+                            .next_back()
+                            .or_else(|| cache.range(req.frame..).next())
+                    } else {
+                        cache
+                            .range(req.frame..)
+                            .next()
+                            .or_else(|| cache.range(..=req.frame).next_back())
+                    };
 
                     if let Some((&frame_num, cached)) = nearest {
+                        let is_forward_or_equal = frame_num >= req.frame;
                         let distance = req.frame.abs_diff(frame_num);
-                        if distance <= fallback_distance {
+                        let is_allowed = if allow_relaxed_fallback {
+                            distance <= fallback_distance
+                        } else {
+                            is_forward_or_equal && distance <= fallback_distance
+                        };
+                        if is_allowed {
                             let _ = req.sender.send(cached.data().to_decoded_frame());
-                        } else if let Some(ref last) = *last_sent_frame.borrow() {
+                        } else if allow_relaxed_fallback
+                            && let Some(ref last) = *last_sent_frame.borrow()
+                        {
                             let _ = req.sender.send(last.to_decoded_frame());
-                        } else if let Some(ref first) = *first_ever_frame.borrow() {
+                        } else if allow_relaxed_fallback
+                            && let Some(ref first) = *first_ever_frame.borrow()
+                        {
                             let _ = req.sender.send(first.to_decoded_frame());
                         } else {
                             unfulfilled_count += 1;
                         }
-                    } else if let Some(ref last) = *last_sent_frame.borrow() {
+                    } else if allow_relaxed_fallback
+                        && let Some(ref last) = *last_sent_frame.borrow()
+                    {
                         let _ = req.sender.send(last.to_decoded_frame());
-                    } else if let Some(ref first) = *first_ever_frame.borrow() {
+                    } else if allow_relaxed_fallback
+                        && let Some(ref first) = *first_ever_frame.borrow()
+                    {
                         let _ = req.sender.send(first.to_decoded_frame());
                     } else {
                         unfulfilled_count += 1;

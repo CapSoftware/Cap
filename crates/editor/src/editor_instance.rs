@@ -533,8 +533,10 @@ impl EditorInstance {
                                 let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
                                     segment_medias.cursor.clone(),
                                     cursor_smoothing,
+                                    project.cursor.click_spring_config(),
                                     project.screen_movement_spring,
                                     total_duration,
+                                    project.timeline.as_ref().map(|t| t.zoom_segments.as_slice()).unwrap_or(&[]),
                                 );
 
                                 let uniforms = ProjectUniforms::new(

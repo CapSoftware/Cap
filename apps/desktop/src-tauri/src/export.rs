@@ -363,8 +363,14 @@ pub async fn generate_export_preview(
     let zoom_focus_interpolator = ZoomFocusInterpolator::new(
         &render_segment.cursor,
         cursor_smoothing,
+        project_config.cursor.click_spring_config(),
         project_config.screen_movement_spring,
         total_duration,
+        project_config
+            .timeline
+            .as_ref()
+            .map(|t| t.zoom_segments.as_slice())
+            .unwrap_or(&[]),
     );
 
     let uniforms = ProjectUniforms::new(
@@ -513,8 +519,14 @@ pub async fn generate_export_preview_fast(
     let zoom_focus_interpolator = ZoomFocusInterpolator::new(
         &segment_media.cursor,
         cursor_smoothing,
+        project_config.cursor.click_spring_config(),
         project_config.screen_movement_spring,
         total_duration,
+        project_config
+            .timeline
+            .as_ref()
+            .map(|t| t.zoom_segments.as_slice())
+            .unwrap_or(&[]),
     );
 
     let uniforms = ProjectUniforms::new(

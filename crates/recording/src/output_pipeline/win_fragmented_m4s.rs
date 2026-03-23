@@ -1,3 +1,4 @@
+use super::core::{BlockingThreadFinish, combine_finish_errors, wait_for_blocking_thread_finish};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
     output_pipeline::{NativeCameraFrame, camera_frame_to_ffmpeg},
@@ -92,6 +93,93 @@ impl FrameDropTracker {
     }
 }
 
+fn finish_encoder_thread(
+    handle: JoinHandle<anyhow::Result<()>>,
+    label: &str,
+) -> BlockingThreadFinish {
+    wait_for_blocking_thread_finish(handle, Duration::from_secs(5), label)
+}
+
+trait FinishableEncoderState {
+    fn close_channel(&self, thread_label: &str);
+    fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>>;
+    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()>;
+}
+
+impl FinishableEncoderState for EncoderState {
+    fn close_channel(&self, thread_label: &str) {
+        if let Err(error) = self.video_tx.send(None) {
+            trace!("{thread_label} channel already closed during finish: {error}");
+        }
+    }
+
+    fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>> {
+        self.encoder_handle.take()
+    }
+
+    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
+        match self.encoder.lock() {
+            Ok(mut encoder) => encoder
+                .finish_with_timestamp(timestamp)
+                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
+            Err(_) => Err(anyhow!(
+                "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
+            )),
+        }
+    }
+}
+
+impl FinishableEncoderState for CameraEncoderState {
+    fn close_channel(&self, thread_label: &str) {
+        if let Err(error) = self.video_tx.send(None) {
+            trace!("{thread_label} channel already closed during finish: {error}");
+        }
+    }
+
+    fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>> {
+        self.encoder_handle.take()
+    }
+
+    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
+        match self.encoder.lock() {
+            Ok(mut encoder) => encoder
+                .finish_with_timestamp(timestamp)
+                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
+            Err(_) => Err(anyhow!(
+                "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
+            )),
+        }
+    }
+}
+
+fn finish_segmented_encoder_impl(
+    state: &mut impl FinishableEncoderState,
+    timestamp: Duration,
+    thread_label: &str,
+    finish_label: &str,
+) -> anyhow::Result<()> {
+    state.close_channel(thread_label);
+
+    let thread_result = state
+        .take_handle()
+        .map(|handle| finish_encoder_thread(handle, thread_label))
+        .unwrap_or(BlockingThreadFinish::Clean);
+
+    let thread_error = match thread_result {
+        BlockingThreadFinish::Clean => None,
+        BlockingThreadFinish::Failed(error) => Some(error),
+        BlockingThreadFinish::TimedOut(error) => return Err(error),
+    };
+
+    let finalize_error = state.finish_encoder(timestamp, finish_label).err();
+
+    match (thread_error, finalize_error) {
+        (None, None) => Ok(()),
+        (Some(error), None) | (None, Some(error)) => Err(error),
+        (Some(primary), Some(secondary)) => Err(combine_finish_errors(primary, secondary)),
+    }
+}
+
 struct EncoderState {
     video_tx: SyncSender<Option<(screen_capture::ScreenFrame, Duration)>>,
     encoder: Arc<Mutex<SegmentedVideoEncoder>>,
@@ -182,54 +270,15 @@ impl Muxer for WindowsFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(mut state) = self.state.take() {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("Windows M4S encoder channel already closed during finish: {e}");
-            }
-
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        match handle.join() {
-                            Err(panic_payload) => {
-                                warn!(
-                                    "Windows M4S encoder thread panicked during finish: {:?}",
-                                    panic_payload
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                warn!("Windows M4S encoder thread returned error: {e}");
-                            }
-                            Ok(Ok(())) => {}
-                        }
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Windows M4S encoder thread did not finish within {:?}, abandoning",
-                            timeout
-                        );
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
-
-            match state.encoder.lock() {
-                Ok(mut encoder) => {
-                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
-                        warn!("Failed to finish segmented encoder: {e}");
-                    }
-                }
-                Err(_) => {
-                    error!("Encoder mutex poisoned during finish - encoder thread likely panicked");
-                    return Ok(Err(anyhow!(
-                        "Encoder mutex poisoned - recording may be corrupt or incomplete"
-                    )));
-                }
-            }
+        if let Some(mut state) = self.state.take()
+            && let Err(error) = finish_segmented_encoder_impl(
+                &mut state,
+                timestamp,
+                "Windows M4S encoder",
+                "Failed to finish segmented encoder",
+            )
+        {
+            return Ok(Err(error));
         }
 
         Ok(Ok(()))
@@ -508,7 +557,7 @@ impl VideoMuxer for WindowsFragmentedM4SMuxer {
                     self.frame_drops.record_frame();
                 }
                 Err(_) => {
-                    trace!("Windows M4S encoder channel disconnected");
+                    return Err(anyhow!("Windows M4S encoder channel disconnected"));
                 }
             }
         }
@@ -614,56 +663,15 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(mut state) = self.state.take() {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("Windows M4S camera encoder channel already closed during finish: {e}");
-            }
-
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        match handle.join() {
-                            Err(panic_payload) => {
-                                warn!(
-                                    "Windows M4S camera encoder thread panicked during finish: {:?}",
-                                    panic_payload
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                warn!("Windows M4S camera encoder thread returned error: {e}");
-                            }
-                            Ok(Ok(())) => {}
-                        }
-                        break;
-                    }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Windows M4S camera encoder thread did not finish within {:?}, abandoning",
-                            timeout
-                        );
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            }
-
-            match state.encoder.lock() {
-                Ok(mut encoder) => {
-                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
-                        warn!("Failed to finish camera segmented encoder: {e}");
-                    }
-                }
-                Err(_) => {
-                    error!(
-                        "Camera encoder mutex poisoned during finish - encoder thread likely panicked"
-                    );
-                    return Ok(Err(anyhow!(
-                        "Camera encoder mutex poisoned - recording may be corrupt or incomplete"
-                    )));
-                }
-            }
+        if let Some(mut state) = self.state.take()
+            && let Err(error) = finish_segmented_encoder_impl(
+                &mut state,
+                timestamp,
+                "Windows M4S camera encoder",
+                "Failed to finish camera segmented encoder",
+            )
+        {
+            return Ok(Err(error));
         }
 
         Ok(Ok(()))
@@ -986,7 +994,7 @@ impl VideoMuxer for WindowsFragmentedM4SCameraMuxer {
                     self.frame_drops.record_frame();
                 }
                 Err(_) => {
-                    trace!("Windows M4S camera encoder channel disconnected");
+                    return Err(anyhow!("Windows M4S camera encoder channel disconnected"));
                 }
             }
         }
