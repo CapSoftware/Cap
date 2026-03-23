@@ -1,11 +1,202 @@
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use cap_project::{AudioMeta, StudioRecordingMeta, VideoMeta};
+use anyhow::Context as _;
+use cap_project::{
+    AudioMeta, SingleSegment, StudioRecordingMeta, VideoMeta,
+};
+use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
+
+use crate::instant_recording;
+
+pub struct ActorHandle {
+    inner: instant_recording::ActorHandle,
+    pub capture_target: crate::sources::screen_capture::ScreenCaptureTarget,
+    project_path: PathBuf,
+}
+
+impl ActorHandle {
+    pub async fn stop(&self) -> anyhow::Result<CompletedRecording> {
+        let _ = self.inner.stop().await?;
+
+        Ok(CompletedRecording {
+            project_path: self.project_path.clone(),
+            meta: default_studio_meta(),
+        })
+    }
+
+    pub fn done_fut(&self) -> crate::DoneFut {
+        self.inner.done_fut()
+    }
+
+    pub async fn pause(&self) -> anyhow::Result<()> {
+        self.inner.pause().await
+    }
+
+    pub async fn resume(&self) -> anyhow::Result<()> {
+        self.inner.resume().await
+    }
+
+    pub async fn cancel(&self) -> anyhow::Result<()> {
+        self.inner.cancel().await
+    }
+
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+}
+
+impl Drop for ActorHandle {
+    fn drop(&mut self) {
+        let _ = &self.inner;
+    }
+}
+
+pub struct Actor;
+
+impl Actor {
+    pub fn builder(
+        output: PathBuf,
+        capture_target: crate::sources::screen_capture::ScreenCaptureTarget,
+    ) -> ActorBuilder {
+        ActorBuilder::new(output, capture_target)
+    }
+}
+
+pub struct ActorBuilder {
+    output_path: PathBuf,
+    capture_target: crate::sources::screen_capture::ScreenCaptureTarget,
+    system_audio: bool,
+    mic_feed: Option<Arc<crate::feeds::microphone::MicrophoneFeedLock>>,
+    camera_feed: Option<Arc<crate::feeds::camera::CameraFeedLock>>,
+    custom_cursor: bool,
+    fragmented: bool,
+    max_fps: u32,
+    #[cfg(target_os = "macos")]
+    excluded_windows: Vec<scap_targets::WindowId>,
+}
+
+impl ActorBuilder {
+    pub fn new(
+        output: PathBuf,
+        capture_target: crate::sources::screen_capture::ScreenCaptureTarget,
+    ) -> Self {
+        Self {
+            output_path: output,
+            capture_target,
+            system_audio: false,
+            mic_feed: None,
+            camera_feed: None,
+            custom_cursor: false,
+            fragmented: false,
+            max_fps: 60,
+            #[cfg(target_os = "macos")]
+            excluded_windows: Vec::new(),
+        }
+    }
+
+    pub fn with_system_audio(mut self, system_audio: bool) -> Self {
+        self.system_audio = system_audio;
+        self
+    }
+
+    pub fn with_mic_feed(
+        mut self,
+        mic_feed: Arc<crate::feeds::microphone::MicrophoneFeedLock>,
+    ) -> Self {
+        self.mic_feed = Some(mic_feed);
+        self
+    }
+
+    pub fn with_camera_feed(
+        mut self,
+        camera_feed: Arc<crate::feeds::camera::CameraFeedLock>,
+    ) -> Self {
+        self.camera_feed = Some(camera_feed);
+        self
+    }
+
+    pub fn with_custom_cursor(mut self, custom_cursor: bool) -> Self {
+        self.custom_cursor = custom_cursor;
+        self
+    }
+
+    pub fn with_fragmented(mut self, fragmented: bool) -> Self {
+        self.fragmented = fragmented;
+        self
+    }
+
+    pub fn with_max_fps(mut self, max_fps: u32) -> Self {
+        self.max_fps = max_fps.clamp(1, 120);
+        self
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
+        self.excluded_windows = excluded_windows;
+        self
+    }
+
+    pub async fn build(
+        self,
+        #[cfg(target_os = "macos")] _shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    ) -> anyhow::Result<ActorHandle> {
+        let mut builder = instant_recording::Actor::builder(
+            self.output_path.clone(),
+            self.capture_target.clone(),
+        )
+        .with_system_audio(self.system_audio)
+        .with_max_output_size(self.max_fps);
+
+        if let Some(mic_feed) = self.mic_feed {
+            builder = builder.with_mic_feed(mic_feed);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.with_excluded_windows(self.excluded_windows);
+        }
+
+        let inner = builder.build(
+            #[cfg(target_os = "macos")]
+            _shareable_content,
+        )
+        .await
+        .context("spawn instant recording actor")?;
+
+        Ok(ActorHandle {
+            inner,
+            capture_target: self.capture_target,
+            project_path: self.output_path,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletedRecording {
+    pub project_path: PathBuf,
+    pub meta: StudioRecordingMeta,
+}
+
+fn default_studio_meta() -> StudioRecordingMeta {
+    StudioRecordingMeta::SingleSegment {
+        segment: SingleSegment {
+            display: VideoMeta {
+                path: RelativePathBuf::from("content/output.mp4"),
+                fps: 30,
+                start_time: None,
+            },
+            camera: None,
+            audio: None,
+            cursor: None,
+        },
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct Video {

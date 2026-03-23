@@ -16,6 +16,7 @@ use cap_recording::{
         screen_capture,
         screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
     },
+    studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
@@ -71,7 +72,7 @@ pub enum InProgressRecording {
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
-        handle: instant_recording::ActorHandle,
+        handle: studio_recording::ActorHandle,
         common: InProgressRecordingCommon,
     },
 }
@@ -163,7 +164,7 @@ pub enum CompletedRecording {
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: instant_recording::CompletedRecording,
+        recording: studio_recording::CompletedRecording,
         target_name: String,
     },
 }
@@ -492,7 +493,7 @@ pub async fn start_recording(
 
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
-                        let mut builder = instant_recording::Actor::builder(
+                        let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
@@ -501,7 +502,14 @@ pub async fn start_recording(
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
-                        );
+                        )
+                        .with_fragmented(
+                            general_settings
+                                .as_ref()
+                                .map(|s| s.crash_recovery_recording)
+                                .unwrap_or_default(),
+                        )
+                        .with_max_fps(general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60));
 
                         #[cfg(target_os = "macos")]
                         {
@@ -1236,7 +1244,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &instant_recording::CompletedRecording,
+    recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -1294,7 +1302,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &instant_recording::CompletedRecording,
+    completed_recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
