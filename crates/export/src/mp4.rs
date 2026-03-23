@@ -3,7 +3,9 @@ use cap_editor::{AudioRenderer, get_audio_segments};
 use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
-use cap_rendering::{GpuOutputFormat, Nv12RenderedFrame, ProjectUniforms, RenderSegment};
+use cap_rendering::{
+    GpuOutputFormat, Nv12RenderedFrame, ProjectUniforms, RenderSegment, SharedNv12Buffer,
+};
 use futures::FutureExt;
 use image::ImageBuffer;
 use serde::Deserialize;
@@ -330,7 +332,7 @@ impl Mp4ExportSettings {
 }
 
 struct ExportFrame {
-    nv12_data: Arc<Vec<u8>>,
+    nv12_data: SharedNv12Buffer,
     width: u32,
     height: u32,
     y_stride: u32,
@@ -338,7 +340,7 @@ struct ExportFrame {
 }
 
 struct FirstFrameNv12 {
-    data: Arc<Vec<u8>>,
+    data: SharedNv12Buffer,
     width: u32,
     height: u32,
     y_stride: u32,
@@ -414,7 +416,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
             }
 
             return ExportFrame {
-                nv12_data: Arc::new(result),
+                nv12_data: SharedNv12Buffer::from_vec(result),
                 width,
                 height,
                 y_stride: width,
@@ -428,7 +430,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         "swscale RGBA to NV12 conversion failed, using zeroed NV12"
     );
     ExportFrame {
-        nv12_data: Arc::new(vec![0u8; width as usize * height as usize * 3 / 2]),
+        nv12_data: SharedNv12Buffer::from_vec(vec![0u8; width as usize * height as usize * 3 / 2]),
         width,
         height,
         y_stride: width,
@@ -498,7 +500,7 @@ fn fill_nv12_frame_direct(
 
 #[cfg(test)]
 struct Nv12ExportFrame {
-    nv12_data: Arc<Vec<u8>>,
+    nv12_data: SharedNv12Buffer,
     width: u32,
     height: u32,
     y_stride: u32,
@@ -562,6 +564,10 @@ fn save_screenshot_from_nv12(
 use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 
+const FRAME_RECEIVE_INITIAL_TIMEOUT_SECS: u64 = 120;
+const FRAME_RECEIVE_STEADY_TIMEOUT_SECS: u64 = 90;
+const MAX_CONSECUTIVE_FRAME_TIMEOUTS: u32 = 3;
+
 #[allow(clippy::too_many_arguments)]
 async fn export_render_to_channel(
     constants: &RenderVideoConstants,
@@ -600,8 +606,46 @@ async fn export_render_to_channel(
         let forward_future = async {
             let mut first_frame_data: Option<FirstFrameNv12> = None;
             let mut frame_count = 0u32;
+            let mut consecutive_timeouts = 0u32;
 
-            while let Some((frame, _frame_number)) = video_rx.recv().await {
+            loop {
+                let timeout_secs = if frame_count == 0 {
+                    FRAME_RECEIVE_INITIAL_TIMEOUT_SECS
+                } else {
+                    FRAME_RECEIVE_STEADY_TIMEOUT_SECS
+                };
+
+                let Some((frame, _frame_number)) = (match tokio::time::timeout(
+                    Duration::from_secs(timeout_secs),
+                    video_rx.recv(),
+                )
+                .await
+                {
+                    Ok(frame) => {
+                        consecutive_timeouts = 0;
+                        frame
+                    }
+                    Err(_) => {
+                        consecutive_timeouts += 1;
+
+                        if consecutive_timeouts >= MAX_CONSECUTIVE_FRAME_TIMEOUTS {
+                            return Err(cap_rendering::RenderingError::ImageLoadError(format!(
+                                "Export timed out {MAX_CONSECUTIVE_FRAME_TIMEOUTS} times consecutively after {timeout_secs}s each waiting for frame {frame_count}"
+                            )));
+                        }
+
+                        warn!(
+                            frame_count = frame_count,
+                            timeout_secs = timeout_secs,
+                            consecutive_timeouts = consecutive_timeouts,
+                            "Timed out waiting for rendered frame"
+                        );
+                        continue;
+                    }
+                }) else {
+                    break;
+                };
+
                 if !(on_progress)(frame_count) {
                     return Err(cap_rendering::RenderingError::ImageLoadError(
                         "Export cancelled".to_string(),
@@ -631,17 +675,14 @@ async fn export_render_to_channel(
 
             if let Some(first) = first_frame_data {
                 let pp = screenshot_project_path;
-                tokio::task::spawn(async move {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        save_screenshot_from_nv12(
-                            &first.data,
-                            first.width,
-                            first.height,
-                            first.y_stride,
-                            &pp,
-                        );
-                    })
-                    .await;
+                let _screenshot_task = tokio::task::spawn_blocking(move || {
+                    save_screenshot_from_nv12(
+                        first.data.as_ref(),
+                        first.width,
+                        first.height,
+                        first.y_stride,
+                        &pp,
+                    );
                 });
             }
 
@@ -699,7 +740,7 @@ mod tests {
         }
 
         let input = Nv12ExportFrame {
-            nv12_data: Arc::new(nv12_data.clone()),
+            nv12_data: SharedNv12Buffer::from_vec(nv12_data.clone()),
             width,
             height,
             y_stride: width,
@@ -735,7 +776,7 @@ mod tests {
 
         let data = vec![1u8, 2, 3, 4, 5, 6];
         let frame = Nv12RenderedFrame {
-            data: std::sync::Arc::new(data.clone()),
+            data: SharedNv12Buffer::from_vec(data.clone()),
             width: 4,
             height: 2,
             y_stride: 4,
