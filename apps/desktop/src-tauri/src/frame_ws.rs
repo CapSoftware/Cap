@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -179,7 +180,10 @@ pub async fn create_watch_frame_ws(
                             Ok(()) => {
                                 TOTAL_BYTES_SENT.fetch_add(packed_len as u64, Ordering::Relaxed);
                                 TOTAL_FRAMES_SENT.fetch_add(1, Ordering::Relaxed);
-                                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+                                let now_ms = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|duration| duration.as_millis() as u64)
+                                    .unwrap_or_default();
                                 let last_log = LAST_LOG_TIME.load(Ordering::Relaxed);
                                 if now_ms - last_log > 2000 {
                                     LAST_LOG_TIME.store(now_ms, Ordering::Relaxed);
@@ -214,12 +218,24 @@ pub async fn create_watch_frame_ws(
         .route("/", get(ws_handler))
         .with_state(frame_rx);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tracing::info!("WebSocket server listening on port {}", port);
-
     let cancel_token = CancellationToken::new();
     let cancel_token_child = cancel_token.child_token();
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!("Failed to bind watch frame websocket listener: {err}");
+            return (0, cancel_token_child);
+        }
+    };
+    let port = match listener.local_addr() {
+        Ok(addr) => addr.port(),
+        Err(err) => {
+            tracing::error!("Failed to read watch frame websocket listener address: {err}");
+            return (0, cancel_token_child);
+        }
+    };
+    tracing::info!("WebSocket server listening on port {}", port);
+
     tokio::spawn(async move {
         let server = axum::serve(listener, router.into_make_service());
         tokio::select! {
@@ -314,12 +330,24 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         .route("/", get(ws_handler))
         .with_state(frame_tx);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tracing::info!("WebSocket server listening on port {}", port);
-
     let cancel_token = CancellationToken::new();
     let cancel_token_child = cancel_token.child_token();
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!("Failed to bind frame websocket listener: {err}");
+            return (0, cancel_token_child);
+        }
+    };
+    let port = match listener.local_addr() {
+        Ok(addr) => addr.port(),
+        Err(err) => {
+            tracing::error!("Failed to read frame websocket listener address: {err}");
+            return (0, cancel_token_child);
+        }
+    };
+    tracing::info!("WebSocket server listening on port {}", port);
+
     tokio::spawn(async move {
         let server = axum::serve(listener, router.into_make_service());
         tokio::select! {

@@ -47,7 +47,8 @@ import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
 
 const Top = () => {
-	const { activeSpace, anyNewNotifications } = useDashboardContext();
+	const { activeSpace, anyNewNotifications, isDeveloperSection } =
+		useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
 	const bellRef = useRef<HTMLDivElement>(null);
 	const { theme, setThemeHandler } = useTheme();
@@ -62,12 +63,19 @@ const Top = () => {
 		"/dashboard/shared-caps": "Shared Caps",
 		"/dashboard/caps/record": "Record a Cap",
 		"/dashboard/settings/organization": "Organization Settings",
+		"/dashboard/settings/organization/preferences": "Organization Settings",
+		"/dashboard/settings/organization/billing": "Organization Settings",
+		"/dashboard/settings/organization/members": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
 		[`/dashboard/folder/${params.id}`]: "Caps",
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
+		"/dashboard/developers": "Developers",
+		"/dashboard/developers/apps": "Developer Apps",
+		"/dashboard/developers/usage": "Developer Usage",
+		"/dashboard/developers/credits": "Developer Credits",
 	};
 
 	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
@@ -160,20 +168,22 @@ const Top = () => {
 						{toggleNotifications && <Notifications ref={notificationsRef} />}
 					</AnimatePresence>
 				</div>
-				<div
-					onClick={() => {
-						if (document.startViewTransition) {
-							document.startViewTransition(() => {
+				{!isDeveloperSection && (
+					<div
+						onClick={() => {
+							if (document.startViewTransition) {
+								document.startViewTransition(() => {
+									setThemeHandler(theme === "light" ? "dark" : "light");
+								});
+							} else {
 								setThemeHandler(theme === "light" ? "dark" : "light");
-							});
-						} else {
-							setThemeHandler(theme === "light" ? "dark" : "light");
-						}
-					}}
-					className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
-				>
-					<ThemeToggleIcon />
-				</div>
+							}
+						}}
+						className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
+					>
+						<ThemeToggleIcon />
+					</div>
+				)}
 				<User />
 			</div>
 		</div>

@@ -1,5 +1,10 @@
 import { db } from "@cap/database";
-import { organizations, s3Buckets, videos } from "@cap/database/schema";
+import {
+	organizations,
+	s3Buckets,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -92,6 +97,23 @@ export async function transcribeVideo(
 		return {
 			success: true,
 			message: "Transcription already completed or in progress",
+		};
+	}
+
+	const upload = await db()
+		.select({ phase: videoUploads.phase })
+		.from(videoUploads)
+		.where(eq(videoUploads.videoId, videoId))
+		.limit(1);
+
+	if (
+		upload[0]?.phase === "uploading" ||
+		upload[0]?.phase === "processing" ||
+		upload[0]?.phase === "generating_thumbnail"
+	) {
+		return {
+			success: true,
+			message: "Video upload is still in progress",
 		};
 	}
 

@@ -3,6 +3,7 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import {
 	startTransition,
 	use,
@@ -349,6 +350,9 @@ export const Share = ({
 
 	const aiLoading = shouldShowLoading();
 
+	const searchParams = useSearchParams();
+	const initialSeekDone = useRef(false);
+
 	const handleSeek = useCallback((time: number) => {
 		const v =
 			playerRef.current ??
@@ -385,6 +389,41 @@ export const Share = ({
 			v.removeEventListener("loadedmetadata", handleReady);
 		}, 3000);
 	}, []);
+
+	useEffect(() => {
+		if (initialSeekDone.current) return;
+		const tParam = searchParams.get("t");
+		if (!tParam) return;
+		const t = parseInt(tParam, 10);
+		if (!Number.isFinite(t) || t < 0) return;
+
+		const v =
+			playerRef.current ??
+			(document.querySelector("video") as HTMLVideoElement | null);
+		if (v) {
+			initialSeekDone.current = true;
+			handleSeek(t);
+			return;
+		}
+
+		const interval = setInterval(() => {
+			const el =
+				playerRef.current ??
+				(document.querySelector("video") as HTMLVideoElement | null);
+			if (el) {
+				clearInterval(interval);
+				initialSeekDone.current = true;
+				handleSeek(t);
+			}
+		}, 200);
+
+		const timeout = setTimeout(() => clearInterval(interval), 10000);
+
+		return () => {
+			clearInterval(interval);
+			clearTimeout(timeout);
+		};
+	}, [searchParams, handleSeek]);
 
 	const handleOptimisticComment = useCallback(
 		(comment: CommentType) => {
@@ -439,6 +478,8 @@ export const Share = ({
 									areReactionStampsDisabled={areReactionStampsDisabled}
 									chapters={aiData?.chapters || []}
 									aiGenerationStatus={aiData?.aiGenerationStatus}
+									canRetryProcessing={viewerId === data.owner.id}
+									showPlaybackStatusBadge={viewerId === data.owner.id}
 									ref={playerRef}
 								/>
 							</div>

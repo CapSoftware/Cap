@@ -782,6 +782,16 @@ impl Message<NewFrame> for CameraFeed {
         let mut to_remove = vec![];
 
         for (i, sender) in self.senders.iter().enumerate() {
+            if sender.is_full() {
+                if frame_num.is_multiple_of(30) {
+                    warn!(
+                        "Camera sender {} channel full at frame {}, dropping frame",
+                        i, frame_num
+                    );
+                }
+                continue;
+            }
+
             match sender.try_send(msg.0.clone()) {
                 Ok(()) => {}
                 Err(flume::TrySendError::Full(_)) => {
@@ -828,6 +838,16 @@ impl Message<NewNativeFrame> for CameraFeed {
         let mut to_remove = vec![];
 
         for (i, sender) in self.native_senders.iter().enumerate() {
+            if sender.is_full() {
+                if frame_num.is_multiple_of(30) {
+                    warn!(
+                        "Native camera sender {} channel full at frame {}, dropping frame",
+                        i, frame_num
+                    );
+                }
+                continue;
+            }
+
             match sender.try_send(msg.0.clone()) {
                 Ok(()) => {}
                 Err(flume::TrySendError::Full(_)) => {

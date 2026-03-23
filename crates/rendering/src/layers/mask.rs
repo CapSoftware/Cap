@@ -5,7 +5,6 @@ use crate::{PreparedMask, RenderSession};
 
 pub struct MaskLayer {
     sampler: wgpu::Sampler,
-    uniforms_buffer: wgpu::Buffer,
     pipeline: MaskPipeline,
 }
 
@@ -21,11 +20,6 @@ impl MaskLayer {
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()
             }),
-            uniforms_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Mask Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[MaskUniforms::default()]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }),
             pipeline: MaskPipeline::new(device),
         }
     }
@@ -33,17 +27,21 @@ impl MaskLayer {
     pub fn render(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         session: &mut RenderSession,
         encoder: &mut wgpu::CommandEncoder,
         mask: &PreparedMask,
     ) {
         let uniforms = MaskUniforms::from_mask(mask);
-        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let uniforms_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mask Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[uniforms]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
         let bind_group = self.pipeline.bind_group(
             device,
-            &self.uniforms_buffer,
+            &uniforms_buffer,
             session.current_texture_view(),
             &self.sampler,
         );

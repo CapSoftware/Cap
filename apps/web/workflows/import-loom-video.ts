@@ -460,6 +460,61 @@ interface MediaServerProcessResult {
 	};
 }
 
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+
+async function waitForRetry(delayMs: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function startMediaServerProcessJob(
+	mediaServerUrl: string,
+	body: {
+		videoId: string;
+		userId: string;
+		videoUrl: string;
+		outputPresignedUrl: string;
+		thumbnailPresignedUrl: string;
+		webhookUrl: string;
+	},
+): Promise<string> {
+	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
+		const response = await fetch(`${mediaServerUrl}/video/process`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+
+		if (response.ok) {
+			const { jobId } = (await response.json()) as { jobId: string };
+			return jobId;
+		}
+
+		const errorData = (await response.json().catch(() => ({}))) as {
+			error?: string;
+			code?: string;
+			details?: string;
+		};
+		const errorMessage =
+			errorData.error ||
+			errorData.details ||
+			"Video processing failed to start";
+		const shouldRetry =
+			response.status === 503 &&
+			(errorData.code === "SERVER_BUSY" ||
+				errorMessage.includes("Server is busy"));
+
+		if (shouldRetry && attempt < MEDIA_SERVER_START_MAX_ATTEMPTS - 1) {
+			await waitForRetry(MEDIA_SERVER_START_RETRY_BASE_MS * 2 ** attempt);
+			continue;
+		}
+
+		throw new Error(errorMessage);
+	}
+
+	throw new Error("Video processing failed to start");
+}
+
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
 ): Promise<MediaServerProcessResult> {
@@ -505,27 +560,14 @@ async function processVideoOnMediaServer(
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
 
-	const response = await fetch(`${mediaServerUrl}/video/process`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			videoId,
-			userId,
-			videoUrl: rawVideoUrl,
-			outputPresignedUrl,
-			thumbnailPresignedUrl,
-			webhookUrl,
-		}),
+	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
+		videoId,
+		userId,
+		videoUrl: rawVideoUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		webhookUrl,
 	});
-
-	if (!response.ok) {
-		const errorData = (await response.json().catch(() => ({}))) as {
-			error?: string;
-		};
-		throw new Error(errorData.error || "Video processing failed to start");
-	}
-
-	const { jobId } = (await response.json()) as { jobId: string };
 
 	return await pollForCompletion(mediaServerUrl, jobId);
 }

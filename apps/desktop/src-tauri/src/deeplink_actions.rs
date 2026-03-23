@@ -82,9 +82,10 @@ impl TryFrom<&Url> for DeepLinkAction {
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
         #[cfg(target_os = "macos")]
         if url.scheme() == "file" {
-            return Ok(Self::OpenEditor {
-                project_path: url.to_file_path().unwrap(),
-            });
+            return url
+                .to_file_path()
+                .map(|project_path| Self::OpenEditor { project_path })
+                .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
         match url.domain() {

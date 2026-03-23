@@ -299,12 +299,17 @@ pub struct PendingNv12Readback {
 }
 
 impl PendingNv12Readback {
+    fn cancel(self) -> RenderingError {
+        self.buffer.unmap();
+        RenderingError::BufferMapWaitingFailed
+    }
+
     pub async fn wait(
         mut self,
         device: &wgpu::Device,
     ) -> Result<Nv12RenderedFrame, RenderingError> {
         let Some(mut rx) = self.rx.take() else {
-            return Err(RenderingError::BufferMapWaitingFailed);
+            return Err(self.cancel());
         };
 
         let mut poll_count = 0u32;
@@ -313,14 +318,17 @@ impl PendingNv12Readback {
 
         loop {
             if start_time.elapsed() > timeout_duration {
-                return Err(RenderingError::BufferMapWaitingFailed);
+                return Err(self.cancel());
             }
 
             match rx.try_recv() {
-                Ok(result) => {
-                    result?;
-                    break;
-                }
+                Ok(result) => match result {
+                    Ok(()) => break,
+                    Err(error) => {
+                        self.buffer.unmap();
+                        return Err(RenderingError::BufferMapFailed(error));
+                    }
+                },
                 Err(oneshot::error::TryRecvError::Empty) => {
                     device.poll(wgpu::PollType::Poll)?;
                     poll_count += 1;
@@ -333,7 +341,7 @@ impl PendingNv12Readback {
                     }
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(RenderingError::BufferMapWaitingFailed);
+                    return Err(self.cancel());
                 }
             }
         }
@@ -419,6 +427,11 @@ pub struct PendingReadback {
 }
 
 impl PendingReadback {
+    fn cancel(&self) -> RenderingError {
+        self.buffer.unmap();
+        RenderingError::BufferMapWaitingFailed
+    }
+
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
         let mut poll_count = 0u32;
         let start_time = Instant::now();
@@ -433,14 +446,17 @@ impl PendingReadback {
                     "GPU buffer mapping timed out after {}s",
                     GPU_BUFFER_WAIT_TIMEOUT_SECS
                 );
-                return Err(RenderingError::BufferMapWaitingFailed);
+                return Err(self.cancel());
             }
 
             match self.rx.try_recv() {
-                Ok(result) => {
-                    result?;
-                    break;
-                }
+                Ok(result) => match result {
+                    Ok(()) => break,
+                    Err(error) => {
+                        self.buffer.unmap();
+                        return Err(RenderingError::BufferMapFailed(error));
+                    }
+                },
                 Err(oneshot::error::TryRecvError::Empty) => {
                     device.poll(wgpu::PollType::Poll)?;
                     poll_count += 1;
@@ -461,7 +477,7 @@ impl PendingReadback {
                     }
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(RenderingError::BufferMapWaitingFailed);
+                    return Err(self.cancel());
                 }
             }
         }

@@ -24,7 +24,7 @@ import {
 
 declare global {
 	interface Window {
-		MSStream: any;
+		MSStream: unknown;
 	}
 }
 
@@ -51,17 +51,28 @@ export const EmbedVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
 		autoplay?: boolean;
+		showPlaybackStatusBadge?: boolean;
 	}
 >(
 	(
-		{ data, user, comments, chapters = [], ownerName, autoplay = false },
+		{
+			data,
+			user: _user,
+			comments: _comments,
+			chapters = [],
+			ownerName,
+			autoplay: _autoplay = false,
+			showPlaybackStatusBadge = false,
+		},
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
 		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-		const [longestDuration, setLongestDuration] = useState<number>(0);
+		const [longestDuration, setLongestDuration] = useState<number>(
+			data.duration ?? 0,
+		);
 		const [isPlaying, setIsPlaying] = useState(false);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
@@ -128,6 +139,10 @@ export const EmbedVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		let videoSrc: string;
+		const rawFallbackSrc =
+			data.source.type === "webMP4"
+				? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=raw-preview`
+				: undefined;
 		let enableCrossOrigin = false;
 
 		if (isMp4Source) {
@@ -179,6 +194,9 @@ export const EmbedVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
+							rawFallbackSrc={rawFallbackSrc}
+							duration={data.duration}
+							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
@@ -190,6 +208,7 @@ export const EmbedVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
+							duration={data.duration}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}

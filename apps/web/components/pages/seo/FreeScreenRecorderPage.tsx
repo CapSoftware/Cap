@@ -47,7 +47,7 @@ export const freeScreenRecorderContent = {
 		{
 			title: "Creating Tutorials",
 			description:
-				"Easily record and share tutorials without paying for premium priced recording software.",
+				"Easily record and share tutorials without paying for premium-priced recording software. Works great as a <a href='/screen-recorder-windows'>free Windows screen recorder</a> and on Mac.",
 		},
 		{
 			title: "Professional Presentations",
@@ -76,7 +76,7 @@ export const freeScreenRecorderContent = {
 		{
 			question: "How long can I record for on the free plan?",
 			answer:
-				"Cap's free plan allows for unlimited recording time, so you can capture your screen without interruptions. Whether you're on <a href='/screen-recorder-mac'>Mac</a> or Windows, there are no time limits.",
+				"Cap's free plan allows for unlimited recording time, so you can capture your screen without interruptions. Whether you're on <a href='/screen-recorder-mac'>Mac</a> or <a href='/screen-recorder-windows'>Windows</a>, there are no time limits.",
 		},
 		{
 			question: "Can I store my recordings in the cloud?",

@@ -1,10 +1,14 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
+	batch,
 	createRoot,
 	createSignal,
+	For,
 	Index,
 	type JSX,
 	onMount,
@@ -17,11 +21,12 @@ import "./styles.css";
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
+import type { MaskSegment } from "../masks";
+import type { TextSegment } from "../text";
+import { getTrackRowsWithCount, getUsedTrackCount } from "../timelineTracks";
 import { formatTime } from "../utils";
-import { type CaptionSegmentDragState, CaptionsTrack } from "./CaptionsTrack";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
-import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
@@ -32,20 +37,18 @@ const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
 const TIMELINE_HEADER_HEIGHT = 32;
 
-const trackIcons: Record<TimelineTrackType, JSX.Element> = {
-	clip: <IconLucideClapperboard class="size-4" />,
-	text: <IconLucideType class="size-4" />,
-	mask: <IconLucideBoxSelect class="size-4" />,
-	zoom: <IconLucideSearch class="size-4" />,
-	scene: <IconLucideVideo class="size-4" />,
-	caption: <IconLucideCaptions class="size-4" />,
-	keyboard: <IconLucideKeyboard class="size-4" />,
+const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
+	clip: () => <IconLucideClapperboard class="size-4" />,
+	text: () => <IconLucideType class="size-4" />,
+	mask: () => <IconLucideBoxSelect class="size-4" />,
+	zoom: () => <IconLucideSearch class="size-4" />,
+	scene: () => <IconLucideVideo class="size-4" />,
 };
 
 type TrackDefinition = {
 	type: TimelineTrackType;
 	label: string;
-	icon: JSX.Element;
+	icon: () => JSX.Element;
 	locked: boolean;
 };
 
@@ -55,18 +58,6 @@ const trackDefinitions: TrackDefinition[] = [
 		label: "Clip",
 		icon: trackIcons.clip,
 		locked: true,
-	},
-	{
-		type: "caption",
-		label: "Captions",
-		icon: trackIcons.caption,
-		locked: false,
-	},
-	{
-		type: "keyboard",
-		label: "Keyboard",
-		icon: trackIcons.keyboard,
-		locked: false,
 	},
 	{
 		type: "text",
@@ -93,6 +84,19 @@ const trackDefinitions: TrackDefinition[] = [
 		locked: false,
 	},
 ];
+
+function deleteTrackLane<T extends { track?: number }>(
+	segments: T[],
+	laneIndex: number,
+) {
+	return segments
+		.filter((segment) => (segment.track ?? 0) !== laneIndex)
+		.map<T>((segment) => {
+			const track = segment.track ?? 0;
+			if (track <= laneIndex) return segment;
+			return { ...segment, track: track - 1 };
+		});
+}
 
 export function Timeline() {
 	const {
@@ -125,23 +129,29 @@ export function Timeline() {
 				definition.type === "scene"
 					? trackState().scene
 					: definition.type === "mask"
-						? trackState().mask
+						? trackState().mask > 0
 						: definition.type === "text"
-							? trackState().text
-							: definition.type === "caption"
-								? trackState().caption
-								: definition.type === "keyboard"
-									? trackState().keyboard
-									: true,
+							? trackState().text > 0
+							: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
+			supportsMultiple:
+				definition.type === "mask" || definition.type === "text",
 		}));
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
+	const textTrackRows = () =>
+		getTrackRowsWithCount(
+			project.timeline?.textSegments ?? [],
+			trackState().text,
+		);
+	const maskTrackRows = () =>
+		getTrackRowsWithCount(
+			project.timeline?.maskSegments ?? [],
+			trackState().mask,
+		);
 	const visibleTrackCount = () =>
 		2 +
-		(trackState().text ? 1 : 0) +
-		(trackState().mask ? 1 : 0) +
-		(trackState().caption ? 1 : 0) +
-		(trackState().keyboard ? 1 : 0) +
+		textTrackRows().length +
+		maskTrackRows().length +
 		(sceneTrackVisible() ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
@@ -152,7 +162,14 @@ export function Timeline() {
 		}
 
 		if (type === "text") {
-			setEditorState("timeline", "tracks", "text", next);
+			setEditorState(
+				"timeline",
+				"tracks",
+				"text",
+				next
+					? Math.max(getUsedTrackCount(project.timeline?.textSegments ?? []), 1)
+					: 0,
+			);
 			if (!next && editorState.timeline.selection?.type === "text") {
 				setEditorState("timeline", "selection", null);
 			}
@@ -160,27 +177,97 @@ export function Timeline() {
 		}
 
 		if (type === "mask") {
-			setEditorState("timeline", "tracks", "mask", next);
+			setEditorState(
+				"timeline",
+				"tracks",
+				"mask",
+				next
+					? Math.max(getUsedTrackCount(project.timeline?.maskSegments ?? []), 1)
+					: 0,
+			);
 			if (!next && editorState.timeline.selection?.type === "mask") {
 				setEditorState("timeline", "selection", null);
 			}
+		}
+	}
+
+	function handleAddTrack(type: TimelineTrackType) {
+		if (type === "text") {
+			setEditorState("timeline", "tracks", "text", trackState().text + 1);
 			return;
 		}
 
-		if (type === "caption") {
-			setEditorState("timeline", "tracks", "caption", next);
-			if (!next && editorState.timeline.selection?.type === "caption") {
-				setEditorState("timeline", "selection", null);
-			}
-			return;
+		if (type === "mask") {
+			setEditorState("timeline", "tracks", "mask", trackState().mask + 1);
 		}
+	}
 
-		if (type === "keyboard") {
-			setEditorState("timeline", "tracks", "keyboard", next);
-			if (!next && editorState.timeline.selection?.type === "keyboard") {
+	function handleDeleteTrackLane(type: "text" | "mask", laneIndex: number) {
+		const resumeHistory = projectHistory.pause();
+		const currentTrackCount = trackState()[type];
+		const nextTextSegments =
+			type === "text"
+				? deleteTrackLane<TextSegment>(
+						project.timeline?.textSegments ?? [],
+						laneIndex,
+					)
+				: null;
+		const nextMaskSegments =
+			type === "mask"
+				? deleteTrackLane<MaskSegment>(
+						project.timeline?.maskSegments ?? [],
+						laneIndex,
+					)
+				: null;
+		const nextTrackCount = Math.max(
+			type === "text"
+				? getUsedTrackCount(nextTextSegments ?? [])
+				: getUsedTrackCount(nextMaskSegments ?? []),
+			currentTrackCount - 1,
+			0,
+		);
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
 				setEditorState("timeline", "selection", null);
 			}
-		}
+
+			setProject(
+				produce((project) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+
+					if (type === "text" && nextTextSegments) {
+						timeline.textSegments = nextTextSegments;
+					} else if (nextMaskSegments) {
+						timeline.maskSegments = nextMaskSegments;
+					}
+				}),
+			);
+			setEditorState("timeline", "tracks", type, nextTrackCount);
+		});
+
+		resumeHistory();
+	}
+
+	async function handleOpenTrackMenu(
+		e: MouseEvent,
+		type: "text" | "mask",
+		laneIndex: number,
+	) {
+		e.preventDefault();
+		e.stopPropagation();
+
+		const menu = await Menu.new({
+			items: [
+				await MenuItem.new({
+					text: `Delete ${type === "text" ? "text" : "mask"} track`,
+					action: () => handleDeleteTrackLane(type, laneIndex),
+				}),
+			],
+		});
+
+		menu.popup(new LogicalPosition(e.clientX, e.clientY));
 	}
 
 	onMount(() => {
@@ -198,8 +285,6 @@ export function Timeline() {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
-				captionSegments: [],
-				keyboardSegments: [],
 			});
 			resume();
 		}
@@ -241,15 +326,11 @@ export function Timeline() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
-					captionSegments: [],
-					keyboardSegments: [],
 				};
 				project.timeline.sceneSegments ??= [];
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
-				project.timeline.captionSegments ??= [];
-				project.timeline.keyboardSegments ??= [];
 			}),
 		);
 	}
@@ -258,8 +339,6 @@ export function Timeline() {
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
-	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
-	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -318,9 +397,7 @@ export function Timeline() {
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
-			textSegmentDragState.type !== "moving" &&
-			captionSegmentDragState.type !== "moving" &&
-			keyboardSegmentDragState.type !== "moving"
+			textSegmentDragState.type !== "moving"
 		) {
 			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
 			if (left == null) return;
@@ -374,17 +451,15 @@ export function Timeline() {
 				projectActions.deleteMaskSegments(selection.indices);
 			} else if (selection.type === "text") {
 				projectActions.deleteTextSegments(selection.indices);
-			} else if (selection.type === "caption") {
-				projectActions.deleteCaptionSegments(selection.indices);
-			} else if (selection.type === "keyboard") {
-				projectActions.deleteKeyboardSegments(selection.indices);
 			} else if (selection.type === "clip") {
+				// Delete all selected clips in reverse order
 				[...selection.indices]
 					.sort((a, b) => b - a)
 					.forEach((idx) => {
 						projectActions.deleteClipSegment(idx);
 					});
 			} else if (selection.type === "scene") {
+				// Delete all selected scenes in reverse order
 				[...selection.indices]
 					.sort((a, b) => b - a)
 					.forEach((idx) => {
@@ -524,6 +599,7 @@ export function Timeline() {
 							<TrackManager
 								options={trackOptions()}
 								onToggle={handleToggleTrack}
+								onAdd={handleAddTrack}
 							/>
 						</Tooltip>
 					</div>
@@ -585,46 +661,44 @@ export function Timeline() {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
-							<Show when={trackState().caption}>
-								<TrackRow icon={trackIcons.caption}>
-									<CaptionsTrack
-										onDragStateChanged={(v) => {
-											captionSegmentDragState = v;
-										}}
-										handleUpdatePlayhead={handleUpdatePlayhead}
-									/>
-								</TrackRow>
-							</Show>
-							<Show when={trackState().keyboard}>
-								<TrackRow icon={trackIcons.keyboard}>
-									<KeyboardTrack
-										onDragStateChanged={(v) => {
-											keyboardSegmentDragState = v;
-										}}
-										handleUpdatePlayhead={handleUpdatePlayhead}
-									/>
-								</TrackRow>
-							</Show>
-							<Show when={trackState().text}>
-								<TrackRow icon={trackIcons.text}>
-									<TextTrack
-										onDragStateChanged={(v) => {
-											textSegmentDragState = v;
-										}}
-										handleUpdatePlayhead={handleUpdatePlayhead}
-									/>
-								</TrackRow>
-							</Show>
-							<Show when={trackState().mask}>
-								<TrackRow icon={trackIcons.mask}>
-									<MaskTrack
-										onDragStateChanged={(v) => {
-											maskSegmentDragState = v;
-										}}
-										handleUpdatePlayhead={handleUpdatePlayhead}
-									/>
-								</TrackRow>
-							</Show>
+							<For each={textTrackRows()}>
+								{(laneIndex) => (
+									<TrackRow
+										icon={trackIcons.text}
+										onDelete={() => handleDeleteTrackLane("text", laneIndex)}
+										onContextMenu={(e) =>
+											handleOpenTrackMenu(e, "text", laneIndex)
+										}
+									>
+										<TextTrack
+											laneIndex={laneIndex}
+											onDragStateChanged={(v) => {
+												textSegmentDragState = v;
+											}}
+											handleUpdatePlayhead={handleUpdatePlayhead}
+										/>
+									</TrackRow>
+								)}
+							</For>
+							<For each={maskTrackRows()}>
+								{(laneIndex) => (
+									<TrackRow
+										icon={trackIcons.mask}
+										onDelete={() => handleDeleteTrackLane("mask", laneIndex)}
+										onContextMenu={(e) =>
+											handleOpenTrackMenu(e, "mask", laneIndex)
+										}
+									>
+										<MaskTrack
+											laneIndex={laneIndex}
+											onDragStateChanged={(v) => {
+												maskSegmentDragState = v;
+											}}
+											handleUpdatePlayhead={handleUpdatePlayhead}
+										/>
+									</TrackRow>
+								)}
+							</For>
 							<TrackRow icon={trackIcons.zoom}>
 								<ZoomTrack
 									onDragStateChanged={(v) => {
@@ -651,10 +725,40 @@ export function Timeline() {
 	);
 }
 
-function TrackRow(props: { icon: JSX.Element; children: JSX.Element }) {
+function TrackRow(props: {
+	icon: () => JSX.Element;
+	children: JSX.Element;
+	onDelete?: () => void;
+	onContextMenu?: (e: MouseEvent) => void;
+}) {
 	return (
-		<div class="flex items-stretch gap-2">
-			<TrackIcon icon={props.icon} />
+		<div
+			class="group/track flex items-stretch gap-2"
+			onContextMenu={props.onContextMenu}
+		>
+			<div class="relative">
+				<TrackIcon
+					icon={props.icon()}
+					class={
+						props.onDelete
+							? "transition-opacity group-hover/track:pointer-events-none group-hover/track:opacity-0"
+							: undefined
+					}
+				/>
+				<Show when={props.onDelete}>
+					<button
+						class="absolute inset-0 z-20 pointer-events-none flex items-center justify-center rounded-xl border border-red-400/70 bg-red-500/90 text-white opacity-0 transition-opacity group-hover/track:pointer-events-auto group-hover/track:opacity-100"
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onDelete?.();
+						}}
+						onMouseDown={(e) => e.stopPropagation()}
+						title="Delete track"
+					>
+						<IconCapTrash class="size-4" />
+					</button>
+				</Show>
+			</div>
 			<div class="flex-1 relative overflow-hidden min-w-0">
 				{props.children}
 			</div>

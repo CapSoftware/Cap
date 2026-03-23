@@ -159,10 +159,16 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
     ) -> Result<Self, tauri::ipc::InvokeError> {
         let window = Window::from_command(command)?;
 
-        let instances = window.state::<EditorInstances>();
+        let Some(instances) = window.try_state::<EditorInstances>() else {
+            return Err("editor instance registry unavailable".into());
+        };
         let instance = futures::executor::block_on(instances.0.read());
 
-        Ok(Self(instance.get(window.label()).cloned().unwrap()))
+        let Some(instance) = instance.get(window.label()).cloned() else {
+            return Err("editor instance unavailable".into());
+        };
+
+        Ok(Self(instance))
     }
 }
 

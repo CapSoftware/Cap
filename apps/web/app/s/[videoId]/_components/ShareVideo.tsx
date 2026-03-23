@@ -1,5 +1,4 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -8,7 +7,6 @@ import {
 	forwardRef,
 	useEffect,
 	useImperativeHandle,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -18,12 +16,6 @@ import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
-
-declare global {
-	interface Window {
-		MSStream: any;
-	}
-}
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -50,6 +42,8 @@ export const ShareVideo = forwardRef<
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		aiGenerationStatus?: AiGenerationStatus | null;
+		canRetryProcessing?: boolean;
+		showPlaybackStatusBadge?: boolean;
 	}
 >(
 	(
@@ -61,6 +55,8 @@ export const ShareVideo = forwardRef<
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
+			canRetryProcessing,
+			showPlaybackStatusBadge = false,
 		},
 		ref,
 	) => {
@@ -182,6 +178,10 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		let videoSrc: string;
+		const rawFallbackSrc =
+			data.source.type === "webMP4"
+				? `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=raw-preview`
+				: undefined;
 		let enableCrossOrigin = false;
 
 		if (isMp4Source) {
@@ -217,6 +217,9 @@ export const ShareVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl overflow-visible"
 							videoSrc={videoSrc}
+							rawFallbackSrc={rawFallbackSrc}
+							duration={data.duration}
+							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
 							disableReactionStamps={areReactionStampsDisabled ?? false}
@@ -241,12 +244,14 @@ export const ShareVideo = forwardRef<
 							availableCaptions={captionContext.availableTranslations}
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
+							canRetryProcessing={canRetryProcessing}
 						/>
 					) : (
 						<HLSVideoPlayer
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 							videoSrc={videoSrc}
+							duration={data.duration}
 							disableCaptions={areCaptionsDisabled ?? false}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
@@ -259,14 +264,16 @@ export const ShareVideo = forwardRef<
 							availableCaptions={captionContext.availableTranslations}
 							isCaptionLoading={captionContext.isTranslating}
 							hasCaptions={data.transcriptionStatus === "COMPLETE"}
+							canRetryProcessing={canRetryProcessing}
 						/>
 					)}
 				</div>
 
 				{!data.owner.isPro && (
 					<div className="absolute top-4 left-4 z-30">
-						<div
-							className="block cursor-pointer"
+						<button
+							type="button"
+							className="block"
 							onClick={(e) => {
 								e.stopPropagation();
 								setUpgradeModalOpen(true);
@@ -283,7 +290,7 @@ export const ShareVideo = forwardRef<
 									</p>
 								</div>
 							</div>
-						</div>
+						</button>
 					</div>
 				)}
 				<UpgradeModal

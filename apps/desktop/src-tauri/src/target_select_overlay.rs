@@ -410,6 +410,7 @@ pub struct WindowFocusManager {
 
 impl WindowFocusManager {
     pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
+        let display_id = id.clone();
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         tasks.insert(
             id.to_string(),
@@ -431,11 +432,15 @@ impl WindowFocusManager {
                     if main_window_was_seen && !main_window_available && !settings_window_available
                     {
                         window.hide().ok();
+                        app.state::<WindowFocusManager>()
+                            .finish(&display_id, app.global_shortcut());
                         break;
                     }
 
                     #[cfg(windows)]
-                    if let Some(cap_main) = cap_main {
+                    if window.is_visible().unwrap_or(false)
+                        && let Some(cap_main) = cap_main
+                    {
                         let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
                             || window.is_focused().unwrap_or_default();
 
@@ -450,17 +455,11 @@ impl WindowFocusManager {
         );
     }
 
-    /// Called when a specific overlay window is destroyed to cleanup it's resources
-    pub fn destroy<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
+    fn finish<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(task) = tasks.remove(&id.to_string()) {
-            task.abort();
-        }
+        tasks.remove(&id.to_string());
 
-        // When all overlay windows are closed cleanup shared resources.
         if tasks.is_empty() {
-            // Unregister keyboard shortcut
-            // This messes with other applications if we don't remove it.
             global_shortcut
                 .unregister("Escape")
                 .map_err(|err| {
@@ -468,7 +467,6 @@ impl WindowFocusManager {
                 })
                 .ok();
 
-            // Shutdown the cursor tracking task
             if let Some(task) = self
                 .task
                 .lock()
@@ -478,5 +476,16 @@ impl WindowFocusManager {
                 task.abort();
             }
         }
+    }
+
+    /// Called when a specific overlay window is destroyed to cleanup it's resources
+    pub fn destroy<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
+        let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(task) = tasks.remove(&id.to_string()) {
+            task.abort();
+        }
+        drop(tasks);
+
+        self.finish(id, global_shortcut);
     }
 }

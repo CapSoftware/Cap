@@ -299,8 +299,7 @@ export function renderFrameWebGPU(
 		colorAttachments: [
 			{
 				view: currentTexture.createView(),
-				clearValue: { r: 0, g: 0, b: 0, a: 1 },
-				loadOp: "clear",
+				loadOp: "load",
 				storeOp: "store",
 			},
 		],
@@ -413,8 +412,7 @@ export function renderNv12FrameWebGPU(
 		colorAttachments: [
 			{
 				view: context.getCurrentTexture().createView(),
-				clearValue: { r: 0, g: 0, b: 0, a: 1 },
-				loadOp: "clear",
+				loadOp: "load",
 				storeOp: "store",
 			},
 		],

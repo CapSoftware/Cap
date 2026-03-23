@@ -1,7 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { generateThumbnail, processVideo } from "../../lib/ffmpeg-video";
+import {
+	generateThumbnail,
+	normalizeVideoInputExtension,
+	processVideo,
+	uploadToS3,
+	withTimeout,
+} from "../../lib/ffmpeg-video";
 import { probeVideo } from "../../lib/ffprobe";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
@@ -82,6 +89,72 @@ describe("generateThumbnail integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test("retries transient S3 upload failures", async () => {
+		const originalFetch = globalThis.fetch;
+		let attempts = 0;
+
+		globalThis.fetch = (async () => {
+			attempts++;
+			if (attempts === 1) {
+				const error = new Error(
+					"The socket connection was closed unexpectedly.",
+				);
+				Object.assign(error, { code: "ECONNRESET" });
+				throw error;
+			}
+
+			return new Response(null, {
+				status: 200,
+				statusText: "OK",
+			});
+		}) as typeof fetch;
+
+		try {
+			await uploadToS3(
+				new Uint8Array([1, 2, 3, 4]),
+				"https://uploads.example/result.mp4",
+				"video/mp4",
+			);
+			expect(attempts).toBe(2);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("waits for async cleanup before rejecting timed out work", async () => {
+		let resolveCleanup: (() => void) | undefined;
+		let settled = false;
+		const cleanupFinished = new Promise<void>((resolve) => {
+			resolveCleanup = resolve;
+		});
+
+		const timedOutWork = withTimeout(
+			new Promise<never>(() => {}),
+			1,
+			async () => {
+				await cleanupFinished;
+			},
+		);
+
+		void timedOutWork.catch(() => {
+			settled = true;
+		});
+
+		await Bun.sleep(25);
+		expect(settled).toBe(false);
+
+		resolveCleanup?.();
+
+		await expect(timedOutWork).rejects.toThrow("Operation timed out after 1ms");
+		expect(settled).toBe(true);
+	});
+
+	test("normalizes input extensions", () => {
+		expect(normalizeVideoInputExtension(undefined)).toBe(".mp4");
+		expect(normalizeVideoInputExtension("webm")).toBe(".webm");
+		expect(normalizeVideoInputExtension(".MOV")).toBe(".mov");
+	});
+
 	test("processes video and produces valid output", async () => {
 		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
 
@@ -92,7 +165,7 @@ describe("processVideo integration tests", () => {
 			TEST_VIDEO_WITH_AUDIO,
 			metadata,
 			{ maxWidth: 640, maxHeight: 360 },
-			(progress, message) => {
+			(progress, _message) => {
 				expect(progress).toBeGreaterThanOrEqual(lastProgress);
 				progressUpdates.push(progress);
 				lastProgress = progress;
@@ -165,4 +238,33 @@ describe("processVideo integration tests", () => {
 			processVideo("/nonexistent/path/to/video.mp4", fakeMetadata, {}),
 		).rejects.toThrow();
 	});
+
+	test("processes raw webm input into a valid mp4 output", async () => {
+		const rawWebmPath = join(
+			FIXTURES_DIR,
+			`generated-${Date.now()}-${Math.random().toString(36).slice(2)}.webm`,
+		);
+		tempFiles.push(rawWebmPath);
+
+		execFileSync("ffmpeg", [
+			"-y",
+			"-i",
+			TEST_VIDEO_WITH_AUDIO,
+			"-c:v",
+			"libvpx-vp9",
+			"-c:a",
+			"libopus",
+			rawWebmPath,
+		]);
+
+		const metadata = await probeVideo(`file://${rawWebmPath}`);
+		const tempFile = await processVideo(rawWebmPath, metadata, {});
+		tempFiles.push(tempFile.path);
+
+		const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+		expect(outputMetadata.videoCodec).toBe("h264");
+		expect(outputMetadata.audioCodec).toBe("aac");
+
+		await tempFile.cleanup();
+	}, 120000);
 });

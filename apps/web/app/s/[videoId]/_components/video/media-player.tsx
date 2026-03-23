@@ -1469,6 +1469,7 @@ interface MediaPlayerSeekProps
 	withTime?: boolean;
 	withoutChapter?: boolean;
 	withoutTooltip?: boolean;
+	fallbackDuration?: number | null;
 	tooltipThumbnailSrc?: string | ((time: number) => string);
 	tooltipTimeVariant?: "current" | "progress";
 	tooltipSideOffset?: number;
@@ -1483,6 +1484,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		withTime = false,
 		withoutChapter = false,
 		withoutTooltip = false,
+		fallbackDuration,
 		tooltipTimeVariant = "current",
 		tooltipThumbnailSrc,
 		tooltipSideOffset,
@@ -1499,6 +1501,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const mediaCurrentTime = useMediaSelector(
 		(state) => state.mediaCurrentTime ?? 0,
 	);
+	const mediaDuration = useMediaSelector((state) => state.mediaDuration ?? 0);
 	const [seekableStart = 0, seekableEnd = 0] = useMediaSelector(
 		(state) => state.mediaSeekable ?? [0, 0],
 	);
@@ -1547,6 +1550,25 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const lastSeekCommitTimeRef = React.useRef<number>(0);
 
 	const timeCache = React.useRef<Map<number, string>>(new Map());
+	const resolvedDuration = React.useMemo(() => {
+		const candidates = [
+			mediaDuration,
+			seekableEnd,
+			fallbackDuration ?? 0,
+		].filter((duration) => Number.isFinite(duration) && duration > 0);
+
+		return candidates.length > 0 ? Math.max(...candidates) : 0;
+	}, [fallbackDuration, mediaDuration, seekableEnd]);
+	const lastKnownDurationRef = React.useRef(resolvedDuration);
+
+	React.useEffect(() => {
+		if (resolvedDuration > 0) {
+			lastKnownDurationRef.current = resolvedDuration;
+		}
+	}, [resolvedDuration]);
+
+	const effectiveDuration =
+		resolvedDuration > 0 ? resolvedDuration : lastKnownDurationRef.current;
 
 	const displayValue = seekState.pendingSeekTime ?? mediaCurrentTime;
 
@@ -1575,9 +1597,12 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		return formatted;
 	}, []);
 
-	const currentTime = getCachedTime(displayValue, seekableEnd);
-	const duration = getCachedTime(seekableEnd, seekableEnd);
-	const remainingTime = getCachedTime(seekableEnd - displayValue, seekableEnd);
+	const currentTime = getCachedTime(displayValue, effectiveDuration);
+	const duration = getCachedTime(effectiveDuration, effectiveDuration);
+	const remainingTime = getCachedTime(
+		effectiveDuration - displayValue,
+		effectiveDuration,
+	);
 
 	const onCollisionDataUpdate = React.useCallback(() => {
 		if (collisionDataRef.current) return collisionDataRef.current;
@@ -1720,17 +1745,17 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	);
 
 	const onHoverProgressUpdate = React.useCallback(() => {
-		if (!seekRef.current || seekableEnd <= 0) return;
+		if (!seekRef.current || effectiveDuration <= 0) return;
 
 		const hoverPercent = Math.min(
 			100,
-			(hoverTimeRef.current / seekableEnd) * 100,
+			(hoverTimeRef.current / effectiveDuration) * 100,
 		);
 		seekRef.current.style.setProperty(
 			SEEK_HOVER_PERCENT,
 			`${hoverPercent.toFixed(4)}%`,
 		);
-	}, [seekableEnd]);
+	}, [effectiveDuration]);
 
 	React.useEffect(() => {
 		if (seekState.pendingSeekTime !== null) {
@@ -1763,7 +1788,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	}, [dispatch, seekState.isHovering, tooltipDisabled]);
 
 	const bufferedProgress = React.useMemo(() => {
-		if (mediaBuffered.length === 0 || seekableEnd <= 0) return 0;
+		if (mediaBuffered.length === 0 || effectiveDuration <= 0) return 0;
 
 		if (mediaEnded) return 1;
 
@@ -1772,11 +1797,17 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		);
 
 		if (containingRange) {
-			return Math.min(1, containingRange[1] / seekableEnd);
+			return Math.min(1, containingRange[1] / effectiveDuration);
 		}
 
-		return Math.min(1, seekableStart / seekableEnd);
-	}, [mediaBuffered, mediaCurrentTime, seekableEnd, mediaEnded, seekableStart]);
+		return Math.min(1, seekableStart / effectiveDuration);
+	}, [
+		effectiveDuration,
+		mediaBuffered,
+		mediaCurrentTime,
+		mediaEnded,
+		seekableStart,
+	]);
 
 	const onPointerEnter = React.useCallback(() => {
 		if (seekRef.current) {
@@ -1788,7 +1819,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		horizontalMovementRef.current = 0;
 		verticalMovementRef.current = 0;
 
-		if (seekableEnd > 0) {
+		if (effectiveDuration > 0) {
 			if (hoverTimeoutRef.current) {
 				clearTimeout(hoverTimeoutRef.current);
 			}
@@ -1803,7 +1834,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				}
 			}
 		}
-	}, [seekableEnd, onTooltipPositionUpdate, tooltipDisabled]);
+	}, [effectiveDuration, onTooltipPositionUpdate, tooltipDisabled]);
 
 	const onPointerLeave = React.useCallback(() => {
 		if (hoverTimeoutRef.current) {
@@ -1846,7 +1877,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const onPointerMove = React.useCallback(
 		(event: React.PointerEvent<HTMLDivElement>) => {
-			if (seekableEnd <= 0) return;
+			if (effectiveDuration <= 0) return;
 
 			if (!seekRectRef.current && seekRef.current) {
 				seekRectRef.current = seekRef.current.getBoundingClientRect();
@@ -1890,7 +1921,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 					Math.min(clientX - seekRect.left, seekRect.width),
 				);
 				const relativeX = offsetXOnSeekBar / seekRect.width;
-				const calculatedHoverTime = relativeX * seekableEnd;
+				const calculatedHoverTime = relativeX * effectiveDuration;
 
 				hoverTimeRef.current = calculatedHoverTime;
 
@@ -1940,7 +1971,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			onPreviewUpdate,
 			onTooltipPositionUpdate,
 			onHoverProgressUpdate,
-			seekableEnd,
+			effectiveDuration,
 			seekState.isHovering,
 			tooltipDisabled,
 		],
@@ -2045,15 +2076,15 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const currentChapterCue = getCurrentChapterCue(hoverTimeRef.current);
 	const thumbnail = getThumbnail(hoverTimeRef.current);
-	const hoverTime = getCachedTime(hoverTimeRef.current, seekableEnd);
+	const hoverTime = getCachedTime(hoverTimeRef.current, effectiveDuration);
 
 	const chapterSeparators = React.useMemo(() => {
-		if (withoutChapter || chapterCues.length <= 1 || seekableEnd <= 0) {
+		if (withoutChapter || chapterCues.length <= 1 || effectiveDuration <= 0) {
 			return null;
 		}
 
 		return chapterCues.slice(1).map((chapterCue, index) => {
-			const position = (chapterCue.startTime / seekableEnd) * 100;
+			const position = (chapterCue.startTime / effectiveDuration) * 100;
 
 			return (
 				<div
@@ -2070,7 +2101,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				/>
 			);
 		});
-	}, [chapterCues, seekableEnd, withoutChapter]);
+	}, [chapterCues, effectiveDuration, withoutChapter]);
 
 	const spriteStyle = React.useMemo<React.CSSProperties>(() => {
 		if (!thumbnail?.coords || !thumbnail?.src) {
@@ -2111,7 +2142,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				{...seekProps}
 				ref={seekRef}
 				min={seekableStart}
-				max={seekableEnd}
+				max={effectiveDuration}
 				step={0.01}
 				className={cn(
 					"flex relative items-center w-full select-none touch-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
@@ -2133,7 +2164,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 						}}
 					/>
 					<SliderPrimitive.Range className="absolute h-full bg-white will-change-[width]" />
-					{seekState.isHovering && seekableEnd > 0 && (
+					{seekState.isHovering && effectiveDuration > 0 && (
 						<div
 							data-slot="media-player-seek-hover-range"
 							className="absolute h-full bg-white/70 will-change-[width,opacity]"
@@ -2150,7 +2181,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			{!withoutTooltip &&
 				!context.withoutTooltip &&
 				seekState.isHovering &&
-				seekableEnd > 0 && (
+				effectiveDuration > 0 && (
 					<MediaPlayerPortal>
 						<div
 							ref={tooltipRef}
@@ -2401,40 +2432,67 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 interface MediaPlayerTimeProps extends React.ComponentProps<"div"> {
 	variant?: "progress" | "remaining" | "duration";
 	asChild?: boolean;
+	fallbackDuration?: number | null;
 }
 
 function MediaPlayerTime(props: MediaPlayerTimeProps) {
-	const { variant = "progress", asChild, className, ...timeProps } = props;
+	const {
+		variant = "progress",
+		asChild,
+		className,
+		fallbackDuration,
+		...timeProps
+	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerTime");
 	const mediaCurrentTime = useMediaSelector(
 		(state) => state.mediaCurrentTime ?? 0,
 	);
+	const mediaDuration = useMediaSelector((state) => state.mediaDuration ?? 0);
 	const [, seekableEnd = 0] = useMediaSelector(
 		(state) => state.mediaSeekable ?? [0, 0],
 	);
+	const resolvedDuration = React.useMemo(() => {
+		const candidates = [
+			mediaDuration,
+			seekableEnd,
+			fallbackDuration ?? 0,
+		].filter((duration) => Number.isFinite(duration) && duration > 0);
+
+		return candidates.length > 0 ? Math.max(...candidates) : 0;
+	}, [fallbackDuration, mediaDuration, seekableEnd]);
+	const lastKnownDurationRef = React.useRef(resolvedDuration);
+
+	React.useEffect(() => {
+		if (resolvedDuration > 0) {
+			lastKnownDurationRef.current = resolvedDuration;
+		}
+	}, [resolvedDuration]);
+
+	const effectiveDuration =
+		resolvedDuration > 0 ? resolvedDuration : lastKnownDurationRef.current;
 
 	const times = React.useMemo(() => {
 		if (variant === "remaining") {
 			return {
 				remaining: timeUtils.formatTime(
-					seekableEnd - mediaCurrentTime,
-					seekableEnd,
+					effectiveDuration - mediaCurrentTime,
+					effectiveDuration,
 				),
 			};
 		}
 
 		if (variant === "duration") {
 			return {
-				duration: timeUtils.formatTime(seekableEnd, seekableEnd),
+				duration: timeUtils.formatTime(effectiveDuration, effectiveDuration),
 			};
 		}
 
 		return {
-			current: timeUtils.formatTime(mediaCurrentTime, seekableEnd),
-			duration: timeUtils.formatTime(seekableEnd, seekableEnd),
+			current: timeUtils.formatTime(mediaCurrentTime, effectiveDuration),
+			duration: timeUtils.formatTime(effectiveDuration, effectiveDuration),
 		};
-	}, [variant, mediaCurrentTime, seekableEnd]);
+	}, [variant, mediaCurrentTime, effectiveDuration]);
 
 	const TimePrimitive = asChild ? Slot : "div";
 

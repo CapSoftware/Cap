@@ -1,9 +1,17 @@
+import { db } from "@cap/database";
+import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
-import { CurrentUser } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
 
+import { getAnonymousName } from "@/lib/anonymous-names";
+import {
+	createAnonymousViewNotification,
+	sendFirstViewEmail,
+} from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
@@ -17,10 +25,19 @@ interface TrackPayload {
 	occurredAt?: string;
 }
 
-const sanitizeString = (value?: string | null) =>
-	value?.trim() && value.trim() !== "unknown"
-		? value.trim().slice(0, 256)
-		: undefined;
+const sanitizeString = (value?: string | null) => {
+	const trimmed = value?.trim();
+	return trimmed && trimmed !== "unknown" ? trimmed.slice(0, 256) : undefined;
+};
+
+const decodeUrlEncodedHeaderValue = (value?: string | null) => {
+	if (!value) return value;
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+};
 
 export async function POST(request: NextRequest) {
 	let body: TrackPayload;
@@ -34,7 +51,12 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: "videoId is required" }, { status: 400 });
 	}
 
-	const sessionId = body.sessionId?.slice(0, 128) ?? "anon";
+	const parsedSessionId =
+		typeof body.sessionId === "string"
+			? body.sessionId.trim().slice(0, 128) || null
+			: null;
+	const sessionId =
+		parsedSessionId && parsedSessionId !== "anonymous" ? parsedSessionId : null;
 	const userAgent =
 		sanitizeString(request.headers.get("user-agent")) ||
 		sanitizeString(body.userAgent) ||
@@ -50,15 +72,15 @@ export async function POST(request: NextRequest) {
 		sanitizeString(request.headers.get("x-vercel-ip-country")) || "";
 	const region =
 		sanitizeString(request.headers.get("x-vercel-ip-country-region")) || "";
-	const city = sanitizeString(request.headers.get("x-vercel-ip-city")) || "";
+	const city =
+		sanitizeString(
+			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
+		) || "";
 
 	const hostname =
 		sanitizeString(body.hostname) ||
 		sanitizeString(request.nextUrl.hostname) ||
 		"";
-
-	const tenantId =
-		body.orgId || body.ownerId || (hostname ? `domain:${hostname}` : "public");
 
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
 
@@ -77,15 +99,47 @@ export async function POST(request: NextRequest) {
 					return currentUser.id;
 				},
 			});
-			if (userId && body.ownerId && userId === body.ownerId) {
+
+			const ANON_NOTIF_CUTOFF = new Date("2026-03-04T00:00:00Z");
+
+			const [videoRecord] = yield* Effect.tryPromise(() =>
+				db()
+					.select({
+						ownerId: videos.ownerId,
+						firstViewEmailSentAt: videos.firstViewEmailSentAt,
+						videoName: videos.name,
+						createdAt: videos.createdAt,
+					})
+					.from(videos)
+					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+					.limit(1),
+			).pipe(
+				Effect.orElseSucceed(
+					() =>
+						[] as {
+							ownerId: string;
+							firstViewEmailSentAt: Date | null;
+							videoName: string;
+							createdAt: Date;
+						}[],
+				),
+			);
+
+			if (videoRecord && userId === videoRecord.ownerId) {
 				return;
 			}
+
+			const tenantId =
+				body.orgId ||
+				videoRecord?.ownerId ||
+				body.ownerId ||
+				(hostname ? `domain:${hostname}` : "public");
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
 				{
 					timestamp: timestamp.toISOString(),
-					session_id: sessionId,
+					session_id: sessionId ?? "anon",
 					action: "page_hit",
 					version: "1.0",
 					tenant_id: tenantId,
@@ -100,6 +154,91 @@ export async function POST(request: NextRequest) {
 					user_id: userId,
 				},
 			]);
+
+			const isNewVideo =
+				videoRecord && videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
+			const shouldSendFirstViewEmail =
+				isNewVideo && !videoRecord.firstViewEmailSentAt;
+
+			if (userId) {
+				if (shouldSendFirstViewEmail) {
+					yield* Effect.forkDaemon(
+						Effect.tryPromise(() =>
+							sendFirstViewEmail({
+								videoId: body.videoId,
+								viewerUserId: userId,
+								isAnonymous: false,
+							}),
+						).pipe(
+							Effect.catchAll((error) => {
+								console.error("Failed to send first view email:", error);
+								return Effect.void;
+							}),
+						),
+					);
+				}
+			}
+
+			if (!userId && sessionId && isNewVideo) {
+				const anonName = getAnonymousName(sessionId);
+				const location =
+					city && country ? `${city}, ${country}` : city || country || null;
+
+				const effects: Effect.Effect<void, never, never>[] = [
+					Effect.tryPromise(() =>
+						createAnonymousViewNotification({
+							videoId: body.videoId,
+							sessionId,
+							anonName,
+							location,
+						}),
+					).pipe(
+						Effect.catchAll((error) => {
+							console.error(
+								"Failed to create anonymous view notification:",
+								error,
+							);
+							return Effect.void;
+						}),
+					),
+				];
+
+				if (shouldSendFirstViewEmail) {
+					effects.push(
+						Effect.tryPromise(() =>
+							sendFirstViewEmail({
+								videoId: body.videoId,
+								viewerName: anonName,
+								isAnonymous: true,
+							}),
+						).pipe(
+							Effect.catchAll((error) => {
+								console.error("Failed to send first view email:", error);
+								return Effect.void;
+							}),
+						),
+					);
+				}
+
+				yield* Effect.forkDaemon(Effect.all(effects));
+			}
+
+			if (!userId && !sessionId && isNewVideo && shouldSendFirstViewEmail) {
+				yield* Effect.forkDaemon(
+					Effect.tryPromise(() =>
+						sendFirstViewEmail({
+							videoId: body.videoId,
+							viewerName: "Anonymous Viewer",
+							isAnonymous: true,
+						}),
+					).pipe(
+						Effect.catchAll((error) => {
+							console.error("Failed to send first view email:", error);
+							return Effect.void;
+						}),
+					),
+				);
+			}
 		}).pipe(provideOptionalAuth),
 	);
 

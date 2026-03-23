@@ -337,10 +337,22 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 				.where(eq(verificationTokens.token, token))
 				.limit(1);
 			const row = rows[0];
-			if (!row) return null;
+			if (!row) {
+				console.warn("[useVerificationToken] No token found for hash", {
+					identifier,
+					tokenPrefix: token.slice(0, 8),
+				});
+				return null;
+			}
 			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
 			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
-			if (normalizedIdentifier !== storedIdentifier) return null;
+			if (normalizedIdentifier !== storedIdentifier) {
+				console.warn("[useVerificationToken] Identifier mismatch", {
+					expected: normalizedIdentifier,
+					stored: storedIdentifier,
+				});
+				return null;
+			}
 			await db
 				.delete(verificationTokens)
 				.where(

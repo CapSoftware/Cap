@@ -6,7 +6,7 @@ use std::path::PathBuf;
 async fn main() {
     let path: PathBuf = std::env::args().collect::<Vec<_>>().swap_remove(1).into();
 
-    let editor = EditorInstance::new(path, |_s| {}, Box::new(|_| {}))
+    let editor = EditorInstance::new(path, |_s| {}, Box::new(|_| {}), None)
         .await
         .unwrap();
 

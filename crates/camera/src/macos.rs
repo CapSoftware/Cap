@@ -115,16 +115,25 @@ pub(super) fn start_capturing_impl(
 
     let mut output = av::capture::VideoDataOutput::new();
     let mut session = av::capture::Session::new();
+    let mut added_input = false;
 
     session.configure(|s| {
         if s.can_add_input(&input) {
             s.add_input(&input);
+            added_input = true;
         } else {
-            panic!("can't add input");
+            return;
         }
 
         s.add_output(&output);
     });
+
+    if !added_input {
+        return Err(AVFoundationError::Message(
+            "Failed to add camera input to AVFoundation session".to_string(),
+        )
+        .into());
+    }
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
 
@@ -169,6 +178,8 @@ pub enum AVFoundationError {
     Static(&'static cidre::ns::Error),
     #[error("{0}")]
     Retained(cidre::arc::R<cidre::ns::Error>),
+    #[error("{0}")]
+    Message(String),
 }
 
 impl From<&'static cidre::ns::Error> for AVFoundationError {
@@ -190,6 +201,7 @@ impl Deref for AVFoundationError {
         match self {
             AVFoundationError::Static(err) => err,
             AVFoundationError::Retained(err) => err,
+            AVFoundationError::Message(_) => unreachable!(),
         }
     }
 }
@@ -199,6 +211,7 @@ impl Debug for AVFoundationError {
         match self {
             AVFoundationError::Static(err) => write!(f, "{err}"),
             AVFoundationError::Retained(err) => write!(f, "{err}"),
+            AVFoundationError::Message(err) => write!(f, "{err}"),
         }
     }
 }

@@ -3,15 +3,17 @@ import { Button, Logo } from "@cap/ui";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
-import { ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useEffect } from "react";
 import { Tooltip } from "@/components/Tooltip";
 import { useDashboardContext } from "../../Contexts";
+import { DeveloperSidebarContent } from "../../developers/_components/DeveloperSidebarContent";
 import AdminNavItems from "./Items";
 
 export const DesktopNav = () => {
-	const { toggleSidebarCollapsed, sidebarCollapsed } = useDashboardContext();
+	const { toggleSidebarCollapsed, sidebarCollapsed, isDeveloperSection } =
+		useDashboardContext();
 	const { platform } = useDetectPlatform();
 	const cmdSymbol = platform === "macos" ? "⌘" : "Ctrl";
 
@@ -47,16 +49,33 @@ export const DesktopNav = () => {
 		>
 			<div className="flex flex-col mx-auto w-full h-full">
 				<div className="flex justify-between items-center px-3 pt-5 mb-3.5 w-full truncate min-h-8">
-					<Link href="/dashboard">
-						<Logo
-							hideLogoName={sidebarCollapsed}
-							viewBoxDimensions={sidebarCollapsed ? "0 0 40 40" : "0 0 120 40"}
+					{isDeveloperSection ? (
+						<Link
+							href="/dashboard/caps"
 							className={clsx(
-								"w-[120px] h-[40px]",
-								sidebarCollapsed ? "mx-auto" : "",
+								"flex items-center gap-2 text-gray-11 hover:text-gray-12 transition-colors",
+								sidebarCollapsed ? "justify-center" : "",
 							)}
-						/>
-					</Link>
+						>
+							<ArrowLeft size={sidebarCollapsed ? 18 : 16} />
+							{!sidebarCollapsed && (
+								<span className="text-sm font-medium">Dashboard</span>
+							)}
+						</Link>
+					) : (
+						<Link href="/dashboard">
+							<Logo
+								hideLogoName={sidebarCollapsed}
+								viewBoxDimensions={
+									sidebarCollapsed ? "0 0 40 40" : "0 0 120 40"
+								}
+								className={clsx(
+									"w-[120px] h-[40px]",
+									sidebarCollapsed ? "mx-auto" : "",
+								)}
+							/>
+						</Link>
+					)}
 					<Tooltip
 						kbd={[cmdSymbol, "Shift", "S"]}
 						position="right"
@@ -66,12 +85,12 @@ export const DesktopNav = () => {
 							variant="white"
 							onClick={toggleSidebarCollapsed}
 							className={clsx(
-								"size-7 p-0 min-w-[unset] rounded-full transition-all z-10 opacity-0 group-hover:opacity-100",
-								sidebarCollapsed ? "hidden" : "",
+								"p-0 min-w-[unset] rounded-full transition-all z-10 opacity-0 group-hover:opacity-100",
+								sidebarCollapsed ? "size-5 absolute right-0.5 top-7" : "size-7",
 							)}
 						>
 							<ChevronRight
-								size={14}
+								size={sidebarCollapsed ? 12 : 14}
 								className={clsx(
 									"transition-transform duration-200 text-gray-12",
 									!sidebarCollapsed ? "rotate-180" : "",
@@ -82,7 +101,11 @@ export const DesktopNav = () => {
 				</div>
 				<div className="flex overflow-y-auto flex-col flex-grow">
 					<div className="flex flex-col px-3 h-full">
-						<AdminNavItems />
+						{isDeveloperSection ? (
+							<DeveloperSidebarContent />
+						) : (
+							<AdminNavItems />
+						)}
 					</div>
 				</div>
 			</div>

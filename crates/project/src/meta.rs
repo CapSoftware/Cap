@@ -136,6 +136,7 @@ impl RecordingMeta {
         let meta_path = project_path.join("recording-meta.json");
         let mut meta: Self = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
         meta.project_path = project_path.to_path_buf();
+        meta.normalize_paths();
 
         Ok(meta)
     }
@@ -214,6 +215,72 @@ impl RecordingMeta {
         match &self.inner {
             RecordingMetaInner::Studio(meta) => Some(meta),
             _ => None,
+        }
+    }
+
+    fn normalize_paths(&mut self) {
+        let normalize_video = |meta: &mut VideoMeta| normalize_relative_path(&mut meta.path);
+        let normalize_audio = |meta: &mut AudioMeta| normalize_relative_path(&mut meta.path);
+        let normalize_cursor = |path: &mut Option<RelativePathBuf>| {
+            if let Some(path) = path {
+                normalize_relative_path(path);
+            }
+        };
+
+        match &mut self.inner {
+            RecordingMetaInner::Studio(meta) => match meta.as_mut() {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    normalize_video(&mut segment.display);
+                    if let Some(camera) = &mut segment.camera {
+                        normalize_video(camera);
+                    }
+                    if let Some(audio) = &mut segment.audio {
+                        normalize_audio(audio);
+                    }
+                    normalize_cursor(&mut segment.cursor);
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    for segment in &mut inner.segments {
+                        normalize_video(&mut segment.display);
+                        if let Some(camera) = &mut segment.camera {
+                            normalize_video(camera);
+                        }
+                        if let Some(mic) = &mut segment.mic {
+                            normalize_audio(mic);
+                        }
+                        if let Some(system_audio) = &mut segment.system_audio {
+                            normalize_audio(system_audio);
+                        }
+                        normalize_cursor(&mut segment.cursor);
+                    }
+
+                    if let Cursors::Correct(cursors) = &mut inner.cursors {
+                        for cursor in cursors.values_mut() {
+                            normalize_relative_path(&mut cursor.image_path);
+                        }
+                    }
+                }
+            },
+            RecordingMetaInner::Instant(_) => {}
+        }
+    }
+}
+
+fn normalize_relative_path(path: &mut RelativePathBuf) {
+    let original = path.as_str();
+    let normalized = original.replace('\\', "/");
+
+    if normalized.starts_with("content/")
+        || normalized.starts_with("screenshots/")
+        || normalized.starts_with("output/")
+    {
+        return;
+    }
+
+    for root in ["content/", "screenshots/", "output/"] {
+        if let Some(index) = normalized.find(root) {
+            *path = RelativePathBuf::from(&normalized[index..]);
+            return;
         }
     }
 }

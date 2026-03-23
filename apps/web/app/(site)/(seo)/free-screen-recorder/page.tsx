@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
-import { FreeScreenRecorderPage } from "@/components/pages/seo/FreeScreenRecorderPage";
+import Script from "next/script";
+import {
+	FreeScreenRecorderPage,
+	freeScreenRecorderContent,
+} from "@/components/pages/seo/FreeScreenRecorderPage";
+import { createFAQSchema } from "@/utils/web-schema";
 
 export const metadata: Metadata = {
 	title: "Free Screen Recorder: High-Quality Recording at No Cost",
@@ -29,8 +34,24 @@ export const metadata: Metadata = {
 			"Cap offers a top-rated, free screen recorder with high-quality video capture, making it perfect for creating tutorials, educational content, and professional demos without any hidden fees.",
 		images: ["https://cap.so/og.png"],
 	},
+	alternates: {
+		canonical: "https://cap.so/free-screen-recorder",
+	},
 };
 
 export default function Page() {
-	return <FreeScreenRecorderPage />;
+	return (
+		<>
+			<Script
+				id="faq-structured-data"
+				type="application/ld+json"
+				dangerouslySetInnerHTML={{
+					__html: JSON.stringify(
+						createFAQSchema(freeScreenRecorderContent.faqs),
+					),
+				}}
+			/>
+			<FreeScreenRecorderPage />
+		</>
+	);
 }

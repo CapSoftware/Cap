@@ -29,7 +29,15 @@ function isPermitted(status?: OSPermissionStatus): boolean {
 	return status === "granted" || status === "notNeeded";
 }
 
-const permissions = [
+type SetupPermission = {
+	name: string;
+	key: OSPermission;
+	description: string;
+	requiresManualGrant: boolean;
+	optional?: boolean;
+};
+
+const permissions: readonly SetupPermission[] = [
 	{
 		name: "Screen Recording",
 		key: "screenRecording" as const,
@@ -49,6 +57,7 @@ const permissions = [
 		key: "microphone" as const,
 		description: "This permission is required to record audio in your Caps.",
 		requiresManualGrant: false,
+		optional: true,
 	},
 	{
 		name: "Camera",
@@ -56,8 +65,9 @@ const permissions = [
 		description:
 			"This permission is required to record your camera in your Caps.",
 		requiresManualGrant: false,
+		optional: true,
 	},
-] as const;
+];
 
 export default function () {
 	const [initialCheck, setInitialCheck] = createSignal(true);
@@ -182,8 +192,9 @@ export default function () {
 					class="px-12"
 					size="lg"
 					disabled={
-						permissions.find((p) => !isPermitted(check()?.[p.key])) !==
-						undefined
+						permissions.find(
+							(p) => !p.optional && !isPermitted(check()?.[p.key]),
+						) !== undefined
 					}
 					onClick={() => setCurrentStep("mode")}
 				>

@@ -78,6 +78,7 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	processingProgress: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
 	processingMessage: Schema.OptionFromNullOr(Schema.String),
 	processingError: Schema.OptionFromNullOr(Schema.String),
+	hasRawFallback: Schema.Boolean,
 }) {}
 
 export const UploadProgressUpdateInput = Schema.Struct({

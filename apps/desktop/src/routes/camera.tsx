@@ -494,6 +494,9 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		width: number;
 		data: ImageData;
 	} | null>();
+	let reusableFrameData: ImageData | null = null;
+	let reusableFrameWidth = 0;
+	let reusableFrameHeight = 0;
 
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
@@ -530,8 +533,30 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		onCleanup(() => resizeObserver.disconnect());
 	});
 
+	function getReusableFrameData(width: number, height: number) {
+		if (
+			!reusableFrameData ||
+			reusableFrameWidth !== width ||
+			reusableFrameHeight !== height
+		) {
+			reusableFrameData = new ImageData(width, height);
+			reusableFrameWidth = width;
+			reusableFrameHeight = height;
+		}
+
+		return reusableFrameData;
+	}
+
 	function imageDataHandler(imageData: { width: number; data: ImageData }) {
-		setLatestFrame(imageData);
+		const currentFrame = latestFrame();
+		if (
+			!currentFrame ||
+			currentFrame.data !== imageData.data ||
+			currentFrame.data.width !== imageData.data.width ||
+			currentFrame.data.height !== imageData.data.height
+		) {
+			setLatestFrame(imageData);
+		}
 
 		const currentDimensions = frameDimensions();
 		if (
@@ -550,8 +575,18 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	}
 
 	const { cameraWsPort } = window.__CAP__;
+	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
 	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
+	let reconnectInterval: ReturnType<typeof setInterval> | undefined;
+
+	onMount(() => {
+		const handleVisibilityChange = () => setIsWindowVisible(!document.hidden);
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		onCleanup(() =>
+			document.removeEventListener("visibilitychange", handleVisibilityChange),
+		);
+	});
 
 	const createSocket = () => {
 		const socket = new WebSocket(`ws://localhost:${cameraWsPort}`);
@@ -570,6 +605,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		});
 
 		socket.onmessage = (event) => {
+			if (!isWindowVisible()) return;
+
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) {
@@ -607,45 +644,65 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				return;
 			}
 
-			let pixels: Uint8ClampedArray;
-
+			const imageData = getReusableFrameData(width, height);
 			if (strideBytes === expectedRowBytes) {
-				pixels = source.subarray(0, expectedLength);
+				imageData.data.set(source.subarray(0, expectedLength));
 			} else {
-				pixels = new Uint8ClampedArray(expectedLength);
 				for (let row = 0; row < height; row += 1) {
 					const srcStart = row * strideBytes;
 					const destStart = row * expectedRowBytes;
-					pixels.set(
+					imageData.data.set(
 						source.subarray(srcStart, srcStart + expectedRowBytes),
 						destStart,
 					);
 				}
 			}
-
-			const imageData = new ImageData(
-				new Uint8ClampedArray(pixels),
-				width,
-				height,
-			);
 			imageDataHandler({ width, data: imageData });
 		};
 
 		return socket;
 	};
 
-	ws = createSocket();
-
-	const reconnectInterval = setInterval(() => {
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			if (ws) ws.close();
-			ws = createSocket();
+	const stopSocket = () => {
+		if (reconnectInterval) {
+			clearInterval(reconnectInterval);
+			reconnectInterval = undefined;
 		}
-	}, 5000);
+
+		if (ws) {
+			ws.close();
+			ws = undefined;
+		}
+
+		setIsConnected(false);
+	};
+
+	const startSocket = () => {
+		if (ws || !isWindowVisible()) return;
+
+		ws = createSocket();
+
+		reconnectInterval = setInterval(() => {
+			if (!ws || ws.readyState !== WebSocket.OPEN) {
+				if (ws) ws.close();
+				ws = createSocket();
+			}
+		}, 5000);
+	};
+
+	createEffect(() => {
+		if (isWindowVisible()) {
+			startSocket();
+		} else {
+			stopSocket();
+		}
+	});
 
 	onCleanup(() => {
-		clearInterval(reconnectInterval);
-		ws?.close();
+		reusableFrameData = null;
+		reusableFrameWidth = 0;
+		reusableFrameHeight = 0;
+		stopSocket();
 	});
 
 	const scale = () => {

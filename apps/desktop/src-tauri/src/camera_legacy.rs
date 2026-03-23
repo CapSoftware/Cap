@@ -28,22 +28,19 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
                         converter
                     }
                     _ => {
-                        &mut converter
-                            .insert((
-                                frame.format(),
-                                ffmpeg::software::scaling::Context::get(
-                                    frame.format(),
-                                    frame.width(),
-                                    frame.height(),
-                                    Pixel::RGBA,
-                                    1280,
-                                    (1280.0 / (frame.width() as f64 / frame.height() as f64))
-                                        as u32,
-                                    ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-                                )
-                                .unwrap(),
-                            ))
-                            .1
+                        let Ok(new_converter) = ffmpeg::software::scaling::Context::get(
+                            frame.format(),
+                            frame.width(),
+                            frame.height(),
+                            Pixel::RGBA,
+                            1280,
+                            (1280.0 / (frame.width() as f64 / frame.height() as f64)) as u32,
+                            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+                        ) else {
+                            continue;
+                        };
+
+                        &mut converter.insert((frame.format(), new_converter)).1
                     }
                 };
 
@@ -53,7 +50,9 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
                     converter.output().height,
                 );
 
-                converter.run(&frame, &mut new_frame).unwrap();
+                if converter.run(&frame, &mut new_frame).is_err() {
+                    continue;
+                }
 
                 frame = new_frame;
             }

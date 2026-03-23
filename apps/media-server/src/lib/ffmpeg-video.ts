@@ -1,10 +1,16 @@
 import { file, type Subprocess, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
+import { registerSubprocess, terminateProcess } from "./subprocess";
 import { createTempFile, type TempFileHandle } from "./temp-files";
 
-const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
+const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
+const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
+const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_UPLOAD_RETRIES = 4;
+const INITIAL_UPLOAD_RETRY_DELAY_MS = 250;
 const MAX_STDERR_BYTES = 64 * 1024;
 
 export interface VideoProcessingOptions {
@@ -15,6 +21,7 @@ export interface VideoProcessingOptions {
 	crf?: number;
 	preset?: "ultrafast" | "fast" | "medium" | "slow";
 	remuxOnly?: boolean;
+	timeoutMs?: number;
 }
 
 const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
@@ -25,6 +32,7 @@ const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	crf: 23,
 	preset: "medium",
 	remuxOnly: false,
+	timeoutMs: PROCESS_TIMEOUT_MS,
 };
 
 export interface ThumbnailOptions {
@@ -41,21 +49,35 @@ const DEFAULT_THUMBNAIL_OPTIONS: Required<ThumbnailOptions> = {
 	quality: 85,
 };
 
-function killProcess(proc: Subprocess): void {
-	try {
-		proc.kill();
-	} catch {}
+export function normalizeVideoInputExtension(
+	inputExtension: string | undefined,
+): `.${string}` {
+	if (!inputExtension) {
+		return ".mp4";
+	}
+
+	const normalized = inputExtension.trim().toLowerCase();
+	if (!normalized) {
+		return ".mp4";
+	}
+
+	return normalized.startsWith(".")
+		? (normalized as `.${string}`)
+		: (`.${normalized}` as `.${string}`);
 }
 
-async function withTimeout<T>(
+export async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
-	cleanup?: () => void,
+	cleanup?: () => void | Promise<void>,
 ): Promise<T> {
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let cleanupPromise: Promise<void> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutId = setTimeout(() => {
-			cleanup?.();
+			cleanupPromise = (async () => {
+				await cleanup?.();
+			})().catch(() => undefined);
 			reject(new Error(`Operation timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
 	});
@@ -65,6 +87,9 @@ async function withTimeout<T>(
 		if (timeoutId) clearTimeout(timeoutId);
 		return result;
 	} catch (err) {
+		if (cleanupPromise) {
+			await cleanupPromise;
+		}
 		if (timeoutId) clearTimeout(timeoutId);
 		throw err;
 	}
@@ -93,11 +118,18 @@ async function readStreamWithLimit(
 	let totalBytes = 0;
 
 	try {
-		while (totalBytes < maxBytes) {
+		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			chunks.push(value);
-			totalBytes += value.length;
+			if (totalBytes < maxBytes) {
+				const remainingBytes = maxBytes - totalBytes;
+				const chunk =
+					value.length > remainingBytes
+						? value.slice(0, remainingBytes)
+						: value;
+				chunks.push(chunk);
+				totalBytes += chunk.length;
+			}
 		}
 	} finally {
 		reader.releaseLock();
@@ -107,6 +139,10 @@ async function readStreamWithLimit(
 	return chunks
 		.map((chunk) => decoder.decode(chunk, { stream: true }))
 		.join("");
+}
+
+async function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export type ProgressCallback = (progress: number, message: string) => void;
@@ -141,17 +177,25 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 
 export async function downloadVideoToTemp(
 	videoUrl: string,
+	inputExtension?: string,
 	abortSignal?: AbortSignal,
 ): Promise<TempFileHandle> {
-	const tempFile = await createTempFile(".mp4");
+	const tempFile = await createTempFile(
+		normalizeVideoInputExtension(inputExtension),
+	);
 
 	console.log(
 		`[downloadVideoToTemp] Downloading from URL: ${videoUrl.substring(0, 100)}...`,
 	);
 
 	try {
+		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+		const combinedSignal = abortSignal
+			? AbortSignal.any([abortSignal, timeoutSignal])
+			: timeoutSignal;
+
 		const response = await fetch(videoUrl, {
-			signal: abortSignal ?? AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+			signal: combinedSignal,
 		});
 
 		console.log(
@@ -172,8 +216,18 @@ export async function downloadVideoToTemp(
 			throw new Error("No response body");
 		}
 
-		const arrayBuffer = await response.arrayBuffer();
-		await Bun.write(tempFile.path, arrayBuffer);
+		const reader = response.body.getReader();
+		const writer = file(tempFile.path).writer();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				writer.write(value);
+			}
+			await writer.end();
+		} finally {
+			reader.releaseLock();
+		}
 
 		const fileHandle = file(tempFile.path);
 		const fileSize = fileHandle.size;
@@ -196,12 +250,221 @@ export async function downloadVideoToTemp(
 	}
 }
 
+const REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
+
+export async function repairContainer(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<TempFileHandle> {
+	const repairedFile = await createTempFile(".mkv");
+
+	const ffmpegArgs = [
+		"ffmpeg",
+		"-threads",
+		"2",
+		"-err_detect",
+		"ignore_err",
+		"-fflags",
+		"+genpts+igndts",
+		"-i",
+		inputPath,
+		"-c",
+		"copy",
+		"-y",
+		repairedFile.path,
+	];
+
+	console.log(`[repairContainer] Running: ${ffmpegArgs.join(" ")}`);
+
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
+
+	let abortCleanup: (() => void) | undefined;
+	if (abortSignal) {
+		abortCleanup = () => {
+			void terminateProcess(proc);
+		};
+		abortSignal.addEventListener("abort", abortCleanup, { once: true });
+	}
+
+	try {
+		await withTimeout(
+			(async () => {
+				drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+				const stderrText = await readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
+
+				const exitCode = await proc.exited;
+
+				if (exitCode !== 0) {
+					console.error(`[repairContainer] FFmpeg stderr:\n${stderrText}`);
+					throw new Error(`Container repair failed with exit code ${exitCode}`);
+				}
+
+				const outputFile = file(repairedFile.path);
+				if (outputFile.size === 0) {
+					throw new Error("Container repair produced empty file");
+				}
+
+				console.log(
+					`[repairContainer] Repair successful: ${outputFile.size} bytes`,
+				);
+			})(),
+			REPAIR_TIMEOUT_MS,
+			() => terminateProcess(proc),
+		);
+
+		return repairedFile;
+	} catch (err) {
+		await repairedFile.cleanup();
+		throw err;
+	} finally {
+		if (abortCleanup) {
+			abortSignal?.removeEventListener("abort", abortCleanup);
+		}
+		await terminateProcess(proc);
+	}
+}
+
+export interface ResilientInputFlags {
+	errDetectIgnoreErr?: boolean;
+	genPts?: boolean;
+	discardCorrupt?: boolean;
+	maxMuxingQueueSize?: number;
+}
+
+function buildExtraInputFlags(flags: ResilientInputFlags): string[] {
+	const args: string[] = [];
+
+	if (flags.errDetectIgnoreErr) {
+		args.push("-err_detect", "ignore_err");
+	}
+
+	const fflags: string[] = [];
+	if (flags.genPts) fflags.push("+genpts");
+	if (flags.discardCorrupt) fflags.push("+discardcorrupt");
+	if (fflags.length > 0) {
+		args.push("-fflags", fflags.join(""));
+	}
+
+	return args;
+}
+
+function buildExtraOutputFlags(flags: ResilientInputFlags): string[] {
+	if (flags.maxMuxingQueueSize) {
+		return ["-max_muxing_queue_size", flags.maxMuxingQueueSize.toString()];
+	}
+	return [];
+}
+
+function getProcessTimeoutMs(
+	durationSeconds: number,
+	baseTimeoutMs: number,
+): number {
+	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+		return baseTimeoutMs;
+	}
+
+	return Math.min(
+		MAX_PROCESS_TIMEOUT_MS,
+		Math.max(
+			baseTimeoutMs,
+			Math.ceil(durationSeconds * PROCESS_TIMEOUT_PER_SECOND_MS),
+		),
+	);
+}
+
+function isRetryableUploadStatus(status: number): boolean {
+	return (
+		status === 408 ||
+		status === 425 ||
+		status === 429 ||
+		status === 500 ||
+		status === 502 ||
+		status === 503 ||
+		status === 504
+	);
+}
+
+function getErrorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+async function uploadWithRetry(
+	presignedUrl: string,
+	contentType: string,
+	contentLength: number,
+	bodyFactory: () => Blob | Uint8Array | ArrayBuffer | BunFile,
+): Promise<void> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+		try {
+			const response = await fetch(presignedUrl, {
+				method: "PUT",
+				headers: {
+					"Content-Type": contentType,
+					"Content-Length": contentLength.toString(),
+				},
+				body: bodyFactory(),
+				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+			});
+
+			if (response.ok) {
+				return;
+			}
+
+			const responseError = new Error(
+				`S3 upload failed: ${response.status} ${response.statusText}`,
+			);
+
+			if (
+				!isRetryableUploadStatus(response.status) ||
+				attempt === MAX_UPLOAD_RETRIES
+			) {
+				throw responseError;
+			}
+
+			lastError = responseError;
+			const delay = INITIAL_UPLOAD_RETRY_DELAY_MS * 2 ** attempt;
+			console.warn(
+				`[uploadWithRetry] Retrying upload after ${response.status} in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
+			);
+			await sleep(delay);
+		} catch (err) {
+			const uploadError = err instanceof Error ? err : new Error(String(err));
+
+			if (attempt === MAX_UPLOAD_RETRIES) {
+				throw uploadError;
+			}
+
+			lastError = uploadError;
+			const delay = INITIAL_UPLOAD_RETRY_DELAY_MS * 2 ** attempt;
+			console.warn(
+				`[uploadWithRetry] Upload attempt failed: ${getErrorMessage(uploadError)}; retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_UPLOAD_RETRIES})`,
+			);
+			await sleep(delay);
+		}
+	}
+
+	throw lastError ?? new Error("S3 upload failed after retries");
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
 	options: VideoProcessingOptions = {},
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
+	resilientFlags?: ResilientInputFlags,
 ): Promise<TempFileHandle> {
 	const definedOptions = Object.fromEntries(
 		Object.entries(options).filter(([, v]) => v !== undefined),
@@ -215,7 +478,25 @@ export async function processVideo(
 		: needsVideoTranscode(metadata, opts);
 	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 
-	const ffmpegArgs: string[] = ["ffmpeg", "-threads", "2", "-i", inputPath];
+	const extraInputArgs = resilientFlags
+		? buildExtraInputFlags(resilientFlags)
+		: [];
+	const extraOutputArgs = resilientFlags
+		? buildExtraOutputFlags(resilientFlags)
+		: [];
+	const processTimeoutMs = getProcessTimeoutMs(
+		metadata.duration,
+		opts.timeoutMs,
+	);
+
+	const ffmpegArgs: string[] = [
+		"ffmpeg",
+		"-threads",
+		"2",
+		...extraInputArgs,
+		"-i",
+		inputPath,
+	];
 
 	if (videoTranscode) {
 		ffmpegArgs.push(
@@ -245,6 +526,7 @@ export async function processVideo(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
+		...extraOutputArgs,
 		"-progress",
 		"pipe:2",
 		"-y",
@@ -253,18 +535,20 @@ export async function processVideo(
 
 	console.log(`[processVideo] Running FFmpeg: ${ffmpegArgs.join(" ")}`);
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	const totalDurationUs = metadata.duration * 1_000_000;
 
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {
-			killProcess(proc);
+			void terminateProcess(proc);
 		};
 		abortSignal.addEventListener("abort", abortCleanup, { once: true });
 	}
@@ -324,8 +608,8 @@ export async function processVideo(
 					throw new Error("FFmpeg produced empty output file");
 				}
 			})(),
-			PROCESS_TIMEOUT_MS,
-			() => killProcess(proc),
+			processTimeoutMs,
+			() => terminateProcess(proc),
 		);
 
 		return outputTempFile;
@@ -336,7 +620,7 @@ export async function processVideo(
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
@@ -375,11 +659,13 @@ export async function generateThumbnail(
 		"pipe:1",
 	];
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	try {
 		const result = await withTimeout(
@@ -424,12 +710,12 @@ export async function generateThumbnail(
 				return output;
 			})(),
 			THUMBNAIL_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return result;
 	} finally {
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
@@ -442,20 +728,8 @@ export async function uploadToS3(
 		data instanceof Blob
 			? data
 			: new Blob([data.buffer as ArrayBuffer], { type: contentType });
-	const response = await fetch(presignedUrl, {
-		method: "PUT",
-		headers: {
-			"Content-Type": contentType,
-			"Content-Length": blob.size.toString(),
-		},
-		body: blob,
-	});
 
-	if (!response.ok) {
-		throw new Error(
-			`Failed to upload to S3: ${response.status} ${response.statusText}`,
-		);
-	}
+	await uploadWithRetry(presignedUrl, contentType, blob.size, () => blob);
 }
 
 export async function uploadFileToS3(
@@ -464,20 +738,8 @@ export async function uploadFileToS3(
 	contentType: string,
 ): Promise<void> {
 	const fileHandle = file(filePath);
-	const arrayBuffer = await fileHandle.arrayBuffer();
 
-	const response = await fetch(presignedUrl, {
-		method: "PUT",
-		headers: {
-			"Content-Type": contentType,
-			"Content-Length": arrayBuffer.byteLength.toString(),
-		},
-		body: arrayBuffer,
-	});
-
-	if (!response.ok) {
-		throw new Error(
-			`Failed to upload file to S3: ${response.status} ${response.statusText}`,
-		);
-	}
+	await uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
+		file(filePath),
+	);
 }

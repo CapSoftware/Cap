@@ -783,7 +783,8 @@ footer a {
 }
 
 .prose .not-prose p,
-.prose .not-prose li {
+.prose .not-prose li,
+.prose .not-prose a {
 	color: inherit !important;
 	font-size: inherit !important;
 	line-height: inherit !important;

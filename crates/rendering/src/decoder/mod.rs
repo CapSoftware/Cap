@@ -456,11 +456,21 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
-    const NORMAL_TIMEOUT_MS: u64 = 2000;
     const INITIAL_SEEK_TIMEOUT_MS: u64 = 10000;
 
+    fn normal_timeout_ms(&self) -> u64 {
+        let pixels = (self.status.video_width as u64) * (self.status.video_height as u64);
+        if pixels > 4_000_000 {
+            4000
+        } else if pixels > 2_000_000 {
+            3000
+        } else {
+            2000
+        }
+    }
+
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
-        self.get_frame_with_timeout(time, Self::NORMAL_TIMEOUT_MS)
+        self.get_frame_with_timeout(time, self.normal_timeout_ms())
             .await
     }
 

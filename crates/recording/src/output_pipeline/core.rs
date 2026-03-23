@@ -31,6 +31,44 @@ const LARGE_FORWARD_JUMP_SECS: f64 = 2.0;
 
 const HEALTH_CHANNEL_CAPACITY: usize = 32;
 
+pub(crate) enum BlockingThreadFinish {
+    Clean,
+    Failed(anyhow::Error),
+    TimedOut(anyhow::Error),
+}
+
+fn join_blocking_thread(
+    handle: std::thread::JoinHandle<anyhow::Result<()>>,
+    label: &str,
+) -> anyhow::Result<()> {
+    match handle.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(anyhow!("{label} returned error: {error:#}")),
+        Err(panic_payload) => Err(anyhow!("{label} panicked during finish: {panic_payload:?}")),
+    }
+}
+
+pub(crate) fn spawn_blocking_thread_timeout_cleanup(
+    handle: std::thread::JoinHandle<anyhow::Result<()>>,
+    label: &str,
+) -> std::sync::mpsc::Receiver<anyhow::Result<()>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let label = label.to_string();
+    std::thread::spawn(move || {
+        let result = join_blocking_thread(handle, &label);
+        match &result {
+            Ok(()) => warn!(worker = %label, "Timed-out blocking worker later exited cleanly"),
+            Err(error) => error!(
+                worker = %label,
+                error = %error,
+                "Timed-out blocking worker later exited with failure"
+            ),
+        }
+        let _ = tx.send(result);
+    });
+    rx
+}
+
 #[derive(Debug, Clone)]
 pub enum PipelineHealthEvent {
     FrameDropRateHigh { rate_pct: f64 },
@@ -48,6 +86,57 @@ fn new_health_channel() -> (HealthSender, HealthReceiver) {
 
 pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
     let _ = tx.try_send(event);
+}
+
+pub(crate) fn wait_for_blocking_thread_finish(
+    handle: std::thread::JoinHandle<anyhow::Result<()>>,
+    timeout: Duration,
+    label: &str,
+) -> BlockingThreadFinish {
+    let start = Instant::now();
+
+    loop {
+        if handle.is_finished() {
+            return match join_blocking_thread(handle, label) {
+                Ok(()) => BlockingThreadFinish::Clean,
+                Err(error) => BlockingThreadFinish::Failed(error),
+            };
+        }
+
+        if start.elapsed() > timeout {
+            drop(spawn_blocking_thread_timeout_cleanup(handle, label));
+            return BlockingThreadFinish::TimedOut(anyhow!(
+                "{label} did not finish within {:?}",
+                timeout
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+pub(crate) fn combine_finish_errors(
+    primary: anyhow::Error,
+    secondary: anyhow::Error,
+) -> anyhow::Error {
+    anyhow!("{primary:#}; {secondary:#}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MuxStreamKind {
+    Video,
+    Audio,
+}
+
+fn mux_send_error(kind: MuxStreamKind, frame_count: u64, error: anyhow::Error) -> anyhow::Error {
+    match kind {
+        MuxStreamKind::Video => {
+            anyhow!("Video muxer stopped accepting frames at frame {frame_count}: {error}")
+        }
+        MuxStreamKind::Audio => {
+            anyhow!("Audio muxer stopped accepting frames at frame {frame_count}: {error}")
+        }
+    }
 }
 
 struct AudioTimestampGenerator {
@@ -1039,22 +1128,24 @@ async fn finish_build(
         .then(async move |res| {
             let muxer_res = muxer.lock().await.finish(timestamps.instant().elapsed());
 
-            let _ = done_tx.send(match (res, muxer_res) {
-                (Err(e), _) | (_, Err(e)) => Err(e),
-                (_, Ok(muxer_streams_res)) => {
-                    if let Err(e) = muxer_streams_res {
-                        warn!("Muxer streams had failure: {e:#}");
-                    }
-
-                    Ok(())
-                }
-            });
+            let _ = done_tx.send(resolve_pipeline_completion(res, muxer_res));
         }),
     );
 
     info!("Built pipeline for output {}", path.display());
 
     Ok(())
+}
+
+fn resolve_pipeline_completion(
+    task_result: anyhow::Result<()>,
+    muxer_result: anyhow::Result<anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    match (task_result, muxer_result) {
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (_, Ok(Ok(()))) => Ok(()),
+        (_, Ok(Err(error))) => Err(anyhow!("Muxer finish failed: {error:#}")),
+    }
 }
 
 async fn setup_video_source<TVideo: VideoSource>(
@@ -1185,11 +1276,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
-                    muxer
-                        .lock()
-                        .await
-                        .send_video_frame(frame, duration)
-                        .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
+                    if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
+                        return Err(mux_send_error(MuxStreamKind::Video, frame_count, e));
+                    }
                 }
 
                 info!("mux-video stream ended (rx closed)");
@@ -1381,7 +1470,11 @@ impl PreparedAudioSources {
                                         .await
                                         .send_audio_frame(silence_frame, sample_based_before)
                                     {
-                                        error!("Audio encoder (silence): {e}");
+                                        return Err(mux_send_error(
+                                            MuxStreamKind::Audio,
+                                            frame_count,
+                                            e,
+                                        ));
                                     }
                                 }
                             }
@@ -1408,7 +1501,7 @@ impl PreparedAudioSources {
                             }
 
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
-                                error!("Audio encoder: {e}");
+                                return Err(mux_send_error(MuxStreamKind::Audio, frame_count, e));
                             }
                         }
                         Ok::<(), anyhow::Error>(())
@@ -2291,6 +2384,389 @@ mod tests {
             assert_eq!(tracker.wall_clock_confirmed_jumps, 1);
             assert_eq!(tracker.anomaly_count, 0);
             assert!(tracker.total_forward_skew_secs > 2.0);
+        }
+    }
+
+    mod finish_build {
+        use super::*;
+
+        #[test]
+        fn treats_inner_muxer_finish_error_as_failure() {
+            let result = resolve_pipeline_completion(
+                Ok(()),
+                Ok(Err(anyhow!("fragmented audio trailer write failed"))),
+            );
+
+            let error = result.expect_err("inner muxer failure should fail the pipeline");
+            assert!(
+                error
+                    .to_string()
+                    .contains("fragmented audio trailer write failed"),
+                "error should include the muxer failure reason"
+            );
+        }
+
+        #[test]
+        fn preserves_task_failure_over_muxer_finish_success() {
+            let result =
+                resolve_pipeline_completion(Err(anyhow!("capture-video failed")), Ok(Ok(())));
+
+            let error = result.expect_err("task failure should fail the pipeline");
+            assert!(
+                error.to_string().contains("capture-video failed"),
+                "error should include the task failure reason"
+            );
+        }
+
+        #[test]
+        fn succeeds_only_when_tasks_and_muxer_finish_succeed() {
+            resolve_pipeline_completion(Ok(()), Ok(Ok(())))
+                .expect("pipeline should succeed when all work succeeds");
+        }
+    }
+
+    mod pipeline_mux_send_failures {
+        use super::*;
+
+        #[derive(Clone, Copy)]
+        struct TestVideoFrame {
+            timestamp: Timestamp,
+        }
+
+        impl VideoFrame for TestVideoFrame {
+            fn timestamp(&self) -> Timestamp {
+                self.timestamp
+            }
+        }
+
+        #[derive(Clone, Copy)]
+        struct FailingVideoMuxerConfig {
+            fail_after_frame: u64,
+        }
+
+        struct FailingVideoMuxer {
+            fail_after_frame: u64,
+            sent_frames: u64,
+        }
+
+        impl Muxer for FailingVideoMuxer {
+            type Config = FailingVideoMuxerConfig;
+
+            fn setup(
+                config: Self::Config,
+                _output_path: PathBuf,
+                _video_config: Option<VideoInfo>,
+                _audio_config: Option<AudioInfo>,
+                _pause_flag: Arc<AtomicBool>,
+                _tasks: &mut TaskPool,
+            ) -> impl Future<Output = anyhow::Result<Self>> + Send
+            where
+                Self: Sized,
+            {
+                async move {
+                    Ok(Self {
+                        fail_after_frame: config.fail_after_frame,
+                        sent_frames: 0,
+                    })
+                }
+            }
+
+            fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+                Ok(Ok(()))
+            }
+        }
+
+        impl AudioMuxer for FailingVideoMuxer {
+            fn send_audio_frame(
+                &mut self,
+                _frame: AudioFrame,
+                _timestamp: Duration,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl VideoMuxer for FailingVideoMuxer {
+            type VideoFrame = TestVideoFrame;
+
+            fn send_video_frame(
+                &mut self,
+                _frame: Self::VideoFrame,
+                _timestamp: Duration,
+            ) -> anyhow::Result<()> {
+                self.sent_frames += 1;
+                if self.sent_frames >= self.fail_after_frame {
+                    return Err(anyhow!("video mux send failed"));
+                }
+                Ok(())
+            }
+        }
+
+        #[derive(Clone, Copy)]
+        struct FailingAudioMuxerConfig {
+            fail_after_frame: u64,
+        }
+
+        struct FailingAudioMuxer {
+            fail_after_frame: u64,
+            sent_frames: u64,
+        }
+
+        impl Muxer for FailingAudioMuxer {
+            type Config = FailingAudioMuxerConfig;
+
+            fn setup(
+                config: Self::Config,
+                _output_path: PathBuf,
+                _video_config: Option<VideoInfo>,
+                _audio_config: Option<AudioInfo>,
+                _pause_flag: Arc<AtomicBool>,
+                _tasks: &mut TaskPool,
+            ) -> impl Future<Output = anyhow::Result<Self>> + Send
+            where
+                Self: Sized,
+            {
+                async move {
+                    Ok(Self {
+                        fail_after_frame: config.fail_after_frame,
+                        sent_frames: 0,
+                    })
+                }
+            }
+
+            fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+                Ok(Ok(()))
+            }
+        }
+
+        impl AudioMuxer for FailingAudioMuxer {
+            fn send_audio_frame(
+                &mut self,
+                _frame: AudioFrame,
+                _timestamp: Duration,
+            ) -> anyhow::Result<()> {
+                self.sent_frames += 1;
+                if self.sent_frames >= self.fail_after_frame {
+                    return Err(anyhow!("audio mux send failed"));
+                }
+                Ok(())
+            }
+        }
+
+        fn test_video_info() -> VideoInfo {
+            VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30)
+        }
+
+        fn test_audio_info() -> AudioInfo {
+            AudioInfo::new_raw(
+                cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+                48_000,
+                2,
+            )
+        }
+
+        #[tokio::test]
+        async fn pipeline_done_future_surfaces_video_mux_send_failure() {
+            let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+            let timestamps = Timestamps::now();
+            let (video_tx, video_rx) = flume::bounded(4);
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("video.mp4"))
+                .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                    test_video_info(),
+                    video_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<FailingVideoMuxer>(FailingVideoMuxerConfig {
+                    fail_after_frame: 1,
+                })
+                .await
+                .expect("pipeline should build");
+            let done_fut = pipeline.done_fut();
+
+            video_tx
+                .send_async(TestVideoFrame {
+                    timestamp: Timestamp::Instant(timestamps.instant() + Duration::from_millis(33)),
+                })
+                .await
+                .expect("video frame should send");
+            drop(video_tx);
+
+            let done_error = done_fut
+                .await
+                .expect_err("done future should fail when mux-video rejects a frame");
+            assert!(
+                done_error.to_string().contains("Task mux-video failed"),
+                "done future should surface the mux-video task failure"
+            );
+            assert!(
+                done_error
+                    .to_string()
+                    .contains("Video muxer stopped accepting frames at frame 1"),
+                "done future should retain the send-failure context"
+            );
+
+            let stop_error = match pipeline.stop().await {
+                Ok(_) => panic!("stop should fail when mux-video rejects a frame"),
+                Err(error) => error,
+            };
+            assert!(
+                stop_error
+                    .to_string()
+                    .contains("Video muxer stopped accepting frames at frame 1"),
+                "stop should propagate the mux-video send failure"
+            );
+        }
+
+        #[tokio::test]
+        async fn pipeline_done_future_surfaces_audio_mux_send_failure() {
+            let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+            let timestamps = Timestamps::now();
+            let (mut audio_tx, audio_rx) = mpsc::channel(4);
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("audio.ogg"))
+                .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                    test_audio_info(),
+                    audio_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<FailingAudioMuxer>(FailingAudioMuxerConfig {
+                    fail_after_frame: 1,
+                })
+                .await
+                .expect("pipeline should build");
+            let done_fut = pipeline.done_fut();
+
+            audio_tx
+                .try_send(AudioFrame::new(
+                    test_audio_info().empty_frame(960),
+                    Timestamp::Instant(timestamps.instant() + Duration::from_millis(20)),
+                ))
+                .expect("audio frame should send");
+            drop(audio_tx);
+
+            let done_error = done_fut
+                .await
+                .expect_err("done future should fail when mux-audio rejects a frame");
+            assert!(
+                done_error.to_string().contains("Task mux-audio failed"),
+                "done future should surface the mux-audio task failure"
+            );
+            assert!(
+                done_error
+                    .to_string()
+                    .contains("Audio muxer stopped accepting frames at frame 1"),
+                "done future should retain the send-failure context"
+            );
+
+            let stop_error = match pipeline.stop().await {
+                Ok(_) => panic!("stop should fail when mux-audio rejects a frame"),
+                Err(error) => error,
+            };
+            assert!(
+                stop_error
+                    .to_string()
+                    .contains("Audio muxer stopped accepting frames at frame 1"),
+                "stop should propagate the mux-audio send failure"
+            );
+        }
+    }
+
+    mod blocking_thread_finish {
+        use super::*;
+
+        #[test]
+        fn returns_clean_when_thread_exits_successfully() {
+            let handle = std::thread::spawn(|| Ok(()));
+
+            match wait_for_blocking_thread_finish(handle, Duration::from_millis(100), "test-worker")
+            {
+                BlockingThreadFinish::Clean => {}
+                BlockingThreadFinish::Failed(error) => {
+                    panic!("expected clean shutdown, got failure: {error:#}");
+                }
+                BlockingThreadFinish::TimedOut(error) => {
+                    panic!("expected clean shutdown, got timeout: {error:#}");
+                }
+            }
+        }
+
+        #[test]
+        fn returns_failure_when_thread_returns_error() {
+            let handle = std::thread::spawn(|| Err(anyhow!("encoder worker failed")));
+
+            match wait_for_blocking_thread_finish(handle, Duration::from_millis(100), "test-worker")
+            {
+                BlockingThreadFinish::Failed(error) => {
+                    assert!(
+                        error.to_string().contains("encoder worker failed"),
+                        "error should include the worker failure reason"
+                    );
+                }
+                BlockingThreadFinish::Clean => {
+                    panic!("expected failure when worker returns an error");
+                }
+                BlockingThreadFinish::TimedOut(error) => {
+                    panic!("expected failure, got timeout: {error:#}");
+                }
+            }
+        }
+
+        #[test]
+        fn returns_timeout_when_thread_does_not_exit_in_time() {
+            let handle = std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                Ok(())
+            });
+
+            match wait_for_blocking_thread_finish(handle, Duration::from_millis(5), "test-worker") {
+                BlockingThreadFinish::TimedOut(error) => {
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("test-worker did not finish within"),
+                        "error should include the timeout reason"
+                    );
+                }
+                BlockingThreadFinish::Clean => {
+                    panic!("expected timeout when worker exceeds deadline");
+                }
+                BlockingThreadFinish::Failed(error) => {
+                    panic!("expected timeout, got failure: {error:#}");
+                }
+            }
+        }
+
+        #[test]
+        fn timeout_cleanup_reports_late_success() {
+            let handle = std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(25));
+                Ok(())
+            });
+
+            let cleanup_rx = spawn_blocking_thread_timeout_cleanup(handle, "test-worker");
+            let result = cleanup_rx
+                .recv_timeout(Duration::from_millis(250))
+                .expect("cleanup worker should report eventual completion");
+
+            result.expect("cleanup worker should observe a clean exit");
+        }
+
+        #[test]
+        fn timeout_cleanup_reports_late_failure() {
+            let handle = std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(25));
+                Err(anyhow!("late worker failure"))
+            });
+
+            let cleanup_rx = spawn_blocking_thread_timeout_cleanup(handle, "test-worker");
+            let error = cleanup_rx
+                .recv_timeout(Duration::from_millis(250))
+                .expect("cleanup worker should report eventual completion")
+                .expect_err("cleanup worker should surface a late failure");
+
+            assert!(
+                error.to_string().contains("late worker failure"),
+                "error should include the late worker failure"
+            );
         }
     }
 }

@@ -135,7 +135,7 @@ const AnimatedDomainBanner = () => {
 	);
 };
 
-const agenciesContent: SeoPageContent = {
+export const agenciesContent: SeoPageContent = {
 	title: "Faster Client Updates with Instant Video Links",
 	description:
 		"Send clearer client updates in minutes. Share instant links with comments, or craft polished walkthroughs. Available for both macOS & Windows.",

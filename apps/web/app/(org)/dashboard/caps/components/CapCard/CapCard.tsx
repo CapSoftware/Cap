@@ -213,6 +213,12 @@ export const CapCard = ({
 		cap.id,
 		cap.hasActiveUpload || false,
 	);
+	const hasRawFallback =
+		uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
+	const hasVisibleUploadProgress =
+		uploadProgress !== null &&
+		uploadProgress.status !== "fetching" &&
+		!hasRawFallback;
 	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
 	const prevUploadProgressRef = useRef(uploadProgress);
 
@@ -595,7 +601,7 @@ export const CapCard = ({
 				<div className="relative aspect-video w-full">
 					<Link
 						className={clsx(
-							"relative",
+							"relative block w-full h-full",
 							// "block group",
 							anyCapSelected && "cursor-pointer pointer-events-none",
 						)}
@@ -604,7 +610,7 @@ export const CapCard = ({
 						}}
 						href={`/s/${cap.id}`}
 					>
-						{uploadProgress && uploadProgress?.status !== "fetching" && (
+						{hasVisibleUploadProgress && (
 							<>
 								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60 rounded-t-xl" />
 								<div className="flex absolute bottom-3 left-3 gap-2 items-center z-30">
@@ -697,7 +703,9 @@ export const CapCard = ({
 						)}
 
 						<VideoThumbnail
-							videoDuration={cap.duration}
+							videoDuration={
+								hasVisibleUploadProgress ? undefined : cap.duration
+							}
 							imageClass={clsx(
 								anyCapSelected
 									? "opacity-50"

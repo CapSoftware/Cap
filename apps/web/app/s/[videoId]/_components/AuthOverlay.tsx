@@ -135,9 +135,15 @@ const StepOne = ({
 	setLastResendTime: (time: number | null) => void;
 	emailId: string;
 }) => {
-	const videoId = useParams().videoId;
+	const rawVideoId = useParams().videoId;
+	const videoId = Array.isArray(rawVideoId) ? rawVideoId[0] : rawVideoId;
 	const handleGoogleSignIn = () => {
-		trackEvent("auth_started", { method: "google", is_signup: true });
+		trackEvent("auth_started", {
+			method: "google",
+			is_signup: false,
+			auth_surface: "share_overlay",
+			video_id: videoId,
+		});
 		setLoading(true);
 		signIn("google", {
 			redirect: false,
@@ -153,17 +159,30 @@ const StepOne = ({
 				if (!email) return;
 
 				setLoading(true);
+				const normalizedEmail = email.trim().toLowerCase();
+				trackEvent("auth_started", {
+					method: "email",
+					is_signup: false,
+					auth_surface: "share_overlay",
+					video_id: videoId,
+				});
 				signIn("email", {
-					email: email.trim().toLowerCase(),
+					email: normalizedEmail,
 					redirect: false,
 				})
 					.then((res) => {
 						setLoading(false);
 						if (res?.ok && !res?.error) {
-							setEmail("");
 							setEmailSent(true);
 							setStep(2);
 							setLastResendTime(Date.now());
+							trackEvent("auth_email_sent", {
+								method: "email",
+								is_signup: false,
+								auth_surface: "share_overlay",
+								email_domain: normalizedEmail.split("@").at(1),
+								video_id: videoId,
+							});
 							toast.success("Email sent - check your inbox!");
 						} else {
 							toast.error("Error sending email - try again?");

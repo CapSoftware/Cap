@@ -37,6 +37,11 @@ import {
 } from "./web-recorder-constants";
 import { WebRecorderDialogHeader } from "./web-recorder-dialog-header";
 
+const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
+	dateStyle: "medium",
+	timeStyle: "short",
+});
+
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -129,6 +134,8 @@ export const WebRecorderDialog = () => {
 		hasAudioTrack,
 		chunkUploads,
 		errorDownload,
+		completedShareUrl,
+		recoveredDownloads,
 		isRecording,
 		isBusy,
 		isRestarting,
@@ -142,8 +149,10 @@ export const WebRecorderDialog = () => {
 		pauseRecording,
 		resumeRecording,
 		stopRecording,
+		openCompletedShareUrl,
 		restartRecording,
 		resetState,
+		dismissRecoveredDownload,
 	} = useWebRecorder({
 		organisationId,
 		selectedMicId,
@@ -195,7 +204,7 @@ export const WebRecorderDialog = () => {
 		}
 
 		if (!next) {
-			resetState();
+			void resetState();
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
 			setSettingsOpen(false);
@@ -332,6 +341,66 @@ export const WebRecorderDialog = () => {
 								{!isBrowserSupported && unsupportedReason && (
 									<div className="rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
 										{unsupportedReason}
+									</div>
+								)}
+								{phase === "completed" && completedShareUrl && (
+									<div className="rounded-md border border-green-6 bg-green-3/70 px-3 py-3 text-xs text-green-12">
+										<div className="font-medium">Share link ready</div>
+										<div className="mt-1 leading-snug">
+											If it did not open automatically, open it here.
+										</div>
+										<Button
+											variant="blue"
+											size="sm"
+											className="mt-3 w-full"
+											onClick={openCompletedShareUrl}
+										>
+											Open Share Link
+										</Button>
+									</div>
+								)}
+								{phase === "idle" && recoveredDownloads.length > 0 && (
+									<div className="rounded-md border border-blue-6 bg-blue-3/60 px-3 py-2">
+										<div className="text-xs font-medium text-blue-12">
+											Recovered recordings
+										</div>
+										<div className="mt-2 flex flex-col gap-2">
+											{recoveredDownloads.map((download) => (
+												<div
+													key={download.id}
+													className="flex items-center justify-between gap-3 rounded-md bg-white/70 px-2.5 py-2 text-xs text-gray-12"
+												>
+													<div className="min-w-0">
+														<div className="truncate font-medium">
+															{download.fileName}
+														</div>
+														<div className="text-gray-10">
+															{recoveredRecordingTimeFormatter.format(
+																new Date(download.createdAt),
+															)}
+														</div>
+													</div>
+													<div className="flex shrink-0 items-center gap-3">
+														<a
+															href={download.url}
+															download={download.fileName}
+															className="font-medium text-blue-11 hover:text-blue-12"
+														>
+															Download
+														</a>
+														<button
+															type="button"
+															className="text-gray-10 hover:text-gray-12"
+															onClick={() =>
+																dismissRecoveredDownload(download.id)
+															}
+														>
+															Dismiss
+														</button>
+													</div>
+												</div>
+											))}
+										</div>
 									</div>
 								)}
 								<HowItWorksButton onClick={handleHowItWorksOpen} />

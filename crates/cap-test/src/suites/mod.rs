@@ -1,4 +1,5 @@
 mod encoding;
+mod performance;
 mod playback;
 mod recording;
 pub mod scenarios;
@@ -33,6 +34,14 @@ pub async fn run_playback_suite(
     duration: u64,
 ) -> Result<TestResults> {
     playback::run_suite(hardware, duration).await
+}
+
+pub async fn run_performance_suite(
+    hardware: &DiscoveredHardware,
+    recording_path: &std::path::Path,
+    duration: u64,
+) -> Result<TestResults> {
+    performance::run_suite(hardware, recording_path, duration).await
 }
 
 pub async fn run_sync_suite(hardware: &DiscoveredHardware, duration: u64) -> Result<TestResults> {

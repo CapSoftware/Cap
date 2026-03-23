@@ -35,6 +35,10 @@ interface ProgressWebhookPayload {
 	};
 }
 
+function getValidDuration(duration: number) {
+	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+}
+
 function mapPhaseToDbPhase(
 	phase: ProgressWebhookPayload["phase"],
 ): "uploading" | "processing" | "generating_thumbnail" | "complete" | "error" {
@@ -77,12 +81,14 @@ export async function POST(request: NextRequest) {
 
 		if (dbPhase === "complete") {
 			if (payload.metadata) {
+				const duration = getValidDuration(payload.metadata.duration);
+
 				await db()
 					.update(videos)
 					.set({
 						width: payload.metadata.width,
 						height: payload.metadata.height,
-						duration: payload.metadata.duration,
+						...(duration === undefined ? {} : { duration }),
 					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}

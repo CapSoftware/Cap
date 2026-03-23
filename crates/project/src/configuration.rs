@@ -41,6 +41,14 @@ pub enum BackgroundSource {
         to: Color,
         #[serde(default = "default_gradient_angle")]
         angle: u16,
+        #[serde(default)]
+        noise_intensity: Option<f32>,
+        #[serde(default)]
+        noise_scale: Option<f32>,
+        #[serde(default)]
+        animated: Option<bool>,
+        #[serde(default)]
+        animation_speed: Option<f32>,
     },
 }
 
@@ -430,9 +438,9 @@ pub struct ClickSpringConfig {
 impl Default for ClickSpringConfig {
     fn default() -> Self {
         Self {
-            tension: 700.0,
+            tension: 530.0,
             mass: 1.0,
-            friction: 30.0,
+            friction: 40.0,
         }
     }
 }
@@ -512,7 +520,7 @@ impl Default for CursorConfiguration {
             mass: 3.0,
             friction: 70.0,
             raw: false,
-            motion_blur: 0.5,
+            motion_blur: 1.0,
             use_svg: true,
             rotation_amount: Self::default_rotation_amount(),
             base_rotation: 0.0,
@@ -535,7 +543,7 @@ impl CursorConfiguration {
     }
 
     fn default_rotation_amount() -> f32 {
-        0.5
+        0.15
     }
 
     pub fn cursor_type(&self) -> &CursorType {
@@ -661,6 +669,8 @@ pub struct MaskKeyframes {
 pub struct MaskSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub track: u32,
     #[serde(default = "MaskSegment::default_enabled")]
     pub enabled: bool,
     pub mask_type: MaskKind,
@@ -699,6 +709,8 @@ impl MaskSegment {
 pub struct TextSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub track: u32,
     #[serde(default = "TextSegment::default_enabled")]
     pub enabled: bool,
     #[serde(default = "TextSegment::default_content")]
@@ -1178,7 +1190,7 @@ fn camera_config_needs_migration(value: &Value) -> bool {
 
 impl ProjectConfiguration {
     fn default_screen_motion_blur() -> f32 {
-        0.5
+        1.0
     }
 
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {

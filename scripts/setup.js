@@ -119,15 +119,16 @@ async function main() {
 			console.log("Extracted ffmpeg");
 		} else console.log("Using cached ffmpeg");
 
-		// alternative to adding ffmpeg/bin to PATH
-		await fs.mkdir(path.join(targetDir, "debug"), { recursive: true });
-		for (const name of await fs.readdir(path.join(ffmpegDir, "bin"))) {
-			await fs.copyFile(
-				path.join(ffmpegDir, "bin", name),
-				path.join(targetDir, "debug", name),
-			);
+		for (const profile of ["debug", "release"]) {
+			await fs.mkdir(path.join(targetDir, profile), { recursive: true });
+			for (const name of await fs.readdir(path.join(ffmpegDir, "bin"))) {
+				await fs.copyFile(
+					path.join(ffmpegDir, "bin", name),
+					path.join(targetDir, profile, name),
+				);
+			}
 		}
-		console.log("Copied ffmpeg dylibs to target/debug");
+		console.log("Copied ffmpeg DLLs to target/debug and target/release");
 
 		if (!(await fileExists(path.join(targetDir, "native-deps"))))
 			await fs.mkdir(path.join(targetDir, "native-deps"), { recursive: true });

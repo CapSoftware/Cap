@@ -1,4 +1,5 @@
 import { type Subprocess, spawn } from "bun";
+import { registerSubprocess, terminateProcess } from "./subprocess";
 
 export interface AudioExtractionOptions {
 	format?: "mp3";
@@ -28,21 +29,18 @@ export function canAcceptNewProcess(): boolean {
 	return activeProcesses < MAX_CONCURRENT_PROCESSES;
 }
 
-function killProcess(proc: Subprocess): void {
-	try {
-		proc.kill();
-	} catch {}
-}
-
 async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
-	cleanup?: () => void,
+	cleanup?: () => void | Promise<void>,
 ): Promise<T> {
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let cleanupPromise: Promise<void> | undefined;
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutId = setTimeout(() => {
-			cleanup?.();
+			cleanupPromise = Promise.resolve()
+				.then(() => cleanup?.())
+				.then(() => undefined);
 			reject(new Error(`Operation timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
 	});
@@ -52,6 +50,9 @@ async function withTimeout<T>(
 		if (timeoutId) clearTimeout(timeoutId);
 		return result;
 	} catch (err) {
+		if (cleanupPromise) {
+			await cleanupPromise;
+		}
 		if (timeoutId) clearTimeout(timeoutId);
 		throw err;
 	}
@@ -80,11 +81,18 @@ async function readStreamWithLimit(
 	let totalBytes = 0;
 
 	try {
-		while (totalBytes < maxBytes) {
+		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			chunks.push(value);
-			totalBytes += value.length;
+			if (totalBytes < maxBytes) {
+				const remainingBytes = maxBytes - totalBytes;
+				const chunk =
+					value.length > remainingBytes
+						? value.slice(0, remainingBytes)
+						: value;
+				chunks.push(chunk);
+				totalBytes += chunk.length;
+			}
 		}
 	} finally {
 		reader.releaseLock();
@@ -105,11 +113,13 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 
 	activeProcesses++;
 
-	const proc = spawn({
-		cmd: ["ffmpeg", "-i", videoUrl, "-hide_banner"],
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ["ffmpeg", "-i", videoUrl, "-hide_banner"],
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	try {
 		const result = await withTimeout(
@@ -124,13 +134,13 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 				return /Stream #\d+:\d+.*Audio:/.test(stderrText);
 			})(),
 			CHECK_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return result;
 	} finally {
 		activeProcesses--;
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
@@ -160,11 +170,13 @@ export async function extractAudio(
 		"pipe:1",
 	];
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
 
 	try {
 		const result = await withTimeout(
@@ -215,13 +227,13 @@ export async function extractAudio(
 				return output;
 			})(),
 			EXTRACT_TIMEOUT_MS,
-			() => killProcess(proc),
+			() => terminateProcess(proc),
 		);
 
 		return result;
 	} finally {
 		activeProcesses--;
-		killProcess(proc);
+		await terminateProcess(proc);
 	}
 }
 
@@ -243,25 +255,33 @@ export function extractAudioStream(
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	const timeout = options.timeoutMs ?? EXTRACT_TIMEOUT_MS;
 
-	const ffmpegArgs = [
-		"ffmpeg",
-		"-i",
-		videoUrl,
-		"-vn",
-		"-acodec",
-		opts.codec,
-		"-b:a",
-		opts.bitrate,
-		"-f",
-		"mp3",
-		"pipe:1",
-	];
+	let proc: Subprocess;
+	try {
+		const ffmpegArgs = [
+			"ffmpeg",
+			"-i",
+			videoUrl,
+			"-vn",
+			"-acodec",
+			opts.codec,
+			"-b:a",
+			opts.bitrate,
+			"-f",
+			"mp3",
+			"pipe:1",
+		];
 
-	const proc = spawn({
-		cmd: ffmpegArgs,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+		proc = registerSubprocess(
+			spawn({
+				cmd: ffmpegArgs,
+				stdout: "pipe",
+				stderr: "pipe",
+			}),
+		);
+	} catch (err) {
+		activeProcesses--;
+		throw err;
+	}
 
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	let cleaned = false;
@@ -279,7 +299,7 @@ export function extractAudioStream(
 			reader = null;
 		}
 		activeProcesses--;
-		killProcess(proc);
+		void terminateProcess(proc);
 	};
 
 	timeoutId = setTimeout(() => {

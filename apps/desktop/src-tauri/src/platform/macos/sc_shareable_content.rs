@@ -1,7 +1,7 @@
 use cidre::{arc, ns, sc};
 use std::sync::{Arc, OnceLock, RwLock};
 use tokio::sync::{Mutex, Notify};
-use tracing::trace;
+use tracing::{error, trace};
 
 #[derive(Default)]
 struct CacheState {
@@ -56,12 +56,10 @@ async fn prewarm_shareable_content_inner(force_refresh: bool) -> Result<(), arc:
     };
 
     warmup.notify.notified().await;
-    warmup
-        .result
-        .lock()
-        .await
-        .clone()
-        .expect("ScreenCaptureKit warmup task missing result")
+    warmup.result.lock().await.clone().unwrap_or_else(|| {
+        error!("ScreenCaptureKit warmup task finished without a result");
+        Ok(())
+    })
 }
 
 pub async fn get_shareable_content()

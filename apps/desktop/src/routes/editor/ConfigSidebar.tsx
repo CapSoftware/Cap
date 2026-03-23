@@ -48,7 +48,6 @@ import {
 	type CursorAnimationStyle,
 	type CursorType,
 	commands,
-	type KeyboardTrackSegment,
 	type SceneSegment,
 	type StereoMode,
 	type TimelineSegment,
@@ -66,8 +65,14 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
+import {
+	getColorPreviewBorderColor,
+	hexToRgb,
+	RgbInput,
+	rgbToHex,
+} from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
-import { KeyboardTab } from "./KeyboardTab";
+import { GradientEditor } from "./GradientEditor";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
 	DEFAULT_GRADIENT_FROM,
@@ -81,7 +86,6 @@ import {
 	ComingSoonTooltip,
 	EditorButton,
 	Field,
-	Input,
 	MenuItem,
 	MenuItemList,
 	PopperContent,
@@ -130,27 +134,6 @@ const BACKGROUND_COLORS = [
 	"#000000", // Black
 	"#00000000", // Transparent
 ];
-
-const BACKGROUND_GRADIENTS = [
-	{ from: [15, 52, 67], to: [52, 232, 158] }, // Dark Blue to Teal
-	{ from: [34, 193, 195], to: [253, 187, 45] }, // Turquoise to Golden Yellow
-	{ from: [29, 253, 251], to: [195, 29, 253] }, // Cyan to Purple
-	{ from: [69, 104, 220], to: [176, 106, 179] }, // Blue to Violet
-	{ from: [106, 130, 251], to: [252, 92, 125] }, // Soft Blue to Pinkish Red
-	{ from: [131, 58, 180], to: [253, 29, 29] }, // Purple to Red
-	{ from: [249, 212, 35], to: [255, 78, 80] }, // Yellow to Coral Red
-	{ from: [255, 94, 0], to: [255, 42, 104] }, // Orange to Reddish Pink
-	{ from: [255, 0, 150], to: [0, 204, 255] }, // Pink to Sky Blue
-	{ from: [0, 242, 96], to: [5, 117, 230] }, // Green to Blue
-	{ from: [238, 205, 163], to: [239, 98, 159] }, // Peach to Soft Pink
-	{ from: [44, 62, 80], to: [52, 152, 219] }, // Dark Gray Blue to Light Blue
-	{ from: [168, 239, 255], to: [238, 205, 163] }, // Light Blue to Peach
-	{ from: [74, 0, 224], to: [143, 0, 255] }, // Deep Blue to Bright Purple
-	{ from: [252, 74, 26], to: [247, 183, 51] }, // Deep Orange to Soft Yellow
-	{ from: [0, 255, 255], to: [255, 20, 147] }, // Cyan to Deep Pink
-	{ from: [255, 127, 0], to: [255, 255, 0] }, // Orange to Yellow
-	{ from: [255, 0, 255], to: [0, 255, 0] }, // Magenta to Green
-] satisfies Array<{ from: RGBColor; to: RGBColor }>;
 
 const WALLPAPER_NAMES = [
 	// macOS wallpapers
@@ -241,7 +224,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_CURSOR_MOTION_BLUR = 0.5;
+const DEFAULT_CURSOR_MOTION_BLUR = 1.0;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -373,8 +356,7 @@ export function ConfigSidebar() {
 			| "audio"
 			| "cursor"
 			| "hotkeys"
-			| "captions"
-			| "keyboard",
+			| "captions",
 	});
 
 	let scrollRef!: HTMLDivElement;
@@ -407,10 +389,7 @@ export function ConfigSidebar() {
 							id: "captions" as const,
 							icon: IconCapMessageBubble,
 						},
-						{
-							id: "keyboard" as const,
-							icon: IconLucideKeyboard,
-						},
+						// { id: "hotkeys" as const, icon: IconCapHotkeys },
 					].filter(Boolean)}
 				>
 					{(item) => (
@@ -640,6 +619,16 @@ export function ConfigSidebar() {
 								step={1}
 							/>
 						</Field>
+						<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
+							<Slider
+								value={[project.cursor.rotationAmount ?? 0.15]}
+								onChange={(v) => setProject("cursor", "rotationAmount", v[0])}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+						</Field>
 						<Field
 							name="Hide When Idle"
 							icon={<IconLucideTimer class="size-4" />}
@@ -825,12 +814,6 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<CaptionsTab />
-				</KTabs.Content>
-				<KTabs.Content
-					value="keyboard"
-					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
-				>
-					<KeyboardTab />
 				</KTabs.Content>
 			</div>
 			<div
@@ -1198,75 +1181,6 @@ export function ConfigSidebar() {
 									</Show>
 								)}
 							</Show>
-							<Show
-								when={(() => {
-									const kbSelection = selection();
-									if (kbSelection.type !== "keyboard") return;
-
-									const segments = kbSelection.indices
-										.map((idx) => ({
-											segment: project.timeline?.keyboardSegments?.[idx],
-											index: idx,
-										}))
-										.filter(
-											(
-												s,
-											): s is {
-												index: number;
-												segment: KeyboardTrackSegment;
-											} => s.segment !== undefined,
-										);
-
-									if (segments.length === 0) {
-										setEditorState("timeline", "selection", null);
-										return;
-									}
-									return { selection: kbSelection, segments };
-								})()}
-							>
-								{(value) => (
-									<div class="space-y-4">
-										<div class="flex flex-row justify-between items-center">
-											<div class="flex gap-2 items-center">
-												<EditorButton
-													onClick={() =>
-														setEditorState("timeline", "selection", null)
-													}
-													leftIcon={<IconLucideCheck />}
-												>
-													Done
-												</EditorButton>
-												<span class="text-sm text-gray-10">
-													{value().segments.length} keyboard{" "}
-													{value().segments.length === 1
-														? "segment"
-														: "segments"}{" "}
-													selected
-												</span>
-											</div>
-											<EditorButton
-												variant="danger"
-												onClick={() =>
-													projectActions.deleteKeyboardSegments(
-														value().segments.map((s) => s.index),
-													)
-												}
-												leftIcon={<IconCapTrash />}
-											>
-												Delete
-											</EditorButton>
-										</div>
-										<For each={value().segments}>
-											{(item) => (
-												<KeyboardSegmentConfig
-													segment={item.segment}
-													segmentIndex={item.index}
-												/>
-											)}
-										</For>
-									</div>
-								)}
-							</Show>
 						</Suspense>
 					)}
 				</Show>
@@ -1438,8 +1352,6 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			to: DEFAULT_GRADIENT_TO,
 		},
 	};
-
-	const hapticsEnabled = ostype() === "macos";
 
 	return (
 		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6 p-4">
@@ -1916,128 +1828,8 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							</div>
 						</Show>
 					</KTabs.Content>
-					<KTabs.Content value="gradient" class="flex flex-row justify-between">
-						<Show
-							when={
-								project.background.source.type === "gradient" &&
-								project.background.source
-							}
-						>
-							{(source) => {
-								const max = 360;
-
-								const { projectHistory } = useEditorContext();
-
-								const angle = () => source().angle ?? 90;
-
-								return (
-									<div class="flex flex-col gap-3">
-										<div class="flex gap-5 h-10">
-											<RgbInput
-												value={source().from}
-												onChange={(from) => {
-													backgrounds.gradient.from = from;
-													setProject("background", "source", {
-														type: "gradient",
-														from,
-													});
-												}}
-											/>
-											<RgbInput
-												value={source().to}
-												onChange={(to) => {
-													backgrounds.gradient.to = to;
-													setProject("background", "source", {
-														type: "gradient",
-														to,
-													});
-												}}
-											/>
-											<div
-												class="flex relative flex-col items-center p-1 ml-auto rounded-full border bg-gray-1 border-gray-3 size-10 cursor-ns-resize shrink-0"
-												style={{ transform: `rotate(${angle()}deg)` }}
-												onMouseDown={(downEvent) => {
-													const start = angle();
-													const _resumeHistory = projectHistory.pause();
-
-													createRoot((dispose) =>
-														createEventListenerMap(window, {
-															mouseup: () => dispose(),
-															mousemove: (moveEvent) => {
-																const rawNewAngle =
-																	Math.round(
-																		start +
-																			(downEvent.clientY - moveEvent.clientY),
-																	) % max;
-																const newAngle = moveEvent.shiftKey
-																	? rawNewAngle
-																	: Math.round(rawNewAngle / 45) * 45;
-
-																if (
-																	!moveEvent.shiftKey &&
-																	hapticsEnabled &&
-																	project.background.source.type ===
-																		"gradient" &&
-																	project.background.source.angle !== newAngle
-																) {
-																	commands.performHapticFeedback(
-																		"alignment",
-																		"now",
-																	);
-																}
-
-																setProject("background", "source", {
-																	type: "gradient",
-																	angle:
-																		newAngle < 0 ? newAngle + max : newAngle,
-																});
-															},
-														}),
-													);
-												}}
-											>
-												<div class="bg-blue-9 rounded-full size-1.5" />
-											</div>
-										</div>
-										<div class="flex flex-wrap gap-2">
-											<For each={BACKGROUND_GRADIENTS}>
-												{(gradient) => (
-													<label class="relative">
-														<input
-															type="radio"
-															class="sr-only peer"
-															name="colorPicker"
-															onChange={(e) => {
-																if (e.target.checked) {
-																	backgrounds.gradient = {
-																		type: "gradient",
-																		from: gradient.from,
-																		to: gradient.to,
-																	};
-																	setProject(
-																		"background",
-																		"source",
-																		backgrounds.gradient,
-																	);
-																}
-															}}
-														/>
-														<div
-															class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
-															style={{
-																background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
-																	",",
-																)}), rgb(${gradient.to.join(",")}))`,
-															}}
-														/>
-													</label>
-												)}
-											</For>
-										</div>
-									</div>
-								);
-							}}
-						</Show>
+					<KTabs.Content value="gradient">
+						<GradientEditor />
 					</KTabs.Content>
 				</KTabs>
 			</Field>
@@ -2595,8 +2387,11 @@ function HexColorInput(props: {
 			<div class="relative">
 				<button
 					type="button"
-					class="w-10 h-10 rounded-md border border-gray-4 cursor-pointer hover:border-gray-5 transition-colors"
-					style={{ "background-color": text() }}
+					class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
+					style={{
+						"background-color": text(),
+						"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
+					}}
 					onClick={() => colorInput?.click()}
 				/>
 				<input
@@ -2897,6 +2692,7 @@ function MaskSegmentConfig(props: {
 									segment.opacity = 1;
 								} else {
 									segment.feather = 0.1;
+									segment.fadeDuration = 0;
 								}
 							})
 						}
@@ -2972,20 +2768,22 @@ function MaskSegmentConfig(props: {
 					/>
 				</Field>
 			</Show>
-			<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
-				<Slider
-					value={[props.segment.fadeDuration ?? 0.15]}
-					onChange={([v]) =>
-						updateSegment((segment) => {
-							segment.fadeDuration = v;
-						})
-					}
-					minValue={0}
-					maxValue={1}
-					step={0.01}
-					formatTooltip="s"
-				/>
-			</Field>
+			<Show when={props.segment.maskType === "highlight"}>
+				<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
+					<Slider
+						value={[props.segment.fadeDuration ?? 0.15]}
+						onChange={([v]) =>
+							updateSegment((segment) => {
+								segment.fadeDuration = v;
+							})
+						}
+						minValue={0}
+						maxValue={1}
+						step={0.01}
+						formatTooltip="s"
+					/>
+				</Field>
+			</Show>
 		</div>
 	);
 }
@@ -3711,199 +3509,6 @@ function SceneSegmentConfig(props: {
 				</KTabs>
 			</Field>
 		</>
-	);
-}
-
-function RgbInput(props: {
-	value: [number, number, number];
-	onChange: (value: [number, number, number]) => void;
-}) {
-	const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
-	let prevHex = rgbToHex(props.value);
-
-	let colorInput!: HTMLInputElement;
-
-	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
-			<button
-				type="button"
-				class="size-[2rem] rounded-[0.5rem]"
-				style={{
-					"background-color": rgbToHex(props.value),
-				}}
-				onClick={() => colorInput.click()}
-			/>
-			<input
-				ref={colorInput}
-				type="color"
-				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
-				value={rgbToHex(props.value)}
-				onChange={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (!value) return;
-
-					// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-					const [r, g, b] = value;
-					props.onChange([r, g, b]);
-				}}
-			/>
-			<TextInput
-				class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
-				value={text()}
-				onFocus={() => {
-					prevHex = rgbToHex(props.value);
-				}}
-				onInput={(e) => {
-					setText(e.currentTarget.value);
-
-					const value = hexToRgb(e.target.value);
-					if (!value) return;
-
-					const [r, g, b] = value;
-					props.onChange([r, g, b]);
-				}}
-				onBlur={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (value) {
-						const [r, g, b] = value;
-						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-						props.onChange([r, g, b]);
-					} else {
-						setText(prevHex);
-						const fallbackValue = hexToRgb(text());
-						if (!fallbackValue) return;
-
-						const [r, g, b] = fallbackValue;
-						props.onChange([r, g, b]);
-					}
-				}}
-			/>
-		</div>
-	);
-}
-
-function rgbToHex(rgb: [number, number, number]) {
-	return `#${rgb
-		.map((c) => c.toString(16).padStart(2, "0"))
-		.join("")
-		.toUpperCase()}`;
-}
-
-function hexToRgb(hex: string): [number, number, number, number] | null {
-	// Support both 6-digit (RGB) and 8-digit (RGBA) hex colors
-	const match = hex.match(
-		/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})?$/i,
-	);
-	if (!match) return null;
-
-	const [, r, g, b, a] = match;
-	const rgb = [
-		Number.parseInt(r, 16),
-		Number.parseInt(g, 16),
-		Number.parseInt(b, 16),
-	] as const;
-
-	// If alpha is provided, return RGBA tuple
-	if (a) {
-		return [...rgb, Number.parseInt(a, 16)];
-	}
-
-	return [...rgb, 255];
-}
-
-function KeyboardSegmentConfig(props: {
-	segment: KeyboardTrackSegment;
-	segmentIndex: number;
-}) {
-	const { project, setProject } = useEditorContext();
-
-	const getSetting = (key: "fadeDuration") => {
-		const settings = project?.keyboard?.settings;
-		if (settings && key in settings) {
-			return (settings as Record<string, unknown>)[key] as number;
-		}
-		return 0.15;
-	};
-
-	return (
-		<div class="p-4 rounded-lg border border-gray-200 space-y-3">
-			<Subfield name="Display Text">
-				<Input
-					type="text"
-					value={props.segment.displayText}
-					onChange={(e) =>
-						setProject(
-							"timeline",
-							"keyboardSegments",
-							props.segmentIndex,
-							"displayText",
-							e.target.value,
-						)
-					}
-				/>
-			</Subfield>
-			<Subfield name="Start Time">
-				<Input
-					type="number"
-					value={props.segment.start.toFixed(2)}
-					step="0.1"
-					min={0}
-					onChange={(e) =>
-						setProject(
-							"timeline",
-							"keyboardSegments",
-							props.segmentIndex,
-							"start",
-							Number.parseFloat(e.target.value),
-						)
-					}
-				/>
-			</Subfield>
-			<Subfield name="End Time">
-				<Input
-					type="number"
-					value={props.segment.end.toFixed(2)}
-					step="0.1"
-					min={props.segment.start}
-					onChange={(e) =>
-						setProject(
-							"timeline",
-							"keyboardSegments",
-							props.segmentIndex,
-							"end",
-							Number.parseFloat(e.target.value),
-						)
-					}
-				/>
-			</Subfield>
-			<Subfield name="Fade Duration">
-				<Slider
-					value={[
-						(props.segment.fadeDurationOverride ?? getSetting("fadeDuration")) *
-							100,
-					]}
-					onChange={(v) =>
-						setProject(
-							"timeline",
-							"keyboardSegments",
-							props.segmentIndex,
-							"fadeDurationOverride",
-							v[0] / 100,
-						)
-					}
-					minValue={0}
-					maxValue={50}
-					step={1}
-				/>
-				<span class="text-xs text-gray-11 text-right">
-					{(
-						(props.segment.fadeDurationOverride ?? getSetting("fadeDuration")) *
-						1000
-					).toFixed(0)}
-					ms
-				</span>
-			</Subfield>
-		</div>
 	);
 }
 

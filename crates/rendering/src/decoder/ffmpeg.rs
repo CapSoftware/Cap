@@ -202,8 +202,6 @@ impl FfmpegDecoder {
         ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
         use_hw_acceleration: bool,
     ) -> Result<(), String> {
-        let (continue_tx, continue_rx) = mpsc::channel::<Result<(u32, u32, bool), String>>();
-
         std::thread::spawn(move || {
             let hw_device_type = if use_hw_acceleration {
                 #[cfg(target_os = "windows")]
@@ -224,7 +222,7 @@ impl FfmpegDecoder {
             let mut this = match cap_video_decode::FFmpegDecoder::new(path.clone(), hw_device_type)
             {
                 Err(e) => {
-                    let _ = continue_tx.send(Err(e));
+                    let _ = ready_tx.send(Err(e));
                     return;
                 }
                 Ok(v) => {
@@ -235,7 +233,6 @@ impl FfmpegDecoder {
                         "FFmpeg decoder created for '{}': {}x{}, hw_accel={}",
                         name, width, height, is_hw
                     );
-                    let _ = continue_tx.send(Ok((width, height, is_hw)));
                     v
                 }
             };
@@ -260,7 +257,7 @@ impl FfmpegDecoder {
             if first_frame_result.is_none() && is_hw {
                 let mut sw_this = match cap_video_decode::FFmpegDecoder::new(path.clone(), None) {
                     Err(e) => {
-                        let _ = continue_tx.send(Err(format!("Software fallback failed: {e}")));
+                        let _ = ready_tx.send(Err(format!("Software fallback failed: {e}")));
                         return;
                     }
                     Ok(v) => v,
@@ -908,7 +905,7 @@ impl FfmpegDecoder {
             }
         });
 
-        continue_rx.recv().map_err(|e| e.to_string())?.map(|_| ())
+        Ok(())
     }
 }
 

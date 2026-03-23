@@ -8,6 +8,12 @@ vi.mock("@cap/env", () => ({
 }));
 
 const mockStart = vi.hoisted(() => vi.fn());
+const schemaMocks = vi.hoisted(() => ({
+	videos: { id: "id", settings: "settings" },
+	organizations: { id: "id", settings: "settings" },
+	s3Buckets: { id: "id" },
+	videoUploads: { videoId: "videoId", phase: "phase" },
+}));
 
 vi.mock("workflow/api", () => ({
 	start: mockStart,
@@ -18,19 +24,27 @@ vi.mock("@/workflows/transcribe", () => ({
 }));
 
 let mockQueryResult: unknown[] = [];
+let mockUploadQueryResult: unknown[] = [];
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
-			from: () => ({
-				leftJoin: () => ({
-					leftJoin: () => ({
-						where: vi
-							.fn()
-							.mockImplementation(() => Promise.resolve(mockQueryResult)),
-					}),
-				}),
-			}),
+			from: (table: unknown) =>
+				table === schemaMocks.videoUploads
+					? {
+							where: vi.fn().mockReturnValue({
+								limit: vi.fn().mockResolvedValue(mockUploadQueryResult),
+							}),
+						}
+					: {
+							leftJoin: () => ({
+								leftJoin: () => ({
+									where: vi
+										.fn()
+										.mockImplementation(() => Promise.resolve(mockQueryResult)),
+								}),
+							}),
+						},
 		}),
 		update: () => ({
 			set: () => ({
@@ -41,9 +55,10 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/schema", () => ({
-	videos: { id: "id", settings: "settings" },
-	organizations: { id: "id", settings: "settings" },
-	s3Buckets: { id: "id" },
+	videos: schemaMocks.videos,
+	organizations: schemaMocks.organizations,
+	s3Buckets: schemaMocks.s3Buckets,
+	videoUploads: schemaMocks.videoUploads,
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -58,6 +73,7 @@ describe("transcribeVideo", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockQueryResult = [];
+		mockUploadQueryResult = [];
 	});
 
 	describe("input validation", () => {
@@ -264,6 +280,19 @@ describe("transcribeVideo", () => {
 				},
 			];
 			mockStart.mockResolvedValue({ id: "workflow-run-123" });
+		});
+
+		it("does not trigger while upload is still active", async () => {
+			mockUploadQueryResult = [{ phase: "processing" }];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.message).toBe("Video upload is still in progress");
+			expect(mockStart).not.toHaveBeenCalled();
 		});
 
 		it("triggers workflow for valid video", async () => {

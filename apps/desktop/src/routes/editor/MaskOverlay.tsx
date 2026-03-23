@@ -84,23 +84,30 @@ export function MaskOverlay(props: MaskOverlayProps) {
 	const hasMaskSelection = () => selectedMaskIndex() !== null;
 
 	return (
-		<div
-			class="absolute inset-0"
-			classList={{ "pointer-events-none": !hasMaskSelection() }}
-			onMouseDown={handleBackgroundClick}
-		>
+		<div class="absolute inset-0 pointer-events-none">
+			<Show when={hasMaskSelection()}>
+				<div
+					class="absolute inset-0 pointer-events-auto"
+					onMouseDown={handleBackgroundClick}
+				/>
+			</Show>
 			<For each={visibleMaskSegments()}>
 				{({ segment, index }) => {
 					const isSelected = () => selectedMaskIndex() === index;
 					const rect = () => getMaskRect(segment);
 					const maskState = () => evaluateMask(segment, currentAbsoluteTime());
+					const overlayClass = () =>
+						"border-gray-12/60 bg-gray-9/5 hover:border-gray-12 hover:bg-gray-9/10";
 
 					return (
 						<Show
 							when={isSelected() && selectedMask()}
 							fallback={
 								<div
-									class="absolute pointer-events-auto cursor-pointer rounded-md border-2 border-transparent hover:border-gray-12 hover:bg-gray-9/5 transition-colors"
+									class={cx(
+										"absolute pointer-events-auto cursor-pointer rounded-md border-2 transition-colors",
+										overlayClass(),
+									)}
 									style={{
 										left: `${rect().left}px`,
 										top: `${rect().top}px`,
@@ -223,7 +230,7 @@ function MaskOverlayContent(props: {
 
 	return (
 		<div
-			class="absolute pointer-events-auto group"
+			class="absolute pointer-events-auto group z-10"
 			style={{
 				left: `${rect().left}px`,
 				top: `${rect().top}px`,

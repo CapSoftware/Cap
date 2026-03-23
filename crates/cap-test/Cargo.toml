@@ -15,6 +15,9 @@ path = "src/main.rs"
 cap-recording = { path = "../recording", features = ["test-utils"] }
 cap-media-info = { path = "../media-info" }
 cap-project = { path = "../project" }
+cap-editor = { path = "../editor" }
+cap-export = { path = "../export" }
+cap-rendering = { path = "../rendering" }
 scap-targets = { path = "../scap-targets" }
 cap-camera = { path = "../camera" }
 

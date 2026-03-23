@@ -8,7 +8,14 @@ use futures::FutureExt;
 use image::ImageBuffer;
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tracing::{info, trace, warn};
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]
@@ -28,6 +35,20 @@ impl ExportCompression {
             Self::Potato => 0.04,
         }
     }
+}
+
+#[derive(Clone, Default)]
+struct ExportNv12Mode {
+    stop_after_frames_sent: Option<u32>,
+    record_first_queued_ms_since_pipeline: Option<Arc<AtomicU64>>,
+    nv12_render_startup_breakdown_ms:
+        Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct FirstFrameQueuedBenchmark {
+    pub ms_to_first_frame_queued_since_export_pipeline_start: u64,
+    pub nv12_render_startup_breakdown_ms: Option<cap_rendering::Nv12RenderStartupBreakdownMs>,
 }
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]
@@ -69,7 +90,61 @@ impl Mp4ExportSettings {
             height = output_size.1,
             "Exporting with NV12 pipeline (GPU when possible, CPU fallback otherwise)"
         );
-        self.export_nv12(base, output_size, fps, on_progress).await
+        self.export_nv12(
+            base,
+            output_size,
+            fps,
+            on_progress,
+            ExportNv12Mode::default(),
+        )
+        .await
+    }
+
+    pub async fn benchmark_first_frame_with_breakdown(
+        self,
+        base: ExporterBase,
+    ) -> Result<FirstFrameQueuedBenchmark, String> {
+        let fps = self.fps;
+        let output_size = ProjectUniforms::get_output_size(
+            &base.render_constants.options,
+            &base.project_config,
+            self.resolution_base,
+        );
+        let first_ms = Arc::new(AtomicU64::new(u64::MAX));
+        let first_ms_enc = Arc::clone(&first_ms);
+        let breakdown = Arc::new(Mutex::new(None));
+        let breakdown_enc = Arc::clone(&breakdown);
+        self.export_nv12(
+            base,
+            output_size,
+            fps,
+            |_| true,
+            ExportNv12Mode {
+                stop_after_frames_sent: Some(1),
+                record_first_queued_ms_since_pipeline: Some(first_ms_enc),
+                nv12_render_startup_breakdown_ms: Some(breakdown_enc),
+            },
+        )
+        .await?;
+        let v = first_ms.load(Ordering::Relaxed);
+        if v == u64::MAX {
+            return Err("first frame was not queued to the encoder".to_string());
+        }
+        let nv12_render_startup_breakdown_ms = breakdown.lock().ok().and_then(|mut g| g.take());
+        Ok(FirstFrameQueuedBenchmark {
+            ms_to_first_frame_queued_since_export_pipeline_start: v,
+            nv12_render_startup_breakdown_ms,
+        })
+    }
+
+    pub async fn benchmark_ms_to_first_frame_queued(
+        self,
+        base: ExporterBase,
+    ) -> Result<u64, String> {
+        Ok(self
+            .benchmark_first_frame_with_breakdown(base)
+            .await?
+            .ms_to_first_frame_queued_since_export_pipeline_start)
     }
 
     async fn export_nv12(
@@ -78,7 +153,9 @@ impl Mp4ExportSettings {
         output_size: (u32, u32),
         fps: u32,
         mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
+        mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
+        let pipeline_start = std::time::Instant::now();
         let output_path = base.output_path.clone();
         let meta = &base.studio_meta;
 
@@ -98,6 +175,11 @@ impl Mp4ExportSettings {
             .map(|_| AudioRenderer::new(audio_segments.clone()));
         let has_audio = audio_renderer.is_some();
 
+        let stop_after_frames_sent = mode.stop_after_frames_sent;
+        let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;
+        let nv12_render_startup_breakdown_ms = mode.nv12_render_startup_breakdown_ms;
+
+        let pipeline_start_for_encoder = pipeline_start;
         let encoder_thread = tokio::task::spawn_blocking(move || {
             trace!("Creating MP4File encoder (NV12 path)");
 
@@ -146,6 +228,13 @@ impl Mp4ExportSettings {
                     encoder.queue_audio_frame(audio);
                 }
                 encoded_frames += 1;
+                if encoded_frames == 1
+                    && let Some(atom) = record_first_queued_ms.as_ref()
+                {
+                    let ms = pipeline_start_for_encoder.elapsed().as_millis() as u64;
+                    let _ =
+                        atom.compare_exchange(u64::MAX, ms, Ordering::Relaxed, Ordering::Relaxed);
+                }
             }
 
             let encode_elapsed = encode_start.elapsed();
@@ -330,6 +419,8 @@ impl Mp4ExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
+            stop_after_frames_sent,
+            nv12_render_startup_breakdown_ms,
         )
         .then(|v| async { v.map_err(|e| e.to_string()) });
 
@@ -560,11 +651,11 @@ mod tests {
         let uv_size = (width * height / 2) as usize;
 
         let mut nv12_data = vec![0u8; y_size + uv_size];
-        for i in 0..y_size {
-            nv12_data[i] = (i % 256) as u8;
+        for (i, item) in nv12_data.iter_mut().take(y_size).enumerate() {
+            *item = (i % 256) as u8;
         }
-        for i in 0..uv_size {
-            nv12_data[y_size + i] = (128 + i % 128) as u8;
+        for (i, item) in nv12_data.iter_mut().skip(y_size).take(uv_size).enumerate() {
+            *item = (128 + i % 128) as u8;
         }
 
         let input = Nv12ExportFrame {

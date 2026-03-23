@@ -1,0 +1,99 @@
+name: Performance Regressions
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  performance:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout Cap
+        uses: actions/checkout@v4
+
+      - name: Checkout Fixture Repo
+        uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        run: node scripts/setup.js
+
+      - name: Add FFmpeg DLLs to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Set results path
+        shell: bash
+        run: |
+          echo "PERFORMANCE_RESULTS_PATH=performance-results-${{ matrix.runner }}.json" >> "$GITHUB_ENV"
+          echo "PERFORMANCE_LOG_PATH=performance-suite-${{ matrix.runner }}.log" >> "$GITHUB_ENV"
+
+      - name: Run performance suite
+        id: performance_suite
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --release -p cap-test -- suite performance --recording-path "${{ github.workspace }}/performance-fixtures/reference-recording.cap" --duration 8 --output "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}" 2>&1 | tee "${{ github.workspace }}/${PERFORMANCE_LOG_PATH}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results-${{ matrix.runner }}
+          path: ${{ github.workspace }}/${{ env.PERFORMANCE_RESULTS_PATH }}
+
+      - name: Upload suite log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-log-${{ matrix.runner }}
+          path: ${{ github.workspace }}/${{ env.PERFORMANCE_LOG_PATH }}
+
+      - name: Print results
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}" ]; then
+            cat "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}"
+          else
+            echo "$PERFORMANCE_RESULTS_PATH not found"
+          fi
+
+      - name: Enforce suite gate
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}" ]; then
+            target/release/cap-test report "${{ github.workspace }}/${PERFORMANCE_RESULTS_PATH}"
+            node -e 'const fs = require("fs"); const p = process.env.GITHUB_WORKSPACE + "/" + process.env.PERFORMANCE_RESULTS_PATH; const r = JSON.parse(fs.readFileSync(p, "utf8")); process.exit((r.summary.failed || r.summary.errors) ? 1 : 0);'
+          else
+            echo "$PERFORMANCE_RESULTS_PATH not found"
+            if [ -f "${{ github.workspace }}/${PERFORMANCE_LOG_PATH}" ]; then
+              cat "${{ github.workspace }}/${PERFORMANCE_LOG_PATH}"
+            fi
+            exit 1
+          fi

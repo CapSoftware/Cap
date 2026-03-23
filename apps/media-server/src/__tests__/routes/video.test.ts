@@ -311,11 +311,11 @@ describe("POST /video/process", () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => false,
 			getActiveVideoProcessCount: jobManager.getActiveVideoProcessCount,
+			getMaxConcurrentVideoProcesses: jobManager.getMaxConcurrentVideoProcesses,
+			getSystemResources: jobManager.getSystemResources,
 			getAllJobs: jobManager.getAllJobs,
 			generateJobId: jobManager.generateJobId,
 			createJob: jobManager.createJob,
-			incrementActiveVideoProcesses: jobManager.incrementActiveVideoProcesses,
-			decrementActiveVideoProcesses: jobManager.decrementActiveVideoProcesses,
 			getJob: jobManager.getJob,
 			updateJob: jobManager.updateJob,
 			deleteJob: jobManager.deleteJob,
@@ -347,6 +347,8 @@ describe("POST /video/process", () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,
 			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
 			getAllJobs: () => [],
 			generateJobId: () => "test-job-id",
 			createJob: () => ({
@@ -358,8 +360,6 @@ describe("POST /video/process", () => {
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			}),
-			incrementActiveVideoProcesses: () => {},
-			decrementActiveVideoProcesses: () => {},
 			getJob: () => null,
 			updateJob: () => null,
 			deleteJob: () => {},
@@ -410,11 +410,11 @@ describe("GET /video/process/:jobId/status", () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,
 			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
 			getAllJobs: () => [],
 			generateJobId: () => "test-job-id",
 			createJob: jobManager.createJob,
-			incrementActiveVideoProcesses: () => {},
-			decrementActiveVideoProcesses: () => {},
 			getJob: () => ({
 				jobId: "test-job-id",
 				videoId: "test-video",
@@ -459,11 +459,11 @@ describe("POST /video/process/:jobId/cancel", () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,
 			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
 			getAllJobs: () => [],
 			generateJobId: () => "test-job-id",
 			createJob: jobManager.createJob,
-			incrementActiveVideoProcesses: () => {},
-			decrementActiveVideoProcesses: () => {},
 			getJob: () => null,
 			updateJob: () => null,
 			deleteJob: () => {},
@@ -488,11 +488,11 @@ describe("POST /video/process/:jobId/cancel", () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,
 			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
 			getAllJobs: () => [],
 			generateJobId: () => "test-job-id",
 			createJob: jobManager.createJob,
-			incrementActiveVideoProcesses: () => {},
-			decrementActiveVideoProcesses: () => {},
 			getJob: () => ({
 				jobId: "test-job-id",
 				videoId: "test-video",
@@ -523,17 +523,16 @@ describe("POST /video/process/:jobId/cancel", () => {
 	});
 
 	test("successfully cancels running job", async () => {
-		const abortController = new AbortController();
 		let abortCalled = false;
 
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,
 			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
 			getAllJobs: () => [],
 			generateJobId: () => "test-job-id",
 			createJob: jobManager.createJob,
-			incrementActiveVideoProcesses: () => {},
-			decrementActiveVideoProcesses: () => {},
 			getJob: () => ({
 				jobId: "test-job-id",
 				videoId: "test-video",
