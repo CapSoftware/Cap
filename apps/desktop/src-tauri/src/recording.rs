@@ -16,7 +16,6 @@ use cap_recording::{
         screen_capture,
         screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
     },
-    studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
@@ -44,7 +43,7 @@ use crate::{
     auth::AuthStore,
     create_screenshot,
     general_settings::{
-        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
+        GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
     },
     open_external_link,
     presets::PresetsStore,
@@ -72,7 +71,7 @@ pub enum InProgressRecording {
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
-        handle: studio_recording::ActorHandle,
+        handle: instant_recording::ActorHandle,
         common: InProgressRecordingCommon,
     },
 }
@@ -164,7 +163,7 @@ pub enum CompletedRecording {
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: studio_recording::CompletedRecording,
+        recording: instant_recording::CompletedRecording,
         target_name: String,
     },
 }
@@ -493,7 +492,7 @@ pub async fn start_recording(
 
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
-                        let mut builder = studio_recording::Actor::builder(
+                        let mut builder = instant_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
@@ -1237,7 +1236,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &studio_recording::CompletedRecording,
+    recording: &instant_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -1295,7 +1294,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &studio_recording::CompletedRecording,
+    completed_recording: &instant_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
