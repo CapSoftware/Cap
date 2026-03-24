@@ -26,10 +26,8 @@ import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createLazySignal } from "~/utils/socket";
-import { createRive } from "~/utils/rive";
 import { commands, events } from "~/utils/tauri";
 import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
-import AvatarRivAsset from "../assets/rive/avatar.riv";
 
 type CameraWindowShape = "round" | "square" | "full";
 type CameraWindowState = {
@@ -218,159 +216,73 @@ function drawClawdShape(ctx: CanvasRenderingContext2D, s: number, pad: number) {
 }
 
 function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
-	let fallbackCanvasRef: HTMLCanvasElement | undefined;
-	const [faceData, setFaceData] = createSignal({
-		headPitch: 0,
-		headYaw: 0,
-		headRoll: 0,
-		mouthOpen: 0,
-		leftEyeOpen: 1,
-		rightEyeOpen: 1,
-		confidence: 0,
-	});
-	const [useRive, setUseRive] = createSignal(false);
-
-	console.log("[Camera] AvatarRivAsset value:", AvatarRivAsset, typeof AvatarRivAsset);
-
-	let riveInputs: Record<string, { value: number | boolean }> = {};
-
-	const { rive, RiveComponent } = createRive(() => ({
-		src: AvatarRivAsset,
-		autoplay: true,
-		stateMachines: "State Machine 1",
-		onLoadError: (e: unknown) => {
-			console.log("[Camera] Rive load failed:", e);
-			setUseRive(false);
-		},
-	}));
-
-	createEffect(() => {
-		const r = rive();
-		if (!r) return;
-		console.log("[Camera] Rive instance ready");
-
-		const smNames = ["State Machine 1", "state_machine", "StateMachine"];
-		for (const smName of smNames) {
-			const inputs = r.stateMachineInputs(smName);
-			if (inputs && inputs.length > 0) {
-				console.log("[Camera] Found state machine:", smName, "with", inputs.length, "inputs");
-				for (const input of inputs) {
-					riveInputs[input.name] = input;
-					console.log("[Camera] Rive input:", input.name, "type:", input.type);
-				}
-				break;
-			}
-		}
-
-		if (Object.keys(riveInputs).length === 0) {
-			console.log("[Camera] No inputs found, listing contents:");
-			const contents = r.contents;
-			if (contents) {
-				for (const ab of contents.artboards || []) {
-					console.log("[Camera] Artboard:", ab.name, "stateMachines:", ab.stateMachines);
-				}
-			}
-		}
-
-		setUseRive(true);
-	});
+	let canvasRef: HTMLCanvasElement | undefined;
+	const [loaded, setLoaded] = createSignal(false);
+	let live2dModel: any = null;
 
 	createTauriEventListener(events.faceTrackingUpdate, (payload) => {
-		const data = {
-			headPitch: payload.head_pitch,
-			headYaw: payload.head_yaw,
-			headRoll: payload.head_roll,
-			mouthOpen: payload.mouth_open,
-			leftEyeOpen: payload.left_eye_open,
-			rightEyeOpen: payload.right_eye_open,
-			confidence: payload.confidence,
-		};
-		setFaceData(data);
+		if (!live2dModel || !loaded()) return;
 
-		if (useRive()) {
-			const setInput = (names: string[], value: number) => {
-				for (const name of names) {
-					if (riveInputs[name]) {
-						riveInputs[name].value = value;
-						return;
-					}
-				}
-			};
-			setInput(["mouth_open", "mouthOpen", "Mouth", "mouth", "jawOpen", "jaw_open"], data.mouthOpen);
-			setInput(["left_eye_open", "leftEyeOpen", "Left Eye", "leftEye", "eyeBlinkLeft"], data.leftEyeOpen);
-			setInput(["right_eye_open", "rightEyeOpen", "Right Eye", "rightEye", "eyeBlinkRight"], data.rightEyeOpen);
-			setInput(["head_yaw", "headYaw", "Head Yaw", "yaw", "Yaw", "numX", "x"], data.headYaw);
-			setInput(["head_pitch", "headPitch", "Head Pitch", "pitch", "Pitch", "numY", "y"], data.headPitch);
-			setInput(["head_roll", "headRoll", "Head Roll", "roll", "Roll"], data.headRoll);
+		const coreModel = live2dModel.internalModel?.coreModel;
+		if (!coreModel) return;
 
-			if (riveInputs.Neutral) riveInputs.Neutral.value = (1.0 - data.mouthOpen) * 100;
-			if (riveInputs.Smile) riveInputs.Smile.value = data.mouthOpen * 80;
-			if (riveInputs.Happy) riveInputs.Happy.value = data.mouthOpen > 0.3 ? (data.mouthOpen - 0.3) * 140 : 0;
-			if (riveInputs.Surprise) riveInputs.Surprise.value = data.mouthOpen > 0.5 ? (data.mouthOpen - 0.5) * 200 : 0;
-			if (riveInputs.Sad) riveInputs.Sad.value = data.confidence < 0.3 ? 50 : 0;
-		}
+		coreModel.setParameterValueById("ParamAngleX", payload.head_yaw * 30);
+		coreModel.setParameterValueById("ParamAngleY", payload.head_pitch * 30);
+		coreModel.setParameterValueById("ParamAngleZ", payload.head_roll * 30);
+		coreModel.setParameterValueById("ParamMouthOpenY", payload.mouth_open);
+		coreModel.setParameterValueById("ParamEyeLOpen", payload.left_eye_open);
+		coreModel.setParameterValueById("ParamEyeROpen", payload.right_eye_open);
+		coreModel.setParameterValueById("ParamBodyAngleX", payload.head_yaw * 10);
 	});
 
-	onMount(() => {
+	onMount(async () => {
 		getCurrentWindow().show();
+		if (!canvasRef) return;
 
-		if (!useRive()) {
-			const canvas = fallbackCanvasRef;
-			if (!canvas) return;
-			const ctx = canvas.getContext("2d");
-			if (!ctx) return;
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const script = document.createElement("script");
+				script.src = "/live2d/live2dcubismcore.min.js";
+				script.onload = () => {
+					console.log("[Camera] Cubism Core loaded");
+					resolve();
+				};
+				script.onerror = () => reject(new Error("Failed to load Cubism Core"));
+				document.head.appendChild(script);
+			});
 
-			let animationId: number;
-			const draw = () => {
-				if (!canvas || useRive()) return;
-				const data = faceData();
-				const w = canvas.width;
-				const h = canvas.height;
-				ctx.clearRect(0, 0, w, h);
+			const PIXI = await import("pixi.js");
+			const { Live2DModel } = await import("pixi-live2d-display/cubism4");
 
-				ctx.fillStyle = "#262629";
-				ctx.fillRect(0, 0, w, h);
+			Live2DModel.registerTicker(PIXI.Ticker);
 
-				ctx.save();
-				ctx.translate(w / 2, h / 2);
-				ctx.rotate(data.headRoll * 0.25);
-				ctx.translate(data.headYaw * 15, data.headPitch * 10);
+			const app = new PIXI.Application({
+				view: canvasRef,
+				width: 512,
+				height: 512,
+				backgroundAlpha: 0,
+				backgroundColor: 0x262629,
+			});
 
-				const breath = 1 + Math.sin(Date.now() * 0.003) * 0.01;
-				ctx.scale(breath, breath);
+			const modelUrl = "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json";
 
-				const s = Math.min(w, h) * 0.35;
+			console.log("[Camera] Loading Live2D model...");
+			const model = await Live2DModel.from(modelUrl, { autoInteract: false });
 
-				ctx.fillStyle = "#FFFFFF";
-				drawClawdShape(ctx, s, 4);
-				ctx.fillStyle = "#D4845A";
-				drawClawdShape(ctx, s, 0);
+			model.anchor.set(0.5, 0.5);
+			model.position.set(256, 280);
 
-				const eyeY = -s * 0.2;
-				const eyeSpacing = s * 0.35;
-				const eyeSize = s * 0.14;
+			const scale = Math.min(512 / model.width, 512 / model.height) * 0.8;
+			model.scale.set(scale);
 
-				ctx.fillStyle = "#111111";
-				const leftEyeH = eyeSize * Math.max(data.leftEyeOpen, 0.08);
-				ctx.fillRect(-eyeSpacing - eyeSize / 2, eyeY - leftEyeH / 2, eyeSize, leftEyeH);
-				const rightEyeH = eyeSize * Math.max(data.rightEyeOpen, 0.08);
-				ctx.fillRect(eyeSpacing - eyeSize / 2, eyeY - rightEyeH / 2, eyeSize, rightEyeH);
+			app.stage.addChild(model);
+			live2dModel = model;
 
-				if (data.mouthOpen > 0.05) {
-					const mouthH = data.mouthOpen * s * 0.2;
-					const mouthW = s * 0.2;
-					const mouthY = s * 0.35;
-					ctx.fillStyle = "#2A1508";
-					ctx.beginPath();
-					ctx.roundRect(-mouthW / 2, mouthY - mouthH / 2, mouthW, mouthH, mouthH * 0.3);
-					ctx.fill();
-				}
-
-				ctx.restore();
-				animationId = requestAnimationFrame(draw);
-			};
-			animationId = requestAnimationFrame(draw);
-			onCleanup(() => cancelAnimationFrame(animationId));
+			console.log("[Camera] Live2D model loaded successfully");
+			console.log("[Camera] Model parameters:", model.internalModel?.coreModel?.getParameterCount?.() ?? "unknown");
+			setLoaded(true);
+		} catch (e) {
+			console.error("[Camera] Live2D load failed:", e);
 		}
 	});
 
@@ -382,23 +294,18 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<Show when={props.disconnected()}>
 				<CameraDisconnectedOverlay />
 			</Show>
-			<RiveComponent
+			<canvas
+				ref={canvasRef}
+				width={512}
+				height={512}
 				data-tauri-drag-region
 				class="w-full h-full"
-				style={{
-					"border-radius": "50%",
-					display: useRive() ? "block" : "none",
-				}}
+				style={{ "border-radius": "50%" }}
 			/>
-			<Show when={!useRive()}>
-				<canvas
-					ref={fallbackCanvasRef}
-					width={512}
-					height={512}
-					data-tauri-drag-region
-					class="w-full h-full"
-					style={{ "border-radius": "50%" }}
-				/>
+			<Show when={!loaded()}>
+				<div class="absolute inset-0 flex items-center justify-center text-white text-sm">
+					Loading avatar...
+				</div>
 			</Show>
 		</div>
 	);
