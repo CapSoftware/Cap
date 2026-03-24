@@ -29,13 +29,7 @@ import { createLazySignal } from "~/utils/socket";
 import { createRive } from "~/utils/rive";
 import { commands, events } from "~/utils/tauri";
 import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
-
-let avatarRivAsset: string | undefined;
-try {
-	avatarRivAsset = new URL("../assets/rive/avatar.riv", import.meta.url).href;
-} catch {
-	avatarRivAsset = undefined;
-}
+import AvatarRivAsset from "../assets/rive/avatar.riv";
 
 type CameraWindowShape = "round" | "square" | "full";
 type CameraWindowState = {
@@ -236,28 +230,50 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 	const [useRive, setUseRive] = createSignal(false);
 
+	console.log("[Camera] AvatarRivAsset value:", AvatarRivAsset, typeof AvatarRivAsset);
+
 	let riveInputs: Record<string, { value: number | boolean }> = {};
 
 	const { rive, RiveComponent } = createRive(() => ({
-		src: avatarRivAsset,
+		src: AvatarRivAsset,
 		autoplay: true,
 		stateMachines: "State Machine 1",
-		onLoad: () => {
-			console.log("[Camera] Rive avatar loaded");
-			const inputs = rive()?.stateMachineInputs("State Machine 1");
-			if (inputs) {
-				for (const input of inputs) {
-					riveInputs[input.name] = input;
-				}
-				console.log("[Camera] Rive inputs:", Object.keys(riveInputs));
-			}
-			setUseRive(true);
-		},
-		onLoadError: () => {
-			console.log("[Camera] Rive load failed, using Canvas2D fallback");
+		onLoadError: (e: unknown) => {
+			console.log("[Camera] Rive load failed:", e);
 			setUseRive(false);
 		},
 	}));
+
+	createEffect(() => {
+		const r = rive();
+		if (!r) return;
+		console.log("[Camera] Rive instance ready");
+
+		const smNames = ["State Machine 1", "state_machine", "StateMachine"];
+		for (const smName of smNames) {
+			const inputs = r.stateMachineInputs(smName);
+			if (inputs && inputs.length > 0) {
+				console.log("[Camera] Found state machine:", smName, "with", inputs.length, "inputs");
+				for (const input of inputs) {
+					riveInputs[input.name] = input;
+					console.log("[Camera] Rive input:", input.name, "type:", input.type);
+				}
+				break;
+			}
+		}
+
+		if (Object.keys(riveInputs).length === 0) {
+			console.log("[Camera] No inputs found, listing contents:");
+			const contents = r.contents;
+			if (contents) {
+				for (const ab of contents.artboards || []) {
+					console.log("[Camera] Artboard:", ab.name, "stateMachines:", ab.stateMachines);
+				}
+			}
+		}
+
+		setUseRive(true);
+	});
 
 	createTauriEventListener(events.faceTrackingUpdate, (payload) => {
 		const data = {
@@ -272,12 +288,26 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		setFaceData(data);
 
 		if (useRive()) {
-			if (riveInputs.mouth_open) riveInputs.mouth_open.value = data.mouthOpen;
-			if (riveInputs.left_eye_open) riveInputs.left_eye_open.value = data.leftEyeOpen;
-			if (riveInputs.right_eye_open) riveInputs.right_eye_open.value = data.rightEyeOpen;
-			if (riveInputs.head_yaw) riveInputs.head_yaw.value = data.headYaw;
-			if (riveInputs.head_pitch) riveInputs.head_pitch.value = data.headPitch;
-			if (riveInputs.head_roll) riveInputs.head_roll.value = data.headRoll;
+			const setInput = (names: string[], value: number) => {
+				for (const name of names) {
+					if (riveInputs[name]) {
+						riveInputs[name].value = value;
+						return;
+					}
+				}
+			};
+			setInput(["mouth_open", "mouthOpen", "Mouth", "mouth", "jawOpen", "jaw_open"], data.mouthOpen);
+			setInput(["left_eye_open", "leftEyeOpen", "Left Eye", "leftEye", "eyeBlinkLeft"], data.leftEyeOpen);
+			setInput(["right_eye_open", "rightEyeOpen", "Right Eye", "rightEye", "eyeBlinkRight"], data.rightEyeOpen);
+			setInput(["head_yaw", "headYaw", "Head Yaw", "yaw", "Yaw", "numX", "x"], data.headYaw);
+			setInput(["head_pitch", "headPitch", "Head Pitch", "pitch", "Pitch", "numY", "y"], data.headPitch);
+			setInput(["head_roll", "headRoll", "Head Roll", "roll", "Roll"], data.headRoll);
+
+			if (riveInputs.Neutral) riveInputs.Neutral.value = (1.0 - data.mouthOpen) * 100;
+			if (riveInputs.Smile) riveInputs.Smile.value = data.mouthOpen * 80;
+			if (riveInputs.Happy) riveInputs.Happy.value = data.mouthOpen > 0.3 ? (data.mouthOpen - 0.3) * 140 : 0;
+			if (riveInputs.Surprise) riveInputs.Surprise.value = data.mouthOpen > 0.5 ? (data.mouthOpen - 0.5) * 200 : 0;
+			if (riveInputs.Sad) riveInputs.Sad.value = data.confidence < 0.3 ? 50 : 0;
 		}
 	});
 
@@ -352,20 +382,19 @@ function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<Show when={props.disconnected()}>
 				<CameraDisconnectedOverlay />
 			</Show>
-			<Show
-				when={useRive()}
-				fallback={
-					<canvas
-						ref={fallbackCanvasRef}
-						width={512}
-						height={512}
-						data-tauri-drag-region
-						class="w-full h-full"
-						style={{ "border-radius": "50%" }}
-					/>
-				}
-			>
-				<RiveComponent
+			<RiveComponent
+				data-tauri-drag-region
+				class="w-full h-full"
+				style={{
+					"border-radius": "50%",
+					display: useRive() ? "block" : "none",
+				}}
+			/>
+			<Show when={!useRive()}>
+				<canvas
+					ref={fallbackCanvasRef}
+					width={512}
+					height={512}
 					data-tauri-drag-region
 					class="w-full h-full"
 					style={{ "border-radius": "50%" }}
