@@ -1,11 +1,49 @@
+import { Slider as KSlider } from "@kobalte/core/slider";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
-import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+import {
+	type AutoZoomConfig,
+	commands,
+	type GeneralSettingsStore,
+} from "~/utils/tauri";
 import { ToggleSettingItem } from "./Setting";
+
+function SettingSlider(props: {
+	label: string;
+	value: number;
+	onChange: (v: number) => void;
+	min: number;
+	max: number;
+	step: number;
+	format?: (v: number) => string;
+}) {
+	return (
+		<div class="space-y-1.5">
+			<div class="flex justify-between items-center text-sm">
+				<span class="text-gray-11">{props.label}</span>
+				<span class="text-gray-12 font-medium">
+					{props.format ? props.format(props.value) : props.value}
+				</span>
+			</div>
+			<KSlider
+				value={[props.value]}
+				onChange={(v) => props.onChange(v[0])}
+				minValue={props.min}
+				maxValue={props.max}
+				step={props.step}
+			>
+				<KSlider.Track class="h-[0.3rem] cursor-pointer relative bg-gray-4 rounded-full w-full">
+					<KSlider.Fill class="absolute h-full rounded-full bg-blue-9" />
+					<KSlider.Thumb class="block size-4 rounded-full bg-white border-2 border-blue-9 -top-[0.35rem] outline-none" />
+				</KSlider.Track>
+			</KSlider>
+		</div>
+	);
+}
 
 export default function ExperimentalSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -27,8 +65,37 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNativeCameraPreview: false,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
+			autoZoomConfig: {
+				zoomAmount: 1.5,
+				clickGroupTimeThreshold: 2.5,
+				clickGroupSpatialThreshold: 0.15,
+				clickPrePadding: 0.4,
+				clickPostPadding: 1.8,
+				movementPrePadding: 0.3,
+				movementPostPadding: 1.5,
+				mergeGapThreshold: 0.8,
+				minSegmentDuration: 1.0,
+				movementEventDistanceThreshold: 0.02,
+				movementWindowDistanceThreshold: 0.08,
+				deadZoneRadius: 0.1,
+				doubleClickThresholdMs: 400.0,
+				ignoreRightClicks: true,
+				minZoomAmount: 1.2,
+				maxZoomAmount: 2.5,
+				intensitySpatialScale: 0.3,
+			},
 		},
 	);
+
+	const handleConfigChange = <K extends keyof AutoZoomConfig>(
+		key: K,
+		value: AutoZoomConfig[K],
+	) => {
+		setSettings("autoZoomConfig", key, value);
+		generalSettingsStore.set({
+			autoZoomConfig: { ...settings.autoZoomConfig, [key]: value },
+		});
+	};
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -95,6 +162,55 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							}}
 						/>
 					</div>
+					<Show when={settings.autoZoomOnClicks}>
+						<div class="px-3 py-3 space-y-4">
+							<SettingSlider
+								label="Min Zoom"
+								value={settings.autoZoomConfig?.minZoomAmount ?? 1.2}
+								onChange={(v) => handleConfigChange("minZoomAmount", v)}
+								min={1.0}
+								max={3.0}
+								step={0.1}
+								format={(v) => `${v.toFixed(1)}x`}
+							/>
+							<SettingSlider
+								label="Max Zoom"
+								value={settings.autoZoomConfig?.maxZoomAmount ?? 2.5}
+								onChange={(v) => handleConfigChange("maxZoomAmount", v)}
+								min={1.5}
+								max={4.0}
+								step={0.1}
+								format={(v) => `${v.toFixed(1)}x`}
+							/>
+							<SettingSlider
+								label="Sensitivity"
+								value={
+									settings.autoZoomConfig?.movementWindowDistanceThreshold ??
+									0.08
+								}
+								onChange={(v) =>
+									handleConfigChange("movementWindowDistanceThreshold", v)
+								}
+								min={0.02}
+								max={0.2}
+								step={0.01}
+								format={(v) => {
+									if (v <= 0.05) return "High";
+									if (v <= 0.12) return "Medium";
+									return "Low";
+								}}
+							/>
+							<SettingSlider
+								label="Smoothing"
+								value={settings.autoZoomConfig?.mergeGapThreshold ?? 0.8}
+								onChange={(v) => handleConfigChange("mergeGapThreshold", v)}
+								min={0.2}
+								max={2.0}
+								step={0.1}
+								format={(v) => `${v.toFixed(1)}s`}
+							/>
+						</div>
+					</Show>
 				</div>
 			</div>
 		</div>
