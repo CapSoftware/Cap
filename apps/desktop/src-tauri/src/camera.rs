@@ -18,7 +18,8 @@ use std::{
     },
     thread,
 };
-use tauri::{LogicalPosition, LogicalSize, PhysicalSize, WebviewWindow};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow};
+use tauri_specta::Event;
 use tokio::{
     runtime::Runtime,
     sync::{broadcast, oneshot},
@@ -27,6 +28,17 @@ use tokio::{
 };
 use tracing::{error, info, trace, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
+
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct FaceTrackingUpdate {
+    pub head_pitch: f32,
+    pub head_yaw: f32,
+    pub head_roll: f32,
+    pub mouth_open: f32,
+    pub left_eye_open: f32,
+    pub right_eye_open: f32,
+    pub confidence: f32,
+}
 
 static TOOLBAR_HEIGHT: f32 = 56.0;
 
@@ -169,12 +181,19 @@ impl CameraPreviewManager {
         &mut self,
         window: WebviewWindow,
         actor: ActorRef<CameraFeed>,
+        avatar_mode: bool,
     ) -> anyhow::Result<()> {
         if let Some(preview) = &mut self.preview {
             actor
                 .ask(feeds::camera::AddSender(preview.camera_tx.clone()))
                 .await
                 .context("Error re-attaching camera feed consumer")?;
+
+            preview
+                .reconfigure
+                .send(ReconfigureEvent::AvatarMode(avatar_mode))
+                .map_err(|err| error!("Error sending avatar mode update: {err}"))
+                .ok();
 
             if preview.is_paused {
                 preview.is_paused = false;
@@ -216,6 +235,7 @@ impl CameraPreviewManager {
             window.clone(),
             &default_state,
             self.wgpu_instance.clone(),
+            avatar_mode,
         )
         .await?;
         window
@@ -276,6 +296,7 @@ impl CameraPreviewManager {
 enum ReconfigureEvent {
     State(CameraPreviewState),
     WindowResized { width: u32, height: u32 },
+    AvatarMode(bool),
     Pause,
     Resume,
     Shutdown,
@@ -294,6 +315,7 @@ impl InitializedCameraPreview {
         window: WebviewWindow,
         default_state: &CameraPreviewState,
         instance: wgpu::Instance,
+        avatar_mode: bool,
     ) -> anyhow::Result<Renderer> {
         let aspect = if default_state.shape == CameraPreviewShape::Full {
             16.0 / 9.0
@@ -520,6 +542,22 @@ impl InitializedCameraPreview {
             ..Default::default()
         });
 
+        let avatar_renderer = if avatar_mode {
+            Some(cap_rendering::avatar::AvatarRenderer::new(&device))
+        } else {
+            None
+        };
+        let face_tracker = if avatar_mode {
+            Some(cap_rendering::cap_face_tracking::FaceTracker::new())
+        } else {
+            None
+        };
+        let face_pose_smoother = if avatar_mode {
+            Some(cap_rendering::avatar_smoothing::FacePoseSmoother::new())
+        } else {
+            None
+        };
+
         let mut renderer = Renderer {
             surface: Some(surface),
             surface_config,
@@ -534,6 +572,11 @@ impl InitializedCameraPreview {
             uniform_bind_group,
             texture: Cached::default(),
             aspect_ratio: Cached::default(),
+            avatar_mode,
+            avatar_renderer,
+            face_tracker,
+            face_pose_smoother,
+            avatar_face_pose: cap_rendering::cap_face_tracking::FacePose::default(),
         };
 
         renderer.update_state_uniforms(default_state);
@@ -586,6 +629,11 @@ struct Renderer {
     uniform_bind_group: wgpu::BindGroup,
     texture: Cached<(u32, u32), PreparedTexture>,
     aspect_ratio: Cached<f32>,
+    avatar_mode: bool,
+    avatar_renderer: Option<cap_rendering::avatar::AvatarRenderer>,
+    face_tracker: Option<cap_rendering::cap_face_tracking::FaceTracker>,
+    face_pose_smoother: Option<cap_rendering::avatar_smoothing::FacePoseSmoother>,
+    avatar_face_pose: cap_rendering::cap_face_tracking::FacePose,
 }
 
 impl Renderer {
@@ -646,6 +694,10 @@ impl Renderer {
                         Ok(ReconfigureEvent::WindowResized { width, height }) => {
                             self.reconfigure_gpu_surface(width, height);
                         }
+                        Ok(ReconfigureEvent::AvatarMode(enabled)) => {
+                            self.apply_avatar_mode(enabled);
+                            self.texture = Cached::default();
+                        }
                         Ok(ReconfigureEvent::Pause) => {}
                         Err(_) => {
                             continue;
@@ -700,58 +752,160 @@ impl Renderer {
             match event {
                 Ok(frame) => {
                     received_first_frame = true;
-                    let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
-                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
-                        .await;
 
-                    let surface_result = self.surface.as_ref().and_then(|s| {
-                        s.get_current_texture()
-                            .map_err(|err| {
-                                error!("Error getting camera renderer surface texture: {err:?}")
-                            })
-                            .ok()
-                    });
-                    if let Some(surface) = surface_result {
-                        let output_width = 1280;
-                        let output_height = (1280.0 / aspect_ratio) as u32;
+                    if self.avatar_mode {
+                        let cam_aspect = frame.inner.width() as f32 / frame.inner.height() as f32;
+                        let tracking_width = 640u32;
+                        let tracking_height = (640.0 / cam_aspect) as u32;
 
-                        let resampler_frame = resampler_frame
-                            .get_or_init((output_width, output_height), frame::Video::empty);
+                        let tracking_frame = resampler_frame
+                            .get_or_init((tracking_width, tracking_height), frame::Video::empty);
 
                         scaler.cached(
                             frame.inner.format(),
                             frame.inner.width(),
                             frame.inner.height(),
                             format::Pixel::RGBA,
-                            output_width,
-                            output_height,
+                            tracking_width,
+                            tracking_height,
                             ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
                         );
 
-                        if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
-                            error!("Error rescaling frame with ffmpeg: {err:?}");
+                        if let Err(err) = scaler.run(&frame.inner, tracking_frame) {
+                            error!("Error rescaling frame for face tracking: {err:?}");
                             continue 'main_loop;
                         }
 
-                        self.texture
-                            .get_or_init((output_width, output_height), || {
-                                PreparedTexture::init(
-                                    self.device.clone(),
-                                    self.queue.clone(),
-                                    &self.sampler,
-                                    &self.bind_group_layout,
-                                    self.uniform_bind_group.clone(),
-                                    self.render_pipeline.clone(),
-                                    output_width,
-                                    output_height,
-                                )
-                            })
-                            .render(
-                                &surface,
-                                resampler_frame.data(0),
-                                resampler_frame.stride(0) as u32,
+                        if let Some(ref mut tracker) = self.face_tracker {
+                            let raw_pose = tracker.track(
+                                tracking_frame.data(0),
+                                tracking_width,
+                                tracking_height,
+                                tracking_frame.stride(0),
                             );
-                        surface.present();
+                            if let Some(ref mut smoother) = self.face_pose_smoother {
+                                self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
+                            } else {
+                                self.avatar_face_pose = raw_pose;
+                            }
+                        }
+
+                        FaceTrackingUpdate {
+                            head_pitch: self.avatar_face_pose.head_pitch,
+                            head_yaw: self.avatar_face_pose.head_yaw,
+                            head_roll: self.avatar_face_pose.head_roll,
+                            mouth_open: self.avatar_face_pose.mouth_open,
+                            left_eye_open: self.avatar_face_pose.left_eye_open,
+                            right_eye_open: self.avatar_face_pose.right_eye_open,
+                            confidence: self.avatar_face_pose.confidence,
+                        }
+                        .emit(window.app_handle())
+                        .ok();
+
+                        let avatar_size = cap_rendering::avatar::AvatarRenderer::size();
+                        let avatar_rgba = if let Some(ref mut avatar) = self.avatar_renderer {
+                            avatar.render(
+                                &self.device,
+                                &self.queue,
+                                &self.avatar_face_pose,
+                                1.0 / 30.0,
+                            );
+                            Some(avatar.output_rgba().to_vec())
+                        } else {
+                            None
+                        };
+
+                        if let Some(rgba_data) = avatar_rgba {
+                            self.sync_ratio_uniform_and_resize_window_to_it(
+                                &window, &state, 1.0_f32,
+                            )
+                            .await;
+
+                            let surface_result = self.surface.as_ref().and_then(|s| {
+                                s.get_current_texture()
+                                    .map_err(|err| {
+                                        error!(
+                                            "Error getting camera renderer surface texture: {err:?}"
+                                        )
+                                    })
+                                    .ok()
+                            });
+                            if let Some(surface) = surface_result {
+                                self.texture
+                                    .get_or_init((avatar_size, avatar_size), || {
+                                        PreparedTexture::init(
+                                            self.device.clone(),
+                                            self.queue.clone(),
+                                            &self.sampler,
+                                            &self.bind_group_layout,
+                                            self.uniform_bind_group.clone(),
+                                            self.render_pipeline.clone(),
+                                            avatar_size,
+                                            avatar_size,
+                                        )
+                                    })
+                                    .render(&surface, &rgba_data, avatar_size * 4);
+                                surface.present();
+                            }
+                        }
+                    } else {
+                        let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
+                        self.sync_ratio_uniform_and_resize_window_to_it(
+                            &window,
+                            &state,
+                            aspect_ratio,
+                        )
+                        .await;
+
+                        let surface_result = self.surface.as_ref().and_then(|s| {
+                            s.get_current_texture()
+                                .map_err(|err| {
+                                    error!("Error getting camera renderer surface texture: {err:?}")
+                                })
+                                .ok()
+                        });
+                        if let Some(surface) = surface_result {
+                            let output_width = 1280;
+                            let output_height = (1280.0 / aspect_ratio) as u32;
+
+                            let resampler_frame = resampler_frame
+                                .get_or_init((output_width, output_height), frame::Video::empty);
+
+                            scaler.cached(
+                                frame.inner.format(),
+                                frame.inner.width(),
+                                frame.inner.height(),
+                                format::Pixel::RGBA,
+                                output_width,
+                                output_height,
+                                ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+                            );
+
+                            if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
+                                error!("Error rescaling frame with ffmpeg: {err:?}");
+                                continue 'main_loop;
+                            }
+
+                            self.texture
+                                .get_or_init((output_width, output_height), || {
+                                    PreparedTexture::init(
+                                        self.device.clone(),
+                                        self.queue.clone(),
+                                        &self.sampler,
+                                        &self.bind_group_layout,
+                                        self.uniform_bind_group.clone(),
+                                        self.render_pipeline.clone(),
+                                        output_width,
+                                        output_height,
+                                    )
+                                })
+                                .render(
+                                    &surface,
+                                    resampler_frame.data(0),
+                                    resampler_frame.stride(0) as u32,
+                                );
+                            surface.present();
+                        }
                     }
                 }
                 Err(ReconfigureEvent::State(new_state)) => {
@@ -780,6 +934,10 @@ impl Renderer {
                 Err(ReconfigureEvent::WindowResized { width, height }) => {
                     trace!("CameraPreview/ReconfigureEvent.WindowResized({width}x{height})");
                     self.reconfigure_gpu_surface(width, height);
+                }
+                Err(ReconfigureEvent::AvatarMode(enabled)) => {
+                    self.apply_avatar_mode(enabled);
+                    self.texture = Cached::default();
                 }
                 Err(ReconfigureEvent::Pause) => {
                     // When pausing, we hide the window to provide proper UX feedback.
@@ -837,6 +995,30 @@ impl Renderer {
         self.device.destroy();
 
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    fn apply_avatar_mode(&mut self, enabled: bool) {
+        if self.avatar_mode == enabled {
+            return;
+        }
+        self.avatar_mode = enabled;
+        if enabled {
+            if self.avatar_renderer.is_none() {
+                self.avatar_renderer =
+                    Some(cap_rendering::avatar::AvatarRenderer::new(&self.device));
+            }
+            if self.face_tracker.is_none() {
+                self.face_tracker = Some(cap_rendering::cap_face_tracking::FaceTracker::new());
+            }
+            if self.face_pose_smoother.is_none() {
+                self.face_pose_smoother =
+                    Some(cap_rendering::avatar_smoothing::FacePoseSmoother::new());
+            }
+        } else {
+            self.avatar_renderer = None;
+            self.face_tracker = None;
+            self.face_pose_smoother = None;
+        }
     }
 
     fn reconfigure_gpu_surface(&mut self, window_width: u32, window_height: u32) {

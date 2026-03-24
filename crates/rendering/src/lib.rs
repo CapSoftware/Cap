@@ -28,6 +28,8 @@ use std::{
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
+pub mod avatar;
+pub mod avatar_smoothing;
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
@@ -48,6 +50,7 @@ pub mod yuv_converter;
 mod zoom;
 pub mod zoom_focus_interpolation;
 
+pub use cap_face_tracking;
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
@@ -175,6 +178,7 @@ fn rounding_type_value(style: CornerStyle) -> f32 {
 pub struct RenderOptions {
     pub camera_size: Option<XY<u32>>,
     pub screen_size: XY<u32>,
+    pub avatar_mode: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -501,6 +505,10 @@ pub async fn render_video_to_channel(
         &constants.queue,
         constants.is_software_adapter,
     );
+
+    if constants.options.avatar_mode {
+        layers.set_avatar_enabled(&constants.device, true);
+    }
 
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
@@ -835,6 +843,10 @@ pub async fn render_video_to_channel_nv12(
         &constants.queue,
         constants.is_software_adapter,
     );
+
+    if constants.options.avatar_mode {
+        layers.set_avatar_enabled(&constants.device, true);
+    }
 
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
@@ -1327,6 +1339,7 @@ impl RenderVideoConstants {
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
+            avatar_mode: false,
         };
 
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
@@ -1385,6 +1398,7 @@ impl RenderVideoConstants {
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
+            avatar_mode: false,
         };
 
         let instance = create_wgpu_instance().await;
@@ -3108,6 +3122,11 @@ pub struct RendererLayers {
     mask: MaskLayer,
     text: TextLayer,
     captions: CaptionsLayer,
+    avatar: Option<crate::avatar::AvatarRenderer>,
+    avatar_face_pose: cap_face_tracking::FacePose,
+    avatar_enabled: bool,
+    face_tracker: Option<cap_face_tracking::FaceTracker>,
+    face_pose_smoother: Option<avatar_smoothing::FacePoseSmoother>,
 }
 
 impl RendererLayers {
@@ -3147,6 +3166,11 @@ impl RendererLayers {
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
+            avatar: None,
+            avatar_face_pose: cap_face_tracking::FacePose::default(),
+            avatar_enabled: false,
+            face_tracker: None,
+            face_pose_smoother: None,
         }
     }
 
@@ -3172,6 +3196,19 @@ impl RendererLayers {
             self.camera_only
                 .prepare_for_video_dimensions(device, cw, ch);
         }
+    }
+
+    pub fn set_avatar_enabled(&mut self, device: &wgpu::Device, enabled: bool) {
+        self.avatar_enabled = enabled;
+        if enabled && self.avatar.is_none() {
+            self.avatar = Some(crate::avatar::AvatarRenderer::new(device));
+            self.face_tracker = Some(cap_face_tracking::FaceTracker::new());
+            self.face_pose_smoother = Some(avatar_smoothing::FacePoseSmoother::new());
+        }
+    }
+
+    pub fn set_avatar_face_pose(&mut self, pose: cap_face_tracking::FacePose) {
+        self.avatar_face_pose = pose;
     }
 
     pub async fn prepare(
@@ -3210,29 +3247,73 @@ impl RendererLayers {
             constants,
         );
 
-        self.camera.prepare(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-        );
-
-        self.camera_only.prepare(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-        );
+        if self.avatar_enabled {
+            if let Some(ref mut face_tracker) = self.face_tracker {
+                if let Some(camera_frame) = segment_frames.camera_frame.as_ref() {
+                    let raw_pose = face_tracker.track(
+                        camera_frame.data(),
+                        camera_frame.width(),
+                        camera_frame.height(),
+                        camera_frame.width() as usize * 4,
+                    );
+                    if let Some(ref mut smoother) = self.face_pose_smoother {
+                        self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
+                    } else {
+                        self.avatar_face_pose = raw_pose;
+                    }
+                }
+            }
+            if let Some(ref mut avatar) = self.avatar {
+                avatar.render(
+                    &constants.device,
+                    &constants.queue,
+                    &self.avatar_face_pose,
+                    1.0 / 30.0,
+                );
+                let avatar_size = crate::avatar::AvatarRenderer::size();
+                let avatar_frame = decoder::DecodedFrame::new(
+                    avatar.output_rgba().to_vec(),
+                    avatar_size,
+                    avatar_size,
+                );
+                let avatar_xy = XY::new(avatar_size, avatar_size);
+                self.camera.prepare(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                );
+                self.camera_only.prepare(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera_only,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                );
+            }
+        } else {
+            self.camera.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+            );
+            self.camera_only.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera_only,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+            );
+        }
 
         self.text.prepare(
             &constants.device,
@@ -3289,31 +3370,77 @@ impl RendererLayers {
             constants,
         );
 
-        self.camera.prepare_with_encoder(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-            encoder,
-        );
-
-        self.camera_only.prepare_with_encoder(
-            &constants.device,
-            &constants.queue,
-            uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
-            encoder,
-        );
+        if self.avatar_enabled {
+            if let Some(ref mut face_tracker) = self.face_tracker {
+                if let Some(camera_frame) = segment_frames.camera_frame.as_ref() {
+                    let raw_pose = face_tracker.track(
+                        camera_frame.data(),
+                        camera_frame.width(),
+                        camera_frame.height(),
+                        camera_frame.width() as usize * 4,
+                    );
+                    if let Some(ref mut smoother) = self.face_pose_smoother {
+                        self.avatar_face_pose = smoother.update(&raw_pose, 33.0);
+                    } else {
+                        self.avatar_face_pose = raw_pose;
+                    }
+                }
+            }
+            if let Some(ref mut avatar) = self.avatar {
+                avatar.render(
+                    &constants.device,
+                    &constants.queue,
+                    &self.avatar_face_pose,
+                    1.0 / 30.0,
+                );
+                let avatar_size = crate::avatar::AvatarRenderer::size();
+                let avatar_frame = decoder::DecodedFrame::new(
+                    avatar.output_rgba().to_vec(),
+                    avatar_size,
+                    avatar_size,
+                );
+                let avatar_xy = XY::new(avatar_size, avatar_size);
+                self.camera.prepare_with_encoder(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                    encoder,
+                );
+                self.camera_only.prepare_with_encoder(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.camera_only,
+                    Some((avatar_xy, &avatar_frame, segment_frames.recording_time)),
+                    encoder,
+                );
+            }
+        } else {
+            self.camera.prepare_with_encoder(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+                encoder,
+            );
+            self.camera_only.prepare_with_encoder(
+                &constants.device,
+                &constants.queue,
+                uniforms.camera_only,
+                constants.options.camera_size.and_then(|size| {
+                    segment_frames
+                        .camera_frame
+                        .as_ref()
+                        .map(|frame| (size, frame, segment_frames.recording_time))
+                }),
+                encoder,
+            );
+        }
 
         self.text.prepare(
             &constants.device,

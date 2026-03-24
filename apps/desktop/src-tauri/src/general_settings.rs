@@ -124,6 +124,10 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub auto_zoom_on_clicks: bool,
     #[serde(default)]
+    pub avatar_mode: bool,
+    #[serde(default)]
+    pub avatar_background: cap_project::AvatarBackground,
+    #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
     #[serde(default = "default_excluded_windows")]
     pub excluded_windows: Vec<WindowExclusion>,
@@ -203,6 +207,8 @@ impl Default for GeneralSettingsStore {
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
             auto_zoom_on_clicks: false,
+            avatar_mode: false,
+            avatar_background: cap_project::AvatarBackground::Dark,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,

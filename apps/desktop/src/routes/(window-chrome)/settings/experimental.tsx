@@ -26,6 +26,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNotifications: true,
 			enableNativeCameraPreview: false,
 			autoZoomOnClicks: false,
+			avatarMode: false,
 			custom_cursor_capture2: true,
 		},
 	);
@@ -95,6 +96,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							}}
 						/>
 					</div>
+				</div>
+				<h3 class="text-sm text-gray-12 w-fit">Camera Features</h3>
+				<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+					<ToggleSettingItem
+						label="Avatar mode (Clawd)"
+						description="Replace your camera feed with an animated Clawd character that mimics your facial expressions. Perfect for creating engaging tutorials."
+						value={!!settings.avatarMode}
+						onChange={(value) => handleChange("avatarMode", value)}
+					/>
 				</div>
 			</div>
 		</div>

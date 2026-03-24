@@ -101,6 +101,11 @@ export default function () {
 	const isNativePreviewEnabled =
 		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
 		false;
+	const avatarMode = () => {
+		const val = generalSettings.data?.avatarMode ?? false;
+		console.log("[Camera] avatarMode =", val, "nativePreview =", isNativePreviewEnabled);
+		return val;
+	};
 
 	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
 
@@ -169,12 +174,140 @@ export default function () {
 	return (
 		<RecordingOptionsProvider>
 			<Show
-				when={isNativePreviewEnabled}
-				fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}
+				when={avatarMode()}
+				fallback={
+					<Show
+						when={isNativePreviewEnabled}
+						fallback={
+							<LegacyCameraPreviewPage disconnected={cameraDisconnected} />
+						}
+					>
+						<NativeCameraPreviewPage disconnected={cameraDisconnected} />
+					</Show>
+				}
 			>
-				<NativeCameraPreviewPage disconnected={cameraDisconnected} />
+				<AvatarCameraPreviewPage disconnected={cameraDisconnected} />
 			</Show>
 		</RecordingOptionsProvider>
+	);
+}
+
+function drawClawdShape(ctx: CanvasRenderingContext2D, s: number, pad: number) {
+	ctx.beginPath();
+	ctx.rect(
+		-s * 0.48 - pad,
+		-s * 0.42 - pad,
+		s * 0.96 + pad * 2,
+		s * 0.84 + pad * 2,
+	);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(-s * 0.65 - pad, -s * 0.35 - pad, s * 0.2 + pad, s * 0.3 + pad * 2);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(s * 0.45, -s * 0.35 - pad, s * 0.2 + pad, s * 0.3 + pad * 2);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(-s * 0.38 - pad, s * 0.42, s * 0.28 + pad, s * 0.28 + pad);
+	ctx.fill();
+	ctx.beginPath();
+	ctx.rect(s * 0.1, s * 0.42, s * 0.28 + pad, s * 0.28 + pad);
+	ctx.fill();
+}
+
+function AvatarCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
+	let canvasRef: HTMLCanvasElement | undefined;
+	const [loaded, setLoaded] = createSignal(false);
+	let live2dModel: any = null;
+
+	createTauriEventListener(events.faceTrackingUpdate, (payload) => {
+		if (!live2dModel || !loaded()) return;
+
+		const coreModel = live2dModel.internalModel?.coreModel;
+		if (!coreModel) return;
+
+		coreModel.setParameterValueById("ParamAngleX", payload.head_yaw * 30);
+		coreModel.setParameterValueById("ParamAngleY", payload.head_pitch * 30);
+		coreModel.setParameterValueById("ParamAngleZ", payload.head_roll * 30);
+		coreModel.setParameterValueById("ParamMouthOpenY", payload.mouth_open);
+		coreModel.setParameterValueById("ParamEyeLOpen", payload.left_eye_open);
+		coreModel.setParameterValueById("ParamEyeROpen", payload.right_eye_open);
+		coreModel.setParameterValueById("ParamBodyAngleX", payload.head_yaw * 10);
+	});
+
+	onMount(async () => {
+		getCurrentWindow().show();
+		if (!canvasRef) return;
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const script = document.createElement("script");
+				script.src = "/live2d/live2dcubismcore.min.js";
+				script.onload = () => {
+					console.log("[Camera] Cubism Core loaded");
+					resolve();
+				};
+				script.onerror = () => reject(new Error("Failed to load Cubism Core"));
+				document.head.appendChild(script);
+			});
+
+			const PIXI = await import("pixi.js");
+			const { Live2DModel } = await import("pixi-live2d-display/cubism4");
+
+			Live2DModel.registerTicker(PIXI.Ticker);
+
+			const app = new PIXI.Application({
+				view: canvasRef,
+				width: 512,
+				height: 512,
+				backgroundAlpha: 0,
+				backgroundColor: 0x262629,
+			});
+
+			const modelUrl = "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json";
+
+			console.log("[Camera] Loading Live2D model...");
+			const model = await Live2DModel.from(modelUrl, { autoInteract: false });
+
+			model.anchor.set(0.5, 0.5);
+			model.position.set(256, 280);
+
+			const scale = Math.min(512 / model.width, 512 / model.height) * 0.8;
+			model.scale.set(scale);
+
+			app.stage.addChild(model);
+			live2dModel = model;
+
+			console.log("[Camera] Live2D model loaded successfully");
+			console.log("[Camera] Model parameters:", model.internalModel?.coreModel?.getParameterCount?.() ?? "unknown");
+			setLoaded(true);
+		} catch (e) {
+			console.error("[Camera] Live2D load failed:", e);
+		}
+	});
+
+	return (
+		<div
+			data-tauri-drag-region
+			class="flex relative flex-col w-screen h-screen cursor-move"
+		>
+			<Show when={props.disconnected()}>
+				<CameraDisconnectedOverlay />
+			</Show>
+			<canvas
+				ref={canvasRef}
+				width={512}
+				height={512}
+				data-tauri-drag-region
+				class="w-full h-full"
+				style={{ "border-radius": "50%" }}
+			/>
+			<Show when={!loaded()}>
+				<div class="absolute inset-0 flex items-center justify-center text-white text-sm">
+					Loading avatar...
+				</div>
+			</Show>
+		</div>
 	);
 }
 

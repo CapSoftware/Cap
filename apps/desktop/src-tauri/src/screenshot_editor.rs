@@ -291,6 +291,7 @@ impl ScreenshotEditorInstances {
                 let options = cap_rendering::RenderOptions {
                     screen_size: cap_project::XY::new(width, height),
                     camera_size: None,
+                    avatar_mode: false,
                 };
 
                 let studio_meta = match &recording_meta.inner {

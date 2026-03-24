@@ -3191,6 +3191,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             import::VideoImportProgress,
             SetCaptureAreaPending,
             DevicesUpdated,
+            camera::FaceTrackingUpdate,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -4079,6 +4080,12 @@ async fn create_editor_instance_impl(
                 is_software_adapter: shared.is_software_adapter,
             });
 
+    let avatar_mode = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|s| s.avatar_mode)
+        .unwrap_or(false);
+
     let instance = {
         let app = app.clone();
         EditorInstance::new(
@@ -4088,6 +4095,7 @@ async fn create_editor_instance_impl(
             },
             frame_cb,
             shared_device,
+            avatar_mode,
         )
         .await?
     };

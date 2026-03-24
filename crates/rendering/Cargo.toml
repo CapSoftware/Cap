@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
+cap-face-tracking = { path = "../face-tracking" }
 cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
 cap-video-decode = { path = "../video-decode" }

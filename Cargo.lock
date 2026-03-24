@@ -1414,6 +1414,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-face-tracking"
+version = "0.1.0"
+dependencies = [
+ "cidre",
+ "tracing",
+]
+
+[[package]]
 name = "cap-fail"
 version = "0.1.0"
 dependencies = [
@@ -1601,6 +1609,7 @@ dependencies = [
  "build-time",
  "bytemuck",
  "cap-cursor-info",
+ "cap-face-tracking",
  "cap-flags",
  "cap-project",
  "cap-video-decode",

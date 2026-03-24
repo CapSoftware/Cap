@@ -1182,6 +1182,15 @@ impl ProjectConfiguration {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AvatarBackground {
+    #[default]
+    Dark,
+    Light,
+    Gradient,
+}
+
 pub const SLOW_SMOOTHING_SAMPLES: usize = 24;
 pub const REGULAR_SMOOTHING_SAMPLES: usize = 16;
 pub const FAST_SMOOTHING_SAMPLES: usize = 10;
