@@ -179,7 +179,11 @@ async function startDeepLinkSession(signal: AbortSignal) {
 	stopListening = await onOpenUrl(async (urls) => {
 		for (const urlString of urls) {
 			if (signal.aborted) return;
-			settle(parseAuthParams(new URL(urlString)));
+			const url = new URL(urlString);
+
+			if (url.hostname === 'auth') {
+				settle(parseAuthParams(url));
+			}
 		}
 	});
 
