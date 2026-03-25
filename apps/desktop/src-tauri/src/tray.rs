@@ -330,8 +330,22 @@ fn get_current_mode(app: &AppHandle) -> RecordingMode {
         .unwrap_or_default()
 }
 
-fn is_onboarding_window_open(app: &AppHandle) -> bool {
-    app.webview_windows().contains_key("onboarding")
+fn should_use_minimal_onboarding_tray_menu(app: &AppHandle) -> bool {
+    if !app.webview_windows().contains_key("onboarding") {
+        return false;
+    }
+    !crate::permissions::do_permissions_check(false).necessary_granted()
+}
+
+pub(crate) struct TrayMenuCache {
+    cache: Arc<Mutex<PreviousItemsCache>>,
+}
+
+pub(crate) fn refresh_tray_menu_for_app(app: &AppHandle) {
+    let Some(state) = app.try_state::<TrayMenuCache>() else {
+        return;
+    };
+    refresh_tray_menu(app, &state.cache);
 }
 
 fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
@@ -365,7 +379,7 @@ fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
 }
 
 fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result<Menu<tauri::Wry>> {
-    if is_onboarding_window_open(app) {
+    if should_use_minimal_onboarding_tray_menu(app) {
         return Menu::with_items(
             app,
             &[
@@ -648,6 +662,10 @@ fn handle_mode_selection(
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let items = load_all_previous_items(app, false);
     let cache = Arc::new(Mutex::new(PreviousItemsCache { items }));
+
+    app.manage(TrayMenuCache {
+        cache: cache.clone(),
+    });
 
     let menu = {
         let cache_guard = cache.lock().unwrap();
