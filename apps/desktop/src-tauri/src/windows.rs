@@ -544,7 +544,7 @@ impl CapWindowId {
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
-            Self::Onboarding => (860.0, 680.0),
+            Self::Onboarding => (860.0, 690.0),
             _ => return None,
         })
     }
@@ -1423,12 +1423,12 @@ impl ShowCapWindow {
                 }
 
                 let width = (cursor_monitor.width * 0.58).clamp(860.0, 1080.0);
-                let height = (width * 0.72).clamp(680.0, 780.0);
+                let height = (width * 0.72).clamp(690.0, 780.0);
 
                 let window = self
                     .window_builder(app, "/onboarding")
                     .inner_size(width, height)
-                    .min_inner_size(860.0, 680.0)
+                    .min_inner_size(860.0, 690.0)
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
