@@ -68,6 +68,20 @@ pub enum RecoveryError {
 pub struct RecoveryManager;
 
 impl RecoveryManager {
+    pub fn inspect_recording(project_path: &Path) -> Option<IncompleteRecording> {
+        if !project_path.is_dir() {
+            return None;
+        }
+
+        if !project_path.join("recording-meta.json").exists() {
+            return None;
+        }
+
+        let meta = RecordingMeta::load_for_project(project_path).ok()?;
+
+        Self::analyze_incomplete(project_path, &meta)
+    }
+
     pub fn find_incomplete_single(project_path: &Path) -> Option<IncompleteRecording> {
         if !project_path.is_dir() {
             return None;
@@ -255,6 +269,7 @@ impl RecoveryManager {
         use crate::fragmentation::CURRENT_MANIFEST_VERSION;
 
         let manifest_path = dir.join("manifest.json");
+        let mut manifest_init_segment = None;
 
         if manifest_path.exists()
             && let Ok(content) = std::fs::read_to_string(&manifest_path)
@@ -288,6 +303,7 @@ impl RecoveryManager {
                 .and_then(|i| i.as_str())
                 .map(|name| dir.join(name))
                 .filter(|p| p.exists());
+            manifest_init_segment = init_segment.clone();
 
             let entries = if manifest_type == "m4s_segments" {
                 manifest.get("segments").and_then(|s| s.as_array())
@@ -368,6 +384,16 @@ impl RecoveryManager {
             }
         }
 
+        if let Some(init_segment) = manifest_init_segment {
+            let fragments = Self::probe_m4s_fragments_with_init(dir);
+            if !fragments.is_empty() {
+                return FragmentsInfo {
+                    fragments,
+                    init_segment: Some(init_segment),
+                };
+            }
+        }
+
         FragmentsInfo {
             fragments: Self::probe_fragments_in_dir(dir),
             init_segment: None,
@@ -408,6 +434,28 @@ impl RecoveryManager {
                     Some("m4a") | Some("ogg") => probe_media_valid(p),
                     _ => false,
                 }
+            })
+            .collect();
+
+        fragments.sort();
+        fragments
+    }
+
+    fn probe_m4s_fragments_with_init(dir: &Path) -> Vec<PathBuf> {
+        const MIN_VALID_FRAGMENT_SIZE: u64 = 100;
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+
+        let mut fragments: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4s")))
+            .filter(|p| {
+                std::fs::metadata(p)
+                    .map(|metadata| metadata.len() >= MIN_VALID_FRAGMENT_SIZE)
+                    .unwrap_or(false)
             })
             .collect();
 
@@ -802,6 +850,14 @@ impl RecoveryManager {
                 let mic_path = segment_dir.join("audio-input.ogg");
                 let system_audio_path = segment_dir.join("system_audio.ogg");
                 let cursor_path = segment_dir.join("cursor.json");
+                let keyboard_path = {
+                    let binary = segment_dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
+                    if binary.exists() {
+                        binary
+                    } else {
+                        segment_dir.join(cap_project::LEGACY_KEYBOARD_EVENTS_FILE_NAME)
+                    }
+                };
 
                 let display_start_time = original_segment.and_then(|s| s.display.start_time);
 
@@ -884,6 +940,16 @@ impl RecoveryManager {
                     } else {
                         None
                     },
+                    keyboard: if keyboard_path.exists() {
+                        keyboard_path.file_name().map(|file_name| {
+                            RelativePathBuf::from(format!(
+                                "{segment_base}/{}",
+                                file_name.to_string_lossy()
+                            ))
+                        })
+                    } else {
+                        None
+                    },
                 }
             })
             .collect();
@@ -952,6 +1018,8 @@ impl RecoveryManager {
             scene_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
         });
 
         config

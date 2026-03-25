@@ -13,6 +13,7 @@ import {
 	createMemo,
 	createResource,
 	createSignal,
+	ErrorBoundary,
 	Match,
 	on,
 	onCleanup,
@@ -56,14 +57,48 @@ const MIN_TIMELINE_HEIGHT = 240;
 const RESIZE_HANDLE_HEIGHT = 8;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
 
+function getEditorErrorMessage(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function getPreviewProjectConfig(
+	project: ReturnType<typeof useEditorContext>["project"],
+	editorState: ReturnType<typeof useEditorContext>["editorState"],
+) {
+	const config = serializeProjectConfiguration(project);
+
+	if (!editorState.timeline.tracks.caption && config.captions) {
+		config.captions = {
+			...config.captions,
+			settings: {
+				...config.captions.settings,
+				enabled: false,
+			},
+		};
+	}
+
+	if (!editorState.timeline.tracks.keyboard && config.keyboard) {
+		config.keyboard = {
+			...config.keyboard,
+			settings: {
+				...config.keyboard.settings,
+				enabled: false,
+			},
+		};
+	}
+
+	return config;
+}
+
 export function Editor() {
 	const [projectPath] = createResource(() => commands.getEditorProjectPath());
 
 	const rawMetaQuery = createQuery(() => ({
 		queryKey: ["editor", "raw-meta", projectPath()],
-		queryFn: projectPath()
-			? () => commands.getRecordingMetaByPath(projectPath()!)
-			: skipToken,
+		queryFn: (() => {
+			const path = projectPath();
+			return path ? () => commands.getRecordingMetaByPath(path) : skipToken;
+		})(),
 		staleTime: Infinity,
 		gcTime: 0,
 		refetchOnWindowFocus: false,
@@ -134,17 +169,32 @@ export function Editor() {
 				</div>
 			}
 		>
-			<Match when={importStatus() === "importing" && projectPath()}>
-				<ImportProgress
-					projectPath={projectPath()!}
-					onComplete={handleImportComplete}
-					onError={(error) => console.error("Import failed:", error)}
-				/>
+			<Match
+				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
+			>
+				{(path) => (
+					<ImportProgress
+						projectPath={path()}
+						onComplete={handleImportComplete}
+						onError={(error) => console.error("Import failed:", error)}
+					/>
+				)}
 			</Match>
-			<Match when={importStatus() === "ready" && projectPath()}>
-				<EditorInstanceContextProvider>
-					<EditorContent projectPath={projectPath()!} />
-				</EditorInstanceContextProvider>
+			<Match when={importStatus() === "ready" ? (projectPath() ?? null) : null}>
+				{(path) => (
+					<ErrorBoundary
+						fallback={(error) => (
+							<EditorErrorScreen
+								error={getEditorErrorMessage(error)}
+								projectPath={path()}
+							/>
+						)}
+					>
+						<EditorInstanceContextProvider>
+							<EditorContent projectPath={path()} />
+						</EditorInstanceContextProvider>
+					</ErrorBoundary>
+				)}
 			</Match>
 		</Switch>
 	);
@@ -156,12 +206,12 @@ function EditorContent(props: { projectPath: string }) {
 	const errorInfo = () => {
 		const error = ctx.editorInstance.error;
 		if (!error) return null;
-		const errorMessage = error instanceof Error ? error.message : String(error);
+		const errorMessage = getEditorErrorMessage(error);
 		return { error: errorMessage, projectPath: props.projectPath };
 	};
 
 	const readyData = () => {
-		const editorInstance = ctx.editorInstance();
+		const editorInstance = ctx.editorInstance.latest;
 		if (!editorInstance || !ctx.metaQuery.data) return null;
 
 		return {
@@ -329,7 +379,7 @@ function Inner() {
 	);
 
 	const doConfigUpdate = async (time: number) => {
-		const config = serializeProjectConfiguration(project);
+		const config = getPreviewProjectConfig(project, editorState);
 		const frameNumber = Math.max(Math.floor(time * FPS), 0);
 		const resBase = previewResolutionBase();
 		try {
@@ -356,6 +406,10 @@ function Inner() {
 		on(
 			() => {
 				trackDeep(project);
+				return {
+					caption: editorState.timeline.tracks.caption,
+					keyboard: editorState.timeline.tracks.keyboard,
+				};
 			},
 			() => {
 				updateConfigAndRender(frameNumberToRender());
@@ -501,7 +555,7 @@ function Dialogs() {
 						>
 							{(dialog) => {
 								const [name, setName] = createSignal(
-									presets.query.data?.presets[dialog().presetIndex].name!,
+									presets.query.data?.presets[dialog().presetIndex]?.name ?? "",
 								);
 
 								const renamePreset = createMutation(() => ({

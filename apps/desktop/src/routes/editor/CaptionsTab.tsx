@@ -1,6 +1,5 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { createWritableMemo } from "@solid-primitives/memo";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
 import { exists } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
@@ -13,6 +12,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import { defaultCaptionSettings } from "~/store/captions";
@@ -22,9 +22,22 @@ import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
 import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
-import { getColorPreviewBorderColor } from "./color-utils";
+import {
+	CAPTION_MODEL_FOLDER,
+	createCaptionTrackSegments,
+	DEFAULT_CAPTION_MODEL,
+	getCaptionGenerationErrorMessage,
+	syncCaptionWordsWithText,
+	transcribeEditorCaptions,
+} from "./captions";
 import { useEditorContext } from "./context";
-import { TextInput } from "./TextInput";
+import {
+	CAPTION_POSITION_OPTIONS,
+	FONT_OPTIONS,
+	getTextWeightLabel,
+	HexColorInput,
+	TEXT_WEIGHT_OPTIONS,
+} from "./text-style";
 import {
 	Field,
 	Input,
@@ -97,79 +110,47 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 	{ code: "ta", label: "Tamil" },
 ];
 
-interface PositionOption {
-	value: string;
-	label: string;
-}
-
-const POSITION_OPTIONS: PositionOption[] = [
-	{ value: "top-left", label: "Top Left" },
-	{ value: "top-center", label: "Top Center" },
-	{ value: "top-right", label: "Top Right" },
-	{ value: "bottom-left", label: "Bottom Left" },
-	{ value: "bottom-center", label: "Bottom Center" },
-	{ value: "bottom-right", label: "Bottom Right" },
-];
-
-const DEFAULT_MODEL = "small";
-const MODEL_FOLDER = "transcription_models";
-
-const fontOptions = [
-	{ value: "System Sans-Serif", label: "System Sans-Serif" },
-	{ value: "System Serif", label: "System Serif" },
-	{ value: "System Monospace", label: "System Monospace" },
-];
-
-function RgbInput(props: { value: string; onChange: (value: string) => void }) {
-	const [text, setText] = createWritableMemo(() => props.value);
-	let prevColor = props.value;
-	let colorInput!: HTMLInputElement;
-
-	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
-			<button
-				type="button"
-				class="size-[2rem] rounded-[0.5rem]"
-				style={{
-					"background-color": text(),
-					"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
-				}}
-				onClick={() => colorInput.click()}
-			/>
-			<input
-				ref={colorInput}
-				type="color"
-				class="absolute left-0 bottom-0 size-[2rem] opacity-0"
-				value={text()}
-				onChange={(e) => {
-					setText(e.target.value);
-					props.onChange(e.target.value);
-				}}
-			/>
-			<TextInput
-				class="w-[5rem] p-[0.375rem] border border-gray-3 text-gray-12 rounded-[0.5rem] bg-gray-2"
-				value={text()}
-				onFocus={() => {
-					prevColor = props.value;
-				}}
-				onInput={(e) => {
-					setText(e.currentTarget.value);
-					props.onChange(e.currentTarget.value);
-				}}
-				onBlur={(e) => {
-					if (!/^#[0-9A-F]{6}$/i.test(e.target.value)) {
-						setText(prevColor);
-						props.onChange(prevColor);
-					}
-				}}
-			/>
-		</div>
-	);
-}
-
 export function CaptionsTab() {
 	const { project, setProject, editorInstance, editorState, setEditorState } =
 		useEditorContext();
+
+	const selectedCaptionIndex = () =>
+		editorState.timeline.selection?.type === "caption" &&
+		editorState.timeline.selection.indices.length === 1
+			? editorState.timeline.selection.indices[0]
+			: -1;
+
+	const selectedCaptionSegment = () =>
+		project.timeline?.captionSegments?.[selectedCaptionIndex()];
+
+	const updateSelectedCaption = (
+		update: (
+			segment: NonNullable<ReturnType<typeof selectedCaptionSegment>>,
+		) => void,
+	) => {
+		const index = selectedCaptionIndex();
+		if (index < 0) return;
+
+		setProject(
+			produce((currentProject: typeof project) => {
+				const timelineSegment =
+					currentProject.timeline?.captionSegments?.[index];
+				if (!timelineSegment) return;
+
+				update(timelineSegment);
+
+				const captionSegment = currentProject.captions?.segments?.[index];
+				if (!captionSegment) return;
+
+				captionSegment.start = timelineSegment.start;
+				captionSegment.end = timelineSegment.end;
+				captionSegment.text = timelineSegment.text;
+				captionSegment.words = timelineSegment.words?.map((word) => ({
+					...word,
+				}));
+			}),
+		);
+	};
 
 	const getSetting = <K extends keyof CaptionSettings>(
 		key: K,
@@ -186,7 +167,7 @@ export function CaptionsTab() {
 		setProject("captions", "settings", key, value);
 	};
 
-	const [selectedModel, setSelectedModel] = createSignal(DEFAULT_MODEL);
+	const [selectedModel, setSelectedModel] = createSignal(DEFAULT_CAPTION_MODEL);
 	const [selectedLanguage, setSelectedLanguage] = createSignal("auto");
 	const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
 
@@ -221,7 +202,7 @@ export function CaptionsTab() {
 	onMount(async () => {
 		try {
 			const appDataDirPath = await appLocalDataDir();
-			const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+			const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 
 			if (!(await exists(modelsPath))) {
 				await commands.createDir(modelsPath, true);
@@ -316,7 +297,7 @@ export function CaptionsTab() {
 
 	const checkModelExists = async (modelName: string) => {
 		const appDataDirPath = await appLocalDataDir();
-		const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+		const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 		const path = await join(modelsPath, `${modelName}.bin`);
 		return await commands.checkModelExists(path);
 	};
@@ -329,7 +310,7 @@ export function CaptionsTab() {
 			setDownloadingModel(modelToDownload);
 
 			const appDataDirPath = await appLocalDataDir();
-			const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+			const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 			const modelPath = await join(modelsPath, `${modelToDownload}.bin`);
 
 			try {
@@ -365,23 +346,23 @@ export function CaptionsTab() {
 		setIsGenerating(true);
 
 		try {
-			const videoPath = editorInstance.path;
-			const lang = selectedLanguage();
-			const currentModelPath = await join(
-				await appLocalDataDir(),
-				MODEL_FOLDER,
-				`${selectedModel()}.bin`,
-			);
-
-			const result = await commands.transcribeAudio(
-				videoPath,
-				currentModelPath,
-				lang,
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				selectedModel(),
+				selectedLanguage(),
 			);
 
 			if (result && result.segments.length > 0) {
 				setProject("captions", "segments", result.segments);
 				updateCaptionSetting("enabled", true);
+
+				setProject(
+					"timeline",
+					"captionSegments",
+					createCaptionTrackSegments(result.segments),
+				);
+				setEditorState("timeline", "tracks", "caption", true);
+
 				toast.success("Captions generated successfully!");
 			} else {
 				toast.error(
@@ -390,75 +371,21 @@ export function CaptionsTab() {
 			}
 		} catch (error) {
 			console.error("Error generating captions:", error);
-			let errorMessage = "Unknown error occurred";
-
-			if (error instanceof Error) {
-				errorMessage = error.message;
-			} else if (typeof error === "string") {
-				errorMessage = error;
-			}
-
-			if (errorMessage.includes("No audio stream found")) {
-				errorMessage = "No audio found in the video file";
-			} else if (errorMessage.includes("Model file not found")) {
-				errorMessage = "Caption model not found. Please download it first";
-			} else if (errorMessage.includes("Failed to load Whisper model")) {
-				errorMessage =
-					"Failed to load the caption model. Try downloading it again";
-			}
-
+			const errorMessage = getCaptionGenerationErrorMessage(error);
 			toast.error(`Failed to generate captions: ${errorMessage}`);
 		} finally {
 			setIsGenerating(false);
 		}
 	};
 
-	const deleteSegment = (id: string) => {
-		if (!project?.captions?.segments) return;
-
-		setProject(
-			"captions",
-			"segments",
-			project.captions.segments.filter((segment) => segment.id !== id),
-		);
-	};
-
-	const updateSegment = (
-		id: string,
-		updates: Partial<{ start: number; end: number; text: string }>,
-	) => {
-		if (!project?.captions?.segments) return;
-
-		setProject(
-			"captions",
-			"segments",
-			project.captions.segments.map((segment) =>
-				segment.id === id ? { ...segment, ...updates } : segment,
-			),
-		);
-	};
-
-	const addSegment = (time: number) => {
-		if (!project?.captions) return;
-
-		const id = `segment-${Date.now()}`;
-		setProject("captions", "segments", [
-			...project.captions.segments,
-			{
-				id,
-				start: time,
-				end: time + 2,
-				text: "New caption",
-			},
-		]);
-	};
-
 	const hasCaptions = createMemo(
-		() => (project.captions?.segments?.length ?? 0) > 0,
+		() =>
+			(project.timeline?.captionSegments?.length ?? 0) > 0 ||
+			(project.captions?.segments?.length ?? 0) > 0,
 	);
 
 	return (
-		<Field name="Captions" icon={<IconCapMessageBubble />}>
+		<Field name="Captions" icon={<IconCapMessageBubble />} badge="Beta">
 			<div class="flex flex-col gap-4">
 				<div class="space-y-6 transition-all duration-200">
 					<div class="space-y-4">
@@ -626,7 +553,7 @@ export function CaptionsTab() {
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Font Family</span>
 									<KSelect<string>
-										options={fontOptions.map((f) => f.value)}
+										options={FONT_OPTIONS.map((f) => f.value)}
 										value={getSetting("font")}
 										onChange={(value) => {
 											if (value === null) return;
@@ -640,7 +567,7 @@ export function CaptionsTab() {
 											>
 												<KSelect.ItemLabel class="flex-1">
 													{
-														fontOptions.find(
+														FONT_OPTIONS.find(
 															(f) => f.value === props.item.rawValue,
 														)?.label
 													}
@@ -651,7 +578,7 @@ export function CaptionsTab() {
 										<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
 											<KSelect.Value<string>>
 												{(state) =>
-													fontOptions.find(
+													FONT_OPTIONS.find(
 														(f) => f.value === state.selectedOption(),
 													)?.label
 												}
@@ -708,8 +635,8 @@ export function CaptionsTab() {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Font Color</span>
-									<RgbInput
+									<span class="text-gray-11 text-sm">Text Color</span>
+									<HexColorInput
 										value={getSetting("color")}
 										onChange={(value) => updateCaptionSetting("color", value)}
 									/>
@@ -721,7 +648,7 @@ export function CaptionsTab() {
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Background Color</span>
-									<RgbInput
+									<HexColorInput
 										value={getSetting("backgroundColor")}
 										onChange={(value) =>
 											updateCaptionSetting("backgroundColor", value)
@@ -747,7 +674,7 @@ export function CaptionsTab() {
 
 						<Field name="Position" icon={<IconCapMessageBubble />}>
 							<KSelect<string>
-								options={POSITION_OPTIONS.map((p) => p.value)}
+								options={CAPTION_POSITION_OPTIONS.map((p) => p.value)}
 								value={getSetting("position")}
 								onChange={(value) => {
 									if (value === null) return;
@@ -761,7 +688,7 @@ export function CaptionsTab() {
 									>
 										<KSelect.ItemLabel class="flex-1">
 											{
-												POSITION_OPTIONS.find(
+												CAPTION_POSITION_OPTIONS.find(
 													(p) => p.value === props.item.rawValue,
 												)?.label
 											}
@@ -774,7 +701,7 @@ export function CaptionsTab() {
 										{(state) => (
 											<span>
 												{
-													POSITION_OPTIONS.find(
+													CAPTION_POSITION_OPTIONS.find(
 														(p) => p.value === state.selectedOption(),
 													)?.label
 												}
@@ -802,7 +729,7 @@ export function CaptionsTab() {
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Highlight Color</span>
-									<RgbInput
+									<HexColorInput
 										value={getSetting("highlightColor")}
 										onChange={(value) =>
 											updateCaptionSetting("highlightColor", value)
@@ -830,11 +757,7 @@ export function CaptionsTab() {
 
 						<Field name="Font Weight" icon={<IconCapMessageBubble />}>
 							<KSelect
-								options={[
-									{ label: "Normal", value: 400 },
-									{ label: "Medium", value: 500 },
-									{ label: "Bold", value: 700 },
-								]}
+								options={TEXT_WEIGHT_OPTIONS}
 								optionValue="value"
 								optionTextValue="label"
 								value={{
@@ -865,17 +788,10 @@ export function CaptionsTab() {
 										label: string;
 										value: number;
 									}> class="truncate">
-										{(state) => {
-											const selected = state.selectedOption();
-											if (selected) return selected.label;
-											const weight = getSetting("fontWeight");
-											const option = [
-												{ label: "Normal", value: 400 },
-												{ label: "Medium", value: 500 },
-												{ label: "Bold", value: 700 },
-											].find((o) => o.value === weight);
-											return option ? option.label : "Bold";
-										}}
+										{(state) =>
+											state.selectedOption()?.label ??
+											getTextWeightLabel(getSetting("fontWeight"))
+										}
 									</KSelect.Value>
 									<KSelect.Icon>
 										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
@@ -908,117 +824,91 @@ export function CaptionsTab() {
 						</Field>
 					</div>
 
-					<Show when={hasCaptions()}>
-						<Field name="Caption Segments" icon={<IconCapMessageBubble />}>
-							<div class="space-y-4">
-								<div class="flex items-center justify-between">
-									<Button
-										onClick={() => addSegment(editorState.playbackTime)}
-										class="w-full"
-									>
-										Add at Current Time
-									</Button>
-								</div>
-
-								<div class="max-h-[300px] overflow-y-auto space-y-3 pr-2">
-									<For each={project.captions?.segments}>
-										{(segment) => (
-											<div class="bg-gray-2 border border-gray-3 rounded-lg p-4 space-y-4">
-												<div class="flex flex-col space-y-4">
-													<div class="flex space-x-4">
-														<div class="flex-1">
-															<label class="text-xs text-gray-11">
-																Start Time
-															</label>
-															<Input
-																type="number"
-																class="w-full"
-																value={segment.start.toFixed(1)}
-																step="0.1"
-																min={0}
-																onChange={(e) =>
-																	updateSegment(segment.id, {
-																		start: parseFloat(e.target.value),
-																	})
-																}
-															/>
-														</div>
-														<div class="flex-1">
-															<label class="text-xs text-gray-11">
-																End Time
-															</label>
-															<Input
-																type="number"
-																class="w-full"
-																value={segment.end.toFixed(1)}
-																step="0.1"
-																min={segment.start}
-																onChange={(e) =>
-																	updateSegment(segment.id, {
-																		end: parseFloat(e.target.value),
-																	})
-																}
-															/>
-														</div>
-													</div>
-
-													<div class="space-y-2">
-														<label class="text-xs text-gray-11">
-															Caption Text
-														</label>
-														<div class="w-full px-3 py-2 bg-gray-2 border border-gray-3 rounded-lg text-sm focus-within:border-blue-9 focus-within:ring-1 focus-within:ring-blue-9 transition-colors">
-															<textarea
-																class="w-full resize-none outline-none bg-transparent text-[--text-primary]"
-																value={segment.text}
-																rows={2}
-																onChange={(e) =>
-																	updateSegment(segment.id, {
-																		text: e.target.value,
-																	})
-																}
-															/>
-														</div>
-													</div>
-
-													<div class="flex justify-end">
-														<Button
-															variant="destructive"
-															size="sm"
-															onClick={() => deleteSegment(segment.id)}
-															class="text-gray-11 inline-flex items-center gap-1.5"
-														>
-															<IconDelete />
-															Delete
-														</Button>
-													</div>
-												</div>
+					<Show
+						when={
+							editorState.timeline.selection?.type === "caption" &&
+							editorState.timeline.selection.indices.length === 1
+						}
+					>
+						{(() => {
+							return (
+								<Field
+									name="Selected Caption Override"
+									icon={<IconCapMessageBubble />}
+								>
+									<Show when={selectedCaptionSegment()}>
+										{(seg) => (
+											<div class="space-y-3">
+												<Subfield name="Start Time">
+													<Input
+														type="number"
+														value={seg().start.toFixed(2)}
+														step="0.1"
+														min={0}
+														onChange={(e) =>
+															updateSelectedCaption((segment) => {
+																segment.start = Number.parseFloat(
+																	e.target.value,
+																);
+															})
+														}
+													/>
+												</Subfield>
+												<Subfield name="End Time">
+													<Input
+														type="number"
+														value={seg().end.toFixed(2)}
+														step="0.1"
+														min={seg().start}
+														onChange={(e) =>
+															updateSelectedCaption((segment) => {
+																segment.end = Number.parseFloat(e.target.value);
+															})
+														}
+													/>
+												</Subfield>
+												<Subfield name="Caption Text">
+													<Input
+														type="text"
+														value={seg().text}
+														onChange={(e) =>
+															updateSelectedCaption((segment) => {
+																segment.text = e.target.value;
+																segment.words = syncCaptionWordsWithText(
+																	e.target.value,
+																	segment.words,
+																	segment.start,
+																	segment.end,
+																);
+															})
+														}
+													/>
+												</Subfield>
+												<Subfield name="Fade Duration Override">
+													<Slider
+														value={[
+															(seg().fadeDurationOverride ??
+																getSetting("fadeDuration")) * 100,
+														]}
+														onChange={(v) =>
+															updateSelectedCaption((segment) => {
+																segment.fadeDurationOverride = v[0] / 100;
+															})
+														}
+														minValue={0}
+														maxValue={50}
+														step={1}
+													/>
+												</Subfield>
 											</div>
 										)}
-									</For>
-								</div>
-							</div>
-						</Field>
+									</Show>
+								</Field>
+							);
+						})()}
 					</Show>
 				</div>
 			</div>
 		</Field>
-	);
-}
-
-function IconDelete() {
-	return (
-		<svg
-			width="14"
-			height="14"
-			viewBox="0 0 24 24"
-			fill="none"
-			xmlns="http://www.w3.org/2000/svg"
-			class="size-4"
-		>
-			<path
-				d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
-				fill="currentColor"
-			/>
-		</svg>
 	);
 }

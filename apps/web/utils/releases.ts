@@ -28,7 +28,7 @@ function parseDownloadsFromBody(body: string): ReleaseDownloads {
 
 	const jsonMatch = body.match(/<!--\s*DOWNLOADS_JSON\s*(\{[^}]+\})\s*-->/);
 
-	if (jsonMatch && jsonMatch[1]) {
+	if (jsonMatch?.[1]) {
 		try {
 			const parsed = JSON.parse(jsonMatch[1]);
 			if (parsed["macos-arm64"])

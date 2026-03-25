@@ -31,11 +31,26 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		return selection.indices[0] ?? null;
 	});
 
+	const hoveredMaskIndex = createMemo(
+		() => editorState.timeline.hoveredMaskIndex,
+	);
+	const hoveredMaskTime = createMemo(
+		() => editorState.timeline.hoveredMaskTime,
+	);
+
 	const selectedMask = createMemo(() => {
 		const index = selectedMaskIndex();
 		if (index === null) return;
 		const segment = project.timeline?.maskSegments?.[index];
 		if (!segment) return;
+		return { index, segment };
+	});
+
+	const hoveredMask = createMemo(() => {
+		const index = hoveredMaskIndex();
+		if (index === null) return null;
+		const segment = project.timeline?.maskSegments?.[index];
+		if (!segment) return null;
 		return { index, segment };
 	});
 
@@ -64,13 +79,43 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		});
 	};
 
-	const getMaskRect = (segment: MaskSegment) => {
-		const state = evaluateMask(segment, currentAbsoluteTime());
+	const displayedMaskSegments = createMemo(() => {
+		const visible = visibleMaskSegments();
+		const hoveredIndex = hoveredMaskIndex();
+		if (
+			hoveredIndex === null ||
+			visible.some(({ index }) => index === hoveredIndex)
+		) {
+			return visible;
+		}
+		const segment = project.timeline?.maskSegments?.[hoveredIndex];
+		if (!segment) return visible;
+		return [...visible, { segment, index: hoveredIndex }];
+	});
+
+	const getMaskTime = (index: number) => {
+		const time = hoveredMaskTime();
+		return hoveredMaskIndex() === index && time !== null
+			? time
+			: currentAbsoluteTime();
+	};
+
+	const getMaskRectAtTime = (segment: MaskSegment, time: number) => {
+		const state = evaluateMask(segment, time);
 		const width = state.size.x * props.size.width;
 		const height = state.size.y * props.size.height;
 		const left = state.position.x * props.size.width - width / 2;
 		const top = state.position.y * props.size.height - height / 2;
 		return { width, height, left, top };
+	};
+
+	const shouldRenderHoveredMask = () => {
+		const hovered = hoveredMask();
+		return (
+			hovered !== null &&
+			selectedMaskIndex() !== hovered.index &&
+			hoveredMaskTime() !== null
+		);
 	};
 
 	const handleBackgroundClick = (e: MouseEvent) => {
@@ -91,13 +136,34 @@ export function MaskOverlay(props: MaskOverlayProps) {
 					onMouseDown={handleBackgroundClick}
 				/>
 			</Show>
-			<For each={visibleMaskSegments()}>
+			<Show when={shouldRenderHoveredMask() ? hoveredMask() : null}>
+				{(hovered) => {
+					const rect = () =>
+						getMaskRectAtTime(hovered().segment, getMaskTime(hovered().index));
+					return (
+						<div
+							class="absolute z-20 pointer-events-none rounded-md border-2 border-gray-11/65 bg-gray-9/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
+							style={{
+								left: `${rect().left}px`,
+								top: `${rect().top}px`,
+								width: `${rect().width}px`,
+								height: `${rect().height}px`,
+							}}
+						/>
+					);
+				}}
+			</Show>
+			<For each={displayedMaskSegments()}>
 				{({ segment, index }) => {
 					const isSelected = () => selectedMaskIndex() === index;
-					const rect = () => getMaskRect(segment);
-					const maskState = () => evaluateMask(segment, currentAbsoluteTime());
+					const isHovered = () => hoveredMaskIndex() === index;
+					const rect = () => getMaskRectAtTime(segment, getMaskTime(index));
+					const maskState = () => evaluateMask(segment, getMaskTime(index));
 					const overlayClass = () =>
-						"border-gray-12/60 bg-gray-9/5 hover:border-gray-12 hover:bg-gray-9/10";
+						cx(
+							"border-transparent bg-transparent hover:border-gray-11/65 hover:bg-gray-9/5",
+							isHovered() && "border-gray-11/65 bg-gray-9/5",
+						);
 
 					return (
 						<Show

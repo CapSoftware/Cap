@@ -2452,23 +2452,21 @@ mod tests {
         impl Muxer for FailingVideoMuxer {
             type Config = FailingVideoMuxerConfig;
 
-            fn setup(
+            async fn setup(
                 config: Self::Config,
                 _output_path: PathBuf,
                 _video_config: Option<VideoInfo>,
                 _audio_config: Option<AudioInfo>,
                 _pause_flag: Arc<AtomicBool>,
                 _tasks: &mut TaskPool,
-            ) -> impl Future<Output = anyhow::Result<Self>> + Send
+            ) -> anyhow::Result<Self>
             where
                 Self: Sized,
             {
-                async move {
-                    Ok(Self {
-                        fail_after_frame: config.fail_after_frame,
-                        sent_frames: 0,
-                    })
-                }
+                Ok(Self {
+                    fail_after_frame: config.fail_after_frame,
+                    sent_frames: 0,
+                })
             }
 
             fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -2515,23 +2513,21 @@ mod tests {
         impl Muxer for FailingAudioMuxer {
             type Config = FailingAudioMuxerConfig;
 
-            fn setup(
+            async fn setup(
                 config: Self::Config,
                 _output_path: PathBuf,
                 _video_config: Option<VideoInfo>,
                 _audio_config: Option<AudioInfo>,
                 _pause_flag: Arc<AtomicBool>,
                 _tasks: &mut TaskPool,
-            ) -> impl Future<Output = anyhow::Result<Self>> + Send
+            ) -> anyhow::Result<Self>
             where
                 Self: Sized,
             {
-                async move {
-                    Ok(Self {
-                        fail_after_frame: config.fail_after_frame,
-                        sent_frames: 0,
-                    })
-                }
+                Ok(Self {
+                    fail_after_frame: config.fail_after_frame,
+                    sent_frames: 0,
+                })
             }
 
             fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {

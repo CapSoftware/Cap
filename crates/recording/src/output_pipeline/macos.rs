@@ -1068,11 +1068,13 @@ mod tests {
 
         #[test]
         fn instant_mode_buffer_is_larger_than_normal() {
+            let instant = DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT;
+            let normal = DEFAULT_MP4_MUXER_BUFFER_SIZE;
             assert!(
-                DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT > DEFAULT_MP4_MUXER_BUFFER_SIZE,
+                instant > normal,
                 "Instant mode buffer ({}) should be larger than normal mode buffer ({})",
-                DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT,
-                DEFAULT_MP4_MUXER_BUFFER_SIZE
+                instant,
+                normal
             );
         }
 

@@ -4,30 +4,30 @@ import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
-import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+import {
+	deriveGeneralSettings,
+	type GeneralSettingsStore,
+} from "~/utils/general-settings";
+import { commands } from "~/utils/tauri";
 import { ToggleSettingItem } from "./Setting";
 
 export default function ExperimentalSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
+	const osType = type();
 
 	return (
 		<Show when={store.state === "ready" && ([store()] as const)}>
-			{(store) => <Inner initialStore={store()[0] ?? null} />}
+			{(store) => <Inner initialStore={store()[0] ?? null} osType={osType} />}
 		</Show>
 	);
 }
 
-function Inner(props: { initialStore: GeneralSettingsStore | null }) {
+function Inner(props: {
+	initialStore: GeneralSettingsStore | null;
+	osType: ReturnType<typeof type>;
+}) {
 	const [settings, setSettings] = createStore<GeneralSettingsStore>(
-		props.initialStore ?? {
-			uploadIndividualFiles: false,
-			hideDockIcon: false,
-			autoCreateShareableLink: false,
-			enableNotifications: true,
-			enableNativeCameraPreview: false,
-			autoZoomOnClicks: false,
-			custom_cursor_capture2: true,
-		},
+		deriveGeneralSettings(props.initialStore),
 	);
 
 	const handleChange = async <K extends keyof typeof settings>(
@@ -61,18 +61,17 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						expected.
 					</p>
 				</div>
-				<div class="space-y-3">
-					<h3 class="text-sm text-gray-12 w-fit">Recording Features</h3>
-					<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
-						<ToggleSettingItem
-							label="Custom cursor capture in Studio Mode"
-							description="Studio Mode recordings will capture cursor state separately for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
-							value={!!settings.custom_cursor_capture2}
-							onChange={(value) =>
-								handleChange("custom_cursor_capture2", value)
-							}
-						/>
-						{type() !== "windows" && (
+				<Show
+					when={props.osType !== "windows"}
+					fallback={
+						<p class="text-sm text-gray-10">
+							No experimental features are currently available on this platform.
+						</p>
+					}
+				>
+					<div class="space-y-3">
+						<h3 class="text-sm text-gray-12 w-fit">Preview</h3>
+						<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
 							<ToggleSettingItem
 								label="Native camera preview"
 								description="Show the camera preview using a native GPU surface instead of rendering it within the webview. This is not functional on certain Windows systems so your mileage may vary."
@@ -81,21 +80,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									handleChange("enableNativeCameraPreview", value)
 								}
 							/>
-						)}
-						<ToggleSettingItem
-							label="Auto zoom on clicks"
-							description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
-							value={!!settings.autoZoomOnClicks}
-							onChange={(value) => {
-								handleChange("autoZoomOnClicks", value);
-								setTimeout(
-									() => window.scrollTo({ top: 0, behavior: "instant" }),
-									5,
-								);
-							}}
-						/>
+						</div>
 					</div>
-				</div>
+				</Show>
 			</div>
 		</div>
 	);

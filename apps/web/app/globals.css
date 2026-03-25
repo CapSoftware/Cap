@@ -785,9 +785,9 @@ footer a {
 .prose .not-prose p,
 .prose .not-prose li,
 .prose .not-prose a {
-	color: inherit !important;
-	font-size: inherit !important;
-	line-height: inherit !important;
+	color: inherit;
+	font-size: inherit;
+	line-height: inherit;
 }
 
 .new-card-style {
@@ -914,9 +914,9 @@ footer a {
 }
 
 .messenger-markdown > :first-child {
-	margin-top: 0 !important;
+	margin-top: 0;
 }
 
 .messenger-markdown > :last-child {
-	margin-bottom: 0 !important;
+	margin-bottom: 0;
 }

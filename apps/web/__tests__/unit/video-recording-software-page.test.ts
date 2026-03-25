@@ -148,7 +148,7 @@ describe("VideoRecordingSoftwarePage FAQ schema", () => {
 			name: "What is video recording software?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});

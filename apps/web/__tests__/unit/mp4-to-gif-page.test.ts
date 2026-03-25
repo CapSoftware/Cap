@@ -114,7 +114,7 @@ describe("MP4 to GIF FAQ schema validity", () => {
 			name: "How do I convert MP4 to GIF?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});
@@ -164,11 +164,11 @@ describe("MP4 to GIF HowTo schema validity", () => {
 			steps: howToSteps,
 		});
 
-		expect(schema.step[0]!.position).toBe(1);
-		expect(schema.step[0]!.name).toBe("Upload your MP4 file");
-		expect(schema.step[1]!.position).toBe(2);
-		expect(schema.step[2]!.position).toBe(3);
-		expect(schema.step[2]!.name).toBe("Convert and download your GIF");
+		expect(schema.step[0]?.position).toBe(1);
+		expect(schema.step[0]?.name).toBe("Upload your MP4 file");
+		expect(schema.step[1]?.position).toBe(2);
+		expect(schema.step[2]?.position).toBe(3);
+		expect(schema.step[2]?.name).toBe("Convert and download your GIF");
 	});
 
 	it("produces JSON-serializable output", () => {

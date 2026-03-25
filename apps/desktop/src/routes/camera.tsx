@@ -1052,7 +1052,7 @@ function Canvas(props: {
 			style={style()}
 			width={props.latestFrame()?.data.width}
 			height={props.latestFrame()?.data.height}
-			ref={props.ref!}
+			ref={props.ref}
 		/>
 	);
 }

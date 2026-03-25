@@ -10,7 +10,10 @@ async function initApp() {
 		console.error("Failed to get OS type:", error);
 	}
 
-	mount(() => <StartClient />, document.getElementById("app")!);
+	const app = document.getElementById("app");
+	if (!app) throw new Error("App root element not found");
+
+	mount(() => <StartClient />, app);
 }
 
 initApp();

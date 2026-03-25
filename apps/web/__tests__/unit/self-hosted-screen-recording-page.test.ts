@@ -152,7 +152,7 @@ describe("SelfHostedScreenRecordingPage FAQ schema", () => {
 			name: "Can Cap be self-hosted?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});

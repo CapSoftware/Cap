@@ -22,7 +22,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 pub use cap_project::{CaptionSegment, CaptionSettings, CaptionWord};
 
-use crate::http_client;
+use crate::{general_settings::GeneralSettingsStore, http_client};
 
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub struct CaptionData {
@@ -529,6 +529,7 @@ fn process_with_whisper(
     audio_path: &PathBuf,
     context: Arc<WhisperContext>,
     language: &str,
+    transcription_hints: &[String],
 ) -> Result<CaptionData, String> {
     log::info!("=== WHISPER TRANSCRIPTION START ===");
     log::info!("Processing audio file: {audio_path:?}");
@@ -543,6 +544,10 @@ fn process_with_whisper(
     params.set_token_timestamps(true);
     params.set_language(Some(if language == "auto" { "auto" } else { language }));
     params.set_max_len(i32::MAX);
+
+    if let Some(initial_prompt) = build_initial_prompt(transcription_hints) {
+        params.set_initial_prompt(&initial_prompt);
+    }
 
     log::info!("Whisper params - translate: false, token_timestamps: true, max_len: MAX");
 
@@ -783,10 +788,32 @@ fn process_with_whisper(
     })
 }
 
+fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
+    let mut normalized = Vec::new();
+
+    for hint in transcription_hints {
+        let value = hint.replace('\0', "").trim().to_string();
+        if value.is_empty() || normalized.contains(&value) {
+            continue;
+        }
+        normalized.push(value);
+    }
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Preferred spellings, names, and capitalization for this transcript: {}",
+            normalized.join("; ")
+        ))
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
 pub async fn transcribe_audio(
+    app: AppHandle,
     video_path: String,
     model_path: String,
     language: String,
@@ -843,11 +870,18 @@ pub async fn transcribe_audio(
         }
     };
 
+    let transcription_hints = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|settings| settings.transcription_hints)
+        .unwrap_or_default();
+
     log::info!("Starting Whisper transcription in blocking task...");
-    let whisper_result =
-        tokio::task::spawn_blocking(move || process_with_whisper(&audio_path, context, &language))
-            .await
-            .map_err(|e| format!("Whisper task panicked: {e}"))?;
+    let whisper_result = tokio::task::spawn_blocking(move || {
+        process_with_whisper(&audio_path, context, &language, &transcription_hints)
+    })
+    .await
+    .map_err(|e| format!("Whisper task panicked: {e}"))?;
 
     match whisper_result {
         Ok(captions) => {

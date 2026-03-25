@@ -11,7 +11,7 @@ use crate::{
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
-    cursor::{CursorActor, Cursors, spawn_cursor_recorder},
+    cursor::{CursorActor, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
@@ -27,8 +27,8 @@ use crate::output_pipeline::{
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
 use cap_project::{
-    CursorEvents, MultipleSegment, MultipleSegments, Platform, RecordingMeta, RecordingMetaInner,
-    StudioRecordingMeta, StudioRecordingStatus,
+    CursorEvents, KeyboardEvents, MultipleSegment, MultipleSegments, Platform, RecordingMeta,
+    RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus,
 };
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
@@ -94,13 +94,25 @@ impl Actor {
         let cursors = if let Some(cursor) = pipeline.cursor.as_mut()
             && let Ok(res) = cursor.actor.rx.clone().await
         {
-            std::fs::write(
-                &cursor.output_path,
-                serde_json::to_string_pretty(&CursorEvents {
-                    clicks: res.clicks,
-                    moves: res.moves,
-                })?,
-            )?;
+            if let Some(output_path) = cursor.output_path.as_ref() {
+                std::fs::write(
+                    output_path,
+                    serde_json::to_string_pretty(&CursorEvents {
+                        clicks: res.clicks,
+                        moves: res.moves,
+                    })?,
+                )?;
+            }
+
+            if !res.keyboard_presses.is_empty()
+                && let Some(keyboard_output_path) = cursor.keyboard_output_path.as_ref()
+            {
+                KeyboardEvents {
+                    presses: res.keyboard_presses,
+                }
+                .write_to_file(keyboard_output_path)
+                .map_err(anyhow::Error::msg)?;
+            }
 
             (res.cursors, res.next_cursor_id)
         } else {
@@ -597,7 +609,8 @@ impl Pipeline {
 }
 
 struct CursorPipeline {
-    output_path: PathBuf,
+    output_path: Option<PathBuf>,
+    keyboard_output_path: Option<PathBuf>,
     actor: CursorActor,
 }
 
@@ -657,6 +670,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
+    keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
     #[cfg(target_os = "macos")]
@@ -672,6 +686,7 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
+            keyboard_capture: true,
             fragmented: false,
             max_fps: 60,
             #[cfg(target_os = "macos")]
@@ -696,6 +711,11 @@ impl ActorBuilder {
 
     pub fn with_custom_cursor(mut self, custom_cursor: bool) -> Self {
         self.custom_cursor = custom_cursor;
+        self
+    }
+
+    pub fn with_keyboard_capture(mut self, keyboard_capture: bool) -> Self {
+        self.keyboard_capture = keyboard_capture;
         self
     }
 
@@ -732,6 +752,7 @@ impl ActorBuilder {
                 excluded_windows: self.excluded_windows,
             },
             self.custom_cursor,
+            self.keyboard_capture,
             self.fragmented,
             self.max_fps,
         )
@@ -744,6 +765,7 @@ async fn spawn_studio_recording_actor(
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
+    keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
 ) -> anyhow::Result<ActorHandle> {
@@ -773,6 +795,7 @@ async fn spawn_studio_recording_actor(
         cursors_dir,
         base_inputs.clone(),
         custom_cursor_capture,
+        keyboard_capture,
         fragmented,
         max_fps,
         completion_tx.clone(),
@@ -979,7 +1002,14 @@ async fn stop_recording(
                         .pipeline
                         .cursor
                         .as_ref()
-                        .map(|cursor| make_relative(&cursor.output_path)),
+                        .and_then(|cursor| cursor.output_path.as_ref().map(make_relative)),
+                    keyboard: s.pipeline.cursor.as_ref().and_then(|cursor| {
+                        cursor
+                            .keyboard_output_path
+                            .as_ref()
+                            .filter(|path| path.exists())
+                            .map(make_relative)
+                    }),
                 },
                 diagnostics,
             }
@@ -1061,6 +1091,7 @@ struct SegmentPipelineFactory {
     cursors_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
+    keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
     index: u32,
@@ -1076,6 +1107,7 @@ impl SegmentPipelineFactory {
         cursors_dir: PathBuf,
         base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
+        keyboard_capture: bool,
         fragmented: bool,
         max_fps: u32,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
@@ -1085,6 +1117,7 @@ impl SegmentPipelineFactory {
             cursors_dir,
             base_inputs,
             custom_cursor_capture,
+            keyboard_capture,
             fragmented,
             max_fps,
             index: 0,
@@ -1108,6 +1141,7 @@ impl SegmentPipelineFactory {
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
+            self.keyboard_capture,
             self.fragmented,
             self.max_fps,
             segment_start_time,
@@ -1192,6 +1226,7 @@ async fn create_segment_pipeline(
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
+    keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
     start_time: Timestamps,
@@ -1427,7 +1462,7 @@ async fn create_segment_pipeline(
     let cursor = if camera_only {
         None
     } else {
-        custom_cursor_capture
+        (custom_cursor_capture || keyboard_capture)
             .then(move || {
                 let cursor_crop_bounds = base_inputs
                     .capture_target
@@ -1435,8 +1470,14 @@ async fn create_segment_pipeline(
                     .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
                 let cursor_output_path = dir.join("cursor.json");
-                let incremental_output = if fragmented {
+                let keyboard_output_path = dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
+                let incremental_output = if fragmented && custom_cursor_capture {
                     Some(cursor_output_path.clone())
+                } else {
+                    None
+                };
+                let keyboard_incremental_output = if fragmented && keyboard_capture {
+                    Some(keyboard_output_path.clone())
                 } else {
                     None
                 };
@@ -1450,11 +1491,15 @@ async fn create_segment_pipeline(
                     prev_cursors,
                     next_cursors_id,
                     start_time,
-                    incremental_output,
+                    IncrementalCaptureOutputs {
+                        cursor: incremental_output,
+                        keyboard: keyboard_incremental_output,
+                    },
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
-                    output_path: cursor_output_path,
+                    output_path: custom_cursor_capture.then_some(cursor_output_path),
+                    keyboard_output_path: keyboard_capture.then_some(keyboard_output_path),
                     actor: cursor,
                 })
             })
@@ -1559,18 +1604,18 @@ mod tests {
     impl Muxer for SuccessfulVideoMuxer {
         type Config = ();
 
-        fn setup(
+        async fn setup(
             _config: Self::Config,
             _output_path: PathBuf,
             _video_config: Option<VideoInfo>,
             _audio_config: Option<cap_media_info::AudioInfo>,
             _pause_flag: Arc<std::sync::atomic::AtomicBool>,
             _tasks: &mut TaskPool,
-        ) -> impl Future<Output = anyhow::Result<Self>> + Send
+        ) -> anyhow::Result<Self>
         where
             Self: Sized,
         {
-            async move { Ok(Self) }
+            Ok(Self)
         }
 
         fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -1613,23 +1658,21 @@ mod tests {
     impl Muxer for FailingAudioMuxer {
         type Config = FailingAudioMuxerConfig;
 
-        fn setup(
+        async fn setup(
             config: Self::Config,
             _output_path: PathBuf,
             _video_config: Option<VideoInfo>,
             _audio_config: Option<cap_media_info::AudioInfo>,
             _pause_flag: Arc<std::sync::atomic::AtomicBool>,
             _tasks: &mut TaskPool,
-        ) -> impl Future<Output = anyhow::Result<Self>> + Send
+        ) -> anyhow::Result<Self>
         where
             Self: Sized,
         {
-            async move {
-                Ok(Self {
-                    fail_after_frame: config.fail_after_frame,
-                    sent_frames: 0,
-                })
-            }
+            Ok(Self {
+                fail_after_frame: config.fail_after_frame,
+                sent_frames: 0,
+            })
         }
 
         fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {

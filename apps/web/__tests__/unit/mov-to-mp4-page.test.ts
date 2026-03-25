@@ -114,7 +114,7 @@ describe("MOV to MP4 FAQ schema validity", () => {
 			name: "How do I convert MOV to MP4 online?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});
@@ -164,11 +164,11 @@ describe("MOV to MP4 HowTo schema validity", () => {
 			steps: howToSteps,
 		});
 
-		expect(schema.step[0]!.position).toBe(1);
-		expect(schema.step[0]!.name).toBe("Upload your MOV file");
-		expect(schema.step[1]!.position).toBe(2);
-		expect(schema.step[2]!.position).toBe(3);
-		expect(schema.step[2]!.name).toBe("Download your MP4");
+		expect(schema.step[0]?.position).toBe(1);
+		expect(schema.step[0]?.name).toBe("Upload your MOV file");
+		expect(schema.step[1]?.position).toBe(2);
+		expect(schema.step[2]?.position).toBe(3);
+		expect(schema.step[2]?.name).toBe("Download your MP4");
 	});
 
 	it("produces JSON-serializable output", () => {

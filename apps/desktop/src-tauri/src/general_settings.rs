@@ -121,8 +121,10 @@ pub struct GeneralSettingsStore {
         skip_serializing_if = "no"
     )]
     pub enable_native_camera_preview: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
+    #[serde(default = "default_true")]
+    pub capture_keyboard_events: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
     #[serde(default = "default_excluded_windows")]
@@ -137,6 +139,8 @@ pub struct GeneralSettingsStore {
     pub crash_recovery_recording: bool,
     #[serde(default = "default_max_fps")]
     pub max_fps: u32,
+    #[serde(default = "default_transcription_hints")]
+    pub transcription_hints: Vec<String>,
     #[serde(default)]
     pub editor_preview_quality: EditorPreviewQuality,
     #[serde(default)]
@@ -165,6 +169,15 @@ fn default_instant_mode_max_resolution() -> u32 {
 
 fn default_max_fps() -> u32 {
     60
+}
+
+fn default_transcription_hints() -> Vec<String> {
+    vec![
+        "Cap".to_string(),
+        "TypeScript".to_string(),
+        "My Brand Name".to_string(),
+        "mywebsite.com".to_string(),
+    ]
 }
 
 fn default_server_url() -> String {
@@ -202,7 +215,8 @@ impl Default for GeneralSettingsStore {
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
-            auto_zoom_on_clicks: false,
+            auto_zoom_on_clicks: true,
+            capture_keyboard_events: true,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
@@ -210,6 +224,7 @@ impl Default for GeneralSettingsStore {
             default_project_name_template: None,
             crash_recovery_recording: true,
             max_fps: 60,
+            transcription_hints: default_transcription_hints(),
             editor_preview_quality: EditorPreviewQuality::Half,
             main_window_position: None,
             camera_window_position: None,

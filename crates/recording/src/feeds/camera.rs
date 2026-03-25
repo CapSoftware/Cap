@@ -719,6 +719,14 @@ impl Message<AddSender> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: AddSender, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if self
+            .senders
+            .iter()
+            .any(|sender| sender.same_channel(&msg.0))
+        {
+            return;
+        }
+
         debug!("CameraFeed: Adding new sender");
         self.senders.push(msg.0);
     }
@@ -732,6 +740,14 @@ impl Message<AddNativeSender> for CameraFeed {
         msg: AddNativeSender,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if self
+            .native_senders
+            .iter()
+            .any(|sender| sender.same_channel(&msg.0))
+        {
+            return;
+        }
+
         debug!("CameraFeed: Adding new native sender");
         self.native_senders.push(msg.0);
     }

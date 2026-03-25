@@ -1662,6 +1662,7 @@ pub enum ResizeDirection {
   West,
 }
 
+#[allow(dead_code)]
 pub(crate) fn hit_test(
   (left, top, right, bottom): (i32, i32, i32, i32),
   cx: i32,

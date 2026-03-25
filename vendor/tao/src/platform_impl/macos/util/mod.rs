@@ -123,6 +123,7 @@ pub unsafe fn open_emoji_picker() {
   let () = msg_send![&NSApp(mtm), orderFrontCharacterPalette: nil];
 }
 
+#[allow(dead_code)]
 pub extern "C" fn yes(_: &Object, _: Sel) -> BOOL {
   YES
 }

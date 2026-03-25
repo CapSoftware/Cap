@@ -41,10 +41,10 @@ async function waitForProcessCleanup(
 }
 
 describe("memory and resource leak tests", () => {
-	let initialFFmpegCount: number;
+	let _initialFFmpegCount: number;
 
 	beforeAll(async () => {
-		initialFFmpegCount = await countFFmpegProcesses();
+		_initialFFmpegCount = await countFFmpegProcesses();
 	});
 
 	afterAll(async () => {
