@@ -66,11 +66,11 @@ export function TrackManager(props: {
 			ref={(el) => {
 				addButton = el;
 			}}
-			class="flex h-[3.25rem] items-center justify-center gap-2 rounded-xl border border-gray-4/70 bg-gray-1 px-3 text-sm font-medium text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] transition-colors duration-150 hover:bg-gray-3 dark:border-gray-4/60 dark:bg-gray-3/40"
+			class="relative z-30 flex h-12 items-center justify-center gap-1.5 rounded-xl border border-gray-4/70 bg-gray-1 px-2.5 text-[0.8125rem] font-medium text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] transition-colors duration-150 hover:bg-gray-3 dark:border-gray-4/60 dark:bg-gray-3/40"
 			onClick={handleOpenMenu}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
-			<IconLucidePlus class="size-4" />
+			<IconLucidePlus class="size-3.5" />
 			<span>Add track</span>
 		</button>
 	);
