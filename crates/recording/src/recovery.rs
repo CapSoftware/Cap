@@ -941,8 +941,12 @@ impl RecoveryManager {
                         None
                     },
                     keyboard: if keyboard_path.exists() {
-                        let file_name = keyboard_path.file_name().unwrap().to_string_lossy();
-                        Some(RelativePathBuf::from(format!("{segment_base}/{file_name}")))
+                        keyboard_path.file_name().map(|file_name| {
+                            RelativePathBuf::from(format!(
+                                "{segment_base}/{}",
+                                file_name.to_string_lossy()
+                            ))
+                        })
                     } else {
                         None
                     },
