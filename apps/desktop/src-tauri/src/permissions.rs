@@ -12,6 +12,28 @@ unsafe extern "C" {
     -> bool;
 }
 
+#[cfg(target_os = "macos")]
+fn macos_prompt_screen_recording_access() {
+    scap_screencapturekit::request_permission();
+}
+
+#[cfg(target_os = "macos")]
+fn macos_prompt_accessibility_access() {
+    use core_foundation::base::TCFType;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
+    let prompt_value = core_foundation::boolean::CFBoolean::true_value();
+
+    let options =
+        CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_value.as_CFType())]);
+
+    unsafe {
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum OSPermission {
@@ -23,9 +45,15 @@ pub enum OSPermission {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn open_permission_settings(_permission: OSPermission) {
+pub fn open_permission_settings(app: tauri::AppHandle, _permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
+        match _permission {
+            OSPermission::ScreenRecording => macos_prompt_screen_recording_access(),
+            OSPermission::Accessibility => macos_prompt_accessibility_access(),
+            _ => {}
+        }
+
         use std::process::Command;
 
         let process = match _permission {
@@ -49,10 +77,18 @@ pub fn open_permission_settings(_permission: OSPermission) {
 
         match process {
             Ok(mut process) => {
+                let app = app.clone();
                 tokio::spawn(async move {
-                    let _ = process.wait().map_err(|err| {
-                        tracing::error!("Error waiting for permission settings process: {err}")
-                    });
+                    match tokio::task::spawn_blocking(move || process.wait()).await {
+                        Ok(Err(err)) => {
+                            tracing::error!("Error waiting for permission settings process: {err}");
+                        }
+                        Err(err) => {
+                            tracing::error!("Join error waiting for permission settings: {err}");
+                        }
+                        _ => {}
+                    }
+                    crate::tray::refresh_tray_menu_for_app(&app);
                 });
             }
             Err(err) => {
@@ -79,7 +115,7 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
 
         match _permission {
             OSPermission::ScreenRecording => {
-                scap_screencapturekit::request_permission();
+                macos_prompt_screen_recording_access();
             }
             OSPermission::Camera => {
                 tauri::async_runtime::spawn_blocking(|| {
@@ -102,21 +138,7 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
                 .ok();
             }
             OSPermission::Accessibility => {
-                use core_foundation::base::TCFType;
-                use core_foundation::dictionary::CFDictionary;
-                use core_foundation::string::CFString;
-
-                let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
-                let prompt_value = core_foundation::boolean::CFBoolean::true_value();
-
-                let options = CFDictionary::from_CFType_pairs(&[(
-                    prompt_key.as_CFType(),
-                    prompt_value.as_CFType(),
-                )]);
-
-                unsafe {
-                    AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
-                }
+                macos_prompt_accessibility_access();
             }
         }
 
@@ -126,6 +148,8 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
             tracing::warn!("Failed to restore activation policy to Accessory: {err}");
         }
     }
+
+    crate::tray::refresh_tray_menu_for_app(&_app);
 }
 
 #[derive(Serialize, Deserialize, Debug, specta::Type, Clone)]
@@ -194,6 +218,8 @@ pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
             camera: check_av_permission(MediaType::video()),
             accessibility: if unsafe { AXIsProcessTrusted() } {
                 OSPermissionStatus::Granted
+            } else if _initial_check {
+                OSPermissionStatus::Empty
             } else {
                 OSPermissionStatus::Denied
             },
