@@ -153,7 +153,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			? "original"
 			: captionContext.selectedLanguage;
 	const isTranslating = captionContext.isTranslating;
-	const translatedContent = captionContext.translatedVttContent;
+	const _translatedContent = captionContext.translatedVttContent;
 
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
