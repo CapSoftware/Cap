@@ -585,7 +585,7 @@ async fn export_render_to_channel(
     mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     project_path: PathBuf,
 ) -> Result<(), cap_rendering::RenderingError> {
-    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(2);
+    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
 
     let screenshot_project_path = project_path;
 
