@@ -1129,40 +1129,58 @@ export function ExportPage() {
 
 					<div class="p-4 border-t border-gray-3">
 						{settings.exportTo === "link" && !auth.data ? (
-							<SignInButton class="w-full justify-center">
-								<IconCapLink class="size-4" />
-								<span>Sign in to share</span>
-							</SignInButton>
+							<div class="flex flex-col items-center gap-2.5">
+								<SignInButton class="w-full justify-center">
+									<IconCapLink class="size-4" />
+									<span>Sign in to share</span>
+								</SignInButton>
+								<button
+									type="button"
+									class="text-xs font-medium text-gray-12 transition-colors hover:underline underline-offset-2"
+									onClick={handleBack}
+								>
+									Back to Editor
+								</button>
+							</div>
 						) : (
-							<Button
-								class="w-full gap-2 h-12 text-base"
-								variant="blue"
-								size="lg"
-								onClick={() => {
-									if (settings.exportTo === "file") save.mutate();
-									else if (settings.exportTo === "link") upload.mutate();
-									else copy.mutate();
-								}}
-							>
-								{settings.exportTo === "file" && (
-									<>
-										<IconCapFile class="size-5" />
-										Export to File
-									</>
-								)}
-								{settings.exportTo === "clipboard" && (
-									<>
-										<IconCapCopy class="size-5" />
-										Export to Clipboard
-									</>
-								)}
-								{settings.exportTo === "link" && (
-									<>
-										<IconCapLink class="size-5" />
-										Export to Link
-									</>
-								)}
-							</Button>
+							<div class="flex flex-col items-center gap-2.5">
+								<Button
+									class="w-full gap-2 h-12 text-base"
+									variant="blue"
+									size="lg"
+									onClick={() => {
+										if (settings.exportTo === "file") save.mutate();
+										else if (settings.exportTo === "link") upload.mutate();
+										else copy.mutate();
+									}}
+								>
+									{settings.exportTo === "file" && (
+										<>
+											<IconCapFile class="size-5" />
+											Export to File
+										</>
+									)}
+									{settings.exportTo === "clipboard" && (
+										<>
+											<IconCapCopy class="size-5" />
+											Export to Clipboard
+										</>
+									)}
+									{settings.exportTo === "link" && (
+										<>
+											<IconCapLink class="size-5" />
+											Export to Link
+										</>
+									)}
+								</Button>
+								<button
+									type="button"
+									class="text-xs font-medium text-gray-12 transition-colors hover:underline underline-offset-2"
+									onClick={handleBack}
+								>
+									Back to Editor
+								</button>
+							</div>
 						)}
 					</div>
 				</div>
