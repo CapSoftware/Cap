@@ -15,7 +15,10 @@ export function createPresets() {
 		if (query.isLoading) throw new Error("Presets not loaded");
 
 		let p = query.data;
-		if (!p) await presetsStore.set((p = { presets: [], default: null }));
+		if (!p) {
+			p = { presets: [], default: null };
+			await presetsStore.set(p);
+		}
 
 		const newValue = produce(fn)(p);
 

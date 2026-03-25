@@ -37,7 +37,10 @@ export function initAnonymousUser() {
 	}
 }
 
-export function identifyUser(userId: string, properties?: Record<string, any>) {
+export function identifyUser(
+	userId: string,
+	properties?: Record<string, unknown>,
+) {
 	if (!key || !host) {
 		console.warn("Cannot identify user - missing key or host");
 		return;
@@ -68,7 +71,7 @@ export function identifyUser(userId: string, properties?: Record<string, any>) {
 
 export function trackEvent(
 	eventName: string,
-	properties?: Record<string, any>,
+	properties?: Record<string, unknown>,
 ) {
 	if (!key || !host) {
 		console.warn(

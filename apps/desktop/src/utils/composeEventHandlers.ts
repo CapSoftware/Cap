@@ -18,9 +18,9 @@ export function callHandler<T, E extends Event>(
 
 /** Create a new event handler which calls all given handlers in the order they were chained with the same event. */
 export function composeEventHandlers<T>(
-	handlers: Array<JSX.EventHandlerUnion<T, any> | undefined>,
+	handlers: Array<JSX.EventHandlerUnion<T, Event> | undefined>,
 ) {
-	return (event: any) => {
+	return (event: Event & { currentTarget: T; target: Element }) => {
 		for (const handler of handlers) {
 			callHandler(event, handler);
 		}
