@@ -394,6 +394,7 @@ pub enum CapWindowId {
     ModeSelect,
     Debug,
     ScreenshotEditor { id: u32 },
+    Onboarding,
 }
 
 impl FromStr for CapWindowId {
@@ -412,6 +413,7 @@ impl FromStr for CapWindowId {
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
+            "onboarding" => Self::Onboarding,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
@@ -462,6 +464,7 @@ impl std::fmt::Display for CapWindowId {
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
             Self::ScreenshotEditor { id } => write!(f, "screenshot-editor-{id}"),
+            Self::Onboarding => write!(f, "onboarding"),
         }
     }
 }
@@ -481,6 +484,7 @@ impl CapWindowId {
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
+            Self::Onboarding => "Welcome to Cap".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             Self::TargetSelectOverlay { .. } => "Cap Target Select".to_string(),
@@ -498,6 +502,7 @@ impl CapWindowId {
                 | Self::Settings
                 | Self::Upgrade
                 | Self::ModeSelect
+                | Self::Onboarding
         )
     }
 
@@ -546,6 +551,7 @@ impl CapWindowId {
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
+            Self::Onboarding => (860.0, 680.0),
             _ => return None,
         })
     }
@@ -585,6 +591,7 @@ pub enum ShowCapWindow {
     ScreenshotEditor {
         path: PathBuf,
     },
+    Onboarding,
 }
 
 impl ShowCapWindow {
@@ -992,11 +999,14 @@ impl ShowCapWindow {
                     }
                 }
 
+                window.show().ok();
+                window.set_focus().ok();
+
                 window
             }
             Self::Main { init_target_mode } => {
                 if !permissions::do_permissions_check(false).necessary_granted() {
-                    return Box::pin(Self::Setup.show(app)).await;
+                    return Box::pin(Self::Onboarding.show(app)).await;
                 }
 
                 let title = CapWindowId::Main.title();
@@ -1277,6 +1287,7 @@ impl ShowCapWindow {
                     .min_inner_size(800.0, 580.0)
                     .resizable(true)
                     .maximized(false)
+                    .focused(true)
                     .build()?;
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(800.0, 580.0);
@@ -1292,6 +1303,9 @@ impl ShowCapWindow {
                         warn!("Failed to position Settings window on Windows: {}", e);
                     }
                 }
+
+                window.show().ok();
+                window.set_focus().ok();
 
                 window
             }
@@ -1361,6 +1375,9 @@ impl ShowCapWindow {
                     }
                 }
 
+                window.show().ok();
+                window.set_focus().ok();
+
                 window
             }
             Self::Upgrade => {
@@ -1393,6 +1410,9 @@ impl ShowCapWindow {
                     }
                 }
 
+                window.show().ok();
+                window.set_focus().ok();
+
                 window
             }
             Self::ModeSelect => {
@@ -1424,6 +1444,47 @@ impl ShowCapWindow {
                         warn!("Failed to position ModeSelect window on Windows: {}", e);
                     }
                 }
+
+                window.show().ok();
+                window.set_focus().ok();
+
+                window
+            }
+            Self::Onboarding => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                let width = (cursor_monitor.width * 0.58).clamp(860.0, 1080.0);
+                let height = (width * 0.72).clamp(680.0, 780.0);
+
+                let window = self
+                    .window_builder(app, "/onboarding")
+                    .inner_size(width, height)
+                    .min_inner_size(860.0, 680.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .maximizable(false)
+                    .focused(true)
+                    .shadow(true)
+                    .build()?;
+
+                let (pos_x, pos_y) = cursor_monitor.center_position(width, height);
+                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(width, height)) {
+                        warn!("Failed to set Onboarding window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
+                        warn!("Failed to position Onboarding window on Windows: {}", e);
+                    }
+                }
+
+                window.show().ok();
+                window.set_focus().ok();
 
                 window
             }
@@ -2119,6 +2180,7 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            ShowCapWindow::Onboarding => CapWindowId::Onboarding,
             ShowCapWindow::ScreenshotEditor { path } => {
                 let state = app.state::<ScreenshotEditorWindowIds>();
                 let s = state.ids.lock().unwrap();

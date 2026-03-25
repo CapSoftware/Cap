@@ -638,6 +638,15 @@ async fn set_camera_input(
     drop(app);
 
     if id == current_id && camera_in_use {
+        if id.is_some() && !skip_camera_window.unwrap_or(false) {
+            let show_result = ShowCapWindow::Camera { centered: false }
+                .show(&app_handle)
+                .await;
+            show_result
+                .map_err(|err| error!("Failed to show camera preview window: {err}"))
+                .ok();
+        }
+
         return Ok(());
     }
 
@@ -2693,16 +2702,19 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(app))]
-async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
-    let bundle_id = app.config().identifier.clone();
+#[instrument(skip(_app))]
+async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bundle_id = _app.config().identifier.clone();
 
-    Command::new("tccutil")
-        .arg("reset")
-        .arg("Microphone")
-        .arg(bundle_id)
-        .output()
-        .expect("Failed to reset microphone permissions");
+        Command::new("tccutil")
+            .arg("reset")
+            .arg("Microphone")
+            .arg(bundle_id)
+            .output()
+            .map_err(|_| "Failed to reset microphone permissions".to_string())?;
+    }
 
     Ok(())
 }
@@ -3501,18 +3513,24 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    if !permissions.screen_recording.permitted()
-                        || !permissions.accessibility.permitted()
-                        || GeneralSettingsStore::get(&app)
-                            .ok()
-                            .flatten()
-                            .map(|s| !s.has_completed_startup)
-                            .unwrap_or(false)
-                    {
-                        let _ = ShowCapWindow::Setup.show(&app).await;
-                    } else {
-                        println!("Permissions granted, showing main window");
+                    let settings = GeneralSettingsStore::get(&app).ok().flatten();
+                    let startup_completed = settings
+                        .as_ref()
+                        .map(|s| s.has_completed_startup)
+                        .unwrap_or(false);
+                    let onboarding_completed = settings
+                        .as_ref()
+                        .map(|s| s.has_completed_onboarding)
+                        .unwrap_or(false);
 
+                    if !startup_completed
+                        || !onboarding_completed
+                        || !permissions.necessary_granted()
+                    {
+                        println!("Showing onboarding");
+                        let _ = ShowCapWindow::Onboarding.show(&app).await;
+                    } else {
+                        println!("Showing main window");
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
                         }
@@ -3864,6 +3882,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .run(move |_handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
+                if let Some(onboarding) = CapWindowId::Onboarding.get(_handle) {
+                    onboarding.show().ok();
+                    onboarding.set_focus().ok();
+                    return;
+                }
+
                 let has_window = _handle.webview_windows().iter().any(|(label, _)| {
                     label.starts_with("editor-")
                         || label.starts_with("screenshot-editor-")

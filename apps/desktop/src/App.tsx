@@ -55,6 +55,9 @@ const SettingsIntegrationsPage = lazy(
 const SettingsS3ConfigPage = lazy(
 	() => import("./routes/(window-chrome)/settings/integrations/s3-config"),
 );
+const OnboardingPage = lazy(
+	() => import("./routes/(window-chrome)/onboarding"),
+);
 const UpgradePage = lazy(() => import("./routes/(window-chrome)/upgrade"));
 const UpdatePage = lazy(() => import("./routes/(window-chrome)/update"));
 const CameraPage = lazy(() => import("./routes/camera"));
@@ -172,6 +175,7 @@ function Inner() {
 								component={SettingsS3ConfigPage}
 							/>
 						</Route>
+						<Route path="/onboarding" component={OnboardingPage} />
 						<Route path="/upgrade" component={UpgradePage} />
 						<Route path="/update" component={UpdatePage} />
 					</Route>

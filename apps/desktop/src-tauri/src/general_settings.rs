@@ -149,6 +149,8 @@ pub struct GeneralSettingsStore {
     pub camera_window_position: Option<WindowPosition>,
     #[serde(default)]
     pub camera_window_positions_by_monitor_name: BTreeMap<String, WindowPosition>,
+    #[serde(default = "default_true")]
+    pub has_completed_onboarding: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -229,6 +231,7 @@ impl Default for GeneralSettingsStore {
             main_window_position: None,
             camera_window_position: None,
             camera_window_positions_by_monitor_name: BTreeMap::new(),
+            has_completed_onboarding: false,
         }
     }
 }
