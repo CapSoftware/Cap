@@ -3348,7 +3348,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     flags
                 })
                 .with_denylist(&[
-                    CapWindowId::Setup.label().as_str(),
+                    CapWindowId::Onboarding.label().as_str(),
                     CapWindowId::Main.label().as_str(),
                     "window-capture-occluder",
                     "target-select-overlay",
@@ -3893,7 +3893,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
-                        || label.as_str() == "setup"
+                        || label.as_str() == "onboarding"
                 });
 
                 if has_window {
@@ -3905,7 +3905,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
-                                || label.as_str() == "setup"
+                                || label.as_str() == "onboarding"
                         })
                         .map(|(_, window)| window.clone())
                     {

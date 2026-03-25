@@ -20,7 +20,6 @@ import titlebar from "./utils/titlebar-state";
 
 const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
-const SetupPage = lazy(() => import("./routes/(window-chrome)/setup"));
 const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
 const SettingsGeneralPage = lazy(
 	() => import("./routes/(window-chrome)/settings/general"),
@@ -148,7 +147,6 @@ function Inner() {
 				>
 					<Route path="/" component={WindowChromeLayout}>
 						<Route path="/" component={NewMainPage} />
-						<Route path="/setup" component={SetupPage} />
 						<Route path="/settings" component={SettingsLayout}>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />

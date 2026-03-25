@@ -379,8 +379,6 @@ fn is_position_on_any_screen(pos_x: f64, pos_y: f64) -> bool {
 
 #[derive(Clone, Deserialize, Type)]
 pub enum CapWindowId {
-    // Contains onboarding + permissions
-    Setup,
     Main,
     Settings,
     Editor { id: u32 },
@@ -402,7 +400,6 @@ impl FromStr for CapWindowId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
-            "setup" => Self::Setup,
             "main" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
@@ -446,7 +443,6 @@ impl FromStr for CapWindowId {
 impl std::fmt::Display for CapWindowId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Setup => write!(f, "setup"),
             Self::Main => write!(f, "main"),
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
@@ -476,7 +472,6 @@ impl CapWindowId {
 
     pub fn title(&self) -> String {
         match self {
-            Self::Setup => "Cap Setup".to_string(),
             Self::Settings => "Cap Settings".to_string(),
             Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
             Self::CaptureArea => "Cap Capture Area".to_string(),
@@ -495,8 +490,7 @@ impl CapWindowId {
     pub fn activates_dock(&self) -> bool {
         matches!(
             self,
-            Self::Setup
-                | Self::Main
+            Self::Main
                 | Self::Editor { .. }
                 | Self::ScreenshotEditor { .. }
                 | Self::Settings
@@ -543,7 +537,6 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Setup => (600.0, 600.0),
             Self::Main => (330.0, 395.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
@@ -559,7 +552,6 @@ impl CapWindowId {
 
 #[derive(Debug, Clone, Type, Deserialize)]
 pub enum ShowCapWindow {
-    Setup,
     Main {
         init_target_mode: Option<RecordingTargetMode>,
     },
@@ -930,6 +922,12 @@ impl ShowCapWindow {
         if !matches!(self, Self::Camera { .. } | Self::InProgressRecording { .. })
             && let Some(window) = self.id(app).get(app)
         {
+            if matches!(self, Self::Main { .. })
+                && !permissions::do_permissions_check(false).necessary_granted()
+            {
+                return Box::pin(Self::Onboarding.show(app)).await;
+            }
+
             let cursor_display_id = if let Self::Main { init_target_mode } = self {
                 if init_target_mode.is_some() {
                     Display::get_containing_cursor()
@@ -973,37 +971,6 @@ impl ShowCapWindow {
         let cursor_monitor = CursorMonitorInfo::get();
 
         let window = match self {
-            Self::Setup => {
-                let window = self
-                    .window_builder(app, "/setup")
-                    .inner_size(600.0, 600.0)
-                    .min_inner_size(600.0, 600.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .focused(true)
-                    .maximizable(false)
-                    .shadow(true)
-                    .build()?;
-
-                let (pos_x, pos_y) = cursor_monitor.center_position(600.0, 600.0);
-                let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
-
-                #[cfg(windows)]
-                {
-                    use tauri::LogicalSize;
-                    if let Err(e) = window.set_size(LogicalSize::new(600.0, 600.0)) {
-                        warn!("Failed to set Setup window size on Windows: {}", e);
-                    }
-                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
-                        warn!("Failed to position Setup window on Windows: {}", e);
-                    }
-                }
-
-                window.show().ok();
-                window.set_focus().ok();
-
-                window
-            }
             Self::Main { init_target_mode } => {
                 if !permissions::do_permissions_check(false).necessary_granted() {
                     return Box::pin(Self::Onboarding.show(app)).await;
@@ -2155,7 +2122,6 @@ impl ShowCapWindow {
 
     pub fn id(&self, app: &AppHandle) -> CapWindowId {
         match self {
-            ShowCapWindow::Setup => CapWindowId::Setup,
             ShowCapWindow::Main { .. } => CapWindowId::Main,
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
             ShowCapWindow::Editor { project_path } => {
