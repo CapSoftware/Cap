@@ -221,7 +221,6 @@ export function DocsSearch({ searchIndex }: DocsSearchProps) {
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 						placeholder="Search documentation..."
-						autoFocus
 						className="flex-1 h-14 text-base text-gray-900 placeholder-gray-400 outline-none bg-transparent"
 						aria-label="Search documentation"
 						aria-autocomplete="list"
