@@ -34,8 +34,8 @@ describe("createHowToSchema", () => {
 			name: "Download",
 			text: "Download the app.",
 		});
-		expect(schema.step[1]!.position).toBe(2);
-		expect(schema.step[2]!.position).toBe(3);
+		expect(schema.step[1]?.position).toBe(2);
+		expect(schema.step[2]?.position).toBe(3);
 	});
 
 	it("uses default totalTime of PT2M when not provided", () => {
@@ -124,7 +124,7 @@ describe("createHowToSchema", () => {
 
 		expect(schema["@type"]).toBe("HowTo");
 		expect(schema.step).toHaveLength(4);
-		expect(schema.step[0]!.name).toBe("Download and install Cap");
-		expect(schema.step[3]!.position).toBe(4);
+		expect(schema.step[0]?.name).toBe("Download and install Cap");
+		expect(schema.step[3]?.position).toBe(4);
 	});
 });

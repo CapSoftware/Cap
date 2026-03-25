@@ -114,7 +114,7 @@ describe("Video Speed Controller FAQ schema validity", () => {
 			name: "How do I change the speed of a video online?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});
@@ -164,11 +164,11 @@ describe("Video Speed Controller HowTo schema validity", () => {
 			steps: howToSteps,
 		});
 
-		expect(schema.step[0]!.position).toBe(1);
-		expect(schema.step[0]!.name).toBe("Upload your video file");
-		expect(schema.step[1]!.position).toBe(2);
-		expect(schema.step[2]!.position).toBe(3);
-		expect(schema.step[2]!.name).toBe("Process and download your video");
+		expect(schema.step[0]?.position).toBe(1);
+		expect(schema.step[0]?.name).toBe("Upload your video file");
+		expect(schema.step[1]?.position).toBe(2);
+		expect(schema.step[2]?.position).toBe(3);
+		expect(schema.step[2]?.name).toBe("Process and download your video");
 	});
 
 	it("produces JSON-serializable output", () => {

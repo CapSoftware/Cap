@@ -181,7 +181,7 @@ describe("createDeveloperApp", () => {
 		});
 
 		expect(mockDb.insert).toHaveBeenCalled();
-		const firstValuesCall = mockDb.values.mock.calls[0]![0];
+		const firstValuesCall = mockDb.values.mock.calls[0]?.[0];
 		expect(firstValuesCall).toMatchObject({
 			name: "My App",
 			environment: "production",
@@ -238,7 +238,7 @@ describe("createDeveloperApp", () => {
 		});
 
 		const expectedPrefix = result.publicKey.slice(0, 12);
-		const keysValuesCall = mockDb.values.mock.calls[1]![0];
+		const keysValuesCall = mockDb.values.mock.calls[1]?.[0];
 		const publicKeyEntry = keysValuesCall.find(
 			(entry: Record<string, unknown>) => entry.keyType === "public",
 		);

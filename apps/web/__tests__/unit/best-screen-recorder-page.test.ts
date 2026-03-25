@@ -143,15 +143,15 @@ describe("BestScreenRecorderPage FAQ schema", () => {
 			name: "What is the best screen recorder?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});
 
 	it("strips HTML tags from answers", () => {
 		const schema = createFAQSchema(faqs);
-		expect(schema.mainEntity[1]!.acceptedAnswer.text).not.toContain("<a");
-		expect(schema.mainEntity[1]!.acceptedAnswer.text).toContain("Cap free");
+		expect(schema.mainEntity[1]?.acceptedAnswer.text).not.toContain("<a");
+		expect(schema.mainEntity[1]?.acceptedAnswer.text).toContain("Cap free");
 	});
 
 	it("produces JSON-serializable output", () => {

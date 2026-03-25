@@ -32,7 +32,7 @@ describe("createFAQSchema", () => {
 				text: "Yes, Cap is free.",
 			},
 		});
-		expect(schema.mainEntity[1]!.name).toBe("What platforms does Cap support?");
+		expect(schema.mainEntity[1]?.name).toBe("What platforms does Cap support?");
 		expect(schema.mainEntity).toHaveLength(2);
 	});
 
@@ -46,10 +46,10 @@ describe("createFAQSchema", () => {
 		];
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!.acceptedAnswer.text).toBe(
+		expect(schema.mainEntity[0]?.acceptedAnswer.text).toBe(
 			"Visit the download page to get started.",
 		);
-		expect(schema.mainEntity[0]!.acceptedAnswer.text).not.toContain("<a");
+		expect(schema.mainEntity[0]?.acceptedAnswer.text).not.toContain("<a");
 	});
 
 	it("strips multiple different HTML tags", () => {
@@ -62,7 +62,7 @@ describe("createFAQSchema", () => {
 		];
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!.acceptedAnswer.text).toBe(
+		expect(schema.mainEntity[0]?.acceptedAnswer.text).toBe(
 			"Cap offers 4K recording, instant sharing, and affordable pricing.",
 		);
 	});
@@ -127,8 +127,8 @@ describe("createFAQSchema", () => {
 
 		expect(schema["@type"]).toBe("FAQPage");
 		expect(schema.mainEntity).toHaveLength(5);
-		expect(schema.mainEntity[3]!.acceptedAnswer.text).not.toContain("<a");
-		expect(schema.mainEntity[3]!.acceptedAnswer.text).toContain("macOS");
+		expect(schema.mainEntity[3]?.acceptedAnswer.text).not.toContain("<a");
+		expect(schema.mainEntity[3]?.acceptedAnswer.text).toContain("macOS");
 	});
 
 	it("applies FAQPage schema to free-screen-recorder page FAQs", () => {
@@ -162,8 +162,8 @@ describe("createFAQSchema", () => {
 
 		expect(schema["@type"]).toBe("FAQPage");
 		expect(schema.mainEntity).toHaveLength(5);
-		expect(schema.mainEntity[0]!.acceptedAnswer.text).not.toContain("<a");
-		expect(schema.mainEntity[0]!.acceptedAnswer.text).toContain(
+		expect(schema.mainEntity[0]?.acceptedAnswer.text).not.toContain("<a");
+		expect(schema.mainEntity[0]?.acceptedAnswer.text).toContain(
 			"professional-grade",
 		);
 	});

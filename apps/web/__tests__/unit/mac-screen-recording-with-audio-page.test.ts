@@ -176,7 +176,7 @@ describe("MacScreenRecordingWithAudioPage FAQ schema", () => {
 			name: "Why doesn't macOS record internal audio by default?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});

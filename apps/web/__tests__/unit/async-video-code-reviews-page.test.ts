@@ -151,7 +151,7 @@ describe("AsyncVideoCodeReviewsPage FAQ schema", () => {
 			name: "What is an async video code review?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});
