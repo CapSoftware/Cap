@@ -35,22 +35,21 @@
 
 ## Current Status
 
-**Last Updated**: 2026-01-30
+**Last Updated**: 2026-03-25
 
 ### Performance Summary
 
-| Metric | Target | MP4 Mode | Fragmented Mode | Status |
-|--------|--------|----------|-----------------|--------|
-| Decoder Init (display) | <200ms | 337ms* | TBD | 🟡 Note |
-| Decoder Init (camera) | <200ms | 23ms | TBD | ✅ Pass |
-| Decode Latency (p95) | <50ms | 3.1ms | TBD | ✅ Pass |
-| Effective FPS | ≥30 fps | 549 fps | TBD | ✅ Pass |
-| Decode Jitter | <10ms | ~1ms | TBD | ✅ Pass |
-| A/V Sync (mic↔video) | <100ms | 77ms | TBD | ✅ Pass |
-| A/V Sync (system↔video) | <100ms | 162ms | TBD | 🟡 Known |
-| Camera-Display Drift | <100ms | 0ms | TBD | ✅ Pass |
+| Metric | Target | QHD (2560x1440) | 4K (3840x2160) | Status |
+|--------|--------|-----------------|----------------|--------|
+| Decoder Init (display) | <200ms | 123ms | 29ms | ✅ Pass |
+| Decoder Init (camera) | <200ms | 7ms | 6ms | ✅ Pass |
+| Decode Latency (p95) | <50ms | 1.4ms | 4.3ms | ✅ Pass |
+| Effective FPS | ≥30 fps | 1318 fps | 479 fps | ✅ Pass |
+| Decode Jitter | <10ms | ~1ms | ~2ms | ✅ Pass |
+| A/V Sync (mic↔video) | <100ms | 0ms | 0ms | ✅ Pass |
+| Camera-Display Drift | <100ms | 0ms | 0ms | ✅ Pass |
 
-*Display decoder init time includes multi-position pool initialization (3 decoder instances)
+*Display decoder init time includes multi-position pool initialization (5 decoder instances)
 
 ### What's Working
 - ✅ Playback test infrastructure in place
@@ -388,6 +387,37 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 **Decoder audit**: All `unwrap()` in `avassetreader.rs` eliminated. Remaining `unwrap()` calls in ffmpeg.rs and avassetreader decoder loop are on guaranteed-non-empty BTreeMap caches (safe by construction).
 
 **Stopping point**: All playback metrics healthy. System audio sync metadata fix applied.
+
+---
+
+### Session 2026-03-25 (Decoder Init + Frame Processing Optimizations)
+
+**Goal**: Run playback benchmarks, identify performance improvement areas, implement safe optimizations
+
+**What was done**:
+1. Ran full playback benchmarks on synthetic QHD (2560x1440) and 4K (3840x2160) recordings
+2. Deep-dived into entire playback pipeline: decoder, frame converter, WebSocket transport, WebGPU renderer
+3. Identified 5 concrete optimization opportunities via parallel code analysis agents
+4. Implemented 5 targeted optimizations
+5. Re-ran benchmarks to verify improvements with no regressions
+
+**Changes Made**:
+- `crates/video-decode/src/avassetreader.rs`: Single file open in KeyframeIndex::build (was opening the file twice - once for metadata, once for packet scan). Also caches pixel_format/width/height from the initial probe so pool decoders skip redundant FFmpeg opens.
+- `crates/rendering/src/decoder/frame_converter.rs`: BGRA→RGBA conversion now processes 8 pixels (32 bytes) per loop iteration with direct indexed writes instead of per-pixel push(). Added fast path for RGBA when stride==width*4 (single memcpy instead of per-row copies).
+- `apps/desktop/src-tauri/src/frame_ws.rs`: Consolidated WebSocket frame packing into single pack_ws_frame() function, removed redundant pack_*_ref helper functions.
+
+**Results**:
+- 4K decoder init: 66.8ms → 28.6ms (**-57%**)
+- QHD decoder init: 146.1ms → 123.1ms (**-16%**)
+- Camera decoder init: 9.6ms → 6.5ms (**-32%**)
+- KeyframeIndex build: 17ms → 10ms (**-41%**) at 4K
+- All playback metrics remain healthy, no regressions
+- BGRA→RGBA and RGBA copy improvements don't show in decoder benchmarks (these formats aren't used by the test videos) but benefit real recordings where macOS outputs BGRA
+
+**Stopping point**: All optimizations implemented and verified. Future directions:
+- Consider lazy pool decoder creation (defer creating secondary decoders until needed for scrubbing)
+- Shared memory / IPC instead of WebSocket for local frame transport (architectural change)
+- NEON SIMD intrinsics for BGRA→RGBA on Apple Silicon (currently uses unrolled scalar)
 
 ---
 
