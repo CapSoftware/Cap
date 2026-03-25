@@ -600,6 +600,7 @@ export function Timeline() {
 						maskSegments: [],
 						textSegments: [],
 						captionSegments: [],
+						keyboardSegments: [],
 					};
 					currentProject.timeline.captionSegments = createCaptionTrackSegments(
 						result.segments,
