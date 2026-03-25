@@ -27,11 +27,14 @@ import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
 import {
+	deriveGeneralSettings,
+	type GeneralSettingsStore,
+} from "~/utils/general-settings";
+import {
 	type AppTheme,
 	type CaptureWindow,
 	commands,
 	events,
-	type GeneralSettingsStore,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
@@ -65,32 +68,6 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 };
 
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
-
-const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
-	uploadIndividualFiles: false,
-	hideDockIcon: false,
-	autoCreateShareableLink: false,
-	enableNotifications: true,
-	enableNativeCameraPreview: false,
-	autoZoomOnClicks: false,
-	custom_cursor_capture2: true,
-	excludedWindows: [],
-	instantModeMaxResolution: 1920,
-	crashRecoveryRecording: true,
-	maxFps: 60,
-});
-
-const deriveInitialSettings = (
-	store: GeneralSettingsStore | null,
-): ExtendedGeneralSettingsStore => {
-	const defaults = createDefaultGeneralSettings();
-	if (!store) return defaults;
-
-	return {
-		...defaults,
-		...store,
-	};
-};
 
 const INSTANT_MODE_RESOLUTION_OPTIONS = [
 	{ value: 1280, label: "720p" },
@@ -214,11 +191,11 @@ function AppearanceSection(props: {
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
-		deriveInitialSettings(props.initialStore),
+		deriveGeneralSettings(props.initialStore),
 	);
 
 	createEffect(() => {
-		setSettings(reconcile(deriveInitialSettings(props.initialStore)));
+		setSettings(reconcile(deriveGeneralSettings(props.initialStore)));
 	});
 
 	const [windows, { refetch: refetchWindows }] = createResource(
@@ -357,7 +334,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		description: string;
 		value: T;
 		onChange: (value: T) => void;
-		options: { text: string; value: any }[];
+		options: { text: string; value: T }[];
 	}) => {
 		return (
 			<SettingItem label={props.label} description={props.description}>
@@ -523,6 +500,24 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
 						value={settings.crashRecoveryRecording ?? true}
 						onChange={(value) => handleChange("crashRecoveryRecording", value)}
+					/>
+					<ToggleSettingItem
+						label="Custom cursor capture in Studio Mode"
+						description="Studio Mode recordings capture cursor state separately so you can adjust cursor size and smoothing later in the editor."
+						value={!!settings.custom_cursor_capture2}
+						onChange={(value) => handleChange("custom_cursor_capture2", value)}
+					/>
+					<ToggleSettingItem
+						label="Auto zoom on clicks"
+						description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings."
+						value={!!settings.autoZoomOnClicks}
+						onChange={(value) => handleChange("autoZoomOnClicks", value)}
+					/>
+					<ToggleSettingItem
+						label="Capture keyboard presses for the editor"
+						description="Records keyboard presses during Studio Mode so you can generate keyboard overlays in the editor. This data is only used in the editor."
+						value={!!settings.captureKeyboardEvents}
+						onChange={(value) => handleChange("captureKeyboardEvents", value)}
 					/>
 					<div class="flex flex-col gap-1">
 						<SelectSettingItem
