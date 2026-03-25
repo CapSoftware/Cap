@@ -108,13 +108,15 @@ function LicenseKeyActivate(props: {
 			<Show when={store()}>
 				{(generalSettings) => {
 					const [licenseKey, setLicenseKey] = createSignal("");
+					const instanceId = generalSettings().instanceId;
+					if (!instanceId) throw new Error("No instance ID found");
 
 					const activateLicenseKey = createMutation(() => ({
 						mutationFn: async (vars: { licenseKey: string }) => {
 							const resp = await licenseApiClient.activateCommercialLicense({
 								headers: {
 									licensekey: vars.licenseKey,
-									instanceid: generalSettings().instanceId!,
+									instanceid: instanceId,
 								},
 								body: { reset: false },
 							});
@@ -126,7 +128,7 @@ function LicenseKeyActivate(props: {
 								"message" in resp.body
 							)
 								throw resp.body.message;
-							throw new Error((resp.body as any).toString());
+							throw new Error(String(resp.body));
 						},
 						onSuccess: (value, { licenseKey }) => {
 							props.onActivated({ ...value, licenseKey });
