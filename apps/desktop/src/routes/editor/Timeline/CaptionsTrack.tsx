@@ -1,7 +1,6 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import { createMemo, createRoot, For } from "solid-js";
-import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
 import { useTimelineContext } from "./context";
@@ -18,6 +17,8 @@ const MIN_SEGMENT_PIXELS = 40;
 export function CaptionsTrack(props: {
 	onDragStateChanged: (v: CaptionSegmentDragState) => void;
 	handleUpdatePlayhead: (e: MouseEvent) => void;
+	onGenerate: () => void | Promise<void>;
+	isGenerating: boolean;
 }) {
 	const {
 		project,
@@ -76,9 +77,7 @@ export function CaptionsTrack(props: {
 							setEditorState(
 								"timeline",
 								"selection",
-								next.length > 0
-									? { type: "caption", indices: next }
-									: null,
+								next.length > 0 ? { type: "caption", indices: next } : null,
 							);
 						} else {
 							setEditorState("timeline", "selection", {
@@ -124,19 +123,25 @@ export function CaptionsTrack(props: {
 
 	return (
 		<TrackRoot
-			onMouseEnter={() =>
-				setEditorState("timeline", "hoveredTrack", "caption")
-			}
+			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "caption")}
 			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
 		>
 			<For
 				each={captionSegments()}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
+					<div class="text-center text-sm text-[--text-tertiary] flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl">
 						<div>No captions</div>
-						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
-							Generate captions in the Captions tab
-						</div>
+						<button
+							class="h-8 px-3 rounded-lg border border-green-7/50 bg-green-6/15 text-green-11 text-xs font-medium transition-colors hover:bg-green-6/25 disabled:opacity-50 disabled:cursor-not-allowed"
+							disabled={props.isGenerating}
+							onMouseDown={(e) => e.stopPropagation()}
+							onClick={(e) => {
+								e.stopPropagation();
+								void props.onGenerate();
+							}}
+						>
+							{props.isGenerating ? "Generating..." : "Generate captions"}
+						</button>
 					</div>
 				}
 			>
@@ -216,14 +221,8 @@ export function CaptionsTrack(props: {
 									},
 									(e, value, initialMouseX) => {
 										const delta = (e.clientX - initialMouseX) * secsPerPixel();
-										const lowerBound = Math.min(
-											value.minDelta,
-											value.maxDelta,
-										);
-										const upperBound = Math.max(
-											value.minDelta,
-											value.maxDelta,
-										);
+										const lowerBound = Math.min(value.minDelta, value.maxDelta);
+										const upperBound = Math.max(value.minDelta, value.maxDelta);
 										const clampedDelta = Math.min(
 											upperBound,
 											Math.max(lowerBound, delta),
@@ -261,13 +260,7 @@ export function CaptionsTrack(props: {
 											value.minValue,
 											Math.min(value.maxValue, value.end + delta),
 										);
-										setProject(
-											"timeline",
-											"captionSegments",
-											i(),
-											"end",
-											next,
-										);
+										setProject("timeline", "captionSegments", i(), "end", next);
 									},
 								)}
 							/>

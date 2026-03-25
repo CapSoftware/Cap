@@ -1,7 +1,6 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import { createMemo, createRoot, For } from "solid-js";
-import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
 import { useTimelineContext } from "./context";
@@ -76,9 +75,7 @@ export function KeyboardTrack(props: {
 							setEditorState(
 								"timeline",
 								"selection",
-								next.length > 0
-									? { type: "keyboard", indices: next }
-									: null,
+								next.length > 0 ? { type: "keyboard", indices: next } : null,
 							);
 						} else {
 							setEditorState("timeline", "selection", {
@@ -154,11 +151,11 @@ export function KeyboardTrack(props: {
 							data-keyboard-segment
 							data-index={i()}
 							class={cx(
-								"border duration-200 hover:border-gray-6 transition-colors group",
-								"bg-gradient-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
-								isSelected() ? "border-gray-7" : "border-transparent",
+								"border duration-200 hover:border-sky-6 transition-colors group",
+								"bg-gradient-to-r from-[#0d1830] via-[#142445] to-[#0d1830] shadow-[inset_0_8px_12px_3px_rgba(120,180,255,0.16)]",
+								isSelected() ? "border-sky-7" : "border-transparent",
 							)}
-							innerClass="ring-gray-6"
+							innerClass="ring-sky-6"
 							segment={segment}
 							onMouseDown={(e) => {
 								e.stopPropagation();
@@ -216,14 +213,8 @@ export function KeyboardTrack(props: {
 									},
 									(e, value, initialMouseX) => {
 										const delta = (e.clientX - initialMouseX) * secsPerPixel();
-										const lowerBound = Math.min(
-											value.minDelta,
-											value.maxDelta,
-										);
-										const upperBound = Math.max(
-											value.minDelta,
-											value.maxDelta,
-										);
+										const lowerBound = Math.min(value.minDelta, value.maxDelta);
+										const upperBound = Math.max(value.minDelta, value.maxDelta);
 										const clampedDelta = Math.min(
 											upperBound,
 											Math.max(lowerBound, delta),

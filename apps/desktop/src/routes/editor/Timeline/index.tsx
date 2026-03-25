@@ -15,18 +15,28 @@ import {
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import toast from "solid-toast";
 
 import "./styles.css";
 
 import Tooltip from "~/components/Tooltip";
+import { defaultCaptionSettings } from "~/store/captions";
+import { defaultKeyboardSettings } from "~/store/keyboard";
 import { commands } from "~/utils/tauri";
+import {
+	createCaptionTrackSegments,
+	getCaptionGenerationErrorMessage,
+	transcribeEditorCaptions,
+} from "../captions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import type { MaskSegment } from "../masks";
 import type { TextSegment } from "../text";
 import { getTrackRowsWithCount, getUsedTrackCount } from "../timelineTracks";
 import { formatTime } from "../utils";
+import { type CaptionSegmentDragState, CaptionsTrack } from "./CaptionsTrack";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
+import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
@@ -39,6 +49,8 @@ const TIMELINE_HEADER_HEIGHT = 32;
 
 const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	clip: () => <IconLucideClapperboard class="size-4" />,
+	caption: () => <IconCapCaptions class="size-4" />,
+	keyboard: () => <IconLucideKeyboard class="size-4" />,
 	text: () => <IconLucideType class="size-4" />,
 	mask: () => <IconLucideBoxSelect class="size-4" />,
 	zoom: () => <IconLucideSearch class="size-4" />,
@@ -58,6 +70,18 @@ const trackDefinitions: TrackDefinition[] = [
 		label: "Clip",
 		icon: trackIcons.clip,
 		locked: true,
+	},
+	{
+		type: "caption",
+		label: "Captions",
+		icon: trackIcons.caption,
+		locked: false,
+	},
+	{
+		type: "keyboard",
+		label: "Keyboard",
+		icon: trackIcons.keyboard,
+		locked: false,
 	},
 	{
 		type: "text",
@@ -122,17 +146,23 @@ export function Timeline() {
 
 	const trackState = () => editorState.timeline.tracks;
 	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
+	const captionTrackVisible = () => trackState().caption;
+	const keyboardTrackVisible = () => trackState().keyboard;
 	const trackOptions = () =>
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
-				definition.type === "scene"
-					? trackState().scene
-					: definition.type === "mask"
-						? trackState().mask > 0
-						: definition.type === "text"
-							? trackState().text > 0
-							: true,
+				definition.type === "caption"
+					? trackState().caption
+					: definition.type === "keyboard"
+						? trackState().keyboard
+						: definition.type === "scene"
+							? trackState().scene
+							: definition.type === "mask"
+								? trackState().mask > 0
+								: definition.type === "text"
+									? trackState().text > 0
+									: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 			supportsMultiple:
 				definition.type === "mask" || definition.type === "text",
@@ -150,12 +180,49 @@ export function Timeline() {
 		);
 	const visibleTrackCount = () =>
 		2 +
+		(captionTrackVisible() ? 1 : 0) +
+		(keyboardTrackVisible() ? 1 : 0) +
 		textTrackRows().length +
 		maskTrackRows().length +
 		(sceneTrackVisible() ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
+		if (type === "caption") {
+			batch(() => {
+				if (!project.captions) {
+					setProject("captions", {
+						segments: [],
+						settings: { ...defaultCaptionSettings, enabled: next },
+					});
+				} else {
+					setProject("captions", "settings", "enabled", next);
+				}
+				setEditorState("timeline", "tracks", "caption", next);
+				if (!next && editorState.timeline.selection?.type === "caption") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
+			return;
+		}
+
+		if (type === "keyboard") {
+			batch(() => {
+				if (!project.keyboard) {
+					setProject("keyboard", {
+						settings: { ...defaultKeyboardSettings, enabled: next },
+					});
+				} else {
+					setProject("keyboard", "settings", "enabled", next);
+				}
+				setEditorState("timeline", "tracks", "keyboard", next);
+				if (!next && editorState.timeline.selection?.type === "keyboard") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
+			return;
+		}
+
 		if (type === "scene") {
 			setEditorState("timeline", "tracks", "scene", next);
 			return;
@@ -285,6 +352,8 @@ export function Timeline() {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
+				captionSegments: [],
+				keyboardSegments: [],
 			});
 			resume();
 		}
@@ -326,8 +395,12 @@ export function Timeline() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					captionSegments: [],
+					keyboardSegments: [],
 				};
 				project.timeline.sceneSegments ??= [];
+				project.timeline.captionSegments ??= [];
+				project.timeline.keyboardSegments ??= [];
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
@@ -339,6 +412,8 @@ export function Timeline() {
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
+	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
+	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -397,7 +472,9 @@ export function Timeline() {
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
-			textSegmentDragState.type !== "moving"
+			textSegmentDragState.type !== "moving" &&
+			captionSegmentDragState.type !== "moving" &&
+			keyboardSegmentDragState.type !== "moving"
 		) {
 			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
 			if (left == null) return;
@@ -447,6 +524,10 @@ export function Timeline() {
 
 			if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
+			} else if (selection.type === "caption") {
+				projectActions.deleteCaptionSegments(selection.indices);
+			} else if (selection.type === "keyboard") {
+				projectActions.deleteKeyboardSegments(selection.indices);
 			} else if (selection.type === "mask") {
 				projectActions.deleteMaskSegments(selection.indices);
 			} else if (selection.type === "text") {
@@ -477,6 +558,65 @@ export function Timeline() {
 			setEditorState("timeline", "selection", null);
 		}
 	});
+
+	const generateCaptionsFromTrack = async () => {
+		if (!editorInstance) return;
+
+		setEditorState("timeline", "tracks", "caption", true);
+		setEditorState("captions", "isGenerating", true);
+
+		try {
+			const result = await transcribeEditorCaptions(editorInstance.path);
+
+			if (result.segments.length < 1) {
+				toast.error(
+					"No captions were generated. The audio might be too quiet or unclear.",
+				);
+				return;
+			}
+
+			setProject(
+				produce((currentProject) => {
+					currentProject.captions ??= {
+						segments: [],
+						settings: { ...defaultCaptionSettings, enabled: true },
+					};
+					currentProject.captions.segments = result.segments;
+					currentProject.captions.settings = {
+						...defaultCaptionSettings,
+						...currentProject.captions.settings,
+						enabled: true,
+					};
+					currentProject.timeline ??= {
+						segments: [
+							{
+								start: 0,
+								end: duration(),
+								timescale: 1,
+							},
+						],
+						zoomSegments: [],
+						sceneSegments: [],
+						maskSegments: [],
+						textSegments: [],
+						captionSegments: [],
+					};
+					currentProject.timeline.captionSegments = createCaptionTrackSegments(
+						result.segments,
+					);
+				}),
+			);
+
+			setEditorState("timeline", "tracks", "caption", true);
+			toast.success("Captions generated successfully!");
+		} catch (error) {
+			console.error("Error generating captions:", error);
+			const errorMessage = getCaptionGenerationErrorMessage(error);
+			toast.error(`Failed to generate captions: ${errorMessage}`);
+		} finally {
+			setEditorState("captions", "isGenerating", false);
+		}
+	};
 
 	const split = () => editorState.timeline.interactMode === "split";
 
@@ -661,6 +801,28 @@ export function Timeline() {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<Show when={captionTrackVisible()}>
+								<TrackRow icon={trackIcons.caption}>
+									<CaptionsTrack
+										onDragStateChanged={(v) => {
+											captionSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+										onGenerate={generateCaptionsFromTrack}
+										isGenerating={editorState.captions.isGenerating}
+									/>
+								</TrackRow>
+							</Show>
+							<Show when={keyboardTrackVisible()}>
+								<TrackRow icon={trackIcons.keyboard}>
+									<KeyboardTrack
+										onDragStateChanged={(v) => {
+											keyboardSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<For each={textTrackRows()}>
 								{(laneIndex) => (
 									<TrackRow

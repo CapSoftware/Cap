@@ -16,7 +16,7 @@ export const defaultCaptionSettings: CaptionSettings = {
 	enabled: false,
 	font: "System Sans-Serif",
 	size: 50,
-	color: "#A0A0A0",
+	color: "#FFFFFF",
 	backgroundColor: "#000000",
 	backgroundOpacity: 95,
 	position: "bottom-center",

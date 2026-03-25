@@ -61,7 +61,7 @@ export function getSectionMarker(
 
 			if (left === null && right === null) return null;
 
-			return { type: "dual", left, right } as any;
+			return { type: "dual", left, right };
 		}
 	}
 
