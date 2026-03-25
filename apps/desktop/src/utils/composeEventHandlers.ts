@@ -1,6 +1,5 @@
 import type { JSX } from "solid-js";
 
-/** Call a JSX.EventHandlerUnion with the event. */
 export function callHandler<T, E extends Event>(
 	event: E & { currentTarget: T; target: Element },
 	handler: JSX.EventHandlerUnion<T, E> | undefined,
@@ -16,11 +15,10 @@ export function callHandler<T, E extends Event>(
 	return event?.defaultPrevented;
 }
 
-/** Create a new event handler which calls all given handlers in the order they were chained with the same event. */
-export function composeEventHandlers<T>(
-	handlers: Array<JSX.EventHandlerUnion<T, Event> | undefined>,
+export function composeEventHandlers<T, E extends Event = Event>(
+	handlers: Array<JSX.EventHandlerUnion<T, E> | undefined>,
 ) {
-	return (event: Event & { currentTarget: T; target: Element }) => {
+	return (event: E & { currentTarget: T; target: Element }) => {
 		for (const handler of handlers) {
 			callHandler(event, handler);
 		}
