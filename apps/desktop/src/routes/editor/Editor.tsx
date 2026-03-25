@@ -275,6 +275,10 @@ function Inner() {
 		{ name: "editorTimelineHeight" },
 	);
 	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
+	const [timelineViewportOverflow, setTimelineViewportOverflow] = createSignal<{
+		overflow: number;
+		visibleTrackCount: number;
+	} | null>(null);
 
 	const clampTimelineHeight = (value: number) => {
 		const available = layoutBounds.height ?? 0;
@@ -319,6 +323,23 @@ function Inner() {
 		if (!available) return;
 		setStoredTimelineHeight((height) => clampTimelineHeight(height));
 	});
+
+	createEffect(
+		on(timelineViewportOverflow, (next, prev) => {
+			if (
+				next &&
+				prev &&
+				next.visibleTrackCount > prev.visibleTrackCount &&
+				next.overflow > 0
+			) {
+				setStoredTimelineHeight((height) =>
+					clampTimelineHeight(height + next.overflow),
+				);
+			}
+
+			return next;
+		}),
+	);
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
 		throttledRenderFrame.clear();
@@ -463,7 +484,9 @@ function Inner() {
 							style={{ height: `${timelineHeight()}px` }}
 						>
 							<div class="h-full">
-								<Timeline />
+								<Timeline
+									onViewportOverflowChange={setTimelineViewportOverflow}
+								/>
 							</div>
 						</div>
 					</div>
