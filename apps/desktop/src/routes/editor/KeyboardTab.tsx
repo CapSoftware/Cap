@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
-import { createMemo, createSignal, Show } from "solid-js";
+import { batch, createMemo, createSignal, Show } from "solid-js";
 import { Toggle } from "~/components/Toggle";
 import {
 	defaultKeyboardSettings,
@@ -9,7 +9,15 @@ import {
 } from "~/store/keyboard";
 import { commands } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
+import IconCapCircleCheck from "~icons/cap/circle-check";
 import { useEditorContext } from "./context";
+import {
+	FONT_OPTIONS,
+	getTextWeightLabel,
+	HexColorInput,
+	KEYBOARD_POSITION_OPTIONS,
+	TEXT_WEIGHT_OPTIONS,
+} from "./text-style";
 import {
 	Field,
 	Input,
@@ -47,7 +55,7 @@ export function KeyboardTab() {
 			});
 			return;
 		}
-		setProject("keyboard", "settings", key as string, value);
+		setProject("keyboard", "settings", key, value);
 	};
 
 	const hasKeyboardSegments = createMemo(
@@ -55,6 +63,26 @@ export function KeyboardTab() {
 	);
 
 	const [isGenerating, setIsGenerating] = createSignal(false);
+
+	const ensureKeyboardSettings = (enabled: boolean) => {
+		if (!project?.keyboard) {
+			setProject("keyboard", {
+				settings: { ...defaultKeyboardSettings, enabled },
+			});
+			return;
+		}
+		setProject("keyboard", "settings", "enabled", enabled);
+	};
+
+	const setKeyboardVisible = (enabled: boolean) => {
+		batch(() => {
+			ensureKeyboardSettings(enabled);
+			setEditorState("timeline", "tracks", "keyboard", enabled);
+			if (!enabled && editorState.timeline.selection?.type === "keyboard") {
+				setEditorState("timeline", "selection", null);
+			}
+		});
+	};
 
 	const generateSegments = async () => {
 		setIsGenerating(true);
@@ -67,8 +95,11 @@ export function KeyboardTab() {
 			);
 
 			if (segments.length > 0) {
-				setProject("timeline", "keyboardSegments", segments);
-				setEditorState("timeline", "tracks", "keyboard", true);
+				batch(() => {
+					ensureKeyboardSettings(true);
+					setProject("timeline", "keyboardSegments", segments);
+					setEditorState("timeline", "tracks", "keyboard", true);
+				});
 			}
 		} catch (e) {
 			console.error("Failed to generate keyboard segments:", e);
@@ -97,7 +128,7 @@ export function KeyboardTab() {
 				<Subfield name="Show Keyboard Presses">
 					<Toggle
 						checked={getSetting("enabled")}
-						onChange={(checked) => updateSetting("enabled", checked)}
+						onChange={setKeyboardVisible}
 					/>
 				</Subfield>
 
@@ -110,13 +141,83 @@ export function KeyboardTab() {
 					<Field name="Font Settings" icon={<IconLucideKeyboard />}>
 						<div class="space-y-3">
 							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Font Family</span>
+								<KSelect<string>
+									options={FONT_OPTIONS.map((f) => f.value)}
+									value={getSetting("font")}
+									onChange={(value) => {
+										if (value === null) return;
+										updateSetting("font", value);
+									}}
+									itemComponent={(props) => (
+										<MenuItem<typeof KSelect.Item>
+											as={KSelect.Item}
+											item={props.item}
+										>
+											<KSelect.ItemLabel class="flex-1">
+												{
+													FONT_OPTIONS.find(
+														(f) => f.value === props.item.rawValue,
+													)?.label
+												}
+											</KSelect.ItemLabel>
+										</MenuItem>
+									)}
+								>
+									<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
+										<KSelect.Value<string>>
+											{(state) =>
+												FONT_OPTIONS.find(
+													(f) => f.value === state.selectedOption(),
+												)?.label
+											}
+										</KSelect.Value>
+										<KSelect.Icon>
+											<IconCapChevronDown />
+										</KSelect.Icon>
+									</KSelect.Trigger>
+									<KSelect.Portal>
+										<PopperContent<typeof KSelect.Content>
+											as={KSelect.Content}
+											class={topSlideAnimateClasses}
+										>
+											<MenuItemList<typeof KSelect.Listbox>
+												class="max-h-48 overflow-y-auto"
+												as={KSelect.Listbox}
+											/>
+										</PopperContent>
+									</KSelect.Portal>
+								</KSelect>
+							</div>
+
+							<div class="flex flex-col gap-2">
 								<span class="text-gray-11 text-sm">Size</span>
 								<Slider
 									value={[getSetting("size")]}
 									onChange={(v) => updateSetting("size", v[0])}
 									minValue={12}
-									maxValue={72}
+									maxValue={100}
 									step={1}
+								/>
+							</div>
+
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Text Color</span>
+								<HexColorInput
+									value={getSetting("color")}
+									onChange={(value) => updateSetting("color", value)}
+								/>
+							</div>
+						</div>
+					</Field>
+
+					<Field name="Background Settings" icon={<IconLucideKeyboard />}>
+						<div class="space-y-3">
+							<div class="flex flex-col gap-2">
+								<span class="text-gray-11 text-sm">Background Color</span>
+								<HexColorInput
+									value={getSetting("backgroundColor")}
+									onChange={(value) => updateSetting("backgroundColor", value)}
 								/>
 							</div>
 
@@ -133,13 +234,59 @@ export function KeyboardTab() {
 						</div>
 					</Field>
 
+					<Field name="Position" icon={<IconLucideKeyboard />}>
+						<KSelect<string>
+							options={KEYBOARD_POSITION_OPTIONS.map((p) => p.value)}
+							value={getSetting("position")}
+							onChange={(value) => {
+								if (value === null) return;
+								updateSetting("position", value);
+							}}
+							itemComponent={(props) => (
+								<MenuItem<typeof KSelect.Item>
+									as={KSelect.Item}
+									item={props.item}
+								>
+									<KSelect.ItemLabel class="flex-1">
+										{
+											KEYBOARD_POSITION_OPTIONS.find(
+												(p) => p.value === props.item.rawValue,
+											)?.label
+										}
+									</KSelect.ItemLabel>
+								</MenuItem>
+							)}
+						>
+							<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
+								<KSelect.Value<string>>
+									{(state) => (
+										<span>
+											{
+												KEYBOARD_POSITION_OPTIONS.find(
+													(p) => p.value === state.selectedOption(),
+												)?.label
+											}
+										</span>
+									)}
+								</KSelect.Value>
+								<KSelect.Icon>
+									<IconCapChevronDown />
+								</KSelect.Icon>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={topSlideAnimateClasses}
+								>
+									<MenuItemList<typeof KSelect.Listbox> as={KSelect.Listbox} />
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
+					</Field>
+
 					<Field name="Font Weight" icon={<IconLucideKeyboard />}>
 						<KSelect
-							options={[
-								{ label: "Normal", value: 400 },
-								{ label: "Medium", value: 500 },
-								{ label: "Bold", value: 700 },
-							]}
+							options={TEXT_WEIGHT_OPTIONS}
 							optionValue="value"
 							optionTextValue="label"
 							value={{
@@ -158,6 +305,9 @@ export function KeyboardTab() {
 									<KSelect.ItemLabel class="flex-1">
 										{selectItemProps.item.rawValue.label}
 									</KSelect.ItemLabel>
+									<KSelect.ItemIndicator class="ml-auto text-blue-9">
+										<IconCapCircleCheck />
+									</KSelect.ItemIndicator>
 								</MenuItem>
 							)}
 						>
@@ -166,17 +316,10 @@ export function KeyboardTab() {
 									label: string;
 									value: number;
 								}> class="truncate">
-									{(state) => {
-										const selected = state.selectedOption();
-										if (selected) return selected.label;
-										const weight = getSetting("fontWeight");
-										const option = [
-											{ label: "Normal", value: 400 },
-											{ label: "Medium", value: 500 },
-											{ label: "Bold", value: 700 },
-										].find((o) => o.value === weight);
-										return option ? option.label : "Bold";
-									}}
+									{(state) =>
+										state.selectedOption()?.label ??
+										getTextWeightLabel(getSetting("fontWeight"))
+									}
 								</KSelect.Value>
 								<KSelect.Icon>
 									<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />

@@ -1,6 +1,5 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { createWritableMemo } from "@solid-primitives/memo";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
 import { exists } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
@@ -13,6 +12,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import { defaultCaptionSettings } from "~/store/captions";
@@ -22,9 +22,22 @@ import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
 import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
-import { getColorPreviewBorderColor } from "./color-utils";
+import {
+	CAPTION_MODEL_FOLDER,
+	createCaptionTrackSegments,
+	DEFAULT_CAPTION_MODEL,
+	getCaptionGenerationErrorMessage,
+	syncCaptionWordsWithText,
+	transcribeEditorCaptions,
+} from "./captions";
 import { useEditorContext } from "./context";
-import { TextInput } from "./TextInput";
+import {
+	CAPTION_POSITION_OPTIONS,
+	FONT_OPTIONS,
+	getTextWeightLabel,
+	HexColorInput,
+	TEXT_WEIGHT_OPTIONS,
+} from "./text-style";
 import {
 	Field,
 	Input,
@@ -97,79 +110,47 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 	{ code: "ta", label: "Tamil" },
 ];
 
-interface PositionOption {
-	value: string;
-	label: string;
-}
-
-const POSITION_OPTIONS: PositionOption[] = [
-	{ value: "top-left", label: "Top Left" },
-	{ value: "top-center", label: "Top Center" },
-	{ value: "top-right", label: "Top Right" },
-	{ value: "bottom-left", label: "Bottom Left" },
-	{ value: "bottom-center", label: "Bottom Center" },
-	{ value: "bottom-right", label: "Bottom Right" },
-];
-
-const DEFAULT_MODEL = "small";
-const MODEL_FOLDER = "transcription_models";
-
-const fontOptions = [
-	{ value: "System Sans-Serif", label: "System Sans-Serif" },
-	{ value: "System Serif", label: "System Serif" },
-	{ value: "System Monospace", label: "System Monospace" },
-];
-
-function RgbInput(props: { value: string; onChange: (value: string) => void }) {
-	const [text, setText] = createWritableMemo(() => props.value);
-	let prevColor = props.value;
-	let colorInput!: HTMLInputElement;
-
-	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
-			<button
-				type="button"
-				class="size-[2rem] rounded-[0.5rem]"
-				style={{
-					"background-color": text(),
-					"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
-				}}
-				onClick={() => colorInput.click()}
-			/>
-			<input
-				ref={colorInput}
-				type="color"
-				class="absolute left-0 bottom-0 size-[2rem] opacity-0"
-				value={text()}
-				onChange={(e) => {
-					setText(e.target.value);
-					props.onChange(e.target.value);
-				}}
-			/>
-			<TextInput
-				class="w-[5rem] p-[0.375rem] border border-gray-3 text-gray-12 rounded-[0.5rem] bg-gray-2"
-				value={text()}
-				onFocus={() => {
-					prevColor = props.value;
-				}}
-				onInput={(e) => {
-					setText(e.currentTarget.value);
-					props.onChange(e.currentTarget.value);
-				}}
-				onBlur={(e) => {
-					if (!/^#[0-9A-F]{6}$/i.test(e.target.value)) {
-						setText(prevColor);
-						props.onChange(prevColor);
-					}
-				}}
-			/>
-		</div>
-	);
-}
-
 export function CaptionsTab() {
 	const { project, setProject, editorInstance, editorState, setEditorState } =
 		useEditorContext();
+
+	const selectedCaptionIndex = () =>
+		editorState.timeline.selection?.type === "caption" &&
+		editorState.timeline.selection.indices.length === 1
+			? editorState.timeline.selection.indices[0]
+			: -1;
+
+	const selectedCaptionSegment = () =>
+		project.timeline?.captionSegments?.[selectedCaptionIndex()];
+
+	const updateSelectedCaption = (
+		update: (
+			segment: NonNullable<ReturnType<typeof selectedCaptionSegment>>,
+		) => void,
+	) => {
+		const index = selectedCaptionIndex();
+		if (index < 0) return;
+
+		setProject(
+			produce((currentProject: typeof project) => {
+				const timelineSegment =
+					currentProject.timeline?.captionSegments?.[index];
+				if (!timelineSegment) return;
+
+				update(timelineSegment);
+
+				const captionSegment = currentProject.captions?.segments?.[index];
+				if (!captionSegment) return;
+
+				captionSegment.start = timelineSegment.start;
+				captionSegment.end = timelineSegment.end;
+				captionSegment.text = timelineSegment.text;
+				captionSegment.words = timelineSegment.words?.map((word) => ({
+					...word,
+				}));
+			}),
+		);
+	};
 
 	const getSetting = <K extends keyof CaptionSettings>(
 		key: K,
@@ -186,7 +167,7 @@ export function CaptionsTab() {
 		setProject("captions", "settings", key, value);
 	};
 
-	const [selectedModel, setSelectedModel] = createSignal(DEFAULT_MODEL);
+	const [selectedModel, setSelectedModel] = createSignal(DEFAULT_CAPTION_MODEL);
 	const [selectedLanguage, setSelectedLanguage] = createSignal("auto");
 	const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
 
@@ -221,7 +202,7 @@ export function CaptionsTab() {
 	onMount(async () => {
 		try {
 			const appDataDirPath = await appLocalDataDir();
-			const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+			const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 
 			if (!(await exists(modelsPath))) {
 				await commands.createDir(modelsPath, true);
@@ -316,7 +297,7 @@ export function CaptionsTab() {
 
 	const checkModelExists = async (modelName: string) => {
 		const appDataDirPath = await appLocalDataDir();
-		const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+		const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 		const path = await join(modelsPath, `${modelName}.bin`);
 		return await commands.checkModelExists(path);
 	};
@@ -329,7 +310,7 @@ export function CaptionsTab() {
 			setDownloadingModel(modelToDownload);
 
 			const appDataDirPath = await appLocalDataDir();
-			const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+			const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 			const modelPath = await join(modelsPath, `${modelToDownload}.bin`);
 
 			try {
@@ -365,46 +346,21 @@ export function CaptionsTab() {
 		setIsGenerating(true);
 
 		try {
-			const videoPath = editorInstance.path;
-			const lang = selectedLanguage();
-			const currentModelPath = await join(
-				await appLocalDataDir(),
-				MODEL_FOLDER,
-				`${selectedModel()}.bin`,
-			);
-
-			const result = await commands.transcribeAudio(
-				videoPath,
-				currentModelPath,
-				lang,
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				selectedModel(),
+				selectedLanguage(),
 			);
 
 			if (result && result.segments.length > 0) {
 				setProject("captions", "segments", result.segments);
 				updateCaptionSetting("enabled", true);
 
-				const trackSegments = result.segments.map(
-					(seg: {
-						id: string;
-						start: number;
-						end: number;
-						text: string;
-						words?: Array<{ text: string; start: number; end: number }>;
-					}) => ({
-						id: seg.id,
-						start: seg.start,
-						end: seg.end,
-						text: seg.text,
-						words: seg.words ?? [],
-						fadeDurationOverride: null,
-						lingerDurationOverride: null,
-						positionOverride: null,
-						colorOverride: null,
-						backgroundColorOverride: null,
-						fontSizeOverride: null,
-					}),
+				setProject(
+					"timeline",
+					"captionSegments",
+					createCaptionTrackSegments(result.segments),
 				);
-				setProject("timeline", "captionSegments", trackSegments);
 				setEditorState("timeline", "tracks", "caption", true);
 
 				toast.success("Captions generated successfully!");
@@ -415,23 +371,7 @@ export function CaptionsTab() {
 			}
 		} catch (error) {
 			console.error("Error generating captions:", error);
-			let errorMessage = "Unknown error occurred";
-
-			if (error instanceof Error) {
-				errorMessage = error.message;
-			} else if (typeof error === "string") {
-				errorMessage = error;
-			}
-
-			if (errorMessage.includes("No audio stream found")) {
-				errorMessage = "No audio found in the video file";
-			} else if (errorMessage.includes("Model file not found")) {
-				errorMessage = "Caption model not found. Please download it first";
-			} else if (errorMessage.includes("Failed to load Whisper model")) {
-				errorMessage =
-					"Failed to load the caption model. Try downloading it again";
-			}
-
+			const errorMessage = getCaptionGenerationErrorMessage(error);
 			toast.error(`Failed to generate captions: ${errorMessage}`);
 		} finally {
 			setIsGenerating(false);
@@ -613,7 +553,7 @@ export function CaptionsTab() {
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Font Family</span>
 									<KSelect<string>
-										options={fontOptions.map((f) => f.value)}
+										options={FONT_OPTIONS.map((f) => f.value)}
 										value={getSetting("font")}
 										onChange={(value) => {
 											if (value === null) return;
@@ -627,7 +567,7 @@ export function CaptionsTab() {
 											>
 												<KSelect.ItemLabel class="flex-1">
 													{
-														fontOptions.find(
+														FONT_OPTIONS.find(
 															(f) => f.value === props.item.rawValue,
 														)?.label
 													}
@@ -638,7 +578,7 @@ export function CaptionsTab() {
 										<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
 											<KSelect.Value<string>>
 												{(state) =>
-													fontOptions.find(
+													FONT_OPTIONS.find(
 														(f) => f.value === state.selectedOption(),
 													)?.label
 												}
@@ -695,8 +635,8 @@ export function CaptionsTab() {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-11 text-sm">Font Color</span>
-									<RgbInput
+									<span class="text-gray-11 text-sm">Text Color</span>
+									<HexColorInput
 										value={getSetting("color")}
 										onChange={(value) => updateCaptionSetting("color", value)}
 									/>
@@ -708,7 +648,7 @@ export function CaptionsTab() {
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Background Color</span>
-									<RgbInput
+									<HexColorInput
 										value={getSetting("backgroundColor")}
 										onChange={(value) =>
 											updateCaptionSetting("backgroundColor", value)
@@ -734,7 +674,7 @@ export function CaptionsTab() {
 
 						<Field name="Position" icon={<IconCapMessageBubble />}>
 							<KSelect<string>
-								options={POSITION_OPTIONS.map((p) => p.value)}
+								options={CAPTION_POSITION_OPTIONS.map((p) => p.value)}
 								value={getSetting("position")}
 								onChange={(value) => {
 									if (value === null) return;
@@ -748,7 +688,7 @@ export function CaptionsTab() {
 									>
 										<KSelect.ItemLabel class="flex-1">
 											{
-												POSITION_OPTIONS.find(
+												CAPTION_POSITION_OPTIONS.find(
 													(p) => p.value === props.item.rawValue,
 												)?.label
 											}
@@ -761,7 +701,7 @@ export function CaptionsTab() {
 										{(state) => (
 											<span>
 												{
-													POSITION_OPTIONS.find(
+													CAPTION_POSITION_OPTIONS.find(
 														(p) => p.value === state.selectedOption(),
 													)?.label
 												}
@@ -789,7 +729,7 @@ export function CaptionsTab() {
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
 									<span class="text-gray-11 text-sm">Highlight Color</span>
-									<RgbInput
+									<HexColorInput
 										value={getSetting("highlightColor")}
 										onChange={(value) =>
 											updateCaptionSetting("highlightColor", value)
@@ -817,11 +757,7 @@ export function CaptionsTab() {
 
 						<Field name="Font Weight" icon={<IconCapMessageBubble />}>
 							<KSelect
-								options={[
-									{ label: "Normal", value: 400 },
-									{ label: "Medium", value: 500 },
-									{ label: "Bold", value: 700 },
-								]}
+								options={TEXT_WEIGHT_OPTIONS}
 								optionValue="value"
 								optionTextValue="label"
 								value={{
@@ -852,17 +788,10 @@ export function CaptionsTab() {
 										label: string;
 										value: number;
 									}> class="truncate">
-										{(state) => {
-											const selected = state.selectedOption();
-											if (selected) return selected.label;
-											const weight = getSetting("fontWeight");
-											const option = [
-												{ label: "Normal", value: 400 },
-												{ label: "Medium", value: 500 },
-												{ label: "Bold", value: 700 },
-											].find((o) => o.value === weight);
-											return option ? option.label : "Bold";
-										}}
+										{(state) =>
+											state.selectedOption()?.label ??
+											getTextWeightLabel(getSetting("fontWeight"))
+										}
 									</KSelect.Value>
 									<KSelect.Icon>
 										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
@@ -902,19 +831,12 @@ export function CaptionsTab() {
 						}
 					>
 						{(() => {
-							const selectedIndex = () =>
-								editorState.timeline.selection?.type === "caption"
-									? editorState.timeline.selection.indices[0]
-									: -1;
-							const selectedSegment = () =>
-								project.timeline?.captionSegments?.[selectedIndex()];
-
 							return (
 								<Field
 									name="Selected Caption Override"
 									icon={<IconCapMessageBubble />}
 								>
-									<Show when={selectedSegment()}>
+									<Show when={selectedCaptionSegment()}>
 										{(seg) => (
 											<div class="space-y-3">
 												<Subfield name="Start Time">
@@ -924,13 +846,11 @@ export function CaptionsTab() {
 														step="0.1"
 														min={0}
 														onChange={(e) =>
-															setProject(
-																"timeline",
-																"captionSegments",
-																selectedIndex(),
-																"start",
-																Number.parseFloat(e.target.value),
-															)
+															updateSelectedCaption((segment) => {
+																segment.start = Number.parseFloat(
+																	e.target.value,
+																);
+															})
 														}
 													/>
 												</Subfield>
@@ -941,13 +861,9 @@ export function CaptionsTab() {
 														step="0.1"
 														min={seg().start}
 														onChange={(e) =>
-															setProject(
-																"timeline",
-																"captionSegments",
-																selectedIndex(),
-																"end",
-																Number.parseFloat(e.target.value),
-															)
+															updateSelectedCaption((segment) => {
+																segment.end = Number.parseFloat(e.target.value);
+															})
 														}
 													/>
 												</Subfield>
@@ -956,13 +872,15 @@ export function CaptionsTab() {
 														type="text"
 														value={seg().text}
 														onChange={(e) =>
-															setProject(
-																"timeline",
-																"captionSegments",
-																selectedIndex(),
-																"text",
-																e.target.value,
-															)
+															updateSelectedCaption((segment) => {
+																segment.text = e.target.value;
+																segment.words = syncCaptionWordsWithText(
+																	e.target.value,
+																	segment.words,
+																	segment.start,
+																	segment.end,
+																);
+															})
 														}
 													/>
 												</Subfield>
@@ -973,13 +891,9 @@ export function CaptionsTab() {
 																getSetting("fadeDuration")) * 100,
 														]}
 														onChange={(v) =>
-															setProject(
-																"timeline",
-																"captionSegments",
-																selectedIndex(),
-																"fadeDurationOverride",
-																v[0] / 100,
-															)
+															updateSelectedCaption((segment) => {
+																segment.fadeDurationOverride = v[0] / 100;
+															})
 														}
 														minValue={0}
 														maxValue={50}

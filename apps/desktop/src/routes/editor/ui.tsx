@@ -441,7 +441,7 @@ export const topSlideAnimateClasses =
 	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
 
 export function ComingSoonTooltip(
-	props: ComponentProps<typeof KTooltip> & any,
+	props: ComponentProps<typeof KTooltip> & Record<string, unknown>,
 ) {
 	const [trigger, root] = splitProps(props, ["children", "as"]);
 	return (

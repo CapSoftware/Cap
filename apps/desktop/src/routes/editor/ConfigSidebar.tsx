@@ -15,7 +15,6 @@ import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
 import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	batch,
@@ -41,21 +40,23 @@ import imageBg from "~/assets/illustrations/image.webp";
 import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
-import {
-	type BackgroundSource,
-	type CameraShape,
-	type ClipOffsets,
-	type CursorAnimationStyle,
-	type CursorType,
-	commands,
-	type SceneSegment,
-	type StereoMode,
-	type TimelineSegment,
-	type ZoomSegment,
+import type {
+	BackgroundSource,
+	CameraShape,
+	CaptionTrackSegment,
+	ClipOffsets,
+	CursorAnimationStyle,
+	CursorType,
+	KeyboardTrackSegment,
+	SceneSegment,
+	StereoMode,
+	TimelineSegment,
+	ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideBoxSelect from "~icons/lucide/box-select";
 import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
+import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
 import IconLucidePalette from "~icons/lucide/palette";
@@ -65,20 +66,13 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
-import {
-	getColorPreviewBorderColor,
-	hexToRgb,
-	RgbInput,
-	rgbToHex,
-} from "./color-utils";
+import { syncCaptionWordsWithText } from "./captions";
+import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
+import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
-import {
-	DEFAULT_GRADIENT_FROM,
-	DEFAULT_GRADIENT_TO,
-	type RGBColor,
-} from "./projectConfig";
+import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import type { TextSegment } from "./text";
@@ -86,6 +80,7 @@ import {
 	ComingSoonTooltip,
 	EditorButton,
 	Field,
+	Input,
 	MenuItem,
 	MenuItemList,
 	PopperContent,
@@ -93,6 +88,7 @@ import {
 	Subfield,
 	topSlideAnimateClasses,
 } from "./ui";
+import { formatTime } from "./utils";
 
 const BACKGROUND_SOURCES = {
 	wallpaper: "Wallpaper",
@@ -293,7 +289,9 @@ const TAB_IDS = {
 	transcript: "transcript",
 	audio: "audio",
 	cursor: "cursor",
+	keyboard: "keyboard",
 	hotkeys: "hotkeys",
+	captions: "captions",
 } as const;
 
 export function ConfigSidebar() {
@@ -355,6 +353,7 @@ export function ConfigSidebar() {
 			| "transcript"
 			| "audio"
 			| "cursor"
+			| "keyboard"
 			| "hotkeys"
 			| "captions",
 	});
@@ -386,7 +385,11 @@ export function ConfigSidebar() {
 							),
 						},
 						{
-							id: "captions" as const,
+							id: TAB_IDS.keyboard,
+							icon: IconLucideKeyboard,
+						},
+						{
+							id: TAB_IDS.captions,
 							icon: IconCapMessageBubble,
 						},
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
@@ -810,10 +813,16 @@ export function ConfigSidebar() {
 					</Field>
 				</KTabs.Content>
 				<KTabs.Content
-					value="captions"
+					value={TAB_IDS.captions}
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<CaptionsTab />
+				</KTabs.Content>
+				<KTabs.Content
+					value={TAB_IDS.keyboard}
+					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
+				>
+					<KeyboardTab />
 				</KTabs.Content>
 			</div>
 			<div
@@ -830,6 +839,151 @@ export function ConfigSidebar() {
 				<Show when={editorState.timeline.selection}>
 					{(selection) => (
 						<Suspense>
+							<Show
+								when={(() => {
+									const captionSelection = selection();
+									if (captionSelection.type !== "caption") return;
+
+									const segments = captionSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.captionSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is {
+												index: number;
+												segment: CaptionTrackSegment;
+											} => item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+
+									return { selection: captionSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} caption{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteCaptionSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<CaptionSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const keyboardSelection = selection();
+									if (keyboardSelection.type !== "keyboard") return;
+
+									const segments = keyboardSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.keyboardSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is {
+												index: number;
+												segment: KeyboardTrackSegment;
+											} => item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+
+									return { selection: keyboardSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() => {
+														setEditorState("timeline", "selection", null);
+														setState("selectedTab", TAB_IDS.keyboard);
+													}}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} keyboard{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteKeyboardSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<KeyboardSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
 							<Show
 								when={(() => {
 									const textSelection = selection();
@@ -2608,6 +2762,215 @@ function TextSegmentConfig(props: {
 					step={0.01}
 					formatTooltip="s"
 				/>
+			</Field>
+		</div>
+	);
+}
+
+function KeyboardSegmentConfig(props: {
+	segmentIndex: number;
+	segment: KeyboardTrackSegment;
+}) {
+	const { setProject } = useEditorContext();
+
+	const updateSegment = (fn: (segment: KeyboardTrackSegment) => void) => {
+		setProject(
+			"timeline",
+			"keyboardSegments",
+			produce((segments) => {
+				const segment = segments?.[props.segmentIndex];
+				if (!segment) return;
+				fn(segment);
+			}),
+		);
+	};
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Keyboard ${props.segmentIndex + 1}`}
+				icon={<IconLucideKeyboard class="size-4" />}
+			>
+				<Input
+					type="text"
+					value={props.segment.displayText}
+					onChange={(e) =>
+						updateSegment((segment) => {
+							segment.displayText = e.currentTarget.value;
+						})
+					}
+				/>
+			</Field>
+			<Field name="Timing" icon={<IconLucideTimer class="size-4" />}>
+				<div class="rounded-xl border border-gray-3 bg-gray-2/70 p-3 space-y-3">
+					<div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-start">
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>Start</span>
+								<span>{formatTime(props.segment.start)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.start.toFixed(2)}
+								step="0.1"
+								min={0}
+								onChange={(e) =>
+									updateSegment((segment) => {
+										segment.start = Number.parseFloat(e.currentTarget.value);
+									})
+								}
+							/>
+						</div>
+						<div class="pt-10 text-xs font-medium text-gray-10">to</div>
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>End</span>
+								<span>{formatTime(props.segment.end)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.end.toFixed(2)}
+								step="0.1"
+								min={props.segment.start}
+								onChange={(e) =>
+									updateSegment((segment) => {
+										segment.end = Number.parseFloat(e.currentTarget.value);
+									})
+								}
+							/>
+						</div>
+					</div>
+					<div class="flex items-center justify-between rounded-lg bg-gray-1/70 px-3 py-2 text-xs text-gray-11">
+						<span>Duration</span>
+						<span class="font-medium text-gray-12">
+							{Math.max(0, props.segment.end - props.segment.start).toFixed(2)}s
+						</span>
+					</div>
+				</div>
+			</Field>
+			<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
+				<Slider
+					value={[(props.segment.fadeDurationOverride ?? 0.15) * 100]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.fadeDurationOverride = value / 100;
+						})
+					}
+					minValue={0}
+					maxValue={50}
+					step={1}
+				/>
+			</Field>
+		</div>
+	);
+}
+
+function CaptionSegmentConfig(props: {
+	segmentIndex: number;
+	segment: CaptionTrackSegment;
+}) {
+	const { setProject } = useEditorContext();
+
+	const updateSegment = (fn: (segment: CaptionTrackSegment) => void) => {
+		setProject(
+			produce((project) => {
+				const timelineSegment =
+					project.timeline?.captionSegments?.[props.segmentIndex];
+				if (!timelineSegment) return;
+
+				fn(timelineSegment);
+
+				const captionSegment = project.captions?.segments?.[props.segmentIndex];
+				if (!captionSegment) return;
+
+				captionSegment.start = timelineSegment.start;
+				captionSegment.end = timelineSegment.end;
+				captionSegment.text = timelineSegment.text;
+				captionSegment.words = timelineSegment.words?.map((word) => ({
+					...word,
+				}));
+			}),
+		);
+	};
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Transcript ${props.segmentIndex + 1}`}
+				icon={<IconCapMessageBubble />}
+			>
+				<textarea
+					class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-gray-12 resize-none min-h-[96px] w-full"
+					value={props.segment.text}
+					onInput={(e) =>
+						updateSegment((segment) => {
+							segment.text = e.currentTarget.value;
+							segment.words = syncCaptionWordsWithText(
+								e.currentTarget.value,
+								segment.words,
+								segment.start,
+								segment.end,
+							);
+						})
+					}
+				/>
+			</Field>
+			<Field name="Timing" icon={<IconLucideTimer class="size-4" />}>
+				<div class="rounded-xl border border-gray-3 bg-gray-2/70 p-3 space-y-3">
+					<div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-start">
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>Start</span>
+								<span>{formatTime(props.segment.start)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.start.toFixed(2)}
+								step="0.1"
+								min={0}
+								onChange={(
+									e: Event & {
+										currentTarget: HTMLInputElement;
+										target: HTMLInputElement;
+									},
+								) =>
+									updateSegment((segment) => {
+										segment.start = Number.parseFloat(e.target.value);
+									})
+								}
+							/>
+						</div>
+						<div class="pt-10 text-xs font-medium text-gray-10">to</div>
+						<div class="rounded-lg border border-gray-3 bg-gray-1/80 p-2.5 space-y-2">
+							<div class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-gray-10">
+								<span>End</span>
+								<span>{formatTime(props.segment.end)}</span>
+							</div>
+							<Input
+								type="number"
+								value={props.segment.end.toFixed(2)}
+								step="0.1"
+								min={props.segment.start}
+								onChange={(
+									e: Event & {
+										currentTarget: HTMLInputElement;
+										target: HTMLInputElement;
+									},
+								) =>
+									updateSegment((segment) => {
+										segment.end = Number.parseFloat(e.target.value);
+									})
+								}
+							/>
+						</div>
+					</div>
+					<div class="flex items-center justify-between rounded-lg bg-gray-1/70 px-3 py-2 text-xs text-gray-11">
+						<span>Duration</span>
+						<span class="font-medium text-gray-12">
+							{Math.max(0, props.segment.end - props.segment.start).toFixed(2)}s
+						</span>
+					</div>
+				</div>
 			</Field>
 		</div>
 	);
