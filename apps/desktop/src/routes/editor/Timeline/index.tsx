@@ -6,11 +6,13 @@ import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	batch,
+	createEffect,
 	createRoot,
 	createSignal,
 	For,
 	Index,
 	type JSX,
+	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
@@ -46,6 +48,7 @@ import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
 const TIMELINE_HEADER_HEIGHT = 32;
+const PLAYHEAD_TOP_OFFSET = 24;
 
 const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	clip: () => <IconLucideClapperboard class="size-4" />,
@@ -122,7 +125,12 @@ function deleteTrackLane<T extends { track?: number }>(
 		});
 }
 
-export function Timeline() {
+export function Timeline(props: {
+	onViewportOverflowChange?: (value: {
+		overflow: number;
+		visibleTrackCount: number;
+	}) => void;
+}) {
 	const {
 		project,
 		setProject,
@@ -139,6 +147,10 @@ export function Timeline() {
 	const duration = () => editorInstance.recordingDuration;
 	const transform = () => editorState.timeline.transform;
 
+	const [timelineContainerRef, setTimelineContainerRef] =
+		createSignal<HTMLDivElement>();
+	const [timelineScrollRef, setTimelineScrollRef] =
+		createSignal<HTMLDivElement>();
 	const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
 	const timelineBounds = createElementBounds(timelineRef);
 
@@ -186,6 +198,29 @@ export function Timeline() {
 		maskTrackRows().length +
 		(sceneTrackVisible() ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
+
+	createEffect(() => {
+		const visibleTracks = visibleTrackCount();
+		const scrollContainer = timelineScrollRef();
+		if (!scrollContainer) return;
+
+		const frame = requestAnimationFrame(() => {
+			const currentScrollContainer = timelineScrollRef();
+			if (!currentScrollContainer) return;
+			props.onViewportOverflowChange?.({
+				visibleTrackCount: visibleTracks,
+				overflow: Math.ceil(
+					Math.max(
+						currentScrollContainer.scrollHeight -
+							currentScrollContainer.clientHeight,
+						0,
+					),
+				),
+			});
+		});
+
+		onCleanup(() => cancelAnimationFrame(frame));
+	});
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
 		if (type === "caption") {
@@ -466,8 +501,24 @@ export function Timeline() {
 		}
 	}
 
+	function getTimelineContentMetrics() {
+		const container = timelineContainerRef();
+		if (!container) return null;
+
+		const rect = container.getBoundingClientRect();
+
+		return {
+			left: rect.left + TIMELINE_PADDING + TRACK_GUTTER,
+			width: Math.max(
+				timelineBounds.width ??
+					rect.width - TIMELINE_PADDING * 2 - TRACK_GUTTER,
+				0,
+			),
+		};
+	}
+
 	async function handleUpdatePlayhead(e: MouseEvent) {
-		const { left } = timelineBounds;
+		const metrics = getTimelineContentMetrics();
 		if (
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
@@ -476,10 +527,9 @@ export function Timeline() {
 			captionSegmentDragState.type !== "moving" &&
 			keyboardSegmentDragState.type !== "moving"
 		) {
-			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
-			if (left == null) return;
+			if (!metrics) return;
 			const rawTime =
-				secsPerPixel() * (e.clientX - left) + transform().position;
+				secsPerPixel() * (e.clientX - metrics.left) + transform().position;
 			const newTime = Math.min(Math.max(0, rawTime), totalDuration());
 
 			// If playing, some backends require restart to seek reliably
@@ -628,8 +678,8 @@ export function Timeline() {
 
 		const FADE_WIDTH = 32;
 		const FADE_RAMP_PX = 50;
-		const LEFT_OFFSET = TIMELINE_PADDING + TRACK_GUTTER;
-		const RIGHT_PADDING = TIMELINE_PADDING;
+		const LEFT_OFFSET = TRACK_GUTTER;
+		const RIGHT_PADDING = 0;
 
 		// Calculate alpha for left fade (0 = fully faded, 1 = no fade)
 		// When pos is 0, we are at start -> no fade needed -> strength 0
@@ -671,12 +721,11 @@ export function Timeline() {
 			timelineBounds={timelineBounds}
 		>
 			<div
+				ref={setTimelineContainerRef}
 				class="pt-[2rem] relative overflow-hidden flex flex-col gap-2 h-full"
 				style={{
 					"padding-left": `${TIMELINE_PADDING}px`,
 					"padding-right": `${TIMELINE_PADDING}px`,
-					"mask-image": maskImage(),
-					"-webkit-mask-image": maskImage(),
 					"--track-height": trackHeight(),
 				}}
 				onMouseDown={(e) => {
@@ -693,11 +742,11 @@ export function Timeline() {
 					});
 				}}
 				onMouseMove={(e) => {
-					const { left, width } = timelineBounds;
+					const metrics = getTimelineContentMetrics();
 					if (editorState.playing) return;
-					if (left == null || !width || width <= 0) return;
-					const offsetX = e.clientX - left;
-					if (offsetX < 0 || offsetX > width) {
+					if (!metrics || metrics.width <= 0) return;
+					const offsetX = e.clientX - metrics.left;
+					if (offsetX < 0 || offsetX > metrics.width) {
 						setEditorState("previewTime", null);
 						return;
 					}
@@ -730,11 +779,14 @@ export function Timeline() {
 					}
 				}}
 			>
-				<div class="relative" style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}>
+				<div
+					class="relative z-20"
+					style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}
+				>
 					<div class="absolute inset-0 flex items-end">
 						<TimelineMarkings />
 					</div>
-					<div class="absolute bottom-0">
+					<div class="absolute bottom-0 z-30">
 						<Tooltip content="Add track">
 							<TrackManager
 								options={trackOptions()}
@@ -744,49 +796,56 @@ export function Timeline() {
 						</Tooltip>
 					</div>
 				</div>
-				<div class="relative flex-1 min-h-0">
-					<Show when={!editorState.playing && editorState.previewTime}>
-						{(time) => (
+				<Show when={!editorState.playing && editorState.previewTime}>
+					{(time) => (
+						<div
+							class={cx(
+								"flex absolute bottom-0 z-20 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+								split() ? "from-red-300" : "from-gray-400",
+							)}
+							style={{
+								left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+								top: `${PLAYHEAD_TOP_OFFSET}px`,
+								transform: `translateX(${
+									(time() - transform().position) / secsPerPixel()
+								}px)`,
+							}}
+						>
 							<div
 								class={cx(
-									"flex absolute bottom-0 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
-									split() ? "from-red-300" : "from-gray-400",
+									"absolute left-1/2 top-0 size-3 -translate-x-1/2 -translate-y-2 rounded-full",
+									split() ? "bg-red-300" : "bg-gray-10",
 								)}
-								style={{
-									left: `${TRACK_GUTTER}px`,
-									transform: `translateX(${
-										(time() - transform().position) / secsPerPixel() - 0.5
-									}px)`,
-									top: "0px",
-								}}
-							>
-								<div
-									class={cx(
-										"absolute -top-2 rounded-full size-3 -ml-[calc(0.37rem-0.5px)]",
-										split() ? "bg-red-300" : "bg-gray-10",
-									)}
-								/>
-							</div>
-						)}
-					</Show>
+							/>
+						</div>
+					)}
+				</Show>
+				<div
+					class={cx(
+						"absolute bottom-0 rounded-full z-20 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+						split() && "opacity-50",
+					)}
+					style={{
+						left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+						top: `${PLAYHEAD_TOP_OFFSET}px`,
+						transform: `translateX(${Math.min(
+							(editorState.playbackTime - transform().position) /
+								secsPerPixel(),
+							timelineBounds.width ?? 0,
+						)}px)`,
+					}}
+				>
+					<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+				</div>
+				<div
+					class="relative flex-1 min-h-0"
+					style={{
+						"mask-image": maskImage(),
+						"-webkit-mask-image": maskImage(),
+					}}
+				>
 					<div
-						class={cx(
-							"absolute bottom-0 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
-							split() && "opacity-50",
-						)}
-						style={{
-							left: `${TRACK_GUTTER}px`,
-							transform: `translateX(${Math.min(
-								(editorState.playbackTime - transform().position) /
-									secsPerPixel(),
-								timelineBounds.width ?? 0,
-							)}px)`,
-							top: "0px",
-						}}
-					>
-						<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
-					</div>
-					<div
+						ref={setTimelineScrollRef}
 						class="absolute inset-0 overflow-y-auto overflow-x-hidden pr-1"
 						onWheel={(e) => {
 							if (!e.ctrlKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
