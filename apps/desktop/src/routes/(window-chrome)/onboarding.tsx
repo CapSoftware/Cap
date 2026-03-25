@@ -66,7 +66,7 @@ interface ModeDetail {
 const modes: ModeDetail[] = [
 	{
 		id: "instant",
-		title: "Instant",
+		title: "Instant Mode",
 		tagline: "Record & share in seconds",
 		description:
 			"Your recording uploads as you capture. Stop recording and instantly get a shareable link — no waiting.",
@@ -80,7 +80,7 @@ const modes: ModeDetail[] = [
 	},
 	{
 		id: "studio",
-		title: "Studio",
+		title: "Studio Mode",
 		tagline: "Professional editing tools",
 		description:
 			"Record in full quality locally, then use the built-in editor to add backgrounds, padding, cursor effects, and more.",
@@ -94,7 +94,7 @@ const modes: ModeDetail[] = [
 	},
 	{
 		id: "screenshot",
-		title: "Screenshot",
+		title: "Screenshot Mode",
 		tagline: "Capture & beautify instantly",
 		description:
 			"Take screenshots with a single hotkey, add annotations and beautiful backgrounds, then share or copy instantly.",
@@ -125,8 +125,8 @@ const setupPermissions: readonly SetupPermission[] = [
 		name: "Screen Recording",
 		key: "screenRecording",
 		description:
-			"Add Cap in System Settings, then restart the app for changes to take effect.",
-		requiresManualGrant: true,
+			"Click Grant to allow when macOS asks, or pick Cap in System Settings if needed. Restart the app after allowing screen recording.",
+		requiresManualGrant: false,
 	},
 	{
 		name: "Accessibility",
@@ -308,6 +308,7 @@ export default function OnboardingPage() {
 	const [isExiting, setIsExiting] = createSignal(false);
 	const [permissionsNeeded, setPermissionsNeeded] = createSignal(false);
 	const [permsGranted, setPermsGranted] = createSignal(false);
+	const [corePermsGranted, setCorePermsGranted] = createSignal(false);
 	const [ready, setReady] = createSignal(false);
 
 	const settings = generalSettingsStore.createQuery();
@@ -334,10 +335,12 @@ export default function OnboardingPage() {
 		if (s === undefined || ready()) return;
 
 		commands.doPermissionsCheck(true).then((check) => {
-			const needs = !(
-				isPermitted(check.screenRecording) && isPermitted(check.accessibility)
-			);
+			const coreOk =
+				isPermitted(check.screenRecording) && isPermitted(check.accessibility);
+			const needs = !coreOk;
 			setPermissionsNeeded(needs);
+			setPermsGranted(coreOk);
+			setCorePermsGranted(coreOk);
 			setReady(true);
 		});
 	});
@@ -402,8 +405,8 @@ export default function OnboardingPage() {
 
 	const nextDisabled = () => step() === 0 && !permsGranted();
 
-	const handleSkipRemainder = () => {
-		if (step() !== 0 || !permsGranted() || permissionsOnly()) return;
+	const handleSkipOnboarding = () => {
+		if (!corePermsGranted() || permissionsOnly()) return;
 		handleFinish();
 	};
 
@@ -478,6 +481,7 @@ export default function OnboardingPage() {
 							<PermissionsStep
 								active={step() === 0 && !showStartupOverlay()}
 								onPermissionsChanged={setPermsGranted}
+								onCorePermissionsChanged={setCorePermsGranted}
 							/>
 						</StepPanel>
 						<Show when={!permissionsOnly()}>
@@ -519,13 +523,12 @@ export default function OnboardingPage() {
 							nextLabel={nextLabel()}
 							showBack={step() > 0}
 							nextDisabled={nextDisabled()}
-							showSkipPermissions={
-								step() === 0 &&
-								permsGranted() &&
+							showSkipOnboarding={
+								corePermsGranted() &&
 								!permissionsOnly() &&
 								!showStartupOverlay()
 							}
-							onSkip={handleSkipRemainder}
+							onSkip={handleSkipOnboarding}
 						/>
 					</Show>
 					<Show when={showStartupOverlay()}>
@@ -548,7 +551,7 @@ function StepNavigation(props: {
 	nextLabel: string;
 	showBack: boolean;
 	nextDisabled?: boolean;
-	showSkipPermissions?: boolean;
+	showSkipOnboarding?: boolean;
 	onSkip?: () => void;
 }) {
 	return (
@@ -599,13 +602,13 @@ function StepNavigation(props: {
 								<IconLucideArrowRight class="size-4" />
 							</Show>
 						</Button>
-						<Show when={props.showSkipPermissions}>
+						<Show when={props.showSkipOnboarding}>
 							<button
 								type="button"
 								onClick={() => props.onSkip?.()}
 								class="text-[11px] text-gray-9 hover:text-gray-11 transition-colors duration-200 py-0.5"
 							>
-								Skip
+								Skip onboarding
 							</button>
 						</Show>
 					</div>
@@ -1919,6 +1922,7 @@ function StartupOverlay(props: {
 function PermissionsStep(props: {
 	active: boolean;
 	onPermissionsChanged: (allRequired: boolean) => void;
+	onCorePermissionsChanged: (granted: boolean) => void;
 }) {
 	const [visible, setVisible] = createSignal(false);
 	const [initialCheck, setInitialCheck] = createSignal(true);
@@ -1959,36 +1963,69 @@ function PermissionsStep(props: {
 			.filter((p) => !p.optional)
 			.every((p) => isPermitted(c[p.key]));
 		props.onPermissionsChanged(allRequired);
+		props.onCorePermissionsChanged(
+			isPermitted(c.screenRecording) && isPermitted(c.accessibility),
+		);
 	});
 
+	const maybePromptRestartForScreenRecording = async () => {
+		const shouldRestart = await ask(
+			"After adding Cap in System Settings, you'll need to restart the app for the permission to take effect.",
+			{
+				title: "Restart Required",
+				kind: "info",
+				okLabel: "Restart, I've granted permission",
+				cancelLabel: "No, I still need to add it",
+			},
+		);
+		if (shouldRestart) {
+			await relaunch();
+		}
+	};
+
+	const [requestingPermission, setRequestingPermission] = createSignal(false);
+
 	const requestPermission = async (permission: OSPermission) => {
+		if (requestingPermission()) return;
+		setRequestingPermission(true);
 		try {
 			await commands.requestPermission(permission);
+			setInitialCheck(false);
+			const result = await commands.doPermissionsCheck(false);
+			setCheck(result as unknown as Record<string, OSPermissionStatus>);
+			const notYetPermitted =
+				(permission === "screenRecording" &&
+					!isPermitted(result.screenRecording)) ||
+				(permission === "accessibility" && !isPermitted(result.accessibility));
+			if (notYetPermitted) {
+				await commands.openPermissionSettings(permission);
+				if (permission === "screenRecording") {
+					await maybePromptRestartForScreenRecording();
+				}
+			}
 		} catch (err) {
 			console.error(`Error requesting permission: ${err}`);
+			fetchPermissions().catch(() => {});
+		} finally {
+			setRequestingPermission(false);
 		}
-		setInitialCheck(false);
-		fetchPermissions();
 	};
 
 	const openSettings = async (permission: OSPermission) => {
-		await commands.openPermissionSettings(permission);
-		if (permission === "screenRecording") {
-			const shouldRestart = await ask(
-				"After adding Cap in System Settings, you'll need to restart the app for the permission to take effect.",
-				{
-					title: "Restart Required",
-					kind: "info",
-					okLabel: "Restart, I've granted permission",
-					cancelLabel: "No, I still need to add it",
-				},
-			);
-			if (shouldRestart) {
-				await relaunch();
+		if (requestingPermission()) return;
+		setRequestingPermission(true);
+		try {
+			await commands.openPermissionSettings(permission);
+			if (permission === "screenRecording") {
+				await maybePromptRestartForScreenRecording();
 			}
+			setInitialCheck(false);
+			fetchPermissions();
+		} catch (err) {
+			console.error(`Error opening permission settings: ${err}`);
+		} finally {
+			setRequestingPermission(false);
 		}
-		setInitialCheck(false);
-		fetchPermissions();
 	};
 
 	return (
@@ -2059,6 +2096,7 @@ function PermissionsStep(props: {
 											size="sm"
 											variant="gray"
 											class="shrink-0"
+											disabled={requestingPermission()}
 											onClick={() =>
 												permission.requiresManualGrant ||
 												permStatus() === "denied"
