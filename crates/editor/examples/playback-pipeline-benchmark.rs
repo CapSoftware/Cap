@@ -150,6 +150,8 @@ async fn load_recording(
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
             });
         }
     }
