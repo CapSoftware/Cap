@@ -222,19 +222,21 @@ pub fn group_key_events(
             || is_modifier;
 
         if should_start_new_group && let Some(start) = current_group_start {
-            segment_counter += 1;
-            segments.push(KeyboardTrackSegment {
-                id: format!("kb-{segment_counter}"),
-                start: start / 1000.0,
-                end: (last_key_time + linger_duration_ms) / 1000.0,
-                display_text: current_display.clone(),
-                keys: current_keys.clone(),
-                fade_duration_override: None,
-                position_override: None,
-                color_override: None,
-                background_color_override: None,
-                font_size_override: None,
-            });
+            if !current_display.is_empty() {
+                segment_counter += 1;
+                segments.push(KeyboardTrackSegment {
+                    id: format!("kb-{segment_counter}"),
+                    start: start / 1000.0,
+                    end: (last_key_time + linger_duration_ms) / 1000.0,
+                    display_text: current_display.clone(),
+                    keys: current_keys.clone(),
+                    fade_duration_override: None,
+                    position_override: None,
+                    color_override: None,
+                    background_color_override: None,
+                    font_size_override: None,
+                });
+            }
             current_display.clear();
             current_keys.clear();
             current_group_start = None;
