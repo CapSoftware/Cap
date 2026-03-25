@@ -425,6 +425,24 @@ mod tests {
     }
 
     #[test]
+    fn backspace_to_empty_does_not_emit_blank_segment() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("a", 100.0),
+                key_up("a", 150.0),
+                key_down("Backspace", 200.0),
+                key_up("Backspace", 250.0),
+                key_down("x", 1000.0),
+                key_up("x", 1050.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "x");
+    }
+
+    #[test]
     fn empty_events_returns_empty() {
         let events = KeyboardEvents { presses: vec![] };
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
