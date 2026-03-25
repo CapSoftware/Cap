@@ -93,10 +93,12 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		return [...visible, { segment, index: hoveredIndex }];
 	});
 
-	const getMaskTime = (index: number) =>
-		hoveredMaskIndex() === index && hoveredMaskTime() !== null
-			? hoveredMaskTime()
+	const getMaskTime = (index: number) => {
+		const time = hoveredMaskTime();
+		return hoveredMaskIndex() === index && time !== null
+			? time
 			: currentAbsoluteTime();
+	};
 
 	const getMaskRectAtTime = (segment: MaskSegment, time: number) => {
 		const state = evaluateMask(segment, time);
