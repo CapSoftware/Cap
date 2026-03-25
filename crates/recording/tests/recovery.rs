@@ -116,6 +116,7 @@ impl TestRecording {
                         mic: None,
                         system_audio: None,
                         cursor: None,
+                        keyboard: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
@@ -475,6 +476,55 @@ fn test_fallback_to_directory_scan_when_no_manifest() {
         .collect();
 
     assert_eq!(entries.len(), 2, "Should find 2 video files by scanning");
+}
+
+#[test]
+fn test_inspect_recording_recovers_orphaned_m4s_fragments_with_init() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    let display_dir = recording.create_display_dir(0).unwrap();
+
+    recording
+        .write_manifest(
+            0,
+            "display",
+            &[("segment_001.m4s", false, 150)],
+            Some("init.mp4"),
+        )
+        .unwrap();
+    std::fs::write(display_dir.join("init.mp4"), create_minimal_mp4_data()).unwrap();
+    std::fs::write(display_dir.join("segment_001.m4s"), vec![1u8; 150]).unwrap();
+    std::fs::write(display_dir.join("segment_002.m4s"), vec![2u8; 175]).unwrap();
+    std::fs::write(display_dir.join("segment_003.m4s.tmp"), vec![3u8; 200]).unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::Failed {
+            error: "No recoverable segments found".to_string(),
+        })
+        .unwrap();
+
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+
+    assert_eq!(incomplete.recoverable_segments.len(), 1);
+
+    let segment = &incomplete.recoverable_segments[0];
+    assert_eq!(segment.display_fragments.len(), 2);
+    assert_eq!(
+        segment
+            .display_fragments
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect::<Vec<_>>(),
+        vec!["segment_001.m4s".to_string(), "segment_002.m4s".to_string()]
+    );
+    assert_eq!(
+        segment
+            .display_init_segment
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().to_string()),
+        Some("init.mp4".to_string())
+    );
 }
 
 #[test]

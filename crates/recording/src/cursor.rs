@@ -37,6 +37,11 @@ pub struct CursorActor {
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
 
+pub struct IncrementalCaptureOutputs {
+    pub cursor: Option<PathBuf>,
+    pub keyboard: Option<PathBuf>,
+}
+
 impl CursorActor {
     pub fn stop(&mut self) {
         drop(self.stop.take());
@@ -65,9 +70,7 @@ fn flush_keyboard_data(output_path: &Path, presses: &[KeyPressEvent]) {
     let events = KeyboardEvents {
         presses: presses.to_vec(),
     };
-    if let Ok(json) = serde_json::to_string_pretty(&events)
-        && let Err(e) = std::fs::write(output_path, json)
-    {
+    if let Err(e) = events.write_to_file(output_path) {
         tracing::error!(
             "Failed to write keyboard data to {}: {}",
             output_path.display(),
@@ -191,8 +194,7 @@ pub fn spawn_cursor_recorder(
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: Timestamps,
-    output_path: Option<PathBuf>,
-    keyboard_output_path: Option<PathBuf>,
+    incremental_outputs: IncrementalCaptureOutputs,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
@@ -358,11 +360,11 @@ pub fn spawn_cursor_recorder(
 
             last_keys = current_keys;
 
-            if let Some(ref path) = output_path
-                && last_flush.elapsed() >= flush_interval
-            {
-                flush_cursor_data(path, &response.moves, &response.clicks);
-                if let Some(ref kb_path) = keyboard_output_path {
+            if last_flush.elapsed() >= flush_interval {
+                if let Some(ref path) = incremental_outputs.cursor {
+                    flush_cursor_data(path, &response.moves, &response.clicks);
+                }
+                if let Some(ref kb_path) = incremental_outputs.keyboard {
                     flush_keyboard_data(kb_path, &response.keyboard_presses);
                 }
                 last_flush = Instant::now();
@@ -371,11 +373,11 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
-        if let Some(ref path) = output_path {
+        if let Some(ref path) = incremental_outputs.cursor {
             flush_cursor_data(path, &response.moves, &response.clicks);
         }
 
-        if let Some(ref kb_path) = keyboard_output_path {
+        if let Some(ref kb_path) = incremental_outputs.keyboard {
             flush_keyboard_data(kb_path, &response.keyboard_presses);
         }
 
