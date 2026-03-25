@@ -20,7 +20,6 @@ import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
 	enhanceAudioFromUrl,
-	isAudioEnhancementConfigured,
 } from "@/lib/audio-enhance";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
 import { startAiGeneration } from "@/lib/generate-ai";
@@ -352,7 +351,7 @@ async function queueAiGeneration(
 	await startAiGeneration(videoId as Video.VideoId, userId);
 }
 
-async function markEnhancedAudioProcessing(videoId: string): Promise<void> {
+async function _markEnhancedAudioProcessing(videoId: string): Promise<void> {
 	"use step";
 
 	const [video] = await db()
@@ -373,7 +372,7 @@ async function markEnhancedAudioProcessing(videoId: string): Promise<void> {
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
-async function enhanceAndSaveAudio(
+async function _enhanceAndSaveAudio(
 	videoId: string,
 	userId: string,
 	audioUrl: string,
