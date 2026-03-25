@@ -84,12 +84,16 @@ pub fn copy_rgba_plane(data: &[u8], stride: usize, width: usize, height: usize) 
     debug_assert!(stride >= width * 4, "stride too small for RGBA frame");
 
     let row_len = width * 4;
-    let mut frame_buffer = Vec::with_capacity(row_len * height);
+    let total = row_len * height;
 
+    if stride == row_len && data.len() >= total {
+        return data[..total].to_vec();
+    }
+
+    let mut frame_buffer = Vec::with_capacity(total);
     for row in data.chunks(stride).take(height) {
         frame_buffer.extend_from_slice(&row[..row_len]);
     }
-
     frame_buffer
 }
 
@@ -98,15 +102,61 @@ pub fn copy_bgra_to_rgba(data: &[u8], stride: usize, width: usize, height: usize
     debug_assert!(stride >= width * 4, "stride too small for BGRA frame");
 
     let row_len = width * 4;
-    let mut frame_buffer = Vec::with_capacity(row_len * height);
+    let total = row_len * height;
+    let mut frame_buffer = vec![0u8; total];
 
+    let mut dst_offset = 0;
     for row in data.chunks(stride).take(height) {
-        for pixel in row[..row_len].chunks_exact(4) {
-            frame_buffer.push(pixel[2]);
-            frame_buffer.push(pixel[1]);
-            frame_buffer.push(pixel[0]);
-            frame_buffer.push(pixel[3]);
+        let src = &row[..row_len];
+        let dst = &mut frame_buffer[dst_offset..dst_offset + row_len];
+
+        for (d, s) in dst.chunks_exact_mut(32).zip(src.chunks_exact(32)) {
+            d[0] = s[2];
+            d[1] = s[1];
+            d[2] = s[0];
+            d[3] = s[3];
+            d[4] = s[6];
+            d[5] = s[5];
+            d[6] = s[4];
+            d[7] = s[7];
+            d[8] = s[10];
+            d[9] = s[9];
+            d[10] = s[8];
+            d[11] = s[11];
+            d[12] = s[14];
+            d[13] = s[13];
+            d[14] = s[12];
+            d[15] = s[15];
+            d[16] = s[18];
+            d[17] = s[17];
+            d[18] = s[16];
+            d[19] = s[19];
+            d[20] = s[22];
+            d[21] = s[21];
+            d[22] = s[20];
+            d[23] = s[23];
+            d[24] = s[26];
+            d[25] = s[25];
+            d[26] = s[24];
+            d[27] = s[27];
+            d[28] = s[30];
+            d[29] = s[29];
+            d[30] = s[28];
+            d[31] = s[31];
         }
+
+        let processed = (row_len / 32) * 32;
+        for (d, s) in dst[processed..]
+            .chunks_exact_mut(4)
+            .zip(src[processed..].chunks_exact(4))
+        {
+            d[0] = s[2];
+            d[1] = s[1];
+            d[2] = s[0];
+            d[3] = s[3];
+        }
+
+        dst_offset += row_len;
     }
 
     frame_buffer

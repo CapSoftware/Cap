@@ -604,14 +604,7 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset) -> bool {
 fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
-        &[
-            "h264_videotoolbox",
-            "h264_qsv",
-            "h264_nvenc",
-            "h264_amf",
-            "h264_mf",
-            "libx264",
-        ]
+        &["h264_videotoolbox", "libx264"]
     }
 
     #[cfg(target_os = "windows")]
