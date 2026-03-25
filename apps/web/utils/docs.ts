@@ -96,8 +96,8 @@ export function extractHeadings(content: string): DocHeading[] {
 	const headingRegex = /^(#{2,3})\s+(.+)$/gm;
 	const headings: DocHeading[] = [];
 	for (const match of content.matchAll(headingRegex)) {
-		const level = match[1]!.length;
-		const text = match[2]!.trim();
+		const level = match[1]?.length;
+		const text = match[2]?.trim();
 		const slug = text
 			.toLowerCase()
 			.replace(/\s+/g, "-")
