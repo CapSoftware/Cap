@@ -951,7 +951,7 @@ function CameraPreviewInline() {
 	let reusableFrameWidth = 0;
 	let reusableFrameHeight = 0;
 
-	const cameraWsPort = (window as any).__CAP__?.cameraWsPort;
+	const cameraWsPort = window.__CAP__?.cameraWsPort;
 	const hasCameraSelected = () => rawOptions.cameraID !== null;
 
 	const getReusableFrame = (width: number, height: number) => {

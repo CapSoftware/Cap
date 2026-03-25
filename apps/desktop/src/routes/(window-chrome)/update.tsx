@@ -2,7 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { check } from "@tauri-apps/plugin-updater";
 import { createResource, createSignal, Match, Show, Switch } from "solid-js";
 
 export default function () {
