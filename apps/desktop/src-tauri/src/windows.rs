@@ -95,6 +95,31 @@ fn hide_recording_windows(app: &AppHandle) {
     }
 }
 
+async fn ensure_camera_input_active(app_state: &mut App) {
+    if let Some(id) = app_state.selected_camera_id.clone()
+        && !app_state.camera_in_use
+    {
+        match app_state
+            .camera_feed
+            .ask(feeds::camera::SetInput { id })
+            .await
+        {
+            Ok(ready_future) => {
+                if let Err(err) = ready_future.await {
+                    error!("Camera failed to initialize: {err}");
+                    return;
+                }
+            }
+            Err(err) => {
+                error!("Failed to send SetInput to camera feed: {err}");
+                return;
+            }
+        }
+
+        app_state.camera_in_use = true;
+    }
+}
+
 async fn cleanup_camera_window(
     app: &AppHandle,
     window: Option<&WebviewWindow>,
@@ -517,7 +542,7 @@ impl CapWindowId {
             Self::Main => (330.0, 395.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
-            Self::Settings => (700.0, 540.0),
+            Self::Settings => (800.0, 580.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
@@ -693,6 +718,8 @@ impl ShowCapWindow {
                             None
                         };
 
+                        ensure_camera_input_active(&mut app_state).await;
+
                         if enable_native_camera_preview {
                             let camera_feed = app_state.camera_feed.clone();
                             if let Err(err) = app_state
@@ -772,6 +799,8 @@ impl ShowCapWindow {
                     } else {
                         None
                     };
+
+                    ensure_camera_input_active(&mut app_state).await;
 
                     if enable_native_camera_preview && !app_state.camera_preview.is_initialized() {
                         let camera_feed = app_state.camera_feed.clone();
@@ -1244,19 +1273,19 @@ impl ShowCapWindow {
                         app,
                         format!("/settings/{}", page.clone().unwrap_or_default()),
                     )
-                    .inner_size(600.0, 465.0)
-                    .min_inner_size(600.0, 465.0)
+                    .inner_size(800.0, 580.0)
+                    .min_inner_size(800.0, 580.0)
                     .resizable(true)
                     .maximized(false)
                     .build()?;
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(600.0, 465.0);
+                let (pos_x, pos_y) = cursor_monitor.center_position(800.0, 580.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    if let Err(e) = window.set_size(LogicalSize::new(600.0, 465.0)) {
+                    if let Err(e) = window.set_size(LogicalSize::new(800.0, 580.0)) {
                         warn!("Failed to set Settings window size on Windows: {}", e);
                     }
                     if let Err(e) = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y)) {
@@ -1576,21 +1605,7 @@ impl ShowCapWindow {
                             .set_position(tauri::LogicalPosition::new(camera_pos_x, camera_pos_y));
                     }
 
-                    if let Some(id) = state.selected_camera_id.clone()
-                        && !state.camera_in_use
-                    {
-                        match state.camera_feed.ask(feeds::camera::SetInput { id }).await {
-                            Ok(ready_future) => {
-                                if let Err(err) = ready_future.await {
-                                    error!("Camera failed to initialize: {err}");
-                                }
-                            }
-                            Err(err) => {
-                                error!("Failed to send SetInput to camera feed: {err}");
-                            }
-                        }
-                        state.camera_in_use = true;
-                    }
+                    ensure_camera_input_active(&mut state).await;
 
                     #[cfg(target_os = "macos")]
                     {

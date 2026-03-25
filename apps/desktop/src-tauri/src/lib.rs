@@ -2147,7 +2147,7 @@ async fn generate_keyboard_segments(
     let mut all_events = cap_project::KeyboardEvents { presses: vec![] };
 
     for segment in segments {
-        let events = segment.keyboard_events(&meta);
+        let events = segment.keyboard_events(meta);
         all_events.presses.extend(events.presses);
     }
 
@@ -3719,12 +3719,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             id,
                                             CapWindowId::TargetSelectOverlay { .. }
                                                 | CapWindowId::Main
-                                                | CapWindowId::Camera
                                         )
                                     {
                                         let _ = window.show();
                                     }
                                 }
+
+                                restore_camera_window(app);
 
                                 #[cfg(target_os = "windows")]
                                 if !has_open_editor_window(app) {
@@ -3740,12 +3741,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             id,
                                             CapWindowId::TargetSelectOverlay { .. }
                                                 | CapWindowId::Main
-                                                | CapWindowId::Camera
                                         )
                                     {
                                         let _ = window.show();
                                     }
                                 }
+                                restore_camera_window(app);
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
@@ -3947,9 +3948,25 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
         if let Some(main) = CapWindowId::Main.get(app) {
             let _ = main.show();
         }
-        if let Some(camera) = CapWindowId::Camera.get(app) {
-            let _ = camera.show();
-        }
+
+        restore_camera_window(app);
+    }
+}
+
+fn restore_camera_window(app: &AppHandle) {
+    let should_restore_camera = app
+        .state::<ArcLock<App>>()
+        .try_read()
+        .map(|state| state.selected_camera_id.is_some())
+        .unwrap_or(false);
+
+    if should_restore_camera {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let operation_lock = app.state::<CameraWindowOperationLock>();
+            let _operation_guard = operation_lock.lock().await;
+            let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
+        });
     }
 }
 
