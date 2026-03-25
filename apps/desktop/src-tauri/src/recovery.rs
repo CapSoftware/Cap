@@ -76,21 +76,13 @@ pub async fn find_incomplete_recordings(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<String, String> {
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
-
+pub async fn recover_recording(_app: AppHandle, project_path: String) -> Result<String, String> {
     let path = PathBuf::from(&project_path);
 
-    let incomplete_list = RecoveryManager::find_incomplete(&recordings_dir);
-
-    let recording = incomplete_list
-        .into_iter()
-        .find(|r| r.project_path == path)
-        .ok_or_else(|| "Recording not found in incomplete list".to_string())?;
+    let recording = tokio::task::spawn_blocking(move || RecoveryManager::inspect_recording(&path))
+        .await
+        .map_err(|e| format!("Recovery scan task failed: {e}"))?
+        .ok_or_else(|| "No recoverable segments found".to_string())?;
 
     if recording.recoverable_segments.is_empty() {
         return Err("No recoverable segments found".to_string());

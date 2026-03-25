@@ -878,6 +878,12 @@ pub async fn start_recording(
                                     .map(|s| s.custom_cursor_capture)
                                     .unwrap_or_default(),
                             )
+                            .with_keyboard_capture(
+                                general_settings
+                                    .as_ref()
+                                    .map(|s| s.capture_keyboard_events)
+                                    .unwrap_or(true),
+                            )
                             .with_fragmented(
                                 general_settings
                                     .as_ref()
@@ -2393,7 +2399,7 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
 }
 
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
-    let incomplete_recording = RecoveryManager::find_incomplete_single(recording_dir);
+    let incomplete_recording = RecoveryManager::inspect_recording(recording_dir);
 
     if let Some(recording) = incomplete_recording {
         RecoveryManager::recover(&recording)
