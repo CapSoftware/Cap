@@ -500,9 +500,15 @@ impl MultipleSegment {
     pub fn keyboard_events(&self, meta: &RecordingMeta) -> KeyboardEvents {
         let keyboard_path = self.keyboard.clone().or_else(|| {
             let display_dir = self.display.path.parent()?;
-            let fallback = display_dir.join("keyboard.json");
-            let full = meta.path(&fallback);
-            full.exists().then_some(fallback)
+            let binary = display_dir.join(crate::KEYBOARD_EVENTS_FILE_NAME);
+            let binary_full = meta.path(&binary);
+            if binary_full.exists() {
+                return Some(binary);
+            }
+
+            let legacy = display_dir.join(crate::LEGACY_KEYBOARD_EVENTS_FILE_NAME);
+            let legacy_full = meta.path(&legacy);
+            legacy_full.exists().then_some(legacy)
         });
 
         let Some(keyboard_path) = keyboard_path else {

@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::fs::File;
 use std::path::Path;
+
+pub const KEYBOARD_EVENTS_FILE_NAME: &str = "keyboard.bin";
+pub const LEGACY_KEYBOARD_EVENTS_FILE_NAME: &str = "keyboard.json";
+const KEYBOARD_EVENTS_MAGIC: &[u8; 6] = b"CPKB01";
 
 #[derive(Serialize, Deserialize, Clone, Type, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -26,9 +29,36 @@ pub struct KeyboardEvents {
 
 impl KeyboardEvents {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
-        let file =
-            File::open(path).map_err(|e| format!("Failed to open keyboard events file: {e}"))?;
-        serde_json::from_reader(file).map_err(|e| format!("Failed to parse keyboard events: {e}"))
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("Failed to open keyboard events file: {e}"))?;
+        let config = bincode::config::standard();
+
+        if let Some(payload) = bytes.strip_prefix(KEYBOARD_EVENTS_MAGIC) {
+            return bincode::serde::decode_from_slice::<Self, _>(payload, config)
+                .map(|(events, _)| events)
+                .map_err(|e| format!("Failed to parse keyboard events binary payload: {e}"));
+        }
+
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == "bin")
+            && let Ok((events, _)) = bincode::serde::decode_from_slice::<Self, _>(&bytes, config)
+        {
+            return Ok(events);
+        }
+
+        serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Failed to parse keyboard events legacy JSON: {e}"))
+    }
+
+    pub fn write_to_file(&self, path: &Path) -> Result<(), String> {
+        let mut bytes = KEYBOARD_EVENTS_MAGIC.to_vec();
+        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())
+            .map_err(|e| format!("Failed to serialize keyboard events: {e}"))?;
+        bytes.extend(payload);
+        std::fs::write(path, bytes)
+            .map_err(|e| format!("Failed to write keyboard events file: {e}"))
     }
 }
 
@@ -55,7 +85,7 @@ const SPECIAL_KEY_SYMBOLS: &[(&str, &str)] = &[
 ];
 
 fn is_modifier_key(key: &str) -> bool {
-    MODIFIER_KEYS.iter().any(|&m| key == m)
+    MODIFIER_KEYS.contains(&key)
 }
 
 fn special_key_symbol(key: &str) -> Option<&'static str> {
@@ -191,8 +221,7 @@ pub fn group_key_events(
             || (event.time_ms - last_key_time) > grouping_threshold_ms
             || is_modifier;
 
-        if should_start_new_group && current_group_start.is_some() {
-            let start = current_group_start.unwrap();
+        if should_start_new_group && let Some(start) = current_group_start {
             segment_counter += 1;
             segments.push(KeyboardTrackSegment {
                 id: format!("kb-{segment_counter}"),
@@ -284,8 +313,9 @@ pub fn group_key_events(
         }
     }
 
-    if current_group_start.is_some() && !current_display.is_empty() {
-        let start = current_group_start.unwrap();
+    if let Some(start) = current_group_start
+        && !current_display.is_empty()
+    {
         segment_counter += 1;
         segments.push(KeyboardTrackSegment {
             id: format!("kb-{segment_counter}"),
@@ -408,5 +438,48 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "⏎");
+    }
+
+    #[test]
+    fn roundtrips_binary_keyboard_events() {
+        let events = KeyboardEvents {
+            presses: vec![key_down("a", 100.0), key_up("a", 150.0)],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(KEYBOARD_EVENTS_FILE_NAME);
+
+        events.write_to_file(&path).unwrap();
+
+        let loaded = KeyboardEvents::load_from_file(&path).unwrap();
+        assert_eq!(loaded.presses, events.presses);
+    }
+
+    #[test]
+    fn loads_legacy_json_keyboard_events() {
+        let events = KeyboardEvents {
+            presses: vec![key_down("b", 100.0), key_up("b", 150.0)],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LEGACY_KEYBOARD_EVENTS_FILE_NAME);
+
+        std::fs::write(&path, serde_json::to_vec(&events).unwrap()).unwrap();
+
+        let loaded = KeyboardEvents::load_from_file(&path).unwrap();
+        assert_eq!(loaded.presses, events.presses);
+    }
+
+    #[test]
+    fn loads_unversioned_binary_keyboard_events() {
+        let events = KeyboardEvents {
+            presses: vec![key_down("c", 100.0), key_up("c", 150.0)],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(KEYBOARD_EVENTS_FILE_NAME);
+        let bytes = bincode::serde::encode_to_vec(&events, bincode::config::standard()).unwrap();
+
+        std::fs::write(&path, bytes).unwrap();
+
+        let loaded = KeyboardEvents::load_from_file(&path).unwrap();
+        assert_eq!(loaded.presses, events.presses);
     }
 }
