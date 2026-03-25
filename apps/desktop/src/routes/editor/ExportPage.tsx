@@ -233,7 +233,7 @@ export function ExportPage() {
 		);
 	};
 
-	const matchingPreset = () => {
+	const _matchingPreset = () => {
 		const currentBpp = compressionBpp();
 		return COMPRESSION_OPTIONS.find(
 			(opt) => Math.abs(opt.bpp - currentBpp) < 0.001,

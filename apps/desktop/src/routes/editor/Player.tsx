@@ -11,6 +11,7 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
+import { createCaptionTrackSegments } from "./captions";
 import {
 	type EditorPreviewQuality,
 	FPS,
@@ -61,21 +62,17 @@ export function PlayerContent() {
 	// Load captions on mount
 	onMount(async () => {
 		if (editorInstance?.path) {
-			// Still load captions into the store since they will be used by the GPU renderer
 			await captionsStore.loadCaptions(editorInstance.path);
 
-			// Synchronize captions settings with project configuration
-			// This ensures the GPU renderer will receive the caption settings
 			if (editorInstance && project) {
 				const updatedProject = { ...project };
+				let projectDidChange = false;
+				const captionSegments = captionsStore.state.segments;
+				const hasStoredCaptions = captionSegments.length > 0;
 
-				// Add captions data to project configuration if it doesn't exist
-				if (
-					!updatedProject.captions &&
-					captionsStore.state.segments.length > 0
-				) {
+				if (!updatedProject.captions && hasStoredCaptions) {
 					updatedProject.captions = {
-						segments: captionsStore.state.segments.map((segment) => ({
+						segments: captionSegments.map((segment) => ({
 							id: segment.id,
 							start: segment.start,
 							end: segment.end,
@@ -83,11 +80,47 @@ export function PlayerContent() {
 						})),
 						settings: { ...captionsStore.state.settings },
 					};
+					projectDidChange = true;
+				}
 
-					// Update the project with captions data
+				if (
+					hasStoredCaptions &&
+					(updatedProject.timeline?.captionSegments?.length ?? 0) === 0
+				) {
+					updatedProject.timeline = {
+						...(updatedProject.timeline ?? {
+							segments: [
+								{
+									start: 0,
+									end: editorInstance.recordingDuration,
+									timescale: 1,
+								},
+							],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+						}),
+						captionSegments: createCaptionTrackSegments(captionSegments),
+					};
+					projectDidChange = true;
+				}
+
+				const hasCaptionTrackData =
+					hasStoredCaptions ||
+					(updatedProject.timeline?.captionSegments?.length ?? 0) > 0;
+
+				if (hasCaptionTrackData) {
+					setEditorState(
+						"timeline",
+						"tracks",
+						"caption",
+						updatedProject.captions?.settings?.enabled ?? true,
+					);
+				}
+
+				if (projectDidChange) {
 					setProject(updatedProject);
-
-					// Save the updated project configuration
 					await commands.setProjectConfig(
 						serializeProjectConfiguration(updatedProject),
 					);
