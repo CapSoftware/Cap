@@ -433,6 +433,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 						segments.splice(index + 1, 0, {
 							...segment,
+							id: `kb-split-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 							start: segment.start + time,
 							end: segment.end,
 						});
@@ -472,6 +473,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 						segments.splice(index + 1, 0, {
 							...segment,
+							id: `cap-split-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 							start: segment.start + time,
 							end: segment.end,
 						});
