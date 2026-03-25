@@ -6,9 +6,9 @@ use glyphon::{
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use log::warn;
-use wgpu::{include_wgsl, util::DeviceExt, Device, Queue};
+use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
-use crate::{parse_color_component, DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
+use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 #[derive(Debug, Clone)]
 pub struct CaptionWord {
@@ -93,6 +93,12 @@ impl CaptionPosition {
             Self::TopRight | Self::BottomRight => 0.95,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CaptionOverlayLayout {
+    pub rect: [f32; 4],
+    pub position: CaptionPosition,
 }
 
 const BASE_TEXT_OPACITY: f32 = 0.8;
@@ -196,6 +202,7 @@ pub struct CaptionsLayer {
     background_scissor: Option<[u32; 4]>,
     output_size: (u32, u32),
     has_caption: bool,
+    active_layout: Option<CaptionOverlayLayout>,
 }
 
 impl CaptionsLayer {
@@ -317,6 +324,7 @@ impl CaptionsLayer {
             background_scissor: None,
             output_size: (0, 0),
             has_caption: false,
+            active_layout: None,
         }
     }
 
@@ -339,6 +347,7 @@ impl CaptionsLayer {
         constants: &RenderVideoConstants,
     ) {
         self.has_caption = false;
+        self.active_layout = None;
         self.background_scissor = None;
         self.output_size = (output_size.x, output_size.y);
 
@@ -693,13 +702,17 @@ impl CaptionsLayer {
             Err(e) => warn!("Error preparing text: {e:?}"),
         }
 
+        let rect = [
+            background_left.max(0.0),
+            background_top.max(0.0),
+            box_width,
+            box_height,
+        ];
+
+        self.active_layout = Some(CaptionOverlayLayout { rect, position });
+
         let rect = CaptionBackgroundUniforms {
-            rect: [
-                background_left.max(0.0),
-                background_top.max(0.0),
-                box_width,
-                box_height,
-            ],
+            rect,
             color: [
                 background_color_rgb[0],
                 background_color_rgb[1],
@@ -748,6 +761,10 @@ impl CaptionsLayer {
 
     pub fn has_content(&self) -> bool {
         self.has_caption
+    }
+
+    pub fn active_layout(&self) -> Option<CaptionOverlayLayout> {
+        self.active_layout
     }
 
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

@@ -7,6 +7,7 @@ use glyphon::{
 use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
+use super::captions::{CaptionOverlayLayout, CaptionPosition};
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 #[repr(C)]
@@ -53,6 +54,100 @@ impl KeyboardPosition {
 }
 
 const BOUNCE_OFFSET_PIXELS: f32 = 6.0;
+const MIN_OVERLAY_GAP: f32 = 15.0;
+
+fn shares_caption_lane(
+    caption_position: CaptionPosition,
+    keyboard_position: KeyboardPosition,
+) -> bool {
+    matches!(
+        (caption_position, keyboard_position),
+        (CaptionPosition::TopLeft, KeyboardPosition::TopLeft)
+            | (CaptionPosition::TopCenter, KeyboardPosition::TopCenter)
+            | (CaptionPosition::TopRight, KeyboardPosition::TopRight)
+            | (CaptionPosition::BottomLeft, KeyboardPosition::BottomLeft)
+            | (
+                CaptionPosition::BottomCenter,
+                KeyboardPosition::AboveCaptions
+            )
+            | (
+                CaptionPosition::BottomCenter,
+                KeyboardPosition::BottomCenter
+            )
+            | (CaptionPosition::BottomRight, KeyboardPosition::BottomRight)
+    )
+}
+
+fn prefers_above_caption(keyboard_position: KeyboardPosition) -> bool {
+    matches!(
+        keyboard_position,
+        KeyboardPosition::AboveCaptions
+            | KeyboardPosition::BottomLeft
+            | KeyboardPosition::BottomCenter
+            | KeyboardPosition::BottomRight
+    )
+}
+
+fn resolve_keyboard_position(
+    keyboard_position: KeyboardPosition,
+    caption_layout: Option<CaptionOverlayLayout>,
+) -> KeyboardPosition {
+    if keyboard_position == KeyboardPosition::AboveCaptions && caption_layout.is_none() {
+        KeyboardPosition::BottomCenter
+    } else {
+        keyboard_position
+    }
+}
+
+fn resolve_background_top(
+    current_top: f32,
+    box_height: f32,
+    frame_height: f32,
+    keyboard_position: KeyboardPosition,
+    caption_layout: Option<CaptionOverlayLayout>,
+) -> f32 {
+    let Some(caption_layout) = caption_layout else {
+        return current_top;
+    };
+
+    if !shares_caption_lane(caption_layout.position, keyboard_position) {
+        return current_top;
+    }
+
+    let max_top = (frame_height - box_height).max(0.0);
+    let caption_top = caption_layout.rect[1];
+    let caption_bottom = caption_layout.rect[1] + caption_layout.rect[3];
+    let current_bottom = current_top + box_height;
+
+    if current_bottom + MIN_OVERLAY_GAP <= caption_top
+        || current_top >= caption_bottom + MIN_OVERLAY_GAP
+    {
+        return current_top.clamp(0.0, max_top);
+    }
+
+    let above_candidate = caption_top - MIN_OVERLAY_GAP - box_height;
+    let below_candidate = caption_bottom + MIN_OVERLAY_GAP;
+    let above_valid = above_candidate >= 0.0;
+    let below_valid = below_candidate <= max_top;
+
+    let adjusted_top = if prefers_above_caption(keyboard_position) {
+        if above_valid {
+            above_candidate
+        } else if below_valid {
+            below_candidate
+        } else {
+            current_top
+        }
+    } else if below_valid {
+        below_candidate
+    } else if above_valid {
+        above_candidate
+    } else {
+        current_top
+    };
+
+    adjusted_top.clamp(0.0, max_top)
+}
 
 pub struct KeyboardLayer {
     font_system: FontSystem,
@@ -186,6 +281,7 @@ impl KeyboardLayer {
         _segment_frames: &DecodedSegmentFrames,
         output_size: XY<u32>,
         constants: &RenderVideoConstants,
+        caption_layout: Option<CaptionOverlayLayout>,
     ) {
         self.has_content = false;
         self.background_scissor = None;
@@ -226,7 +322,7 @@ impl KeyboardLayer {
             .fade_duration_override
             .unwrap_or(settings.fade_duration) as f64;
 
-        let visible_text = build_visible_text(&active.segment, current_time);
+        let visible_text = build_visible_text(active.segment, current_time);
 
         if visible_text.is_empty() {
             return;
@@ -286,7 +382,7 @@ impl KeyboardLayer {
         ];
 
         let background_alpha =
-            ((settings.background_opacity as f32 / 100.0) * fade_opacity as f32).clamp(0.0, 1.0);
+            ((settings.background_opacity as f32 / 100.0) * fade_opacity).clamp(0.0, 1.0);
 
         let font_size_base = active.segment.font_size_override.unwrap_or(settings.size) as f32;
         let font_size = font_size_base * (height as f32 / 1080.0);
@@ -310,7 +406,7 @@ impl KeyboardLayer {
             Weight::NORMAL
         };
 
-        let text_alpha = (fade_opacity as f32).clamp(0.0, 1.0);
+        let text_alpha = fade_opacity.clamp(0.0, 1.0);
         let color = Color::rgba(
             (text_color[0] * 255.0) as u8,
             (text_color[1] * 255.0) as u8,
@@ -346,13 +442,26 @@ impl KeyboardLayer {
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
         let box_height = (text_height + padding * 2.0).min(height as f32).max(1.0);
 
-        let background_left = ((width as f32 - box_width) / 2.0).max(0.0);
+        let resolved_position = resolve_keyboard_position(position, caption_layout);
 
-        let center_y = height as f32 * position.y_factor();
-        let base_background_top =
-            (center_y - box_height / 2.0).clamp(0.0, (height as f32 - box_height).max(0.0));
-        let background_top = (base_background_top + bounce_offset as f32)
-            .clamp(0.0, (height as f32 - box_height).max(0.0));
+        let background_left = match resolved_position {
+            KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => margin,
+            KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
+                (width as f32 - margin - box_width).max(0.0)
+            }
+            _ => ((width as f32 - box_width) / 2.0).max(0.0),
+        };
+
+        let center_y = height as f32 * resolved_position.y_factor();
+        let max_background_top = (height as f32 - box_height).max(0.0);
+        let base_background_top = (center_y - box_height / 2.0).clamp(0.0, max_background_top);
+        let background_top = resolve_background_top(
+            (base_background_top + bounce_offset as f32).clamp(0.0, max_background_top),
+            box_height,
+            height as f32,
+            position,
+            caption_layout,
+        );
 
         let text_left = background_left + padding;
         let text_top = background_top + padding;
@@ -509,9 +618,21 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
     }
 
     let time_offset_from_start = (current_time - segment.start) * 1000.0;
+    let chars: Vec<char> = segment.display_text.chars().collect();
+
+    if segment.keys.len() != chars.len() {
+        if segment
+            .keys
+            .iter()
+            .any(|key| time_offset_from_start >= key.time_offset)
+        {
+            return segment.display_text.clone();
+        }
+
+        return String::new();
+    }
 
     let mut visible = String::new();
-    let chars: Vec<char> = segment.display_text.chars().collect();
 
     for (i, key) in segment.keys.iter().enumerate() {
         if time_offset_from_start >= key.time_offset && i < chars.len() {
@@ -568,5 +689,96 @@ fn calculate_keyboard_bounce(current_time: f64, start: f64, end: f64, fade_durat
         (ease * ease) * BOUNCE_OFFSET_PIXELS as f64
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        KeyboardPosition, build_visible_text, resolve_background_top, resolve_keyboard_position,
+    };
+    use crate::layers::{CaptionOverlayLayout, CaptionPosition};
+
+    #[test]
+    fn shortcut_segments_show_the_full_combo() {
+        let segment = cap_project::KeyboardTrackSegment {
+            id: "kb-1".to_string(),
+            start: 1.0,
+            end: 1.8,
+            display_text: "⌘t".to_string(),
+            keys: vec![cap_project::KeyPressDisplay {
+                key: "t".to_string(),
+                time_offset: 0.0,
+            }],
+            fade_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+        };
+
+        assert_eq!(build_visible_text(&segment, 1.0), "⌘t");
+    }
+
+    #[test]
+    fn above_captions_falls_back_to_bottom_center_without_caption_layout() {
+        assert_eq!(
+            resolve_keyboard_position(KeyboardPosition::AboveCaptions, None),
+            KeyboardPosition::BottomCenter
+        );
+    }
+
+    #[test]
+    fn bottom_keyboard_moves_above_captions_with_gap() {
+        let caption_layout = CaptionOverlayLayout {
+            rect: [100.0, 760.0, 400.0, 140.0],
+            position: CaptionPosition::BottomCenter,
+        };
+
+        let resolved_top = resolve_background_top(
+            720.0,
+            120.0,
+            1080.0,
+            KeyboardPosition::AboveCaptions,
+            Some(caption_layout),
+        );
+
+        assert_eq!(resolved_top, 625.0);
+    }
+
+    #[test]
+    fn top_keyboard_moves_below_captions_with_gap() {
+        let caption_layout = CaptionOverlayLayout {
+            rect: [100.0, 60.0, 400.0, 100.0],
+            position: CaptionPosition::TopCenter,
+        };
+
+        let resolved_top = resolve_background_top(
+            90.0,
+            80.0,
+            1080.0,
+            KeyboardPosition::TopCenter,
+            Some(caption_layout),
+        );
+
+        assert_eq!(resolved_top, 175.0);
+    }
+
+    #[test]
+    fn different_lanes_do_not_shift_keyboard() {
+        let caption_layout = CaptionOverlayLayout {
+            rect: [100.0, 760.0, 400.0, 140.0],
+            position: CaptionPosition::BottomLeft,
+        };
+
+        let resolved_top = resolve_background_top(
+            720.0,
+            120.0,
+            1080.0,
+            KeyboardPosition::BottomRight,
+            Some(caption_layout),
+        );
+
+        assert_eq!(resolved_top, 720.0);
     }
 }

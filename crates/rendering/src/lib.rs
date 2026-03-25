@@ -3059,6 +3059,7 @@ impl RendererLayers {
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
             constants,
+            self.captions.active_layout(),
         );
 
         Ok(())
@@ -3147,6 +3148,7 @@ impl RendererLayers {
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
             constants,
+            self.captions.active_layout(),
         );
 
         Ok(())
