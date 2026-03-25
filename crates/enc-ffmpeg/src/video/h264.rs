@@ -781,8 +781,9 @@ fn get_codec_and_options(
                             .map(|v| v.get())
                             .unwrap_or(4);
                         options.set("threads", &thread_count.to_string());
+                        options.set("bf", "0");
                         options.set("rc-lookahead", "10");
-                        options.set("b-adapt", "1");
+                        options.set("b-adapt", "0");
                         options.set("aq-mode", "1");
                         options.set("ref", "2");
                         options.set("subme", "2");
