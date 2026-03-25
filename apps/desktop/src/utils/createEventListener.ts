@@ -6,27 +6,14 @@ type EventListener<T> = {
 };
 
 type EventKey = keyof typeof events;
+type EventPayload<T> = T extends {
+	listen: (
+		cb: (event: { payload: infer Payload }) => void,
+	) => Promise<() => void>;
+}
+	? Payload
+	: never;
 
-/**
- * A SolidJS utility function that creates an event listener with automatic cleanup on unmount.
- *
- * @param eventListener - An event listener object from the events proxy (e.g., events.recordingDeleted)
- * @param callback - The callback function to execute when the event is received
- *
- * @example
- * ```tsx
- * import { createEventListener } from "~/utils/createEventListener";
- * import { events } from "~/utils/tauri";
- *
- * function MyComponent() {
- *   createEventListener(events.recordingDeleted, () => {
- *     console.log("Recording was deleted!");
- *   });
- *
- *   return <div>My Component</div>;
- * }
- * ```
- */
 export function createTauriEventListener<T>(
 	eventListener: EventListener<T>,
 	callback: (payload: T) => void,
@@ -42,28 +29,14 @@ export function createTauriEventListener<T>(
 		unlisten.then((cleanup) => cleanup());
 	});
 }
-
-/**
- * Alternative version that accepts the event key directly for more flexibility.
- *
- * @param eventKey - The key of the event from the events object (e.g., "recordingDeleted")
- * @param callback - The callback function to execute when the event is received
- *
- * @example
- * ```tsx
- * createEventListenerByKey("recordingDeleted", (payload) => {
- *   console.log("Recording deleted:", payload);
- * });
- * ```
- */
 export function createEventListenerByKey<K extends EventKey>(
 	eventKey: K,
-	callback: (
-		payload: (typeof events)[K] extends EventListener<infer T> ? T : never,
-	) => void,
+	callback: (payload: EventPayload<(typeof events)[K]>) => void,
 ): void {
-	const eventListener = events[eventKey] as EventListener<
-		(typeof events)[K] extends EventListener<infer T> ? T : never
-	>;
-	createTauriEventListener(eventListener, callback);
+	createTauriEventListener(
+		events[eventKey] as unknown as EventListener<
+			EventPayload<(typeof events)[K]>
+		>,
+		callback,
+	);
 }
