@@ -330,8 +330,8 @@ fn get_current_mode(app: &AppHandle) -> RecordingMode {
         .unwrap_or_default()
 }
 
-fn is_setup_window_open(app: &AppHandle) -> bool {
-    app.webview_windows().contains_key("setup")
+fn is_onboarding_window_open(app: &AppHandle) -> bool {
+    app.webview_windows().contains_key("onboarding")
 }
 
 fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
@@ -365,7 +365,7 @@ fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
 }
 
 fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result<Menu<tauri::Wry>> {
-    if is_setup_window_open(app) {
+    if is_onboarding_window_open(app) {
         return Menu::with_items(
             app,
             &[
@@ -809,7 +809,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::RequestPermissions) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Setup.show(&app).await;
+                        let _ = ShowCapWindow::Onboarding.show(&app).await;
                     });
                 }
                 _ => {}

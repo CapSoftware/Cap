@@ -72,6 +72,7 @@ import IconCapSettings from "~icons/cap/settings";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
 import IconLucideBug from "~icons/lucide/bug";
+import IconLucideCircleHelp from "~icons/lucide/circle-help";
 import IconLucideImage from "~icons/lucide/image";
 import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
@@ -1743,6 +1744,17 @@ function Page() {
 							</button>
 						</Tooltip>
 						<ChangelogButton />
+						<Tooltip content={<span>Help & Tour</span>}>
+							<button
+								type="button"
+								onClick={() => {
+									commands.showWindow("Onboarding");
+								}}
+								class="flex justify-center items-center size-5 focus:outline-none"
+							>
+								<IconLucideCircleHelp class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+							</button>
+						</Tooltip>
 						{import.meta.env.DEV && (
 							<button
 								type="button"
