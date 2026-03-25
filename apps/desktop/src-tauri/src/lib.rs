@@ -637,7 +637,17 @@ async fn set_camera_input(
     let camera_in_use = app.camera_in_use;
     drop(app);
 
+    let skip_camera_window = skip_camera_window.unwrap_or(false);
+
     if id == current_id && camera_in_use {
+        if !skip_camera_window && CapWindowId::Camera.get(&app_handle).is_none() {
+            let show_result = ShowCapWindow::Camera { centered: false }
+                .show(&app_handle)
+                .await;
+            show_result
+                .map_err(|err| error!("Failed to show camera preview window: {err}"))
+                .ok();
+        }
         return Ok(());
     }
 
@@ -717,7 +727,7 @@ async fn set_camera_input(
                 return Err(e);
             }
 
-            if !skip_camera_window.unwrap_or(false) {
+            if !skip_camera_window {
                 let show_result = ShowCapWindow::Camera { centered: false }
                     .show(&app_handle)
                     .await;
