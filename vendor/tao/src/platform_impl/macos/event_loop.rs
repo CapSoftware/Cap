@@ -123,11 +123,13 @@ impl<T: 'static> EventLoopWindowTarget<T> {
     set_progress_indicator(progress);
   }
 
+  #[allow(dead_code)]
   #[inline]
   pub fn set_badge_count(&self, count: Option<i64>, _desktop_filename: Option<String>) {
     set_badge_label(count.map(|c| c.to_string()));
   }
 
+  #[allow(dead_code)]
   #[inline]
   pub fn set_badge_label(&self, label: Option<String>) {
     set_badge_label(label);
