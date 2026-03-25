@@ -922,6 +922,7 @@ fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use cap_media_info::RawVideoFormat;
@@ -2432,9 +2433,9 @@ mod tests {
             .scan(0i64, |pts, i| {
                 let current = *pts;
                 let step = match i % 12 {
-                    0 | 1 | 2 => 8_333,
+                    0..=2 => 8_333,
                     3 => 33_333,
-                    4 | 5 | 6 => 12_000,
+                    4..=6 => 12_000,
                     _ => frame_60,
                 };
                 *pts += step;
