@@ -131,7 +131,7 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
         Keycode::F11 => ("F11", "F11"),
         Keycode::F12 => ("F12", "F12"),
         Keycode::Escape => ("Escape", "Escape"),
-        Keycode::Space => (" ", "Space"),
+        Keycode::Space => ("Space", "Space"),
         Keycode::LControl => ("LControl", "LControl"),
         Keycode::RControl => ("RControl", "RControl"),
         Keycode::LShift => ("LShift", "LShift"),
