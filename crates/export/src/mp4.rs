@@ -506,7 +506,6 @@ struct Nv12ExportFrame {
     height: u32,
     y_stride: u32,
     pts: i64,
-    audio: Option<ffmpeg::frame::Audio>,
 }
 
 #[cfg(test)]
@@ -746,7 +745,6 @@ mod tests {
             height,
             y_stride: width,
             pts: 42,
-            audio: None,
         };
 
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
