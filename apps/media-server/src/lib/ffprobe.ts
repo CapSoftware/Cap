@@ -1,4 +1,4 @@
-import { type Subprocess, spawn } from "bun";
+import { spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
