@@ -562,7 +562,6 @@ export function Timeline() {
 	const generateCaptionsFromTrack = async () => {
 		if (!editorInstance) return;
 
-		setEditorState("timeline", "tracks", "caption", true);
 		setEditorState("captions", "isGenerating", true);
 
 		try {
