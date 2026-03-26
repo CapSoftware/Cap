@@ -3,7 +3,7 @@
   "name": "cap",
   "title": "Cap",
   "description": "Control Cap screen recorder — start/stop recording, pause, resume, take screenshots, and more.",
-  "icon": "command-icon.png",
+  "icon": "icon.png",
   "author": "cap",
   "categories": ["Productivity", "Applications"],
   "license": "AGPL-3.0",

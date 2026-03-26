@@ -15,11 +15,34 @@ pub enum CaptureMode {
     Window(String),
 }
 
+impl CaptureMode {
+    /// Resolve a CaptureMode into a ScreenCaptureTarget, or default to the primary display.
+    fn resolve(mode: Option<Self>) -> Result<ScreenCaptureTarget, String> {
+        match mode {
+            Some(CaptureMode::Screen(name)) => cap_recording::screen_capture::list_displays()
+                .into_iter()
+                .find(|(s, _)| s.name == name)
+                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                .ok_or(format!("No screen with name \"{}\"", &name)),
+            Some(CaptureMode::Window(name)) => cap_recording::screen_capture::list_windows()
+                .into_iter()
+                .find(|(w, _)| w.name == name)
+                .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+                .ok_or(format!("No window with name \"{}\"", &name)),
+            None => cap_recording::screen_capture::list_displays()
+                .into_iter()
+                .next()
+                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                .ok_or_else(|| "No displays available".to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
     StartRecording {
-        capture_mode: CaptureMode,
+        capture_mode: Option<CaptureMode>,
         camera: Option<DeviceOrModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
@@ -31,7 +54,7 @@ pub enum DeepLinkAction {
     TogglePauseRecording,
     RestartRecording,
     TakeScreenshot {
-        capture_mode: CaptureMode,
+        capture_mode: Option<CaptureMode>,
     },
     OpenEditor {
         project_path: PathBuf,
@@ -127,18 +150,7 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                let capture_target = CaptureMode::resolve(capture_mode)?;
 
                 let inputs = StartRecordingInputs {
                     mode,
@@ -169,18 +181,7 @@ impl DeepLinkAction {
                     .map(|_| ())
             }
             DeepLinkAction::TakeScreenshot { capture_mode } => {
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                let capture_target = CaptureMode::resolve(capture_mode)?;
 
                 crate::recording::take_screenshot(app.clone(), capture_target)
                     .await

@@ -19,12 +19,17 @@ export function buildDeepLink(action: DeepLinkAction): string {
 
 /**
  * Open a Cap deeplink and show a HUD message.
+ * Shows an error HUD if Cap is not running or the deeplink fails.
  */
 export async function triggerDeepLink(
   action: DeepLinkAction,
   hudMessage: string,
 ): Promise<void> {
   const url = buildDeepLink(action);
-  await open(url);
-  await showHUD(hudMessage);
+  try {
+    await open(url);
+    await showHUD(hudMessage);
+  } catch {
+    await showHUD("❌ Failed — is Cap running?");
+  }
 }
