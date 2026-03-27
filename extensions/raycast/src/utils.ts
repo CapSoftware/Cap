@@ -1,7 +1,15 @@
-import { open } from "@raycast/api";
+import { open, showToast, Toast } from "@raycast/api";
 
-export async function sendDeepLink(action: object) {
+export async function sendDeepLink(action: Record<string, unknown>) {
   const value = encodeURIComponent(JSON.stringify(action));
   const url = `cap://action?value=${value}`;
-  await open(url);
+  try {
+    await open(url);
+  } catch {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Cap Not Running",
+      message: "Please open Cap and try again",
+    });
+  }
 }
