@@ -19,7 +19,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		autoCreateShareableLink: false,
 		enableNotifications: true,
 		enableNativeCameraPreview: false,
-		autoZoomOnClicks: true,
+		autoZoomOnClicks: false,
 		captureKeyboardEvents: true,
 		custom_cursor_capture2: true,
 		excludedWindows: [],
