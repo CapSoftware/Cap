@@ -974,6 +974,10 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 			if (meta.type === "single") return !!meta.audio;
 			return !!meta.segments[0].mic;
 		})(),
+		hasRecordedCursorData: (() => {
+			if (meta.type === "single") return !!meta.cursor;
+			return meta.segments.some((s) => !!s.cursor);
+		})(),
 	};
 }
 
