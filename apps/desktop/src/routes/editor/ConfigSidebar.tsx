@@ -220,7 +220,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_CURSOR_MOTION_BLUR = 1.0;
+const DEFAULT_CURSOR_MOTION_BLUR = 0.3;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -243,10 +243,22 @@ const CURSOR_ANIMATION_STYLE_OPTIONS = [
 		preset: { tension: 65, mass: 1.8, friction: 16 },
 	},
 	{
+		value: "smooth",
+		label: "Smooth",
+		description: "Ultra-smooth cinematic feel with high damping.",
+		preset: { tension: 80, mass: 2.5, friction: 28 },
+	},
+	{
 		value: "mellow",
 		label: "Mellow",
 		description: "Balanced smoothing for everyday tutorials and walkthroughs.",
 		preset: { tension: 120, mass: 1.1, friction: 18 },
+	},
+	{
+		value: "fast",
+		label: "Fast",
+		description: "Quick, responsive smoothing for fast-paced content.",
+		preset: { tension: 380, mass: 1.0, friction: 30 },
 	},
 	{
 		value: "custom",

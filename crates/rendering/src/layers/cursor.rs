@@ -262,6 +262,12 @@ impl CursorLayer {
             return;
         };
 
+        let cursor_uv = &interpolated_cursor.position.coord;
+        if !(0.0..=1.0).contains(&cursor_uv.x) || !(0.0..=1.0).contains(&cursor_uv.y) {
+            self.bind_group = None;
+            return;
+        }
+
         let fps = uniforms.frame_rate.max(1) as f32;
         let screen_size = constants.options.screen_size;
         let screen_diag =

@@ -29,6 +29,18 @@ export function RgbInput(props: {
 	let prevHex = rgbToHex(props.value);
 	let colorInput!: HTMLInputElement;
 
+	const commitValue = (raw: string) => {
+		const trimmed = raw.trim();
+		const value = hexToRgb(trimmed);
+		if (value) {
+			const [r, g, b] = value;
+			props.onChange([r, g, b]);
+			setText(rgbToHex([r, g, b]));
+			return true;
+		}
+		return false;
+	};
+
 	return (
 		<div class="flex flex-row items-center gap-[0.75rem] relative">
 			<button
@@ -57,24 +69,26 @@ export function RgbInput(props: {
 				onFocus={() => {
 					prevHex = rgbToHex(props.value);
 				}}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						if (!commitValue(e.currentTarget.value)) {
+							setText(prevHex);
+						}
+						e.currentTarget.blur();
+					}
+				}}
 				onInput={(e) => {
 					setText(e.currentTarget.value);
-					const value = hexToRgb(e.target.value);
+					const value = hexToRgb(e.currentTarget.value.trim());
 					if (!value) return;
 					const [r, g, b] = value;
 					props.onChange([r, g, b]);
 				}}
 				onBlur={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (value) {
-						const [r, g, b] = value;
-						props.onChange([r, g, b]);
-					} else {
+					if (!commitValue(e.target.value)) {
 						setText(prevHex);
-						const fallbackValue = hexToRgb(text());
-						if (!fallbackValue) return;
-						const [r, g, b] = fallbackValue;
-						props.onChange([r, g, b]);
+						props.onChange(props.value);
 					}
 				}}
 			/>

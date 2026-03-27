@@ -6,8 +6,7 @@ use cap_project::{
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{
-    InterpolatedCursorPosition, PrecomputedCursorTimeline, interpolate_cursor,
-    interpolate_cursor_with_click_spring,
+    InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::{
@@ -53,6 +52,7 @@ pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
+pub use cursor_interpolation::PrecomputedCursorTimeline;
 use mask::interpolate_masks;
 use scene::*;
 use text::{PreparedText, prepare_texts};
@@ -2284,11 +2284,13 @@ impl ProjectUniforms {
 
         let actual_cursor_coord = interpolated_cursor
             .as_ref()
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
+            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
+            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
 
         let prev_actual_cursor_coord = prev_interpolated_cursor
             .as_ref()
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
+            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
+            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
 
         let segment_end_focus = segments_cursor
             .prev_segment
@@ -2308,7 +2310,8 @@ impl ProjectUniforms {
                     .clamp(0.0, prev.end) as f32;
                 cursor_interp_fn(boundary_recording_time)
             })
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
+            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
+            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
 
         let zoom = InterpolatedZoom::new_with_cursor_and_end_focus(
             segments_cursor,
@@ -2336,7 +2339,8 @@ impl ProjectUniforms {
                     .clamp(0.0, prev.end) as f32;
                 cursor_interp_fn(boundary_recording_time)
             })
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
+            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord))
+            .filter(|c| (0.0..=1.0).contains(&c.x) && (0.0..=1.0).contains(&c.y));
 
         let prev_zoom = InterpolatedZoom::new_with_cursor_and_end_focus(
             prev_segments_cursor,

@@ -14,7 +14,6 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import * as shell from "@tauri-apps/plugin-shell";
 import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
@@ -1705,9 +1704,7 @@ function Page() {
 					class="flex flex-1 gap-1 items-center mx-2 min-w-0"
 					data-tauri-drag-region
 				>
-					<Show when={ostype() === "macos"}>
-						<MainWindowHelpButton />
-					</Show>
+					<MainWindowHelpButton />
 					<div class="flex-1 min-h-9 min-w-0" data-tauri-drag-region />
 					<div class="flex gap-1 items-center shrink-0" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
@@ -1773,9 +1770,6 @@ function Page() {
 							</button>
 						)}
 					</div>
-					<Show when={ostype() !== "macos"}>
-						<MainWindowHelpButton />
-					</Show>
 				</div>
 			</WindowChromeHeader>
 			<Show when={!activeMenu()}>

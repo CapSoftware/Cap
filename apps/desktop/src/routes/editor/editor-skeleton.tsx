@@ -3,8 +3,8 @@ import { cx } from "cva";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
-const MIN_PLAYER_HEIGHT = 328;
-const RESIZE_HANDLE_HEIGHT = 8;
+const MIN_PLAYER_HEIGHT = 336;
+const RESIZE_HANDLE_HEIGHT = 16;
 
 function SkeletonPulse(props: { class?: string }) {
 	return (
@@ -129,11 +129,13 @@ function PlayerSkeleton() {
 				<PlayerControlsSkeleton />
 			</div>
 			<div
-				class="flex-none transition-colors"
+				class="flex-none shrink-0 border-t border-gray-4 dark:border-gray-5 bg-gray-2/95 dark:bg-gray-3/55"
 				style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
 			>
-				<div class="flex justify-center items-center h-full">
-					<div class="h-1 w-12 rounded-full bg-gray-4" />
+				<div class="flex flex-col gap-0.5 justify-center items-center h-full w-full">
+					<div class="h-0.5 w-20 max-w-[85%] rounded-full bg-gray-6 dark:bg-gray-7 shadow-[0_1px_0_rgb(0_0_0_/0.06)]" />
+					<div class="h-0.5 w-20 max-w-[85%] rounded-full bg-gray-6 dark:bg-gray-7 shadow-[0_1px_0_rgb(0_0_0_/0.06)]" />
+					<div class="h-0.5 w-20 max-w-[85%] rounded-full bg-gray-6 dark:bg-gray-7 shadow-[0_1px_0_rgb(0_0_0_/0.06)]" />
 				</div>
 			</div>
 		</div>

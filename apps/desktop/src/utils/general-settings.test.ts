@@ -33,13 +33,13 @@ describe("general-settings", () => {
 		);
 	});
 
-	it("defaults recording enhancements to enabled when missing", () => {
+	it("defaults recording enhancements when fields are missing", () => {
 		expect(
 			deriveGeneralSettings({
 				enableNativeCameraPreview: false,
 			}),
 		).toMatchObject({
-			autoZoomOnClicks: true,
+			autoZoomOnClicks: false,
 			captureKeyboardEvents: true,
 			custom_cursor_capture2: true,
 		});

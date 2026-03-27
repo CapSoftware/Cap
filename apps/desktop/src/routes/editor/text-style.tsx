@@ -47,6 +47,17 @@ export function HexColorInput(props: {
 	let prevColor = props.value;
 	let colorInput!: HTMLInputElement;
 
+	const commitValue = (raw: string) => {
+		const trimmed = raw.trim();
+		if (/^#[0-9A-F]{6}$/i.test(trimmed)) {
+			const normalized = `#${trimmed.slice(1).toUpperCase()}`;
+			props.onChange(normalized);
+			setText(normalized);
+			return true;
+		}
+		return false;
+	};
+
 	return (
 		<div class="flex flex-row items-center gap-[0.75rem] relative">
 			<button
@@ -74,14 +85,27 @@ export function HexColorInput(props: {
 				onFocus={() => {
 					prevColor = props.value;
 				}}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						if (!commitValue(e.currentTarget.value)) {
+							setText(prevColor);
+						}
+						e.currentTarget.blur();
+					}
+				}}
 				onInput={(e) => {
 					setText(e.currentTarget.value);
-					props.onChange(e.currentTarget.value);
+					const trimmed = e.currentTarget.value.trim();
+					if (/^#[0-9A-F]{6}$/i.test(trimmed)) {
+						const normalized = `#${trimmed.slice(1).toUpperCase()}`;
+						props.onChange(normalized);
+					}
 				}}
 				onBlur={(e) => {
-					if (!/^#[0-9A-F]{6}$/i.test(e.target.value)) {
+					if (!commitValue(e.target.value)) {
 						setText(prevColor);
-						props.onChange(prevColor);
+						props.onChange(props.value);
 					}
 				}}
 			/>
