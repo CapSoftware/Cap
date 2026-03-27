@@ -15,6 +15,7 @@ import "./styles/theme.css";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
+import { initRecordingControlDeepLinks } from "./utils/recording-deeplinks";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
@@ -107,6 +108,10 @@ function Inner() {
 
 	onMount(() => {
 		initAnonymousUser();
+		// Initialize deep link listener for recording controls
+		initRecordingControlDeepLinks().catch((err) =>
+			console.error("[App] Failed to init deep links:", err),
+		);
 	});
 
 	return (
