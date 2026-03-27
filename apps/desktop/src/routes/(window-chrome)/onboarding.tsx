@@ -323,7 +323,17 @@ export default function OnboardingPage() {
 	});
 
 	const isMacOS = createMemo(() => ostype() === "macos");
-	const permissionsOnly = createMemo(() => isRevisit() && permissionsNeeded());
+	const permissionsOnly = createMemo(
+		() => isMacOS() && isRevisit() && permissionsNeeded(),
+	);
+
+	createEffect(() => {
+		ready();
+		if (!isMacOS()) {
+			setPermsGranted(true);
+			setCorePermsGranted(true);
+		}
+	});
 
 	const totalSteps = createMemo(() => {
 		if (permissionsOnly()) return 1;
@@ -362,11 +372,11 @@ export default function OnboardingPage() {
 		setIsExiting(true);
 		await generalSettingsStore.set({ hasCompletedStartup: true });
 		setTimeout(() => {
-			setShowStartupOverlay(false);
-			setIsExiting(false);
 			if (!isMacOS()) {
 				goToStep(1);
 			}
+			setShowStartupOverlay(false);
+			setIsExiting(false);
 		}, 600);
 	};
 
@@ -403,7 +413,7 @@ export default function OnboardingPage() {
 		return "Continue";
 	};
 
-	const nextDisabled = () => step() === 0 && !permsGranted();
+	const nextDisabled = () => isMacOS() && step() === 0 && !permsGranted();
 
 	const handleSkipOnboarding = () => {
 		if (!corePermsGranted() || permissionsOnly()) return;
@@ -477,13 +487,15 @@ export default function OnboardingPage() {
 				<div class="flex flex-col flex-1 min-h-0 overflow-hidden relative">
 					<OnboardingAmbientBackdrop />
 					<div class="relative flex-1 min-h-0 z-10">
-						<StepPanel active={step() === 0} index={0} currentStep={step()}>
-							<PermissionsStep
-								active={step() === 0 && !showStartupOverlay()}
-								onPermissionsChanged={setPermsGranted}
-								onCorePermissionsChanged={setCorePermsGranted}
-							/>
-						</StepPanel>
+						<Show when={isMacOS()}>
+							<StepPanel active={step() === 0} index={0} currentStep={step()}>
+								<PermissionsStep
+									active={step() === 0 && !showStartupOverlay()}
+									onPermissionsChanged={setPermsGranted}
+									onCorePermissionsChanged={setCorePermsGranted}
+								/>
+							</StepPanel>
+						</Show>
 						<Show when={!permissionsOnly()}>
 							<StepPanel active={step() === 1} index={1} currentStep={step()}>
 								<ModesOverviewStep active={step() === 1} />
