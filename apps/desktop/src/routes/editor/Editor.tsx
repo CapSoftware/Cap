@@ -14,6 +14,7 @@ import {
 	createResource,
 	createSignal,
 	ErrorBoundary,
+	For,
 	Match,
 	on,
 	onCleanup,
@@ -54,8 +55,10 @@ import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
-const RESIZE_HANDLE_HEIGHT = 8;
+const RESIZE_HANDLE_HEIGHT = 16;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
+
+const TIMELINE_RESIZE_GRIP_MARKS = [0, 1, 2] as const;
 
 function getEditorErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
@@ -462,18 +465,27 @@ function Inner() {
 								<div
 									role="separator"
 									aria-orientation="horizontal"
-									class="flex-none transition-colors hover:bg-gray-3/30"
+									class="flex-none shrink-0 border-t border-gray-4 dark:border-gray-5 bg-gray-2/95 dark:bg-gray-3/55 transition-colors hover:bg-gray-3/70 dark:hover:bg-gray-4/55"
 									style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
 								>
 									<div
-										class="flex justify-center items-center h-full cursor-row-resize select-none group"
-										classList={{ "bg-gray-3/50": isResizingTimeline() }}
+										class="flex flex-col gap-0.5 justify-center items-center h-full w-full cursor-row-resize select-none group"
+										classList={{
+											"bg-gray-3/55 dark:bg-gray-4/50": isResizingTimeline(),
+										}}
 										onMouseDown={handleTimelineResizeStart}
+										aria-label="Resize timeline height"
 									>
-										<div
-											class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
-											classList={{ "bg-gray-7": isResizingTimeline() }}
-										/>
+										<For each={TIMELINE_RESIZE_GRIP_MARKS}>
+											{() => (
+												<div
+													class="h-0.5 w-20 max-w-[85%] rounded-full bg-gray-6 dark:bg-gray-7 shadow-[0_1px_0_rgb(0_0_0_/0.06)] transition-colors group-hover:bg-gray-9 dark:group-hover:bg-gray-11"
+													classList={{
+														"bg-gray-9 dark:bg-gray-11": isResizingTimeline(),
+													}}
+												/>
+											)}
+										</For>
 									</div>
 								</div>
 							</div>
