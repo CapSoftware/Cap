@@ -5,8 +5,8 @@ use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{
-    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
-    spring_mass_damper::SpringMassDamperSimulationConfig,
+    DecodedSegmentFrames, PrecomputedCursorTimeline, ProjectUniforms, RenderVideoConstants,
+    ZoomFocusInterpolator, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 #[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
@@ -532,9 +532,68 @@ impl Playback {
             let start = Instant::now();
             let mut cached_project = self.project.borrow().clone();
 
+            let build_cursor_timelines =
+                |project: &ProjectConfiguration| -> Vec<Arc<PrecomputedCursorTimeline>> {
+                    let cursor_smoothing =
+                        (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+                            tension: project.cursor.tension,
+                            mass: project.cursor.mass,
+                            friction: project.cursor.friction,
+                        });
+                    let click_spring = project.cursor.click_spring_config();
+                    self.segment_medias
+                        .iter()
+                        .map(|seg| {
+                            Arc::new(PrecomputedCursorTimeline::new(
+                                &seg.cursor,
+                                cursor_smoothing,
+                                Some(click_spring),
+                            ))
+                        })
+                        .collect()
+                };
+
+            let build_zoom_interpolators =
+                |project: &ProjectConfiguration,
+                 cursor_timelines: &[Arc<PrecomputedCursorTimeline>]|
+                 -> Vec<ZoomFocusInterpolator> {
+                    self.segment_medias
+                        .iter()
+                        .zip(cursor_timelines.iter())
+                        .map(|(seg, precomputed)| {
+                            let cursor_smoothing =
+                                (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+                                    tension: project.cursor.tension,
+                                    mass: project.cursor.mass,
+                                    friction: project.cursor.friction,
+                                });
+                            ZoomFocusInterpolator::new_arc_with_precomputed_cursor(
+                                seg.cursor.clone(),
+                                cursor_smoothing,
+                                project.cursor.click_spring_config(),
+                                project.screen_movement_spring,
+                                duration,
+                                project
+                                    .timeline
+                                    .as_ref()
+                                    .map(|t| t.zoom_segments.as_slice())
+                                    .unwrap_or(&[]),
+                                Some(precomputed.clone()),
+                            )
+                        })
+                        .collect()
+                };
+
+            let mut cursor_timelines = build_cursor_timelines(&cached_project);
+            let mut zoom_interpolators =
+                build_zoom_interpolators(&cached_project, &cursor_timelines);
+
             'playback: loop {
                 if self.project.has_changed().unwrap_or(false) {
                     cached_project = self.project.borrow_and_update().clone();
+                    cursor_timelines = build_cursor_timelines(&cached_project);
+                    zoom_interpolators =
+                        build_zoom_interpolators(&cached_project, &cursor_timelines);
                 }
 
                 let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
@@ -622,17 +681,16 @@ impl Playback {
                     } else if prefetch_buffer.is_empty() {
                         let _ = frame_request_tx.send(frame_number);
 
-                        let wait_ms = if total_frames_rendered < 15 { 100 } else { 50 };
-                        let prefetched_opt =
-                            match prefetch_rx.recv_timeout(Duration::from_millis(wait_ms)) {
-                                Ok(p) => Some(p),
-                                Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                                    prefetch_rx.recv_timeout(Duration::from_millis(400)).ok()
-                                }
-                                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                                    break 'playback;
-                                }
-                            };
+                        let wait_ms = if total_frames_rendered < 15 { 20 } else { 8 };
+                        let prefetched_opt = match prefetch_rx
+                            .recv_timeout(Duration::from_millis(wait_ms))
+                        {
+                            Ok(p) => Some(p),
+                            Err(std_mpsc::RecvTimeoutError::Timeout) => prefetch_rx.try_recv().ok(),
+                            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                                break 'playback;
+                            }
+                        };
 
                         match prefetched_opt {
                             Some(prefetched) => {
@@ -671,14 +729,67 @@ impl Playback {
                             }
                         }
                     } else {
-                        let min_buffered = prefetch_buffer.iter().map(|p| p.frame_number).min();
-                        if let Some(next_available_frame) = min_buffered
-                            && next_available_frame > frame_number
+                        // IMPORTANT: Do NOT send frame_request_tx from these skip paths.
+                        // frame_request_tx resets the prefetch pipeline's next_prefetch_frame
+                        // via a watch channel. Since the prefetch is already decoding well ahead
+                        // (e.g. next_prefetch_frame=119), sending a lower frame number here
+                        // (e.g. 63) is interpreted as a backward seek, which clears ALL in-flight
+                        // decode tasks via `in_flight = FuturesUnordered::new()`. This creates a
+                        // cascading failure: dropped decode tasks create more gaps → more skips
+                        // → more resets → progressively worse playback. The prefetch already
+                        // tracks playback position via playback_position_tx/rx.
+                        //
+                        // Note: the overshoot skip (above) and clock-drift skip (below) DO still
+                        // send frame_request_tx because those advance frame_number forward from
+                        // the playback clock, which the prefetch correctly treats as demand for
+                        // higher frames. These buffer-gap skips are different — the frame_number
+                        // we'd send is always BEHIND the prefetch's next_prefetch_frame.
+                        //
+                        // Before jumping, drain all available frames from the rx channel. The
+                        // regular drain budget of 16 per iteration can miss frames that arrived
+                        // between the drain and the buffer check. This protects both the
+                        // jump-to-min path and the +1 fallback path below.
+                        while prefetch_buffer.len() < PREFETCH_BUFFER_SIZE {
+                            match prefetch_rx.try_recv() {
+                                Ok(p) => {
+                                    if p.frame_number >= frame_number {
+                                        prefetch_buffer.push_back(p);
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+
+                        if let Some(late_idx) = prefetch_buffer
+                            .iter()
+                            .position(|p| p.frame_number == frame_number)
                         {
-                            let jumped = next_available_frame - frame_number;
-                            frame_number = next_available_frame;
-                            total_frames_skipped += jumped as u64;
-                            let _ = frame_request_tx.send(frame_number);
+                            let prefetched = prefetch_buffer.remove(late_idx).unwrap();
+                            prefetch_hits += 1;
+                            Some((
+                                Arc::new(prefetched.segment_frames),
+                                prefetched.segment_index,
+                            ))
+                        } else {
+                            let min_buffered = prefetch_buffer.iter().map(|p| p.frame_number).min();
+                            if let Some(next_available_frame) = min_buffered
+                                && next_available_frame > frame_number
+                            {
+                                let jumped = next_available_frame - frame_number;
+                                frame_number = next_available_frame;
+                                total_frames_skipped += jumped as u64;
+                                let _ = playback_position_tx.send(frame_number);
+                                if has_audio
+                                    && audio_playhead_tx
+                                        .send(frame_number as f64 / fps_f64)
+                                        .is_err()
+                                {
+                                    break 'playback;
+                                }
+                                continue;
+                            }
+                            frame_number = frame_number.saturating_add(1);
+                            total_frames_skipped += 1;
                             let _ = playback_position_tx.send(frame_number);
                             if has_audio
                                 && audio_playhead_tx
@@ -689,18 +800,6 @@ impl Playback {
                             }
                             continue;
                         }
-                        frame_number = frame_number.saturating_add(1);
-                        total_frames_skipped += 1;
-                        let _ = frame_request_tx.send(frame_number);
-                        let _ = playback_position_tx.send(frame_number);
-                        if has_audio
-                            && audio_playhead_tx
-                                .send(frame_number as f64 / fps_f64)
-                                .is_err()
-                        {
-                            break 'playback;
-                        }
-                        continue;
                     }
                 };
 
@@ -719,27 +818,31 @@ impl Playback {
                         );
                     }
 
-                    let cursor_smoothing =
-                        (!cached_project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-                            tension: cached_project.cursor.tension,
-                            mass: cached_project.cursor.mass,
-                            friction: cached_project.cursor.friction,
-                        });
+                    let zoom_until = (frame_number as f32 + 1.0) / fps as f32;
+                    if let Some(interp) = zoom_interpolators.get_mut(segment_index as usize) {
+                        interp.ensure_precomputed_until(zoom_until);
+                    }
+                    let zoom_focus_interpolator = zoom_interpolators.get(segment_index as usize);
 
-                    let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
-                        segment_media.cursor.clone(),
-                        cursor_smoothing,
-                        cached_project.cursor.click_spring_config(),
-                        cached_project.screen_movement_spring,
-                        duration,
-                        cached_project
-                            .timeline
-                            .as_ref()
-                            .map(|t| t.zoom_segments.as_slice())
-                            .unwrap_or(&[]),
-                    );
+                    let empty_interp;
+                    let zoom_ref = match zoom_focus_interpolator {
+                        Some(interp) => interp,
+                        None => {
+                            empty_interp = ZoomFocusInterpolator::new_arc(
+                                segment_media.cursor.clone(),
+                                None,
+                                cached_project.cursor.click_spring_config(),
+                                cached_project.screen_movement_spring,
+                                duration,
+                                &[],
+                            );
+                            &empty_interp
+                        }
+                    };
 
-                    let uniforms = ProjectUniforms::new(
+                    let precomputed_cursor = &cursor_timelines[segment_index as usize];
+
+                    let uniforms = ProjectUniforms::new_with_precomputed_cursor(
                         &self.render_constants,
                         &cached_project,
                         frame_number,
@@ -748,10 +851,10 @@ impl Playback {
                         &segment_media.cursor,
                         &segment_frames,
                         duration,
-                        &zoom_focus_interpolator,
+                        zoom_ref,
+                        precomputed_cursor,
                     );
-
-                    self.renderer.render_frame_blocking(
+                    self.renderer.render_frame(
                         Arc::unwrap_or_clone(segment_frames),
                         uniforms,
                         segment_media.cursor.clone(),
