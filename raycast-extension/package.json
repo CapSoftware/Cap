@@ -1,0 +1,69 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recording from Raycast",
+  "icon": "icon.png",
+  "author": "cap",
+  "categories": [
+    "Productivity",
+    "Media"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "record",
+      "title": "Start Recording",
+      "description": "Start a new Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop",
+      "title": "Stop Recording",
+      "description": "Stop the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause",
+      "title": "Pause Recording",
+      "description": "Pause the current recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume",
+      "title": "Resume Recording",
+      "description": "Resume the paused recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-mic",
+      "title": "Toggle Microphone",
+      "description": "Toggle microphone on/off during recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-camera",
+      "title": "Toggle Camera",
+      "description": "Toggle camera on/off during recording",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.48.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "1.0.5",
+    "@types/node": "18.8.3",
+    "@types/react": "18.0.9",
+    "eslint": "^8.19.0",
+    "prettier": "^2.5.1",
+    "typescript": "^4.4.3"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}

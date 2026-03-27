@@ -1,0 +1,3 @@
+Note: This file is a placeholder. 
+For a production Raycast extension, you need to add a 512x512px PNG icon here named "icon.png".
+You can use the official Cap logo from the main repository.
