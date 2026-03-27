@@ -45,7 +45,7 @@ pub enum OSPermission {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn open_permission_settings(app: tauri::AppHandle, _permission: OSPermission) {
+pub fn open_permission_settings(_app: tauri::AppHandle, _permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
         match _permission {
@@ -77,7 +77,7 @@ pub fn open_permission_settings(app: tauri::AppHandle, _permission: OSPermission
 
         match process {
             Ok(mut process) => {
-                let app = app.clone();
+                let app = _app.clone();
                 tokio::spawn(async move {
                     match tokio::task::spawn_blocking(move || process.wait()).await {
                         Ok(Err(err)) => {
