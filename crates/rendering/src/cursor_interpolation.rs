@@ -397,10 +397,7 @@ fn build_smoothed_timeline(
 
         events.push(SmoothedCursorEvent {
             time: t_ms as f32,
-            position: XY::new(
-                sim.position.x.clamp(0.0, 1.0),
-                sim.position.y.clamp(0.0, 1.0),
-            ),
+            position: sim.position,
             velocity: sim.velocity,
             cursor_id: cid,
         });
