@@ -1,5 +1,3 @@
-/** @type {import('next').NextConfig} */
-
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
 import fs from "node:fs";
@@ -31,9 +29,6 @@ const nextConfig = {
 		"@cap/database",
 		"next-mdx-remote",
 	],
-	eslint: {
-		ignoreDuringBuilds: true,
-	},
 	typescript: {
 		ignoreBuildErrors: true,
 	},
@@ -56,6 +51,7 @@ const nextConfig = {
 			"@radix-ui/react-tooltip",
 			"date-fns",
 		],
+		turbopackFileSystemCacheForDev: true,
 	},
 	images: {
 		remotePatterns: [
@@ -129,28 +125,8 @@ const nextConfig = {
 	env: {
 		appVersion: version,
 	},
-	// If the NEXT_PUBLIC_DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
 	output:
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
-	// webpack: (config) => {
-	// 	config.module.rules.push({
-	// 		test: /\.(?:js|ts)$/,
-	// 		use: [
-	// 			{
-	// 				loader: "babel-loader",
-	// 				options: {
-	// 					presets: ["next/babel"],
-	// 					plugins: [
-	// 						"@babel/plugin-transform-private-property-in-object",
-	// 						"@babel/plugin-transform-private-methods",
-	// 					],
-	// 				},
-	// 			},
-	// 		],
-	// 	});
-
-	// 	return config;
-	// },
 };
 
 export default withWorkflow(nextConfig);
