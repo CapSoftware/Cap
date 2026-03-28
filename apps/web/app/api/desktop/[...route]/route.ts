@@ -3,6 +3,7 @@ import { handle } from "hono/vercel";
 
 import { corsMiddleware } from "../../utils";
 
+import * as healthCheck from "./health-check";
 import * as root from "./root";
 import * as s3Config from "./s3Config";
 import * as session from "./session";
@@ -11,6 +12,7 @@ import * as video from "./video";
 const app = new Hono()
 	.basePath("/api/desktop")
 	.use(corsMiddleware)
+	.route("/health-check", healthCheck.app)
 	.route("/s3/config", s3Config.app)
 	.route("/session", session.app)
 	.route("/video", video.app)

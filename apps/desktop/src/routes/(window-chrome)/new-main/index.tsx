@@ -31,6 +31,7 @@ import {
 import { createStore, produce, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
+import NetworkStatus from "~/components/NetworkStatus";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
@@ -1995,6 +1996,7 @@ function Page() {
 				</Show>
 			</div>
 			<RecoveryToast />
+		<NetworkStatus />
 		</div>
 	);
 }

@@ -27,6 +27,7 @@ mod presets;
 mod recording;
 mod recording_settings;
 mod recovery;
+mod speed_test;
 mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
@@ -3223,6 +3224,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recovery::find_incomplete_recordings,
             recovery::recover_recording,
             recovery::discard_incomplete_recording,
+            speed_test::run_speed_test,
+            speed_test::run_health_check,
+            speed_test::get_network_status,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -3249,6 +3253,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             import::VideoImportProgress,
             SetCaptureAreaPending,
             DevicesUpdated,
+            speed_test::SpeedTestUpdate,
+            speed_test::HealthCheckUpdate,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -3393,6 +3399,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(panel_manager::PanelManager::new());
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
+            app.manage(Arc::new(RwLock::new(speed_test::NetworkState::default())));
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
 
@@ -3542,6 +3549,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             audio_meter::spawn_event_emitter(app.clone(), mic_samples_rx);
+
+            speed_test::spawn_startup_health_check(app.clone());
 
             if let Err(err) = tray::create_tray(&app) {
                 error!("Failed to create tray: {err}");
