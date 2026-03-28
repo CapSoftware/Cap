@@ -2,7 +2,11 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationInvites, organizations } from "@cap/database/schema";
+import {
+	organizationInvites,
+	organizationMembers,
+	organizations,
+} from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -17,17 +21,29 @@ export async function removeOrganizationInvite(
 		throw new Error("Unauthorized");
 	}
 
-	const organization = await db()
-		.select()
+	const [organization] = await db()
+		.select({ id: organizations.id })
 		.from(organizations)
 		.where(eq(organizations.id, organizationId))
 		.limit(1);
 
-	if (!organization || organization.length === 0) {
+	if (!organization) {
 		throw new Error("Organization not found");
 	}
 
-	if (organization[0]?.ownerId !== user.id) {
+	const [ownerMembership] = await db()
+		.select({ id: organizationMembers.id })
+		.from(organizationMembers)
+		.where(
+			and(
+				eq(organizationMembers.organizationId, organizationId),
+				eq(organizationMembers.userId, user.id),
+				eq(organizationMembers.role, "owner"),
+			),
+		)
+		.limit(1);
+
+	if (!ownerMembership) {
 		throw new Error("Only the owner can remove organization invites");
 	}
 
