@@ -37,6 +37,15 @@ impl ExportCompression {
             Self::Potato => 0.04,
         }
     }
+
+    pub fn crf_value(&self) -> u8 {
+        match self {
+            Self::Maximum => 24,
+            Self::Social => 28,
+            Self::Web => 32,
+            Self::Potato => 36,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -61,6 +70,8 @@ pub struct Mp4ExportSettings {
     pub custom_bpp: Option<f32>,
     #[serde(default)]
     pub force_ffmpeg_decoder: bool,
+    #[serde(default)]
+    pub optimize_filesize: bool,
 }
 
 impl Mp4ExportSettings {
@@ -185,13 +196,19 @@ impl Mp4ExportSettings {
             let mut encoder = MP4File::init(
                 "output",
                 base.output_path.clone(),
+                self.optimize_filesize,
                 |o| {
-                    H264Encoder::builder(video_info)
+                    let builder = H264Encoder::builder(video_info)
                         .with_bpp(self.effective_bpp())
                         .with_export_priority()
                         .with_export_settings()
-                        .with_external_conversion()
-                        .build(o)
+                        .with_external_conversion();
+                    let builder = if self.optimize_filesize {
+                        builder.with_crf(self.compression.crf_value())
+                    } else {
+                        builder
+                    };
+                    builder.build(o)
                 },
                 |o| {
                     has_audio.then(|| {
