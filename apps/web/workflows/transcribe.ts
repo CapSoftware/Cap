@@ -218,7 +218,7 @@ async function extractAudio(
 		.pipe(runPromise);
 
 	const audioSignedUrl = await bucket
-		.getSignedObjectUrl(audioKey)
+		.getInternalSignedObjectUrl(audioKey)
 		.pipe(runPromise);
 
 	return audioSignedUrl;
@@ -248,7 +248,7 @@ async function resolveVideoSourceUrl(
 	);
 
 	for (const key of candidateKeys) {
-		const url = await bucket.getSignedObjectUrl(key).pipe(runPromise);
+		const url = await bucket.getInternalSignedObjectUrl(key).pipe(runPromise);
 		const response = await fetch(url, {
 			method: "GET",
 			headers: { range: "bytes=0-0" },
