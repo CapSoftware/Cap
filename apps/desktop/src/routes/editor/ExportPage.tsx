@@ -111,6 +111,7 @@ interface Settings {
 	exportTo: ExportToOption;
 	resolution: { label: string; value: string; width: number; height: number };
 	compression: ExportCompression;
+	optimizeFilesize: boolean;
 	organizationId?: string | null;
 }
 
@@ -156,6 +157,7 @@ export function ExportPage() {
 			exportTo: "file",
 			resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
 			compression: "Maximum",
+			optimizeFilesize: false,
 		}),
 		{ name: "export_settings" },
 	);
@@ -371,6 +373,7 @@ export function ExportPage() {
 						compression: settings.compression,
 						custom_bpp: customBpp,
 						force_ffmpeg_decoder: forceFfmpegDecoder(),
+						optimize_filesize: settings.optimizeFilesize,
 					}
 				: {
 						format: "Gif",
@@ -1029,23 +1032,50 @@ export function ExportPage() {
 
 								<button
 									type="button"
-									class="flex items-center gap-2 mt-3 text-xs text-gray-11 hover:text-gray-12 transition-colors"
-									onClick={() => setAdvancedMode(!advancedMode())}
+									role="switch"
+									aria-checked={settings.optimizeFilesize}
+									class="flex items-center gap-2 mt-3 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
+									onClick={() =>
+										updateSettings(
+											"optimizeFilesize",
+											!settings.optimizeFilesize,
+										)
+									}
 								>
 									<div
 										class={cx(
-											"w-8 h-4 rounded-full transition-colors relative",
-											advancedMode() ? "bg-blue-9" : "bg-gray-5",
+											"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+											settings.optimizeFilesize ? "bg-blue-9" : "bg-gray-5",
 										)}
 									>
 										<div
 											class={cx(
 												"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
-												advancedMode() ? "translate-x-4" : "translate-x-0.5",
+												settings.optimizeFilesize
+													? "translate-x-4"
+													: "translate-x-0.5",
 											)}
 										/>
 									</div>
-									<span>Advanced</span>
+									<div class="text-left">
+										<span class="block">Optimize file size</span>
+										<span class="text-[10px] text-gray-9">
+											Re-encodes with software for much smaller files (slower)
+										</span>
+									</div>
+								</button>
+
+								<button
+									type="button"
+									class={cx(
+										"mt-3 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors",
+										advancedMode()
+											? "bg-gray-3 border-gray-5 text-gray-12"
+											: "bg-transparent border-gray-4 text-gray-11 hover:bg-gray-3 hover:border-gray-5",
+									)}
+									onClick={() => setAdvancedMode(!advancedMode())}
+								>
+									Advanced
 								</button>
 
 								<Show when={advancedMode()}>
