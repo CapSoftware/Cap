@@ -4,6 +4,8 @@
  * be used from both the main process and the renderer.
  */
 
+export type RecordingMode = "screen" | "window" | "camera";
+
 export type DeeplinkAction =
   | { type: "record/start" }
   | { type: "record/stop" }
@@ -11,13 +13,15 @@ export type DeeplinkAction =
   | { type: "record/resume" }
   | { type: "record/toggle" }
   | { type: "record/restart" }
+  | { type: "record/switch-mode"; mode: RecordingMode }
   | { type: "unknown"; raw: string };
 
 /**
  * Parse a `cap://` URL into a typed action object.
  *
  * @example
- * parseDeeplink("cap://record/start") // { type: "record/start" }
+ * parseDeeplink("cap://record/start")              // { type: "record/start" }
+ * parseDeeplink("cap://record/switch-mode?mode=window") // { type: "record/switch-mode", mode: "window" }
  */
 export function parseDeeplink(url: string): DeeplinkAction {
   try {
@@ -26,7 +30,7 @@ export function parseDeeplink(url: string): DeeplinkAction {
 
     // Combine host + pathname to produce an action key, e.g. "record/start"
     const host = parsed.hostname; // "record"
-    const path = parsed.pathname.replace(/^\//, ""); // "start"
+    const path = parsed.pathname.replace(/^\//, ""); // "start" | "switch-mode" | …
     const action = path ? `${host}/${path}` : host;
 
     switch (action) {
@@ -42,6 +46,13 @@ export function parseDeeplink(url: string): DeeplinkAction {
         return { type: "record/toggle" };
       case "record/restart":
         return { type: "record/restart" };
+      case "record/switch-mode": {
+        const mode = parsed.searchParams.get("mode");
+        if (mode === "screen" || mode === "window" || mode === "camera") {
+          return { type: "record/switch-mode", mode };
+        }
+        return { type: "unknown", raw: url };
+      }
       default:
         return { type: "unknown", raw: url };
     }
