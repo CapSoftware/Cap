@@ -1,0 +1,72 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recorder — start, stop, pause, and resume recordings directly from Raycast",
+  "icon": "cap-icon.png",
+  "author": "cap",
+  "categories": ["Productivity", "Applications"],
+  "license": "AGPL-3.0",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a new screen recording with Cap",
+      "mode": "no-view",
+      "keywords": ["record", "screen", "capture"]
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current recording",
+      "mode": "no-view",
+      "keywords": ["stop", "end", "finish"]
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "description": "Pause or resume the current recording",
+      "mode": "no-view",
+      "keywords": ["pause", "resume", "toggle"]
+    },
+    {
+      "name": "open-cap",
+      "title": "Open Cap",
+      "description": "Open the Cap application",
+      "mode": "no-view",
+      "keywords": ["open", "launch"]
+    },
+    {
+      "name": "open-settings",
+      "title": "Open Settings",
+      "description": "Open Cap settings",
+      "mode": "no-view",
+      "keywords": ["settings", "preferences", "config"]
+    },
+    {
+      "name": "recent-recordings",
+      "title": "Recent Recordings",
+      "description": "Browse your recent Cap recordings",
+      "mode": "view",
+      "keywords": ["recent", "history", "list", "browse"]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.1",
+    "@raycast/utils": "^1.17.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "22.5.4",
+    "@types/react": "18.3.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint"
+  }
+}
