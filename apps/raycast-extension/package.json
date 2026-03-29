@@ -1,0 +1,43 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
+  "title": "Cap",
+  "description": "Control Cap screen recorder from Raycast",
+  "icon": "command-icon.png",
+  "author": "sixty-dollar-agent",
+  "categories": ["Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a new Cap screen recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "description": "Pause the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "description": "Resume a paused Cap recording",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.64.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.8",
+    "typescript": "^5.3.3"
+  }
+}
