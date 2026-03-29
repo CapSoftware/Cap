@@ -1,8 +1,7 @@
 /**
- * Pure deeplink parsing helpers for Cap's `cap://` URL scheme.
- *
- * No framework-specific imports — these can be used from both the main
- * process and the renderer.
+ * Pure deeplink parsing utilities for Cap's `cap://` URL scheme.
+ * No Electron or Tauri imports — this module is side-effect free so it can
+ * be used from both the main process and the renderer.
  */
 
 export type DeeplinkAction =
@@ -12,20 +11,23 @@ export type DeeplinkAction =
   | { type: "record/resume" }
   | { type: "record/toggle" }
   | { type: "record/restart" }
-  | { type: "unknown"; url: string };
+  | { type: "unknown"; raw: string };
 
 /**
- * Parse a `cap://` deeplink URL into a structured action object.
+ * Parse a `cap://` URL into a typed action object.
  *
  * @example
  * parseDeeplink("cap://record/start") // { type: "record/start" }
  */
 export function parseDeeplink(url: string): DeeplinkAction {
   try {
-    // Normalise: cap://record/start  →  pathname = "record/start"
     const parsed = new URL(url);
-    // URL host + pathname for cap://record/start is host="record", pathname="/start"
-    const action = `${parsed.hostname}${parsed.pathname}`.replace(/^\/|\/$/g, "");
+    if (parsed.protocol !== "cap:") return { type: "unknown", raw: url };
+
+    // Combine host + pathname to produce an action key, e.g. "record/start"
+    const host = parsed.hostname; // "record"
+    const path = parsed.pathname.replace(/^\//, ""); // "start"
+    const action = path ? `${host}/${path}` : host;
 
     switch (action) {
       case "record/start":
@@ -41,9 +43,9 @@ export function parseDeeplink(url: string): DeeplinkAction {
       case "record/restart":
         return { type: "record/restart" };
       default:
-        return { type: "unknown", url };
+        return { type: "unknown", raw: url };
     }
   } catch {
-    return { type: "unknown", url };
+    return { type: "unknown", raw: url };
   }
 }
