@@ -1,0 +1,101 @@
+{
+  "name": "cap-raycast-extension",
+  "title": "Cap",
+  "description": "Control Cap screen recorder from Raycast — start/stop/pause recording, take screenshots, switch microphone and camera, all without leaving your keyboard.",
+  "icon": "cap-icon.png",
+  "author": "cap",
+  "categories": ["Productivity", "Media"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "subtitle": "Cap",
+      "description": "Start a new Cap screen recording.",
+      "mode": "no-view",
+      "keywords": ["cap", "record", "screen", "start"]
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "subtitle": "Cap",
+      "description": "Stop the current Cap screen recording.",
+      "mode": "no-view",
+      "keywords": ["cap", "record", "stop", "finish"]
+    },
+    {
+      "name": "pause-recording",
+      "title": "Pause Recording",
+      "subtitle": "Cap",
+      "description": "Pause the current Cap screen recording.",
+      "mode": "no-view",
+      "keywords": ["cap", "record", "pause"]
+    },
+    {
+      "name": "resume-recording",
+      "title": "Resume Recording",
+      "subtitle": "Cap",
+      "description": "Resume a paused Cap screen recording.",
+      "mode": "no-view",
+      "keywords": ["cap", "record", "resume", "continue"]
+    },
+    {
+      "name": "restart-recording",
+      "title": "Restart Recording",
+      "subtitle": "Cap",
+      "description": "Restart the current Cap screen recording from scratch.",
+      "mode": "no-view",
+      "keywords": ["cap", "record", "restart", "redo"]
+    },
+    {
+      "name": "take-screenshot",
+      "title": "Take Screenshot",
+      "subtitle": "Cap",
+      "description": "Take a Cap screenshot.",
+      "mode": "no-view",
+      "keywords": ["cap", "screenshot", "capture"]
+    },
+    {
+      "name": "switch-microphone",
+      "title": "Switch Microphone",
+      "subtitle": "Cap",
+      "description": "Choose which microphone Cap uses for recording.",
+      "mode": "view",
+      "keywords": ["cap", "mic", "microphone", "audio", "input"]
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "subtitle": "Cap",
+      "description": "Choose which camera Cap uses for recording.",
+      "mode": "view",
+      "keywords": ["cap", "camera", "webcam", "video"]
+    },
+    {
+      "name": "open-cap",
+      "title": "Open Cap",
+      "subtitle": "Cap",
+      "description": "Open the Cap main window.",
+      "mode": "no-view",
+      "keywords": ["cap", "open", "show"]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.79.0"
+  },
+  "devDependencies": {
+    "@raycast/utils": "^1.17.0",
+    "@types/node": "20.8.10",
+    "@types/react": "18.3.3",
+    "typescript": "^5.4.5",
+    "eslint": "^8.57.0",
+    "@raycast/eslint-config": "^1.0.11"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
