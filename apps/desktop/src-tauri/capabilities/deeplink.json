@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "deeplink",
+  "description": "Capability for deep-link URL scheme handling",
+  "windows": ["main", "camera", "in-progress-recording", "notifications", "recording-permissions", "upgrade", "prev-recordings", "window-caption"],
+  "permissions": [
+    "deep-link:default"
+  ]
+}
