@@ -1,7 +1,7 @@
 import { showHUD } from "@raycast/api";
-import { openCapDeeplink } from "./utils/deeplink";
+import { openDeeplink } from "./utils/deeplink";
 
 export default async function RestartRecording() {
-  await openCapDeeplink("record/restart");
-  await showHUD("🔁 Restarted Cap recording");
+  await openDeeplink("cap://record/restart");
+  await showHUD("🔄 Restarted recording");
 }
