@@ -16,15 +16,13 @@ function getRecordings(): Recording[] {
 
   try {
     return readdirSync(dir)
-      .filter((name) => {
-        const fullPath = join(dir, name);
-        return statSync(fullPath).isDirectory();
-      })
       .map((name) => {
         const fullPath = join(dir, name);
         const stat = statSync(fullPath);
-        return { name, path: fullPath, date: stat.mtime };
+        return { name, path: fullPath, stat };
       })
+      .filter(({ name, stat }) => name.endsWith(".cap") && stat.isDirectory())
+      .map(({ name, path, stat }) => ({ name, path, date: stat.mtime }))
       .sort((a, b) => b.date.getTime() - a.date.getTime())
       .slice(0, 50);
   } catch {
@@ -57,7 +55,7 @@ export default function Command() {
                 <Action
                   title="Open in Cap"
                   onAction={async () => {
-                    await open(`file://${rec.path}`);
+                    await open(`file://${encodeURI(rec.path)}`);
                     await showHUD("Opening in Cap...");
                   }}
                 />

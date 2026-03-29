@@ -25,8 +25,9 @@ export async function openCap(): Promise<void> {
 
 /**
  * Get the Cap recordings directory path.
+ * Cap (Tauri) stores recordings under the app data directory.
  */
 export function getRecordingsDir(): string {
   const home = process.env.HOME || "~";
-  return `${home}/.cap/recordings`;
+  return `${home}/Library/Application Support/so.cap.desktop/recordings`;
 }
