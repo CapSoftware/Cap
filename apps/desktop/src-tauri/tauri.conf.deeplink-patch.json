@@ -1,0 +1,16 @@
+// NOTE: This file documents the changes required to tauri.conf.json to enable deep links.
+// Merge the following into your existing tauri.conf.json:
+//
+// {
+//   "plugins": {
+//     "deep-link": {
+//       "desktop": {
+//         "schemes": ["cap"]
+//       }
+//     }
+//   }
+// }
+//
+// The `cap://` URL scheme will be registered by the OS. macOS registers it via
+// Info.plist (CFBundleURLTypes) which the plugin generates automatically.
+// Windows registers it via the NSIS/WiX installer.
