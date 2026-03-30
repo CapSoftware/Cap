@@ -16,7 +16,7 @@ pub enum RecordingTargetMode {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, specta::Type, Debug, Clone, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct RecordingSettingsStore {
     pub target: Option<ScreenCaptureTarget>,
     pub mic_name: Option<String>,
