@@ -1,11 +1,12 @@
+/// Tauri commands exposed to the frontend for programmatic deep-link testing
+/// and for querying current recording state.
 use tauri::{command, AppHandle};
 
-use crate::deeplink::handle_deep_link;
+use crate::deeplink::handle_deeplink;
 
-/// Tauri command: handle an incoming deep-link URL string.
-/// Can be called from the frontend or from OS deep-link events registered
-/// via the `tauri-plugin-deep-link` plugin setup hook.
+/// Trigger any `cap://` deep-link from the frontend (useful for tests / debugging).
 #[command]
-pub async fn handle_deep_link_cmd(app: AppHandle, url: String) -> Result<(), String> {
-    handle_deep_link(app, url).await
+pub async fn trigger_deeplink(app: AppHandle, url: String) -> Result<(), String> {
+    handle_deeplink(&app, &url);
+    Ok(())
 }
