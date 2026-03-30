@@ -1,7 +1,8 @@
 {
-  "name": "cap-raycast-extension",
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap",
   "title": "Cap",
-  "description": "Control Cap screen recorder from Raycast — start/stop/pause recording, take screenshots, switch microphone and camera, all without leaving your keyboard.",
+  "description": "Control Cap screen recorder — start, stop, pause, resume, screenshot and more, all from Raycast.",
   "icon": "cap-icon.png",
   "author": "cap",
   "categories": ["Productivity", "Media"],
@@ -12,90 +13,90 @@
       "title": "Start Recording",
       "subtitle": "Cap",
       "description": "Start a new Cap screen recording.",
-      "mode": "no-view",
-      "keywords": ["cap", "record", "screen", "start"]
+      "mode": "no-view"
     },
     {
       "name": "stop-recording",
       "title": "Stop Recording",
       "subtitle": "Cap",
-      "description": "Stop the current Cap screen recording.",
-      "mode": "no-view",
-      "keywords": ["cap", "record", "stop", "finish"]
+      "description": "Stop the current Cap recording and open the editor.",
+      "mode": "no-view"
     },
     {
       "name": "pause-recording",
       "title": "Pause Recording",
       "subtitle": "Cap",
-      "description": "Pause the current Cap screen recording.",
-      "mode": "no-view",
-      "keywords": ["cap", "record", "pause"]
+      "description": "Pause the current Cap recording.",
+      "mode": "no-view"
     },
     {
       "name": "resume-recording",
       "title": "Resume Recording",
       "subtitle": "Cap",
-      "description": "Resume a paused Cap screen recording.",
-      "mode": "no-view",
-      "keywords": ["cap", "record", "resume", "continue"]
+      "description": "Resume a paused Cap recording.",
+      "mode": "no-view"
     },
     {
       "name": "restart-recording",
       "title": "Restart Recording",
       "subtitle": "Cap",
-      "description": "Restart the current Cap screen recording from scratch.",
-      "mode": "no-view",
-      "keywords": ["cap", "record", "restart", "redo"]
+      "description": "Discard and restart the current Cap recording.",
+      "mode": "no-view"
     },
     {
-      "name": "take-screenshot",
+      "name": "screenshot",
       "title": "Take Screenshot",
       "subtitle": "Cap",
-      "description": "Take a Cap screenshot.",
-      "mode": "no-view",
-      "keywords": ["cap", "screenshot", "capture"]
+      "description": "Capture a screenshot with Cap.",
+      "mode": "no-view"
     },
     {
-      "name": "switch-microphone",
-      "title": "Switch Microphone",
+      "name": "toggle-camera",
+      "title": "Toggle Camera",
       "subtitle": "Cap",
-      "description": "Choose which microphone Cap uses for recording.",
-      "mode": "view",
-      "keywords": ["cap", "mic", "microphone", "audio", "input"]
+      "description": "Show or hide the camera overlay in Cap.",
+      "mode": "no-view"
     },
     {
-      "name": "switch-camera",
-      "title": "Switch Camera",
+      "name": "set-microphone",
+      "title": "Set Microphone",
       "subtitle": "Cap",
-      "description": "Choose which camera Cap uses for recording.",
-      "mode": "view",
-      "keywords": ["cap", "camera", "webcam", "video"]
+      "description": "Choose which microphone Cap uses.",
+      "mode": "view"
     },
     {
-      "name": "open-cap",
-      "title": "Open Cap",
+      "name": "set-camera",
+      "title": "Set Camera",
       "subtitle": "Cap",
-      "description": "Open the Cap main window.",
-      "mode": "no-view",
-      "keywords": ["cap", "open", "show"]
+      "description": "Choose which camera Cap uses.",
+      "mode": "view"
+    },
+    {
+      "name": "set-mode",
+      "title": "Set Recording Mode",
+      "subtitle": "Cap",
+      "description": "Switch between Cap recording modes.",
+      "mode": "view"
     }
   ],
   "dependencies": {
-    "@raycast/api": "^1.79.0"
+    "@raycast/api": "^1.79.0",
+    "@raycast/utils": "^1.17.0"
   },
   "devDependencies": {
-    "@raycast/utils": "^1.17.0",
-    "@types/node": "20.8.10",
-    "@types/react": "18.3.3",
-    "typescript": "^5.4.5",
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "^20.8.10",
+    "@types/react": "^18.3.3",
     "eslint": "^8.57.0",
-    "@raycast/eslint-config": "^1.0.11"
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
   },
   "scripts": {
     "build": "ray build -e dist",
     "dev": "ray develop",
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
+    "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
     "publish": "npx @raycast/api@latest publish"
   }
 }
