@@ -1,45 +1,37 @@
-import { open, showHUD } from "@raycast/api";
+import { open, showHUD, showToast, Toast } from "@raycast/api";
 
-/** All supported Cap deep-link actions */
-export type CapAction =
-  | "record/start"
-  | "record/stop"
-  | "record/pause"
-  | "record/resume"
-  | "record/restart"
-  | "screenshot"
-  | "window/main";
+export const CAP_SCHEME = "cap";
 
 /**
  * Build a `cap://` deep-link URL.
- *
- * Examples:
- *   buildDeepLink("record/start")        → "cap://record/start"
- *   buildDeepLink("mic/set", { name })   → "cap://mic/set?name=My+Mic"
  */
-export function buildDeepLink(
-  path: string,
-  params?: Record<string, string>
-): string {
-  const [host, ...rest] = path.split("/");
-  const pathPart = rest.length ? `/${rest.join("/")}` : "";
-  const base = `cap://${host}${pathPart}`;
-
+export function buildDeeplink(route: string, params?: Record<string, string>): string {
+  const base = `${CAP_SCHEME}://${route}`;
   if (!params || Object.keys(params).length === 0) return base;
-
   const qs = new URLSearchParams(params).toString();
   return `${base}?${qs}`;
 }
 
 /**
- * Fire a Cap deep-link and show a HUD confirmation.
+ * Open a `cap://` deep-link and show HUD feedback.
  */
-export async function triggerCapAction(
-  path: string,
-  hudMessage: string,
-  params?: Record<string, string>
+export async function openDeeplink(
+  route: string,
+  params?: Record<string, string>,
+  hudMessage?: string
 ): Promise<void> {
-  const url = buildDeepLink(path, params);
-  await open(url);
-  await showHUD(hudMessage);
+  const url = buildDeeplink(route, params);
+  try {
+    await open(url);
+    if (hudMessage) {
+      await showHUD(hudMessage);
+    }
+  } catch (err) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Cap not found",
+      message: "Make sure Cap is installed and running.",
+    });
+    throw err;
+  }
 }
