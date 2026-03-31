@@ -6,6 +6,7 @@ use std::{
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init, concatenate_video_fragments,
     get_media_duration, get_video_fps, probe_media_valid, probe_video_can_decode,
+    probe_video_seek_points, remux_file,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
@@ -66,6 +67,8 @@ pub enum RecoveryError {
 }
 
 pub struct RecoveryManager;
+
+const EXPORT_SEEK_PROBE_SAMPLE_COUNT: usize = 8;
 
 impl RecoveryManager {
     pub fn inspect_recording(project_path: &Path) -> Option<IncompleteRecording> {
@@ -750,55 +753,22 @@ impl RecoveryManager {
 
             let display_output = segment_dir.join("display.mp4");
             if display_output.exists() {
-                info!("Validating recovered display video: {:?}", display_output);
-                match probe_video_can_decode(&display_output) {
-                    Ok(true) => {
-                        info!("Display video validation passed");
-                    }
-                    Ok(false) => {
-                        return Err(RecoveryError::UnplayableVideo(format!(
-                            "Display video has no decodable frames: {display_output:?}"
-                        )));
-                    }
-                    Err(e) => {
-                        return Err(RecoveryError::UnplayableVideo(format!(
-                            "Display video validation failed for {display_output:?}: {e}"
-                        )));
-                    }
-                }
+                Self::validate_required_video(&display_output, "display")?;
             }
 
             let camera_output = segment_dir.join("camera.mp4");
-            if camera_output.exists() {
-                info!("Validating recovered camera video: {:?}", camera_output);
-                match probe_video_can_decode(&camera_output) {
-                    Ok(true) => {
-                        info!("Camera video validation passed");
-                    }
-                    Ok(false) => {
-                        warn!(
-                            "Camera video has no decodable frames, removing: {:?}",
-                            camera_output
-                        );
-                        if let Err(e) = std::fs::remove_file(&camera_output) {
-                            debug!(
-                                "Failed to remove invalid camera video {:?}: {e}",
-                                camera_output
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Camera video validation failed for {:?}: {}, removing",
-                            camera_output, e
-                        );
-                        if let Err(remove_err) = std::fs::remove_file(&camera_output) {
-                            debug!(
-                                "Failed to remove invalid camera video {:?}: {remove_err}",
-                                camera_output
-                            );
-                        }
-                    }
+            if camera_output.exists()
+                && let Err(e) = Self::validate_required_video(&camera_output, "camera")
+            {
+                warn!(
+                    "Camera video validation failed for {:?}: {}",
+                    camera_output, e
+                );
+                if let Err(remove_err) = std::fs::remove_file(&camera_output) {
+                    debug!(
+                        "Failed to remove invalid camera video {:?}: {remove_err}",
+                        camera_output
+                    );
                 }
             }
         }
@@ -822,6 +792,60 @@ impl RecoveryManager {
             project_path: recording.project_path.clone(),
             meta,
         })
+    }
+
+    fn validate_required_video(path: &Path, label: &str) -> Result<(), RecoveryError> {
+        info!("Validating recovered {} video: {:?}", label, path);
+
+        Self::ensure_video_decodes(path, label)?;
+
+        if let Err(seek_error) = probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT) {
+            info!(
+                "Recovered {} video failed seek validation, normalizing via remux: {}",
+                label, seek_error
+            );
+            Self::normalize_recovered_video(path, label)?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_video_decodes(path: &Path, label: &str) -> Result<(), RecoveryError> {
+        match probe_video_can_decode(path) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(RecoveryError::UnplayableVideo(format!(
+                "{} video has no decodable frames: {path:?}",
+                label
+            ))),
+            Err(e) => Err(RecoveryError::UnplayableVideo(format!(
+                "{} video validation failed for {path:?}: {e}",
+                label
+            ))),
+        }
+    }
+
+    fn normalize_recovered_video(path: &Path, label: &str) -> Result<(), RecoveryError> {
+        let normalized_path = path.with_extension("normalized.mp4");
+
+        remux_file(path, &normalized_path).map_err(RecoveryError::VideoConcat)?;
+
+        replace_file(&normalized_path, path)?;
+
+        Self::ensure_video_decodes(path, label)?;
+
+        probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT).map_err(|e| {
+            RecoveryError::UnplayableVideo(format!(
+                "{} video seek validation failed for {path:?}: {e}",
+                label
+            ))
+        })?;
+
+        info!(
+            "Recovered {} video validation passed after normalization",
+            label
+        );
+
+        Ok(())
     }
 
     fn build_recovered_meta(
@@ -1140,5 +1164,35 @@ impl RecoveryManager {
                 );
             }
         }
+    }
+}
+
+fn replace_file(src: &Path, dst: &Path) -> Result<(), RecoveryError> {
+    if dst.exists() {
+        std::fs::remove_file(dst).map_err(RecoveryError::Io)?;
+    }
+
+    std::fs::rename(src, dst).map_err(RecoveryError::Io)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_file;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn replace_file_overwrites_existing_destination() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("source.tmp");
+        let dst = dir.path().join("destination.mp4");
+
+        fs::write(&src, b"new").unwrap();
+        fs::write(&dst, b"old").unwrap();
+
+        replace_file(&src, &dst).unwrap();
+
+        assert_eq!(fs::read(&dst).unwrap(), b"new");
+        assert!(!src.exists());
     }
 }

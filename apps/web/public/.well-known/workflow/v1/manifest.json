@@ -1,0 +1,233 @@
+{
+	"version": "1.0.0",
+	"steps": {
+		"workflows/process-video.ts": {
+			"cleanupRawUpload": {
+				"stepId": "step//./workflows/process-video//cleanupRawUpload"
+			},
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/process-video//processVideoOnMediaServer"
+			},
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/process-video//saveMetadataAndComplete"
+			},
+			"setProcessingError": {
+				"stepId": "step//./workflows/process-video//setProcessingError"
+			},
+			"validateProcessingRequest": {
+				"stepId": "step//./workflows/process-video//validateProcessingRequest"
+			}
+		},
+		"workflows/transcribe.ts": {
+			"_enhanceAndSaveAudio": {
+				"stepId": "step//./workflows/transcribe//_enhanceAndSaveAudio"
+			},
+			"_markEnhancedAudioProcessing": {
+				"stepId": "step//./workflows/transcribe//_markEnhancedAudioProcessing"
+			},
+			"cleanupTempAudio": {
+				"stepId": "step//./workflows/transcribe//cleanupTempAudio"
+			},
+			"extractAudio": {
+				"stepId": "step//./workflows/transcribe//extractAudio"
+			},
+			"markNoAudio": {
+				"stepId": "step//./workflows/transcribe//markNoAudio"
+			},
+			"markSkipped": {
+				"stepId": "step//./workflows/transcribe//markSkipped"
+			},
+			"queueAiGeneration": {
+				"stepId": "step//./workflows/transcribe//queueAiGeneration"
+			},
+			"saveTranscription": {
+				"stepId": "step//./workflows/transcribe//saveTranscription"
+			},
+			"transcribeWithDeepgram": {
+				"stepId": "step//./workflows/transcribe//transcribeWithDeepgram"
+			},
+			"validateVideo": {
+				"stepId": "step//./workflows/transcribe//validateVideo"
+			}
+		},
+		"workflows/generate-ai.ts": {
+			"fetchTranscript": {
+				"stepId": "step//./workflows/generate-ai//fetchTranscript"
+			},
+			"generateWithAi": {
+				"stepId": "step//./workflows/generate-ai//generateWithAi"
+			},
+			"markSkipped": {
+				"stepId": "step//./workflows/generate-ai//markSkipped"
+			},
+			"saveResults": {
+				"stepId": "step//./workflows/generate-ai//saveResults"
+			},
+			"validateAndSetProcessing": {
+				"stepId": "step//./workflows/generate-ai//validateAndSetProcessing"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+			"fetch": {
+				"stepId": "step//workflow@4.2.0-beta.73//fetch"
+			}
+		},
+		"workflows/import-loom-video.ts": {
+			"downloadLoomToS3": {
+				"stepId": "step//./workflows/import-loom-video//downloadLoomToS3"
+			},
+			"processVideoOnMediaServer": {
+				"stepId": "step//./workflows/import-loom-video//processVideoOnMediaServer"
+			},
+			"saveMetadataAndComplete": {
+				"stepId": "step//./workflows/import-loom-video//saveMetadataAndComplete"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/internal/builtins.js": {
+			"__builtin_response_array_buffer": {
+				"stepId": "__builtin_response_array_buffer"
+			},
+			"__builtin_response_json": {
+				"stepId": "__builtin_response_json"
+			},
+			"__builtin_response_text": {
+				"stepId": "__builtin_response_text"
+			}
+		}
+	},
+	"workflows": {
+		"workflows/process-video.ts": {
+			"processVideoWorkflow": {
+				"workflowId": "workflow//./workflows/process-video//processVideoWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: processVideoWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		},
+		"workflows/transcribe.ts": {
+			"transcribeVideoWorkflow": {
+				"workflowId": "workflow//./workflows/transcribe//transcribeVideoWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: transcribeVideoWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		},
+		"workflows/generate-ai.ts": {
+			"generateAiWorkflow": {
+				"workflowId": "workflow//./workflows/generate-ai//generateAiWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: generateAiWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		},
+		"workflows/import-loom-video.ts": {
+			"importLoomVideoWorkflow": {
+				"workflowId": "workflow//./workflows/import-loom-video//importLoomVideoWorkflow",
+				"graph": {
+					"nodes": [
+						{
+							"id": "start",
+							"type": "workflowStart",
+							"data": {
+								"label": "Start: importLoomVideoWorkflow",
+								"nodeKind": "workflow_start"
+							}
+						},
+						{
+							"id": "end",
+							"type": "workflowEnd",
+							"data": {
+								"label": "Return",
+								"nodeKind": "workflow_end"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "e_start_end",
+							"source": "start",
+							"target": "end",
+							"type": "default"
+						}
+					]
+				}
+			}
+		}
+	},
+	"classes": {}
+}

@@ -120,6 +120,27 @@ async fn ensure_camera_input_active(app_state: &mut App) {
     }
 }
 
+async fn restore_main_window_inputs(app: &AppHandle) {
+    let should_restore = app
+        .state::<ArcLock<App>>()
+        .try_read()
+        .map(|state| !state.is_recording_active_or_pending())
+        .unwrap_or(false);
+
+    if !should_restore {
+        return;
+    }
+
+    let settings = crate::recording_settings::RecordingSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    if let Err(err) = crate::set_mic_input(app.state(), settings.mic_name).await {
+        warn!("Failed to restore microphone input for main window: {err}");
+    }
+}
+
 async fn cleanup_camera_window(
     app: &AppHandle,
     window: Option<&WebviewWindow>,
@@ -964,6 +985,10 @@ impl ShowCapWindow {
                 }
                 .emit(app);
             } else {
+                if let Self::Main { .. } = self {
+                    restore_main_window_inputs(app).await;
+                }
+
                 window.show().ok();
                 window.unminimize().ok();
                 window.set_focus().ok();

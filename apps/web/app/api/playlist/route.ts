@@ -83,6 +83,43 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
+const resolveRawPreviewKey = (video: Video.Video) =>
+	Effect.gen(function* () {
+		const db = yield* Database;
+		const [s3] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		const [uploadRecord] = yield* db.use((db) =>
+			db
+				.select({ rawFileKey: Db.videoUploads.rawFileKey })
+				.from(Db.videoUploads)
+				.where(eq(Db.videoUploads.videoId, video.id)),
+		);
+
+		if (uploadRecord?.rawFileKey) {
+			return uploadRecord.rawFileKey;
+		}
+
+		if (video.source.type !== "webMP4") {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+
+		const candidateKeys = [
+			`${video.ownerId}/${video.id}/raw-upload.mp4`,
+			`${video.ownerId}/${video.id}/raw-upload.webm`,
+		];
+		const headResults = yield* Effect.all(
+			candidateKeys.map((key) => s3.headObject(key).pipe(Effect.option)),
+			{ concurrency: "unbounded" },
+		);
+		for (let i = 0; i < candidateKeys.length; i++) {
+			const rawHead = headResults[i];
+			if (Option.isSome(rawHead) && (rawHead.value.ContentLength ?? 0) > 0) {
+				return candidateKeys[i];
+			}
+		}
+
+		return yield* Effect.fail(new HttpApiError.NotFound());
+	});
+
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
@@ -93,20 +130,9 @@ const getPlaylistResponse = (
 			video.source.type === "desktopMP4" || video.source.type === "webMP4";
 
 		if (urlParams.videoType === "raw-preview") {
-			const db = yield* Database;
-			const [uploadRecord] = yield* db.use((db) =>
-				db
-					.select({ rawFileKey: Db.videoUploads.rawFileKey })
-					.from(Db.videoUploads)
-					.where(eq(Db.videoUploads.videoId, urlParams.videoId)),
-			);
-
-			if (!uploadRecord?.rawFileKey) {
-				return yield* Effect.fail(new HttpApiError.NotFound());
-			}
-
+			const rawFileKey = yield* resolveRawPreviewKey(video);
 			return yield* s3
-				.getSignedObjectUrl(uploadRecord.rawFileKey)
+				.getSignedObjectUrl(rawFileKey)
 				.pipe(Effect.map(HttpServerResponse.redirect));
 		}
 

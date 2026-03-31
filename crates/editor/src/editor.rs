@@ -189,6 +189,7 @@ impl Renderer {
                     current.segment_frames,
                     current.uniforms,
                     &current.cursor,
+                    true,
                     &mut layers,
                 )
                 .await

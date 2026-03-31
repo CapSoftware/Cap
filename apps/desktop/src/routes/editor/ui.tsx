@@ -426,7 +426,7 @@ export function EditorButton<T extends ValidComponent = "button">(
 }
 
 export const dropdownContainerClasses =
-	"z-10 flex flex-col rounded-[0.75rem] border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-none";
+	"z-[60] flex flex-col rounded-[0.75rem] border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-none";
 
 export const topLeftAnimateClasses =
 	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";

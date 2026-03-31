@@ -162,6 +162,8 @@ pub struct KeyboardTrackSegment {
     pub background_color_override: Option<String>,
     #[serde(default)]
     pub font_size_override: Option<u32>,
+    #[serde(default)]
+    pub uppercase_override: Option<bool>,
 }
 
 pub fn group_key_events(
@@ -217,6 +219,81 @@ pub fn group_key_events(
             continue;
         }
 
+        if event.key == "Space" {
+            let typing_active = current_group_start.is_some()
+                && !current_display.is_empty()
+                && (event.time_ms - last_key_time) <= grouping_threshold_ms;
+
+            if typing_active {
+                if let Some(start) = current_group_start {
+                    segment_counter += 1;
+                    segments.push(KeyboardTrackSegment {
+                        id: format!("kb-{segment_counter}"),
+                        start: start / 1000.0,
+                        end: (event.time_ms + linger_duration_ms) / 1000.0,
+                        display_text: current_display.clone(),
+                        keys: current_keys.clone(),
+                        fade_duration_override: None,
+                        position_override: None,
+                        color_override: None,
+                        background_color_override: None,
+                        font_size_override: None,
+                        uppercase_override: None,
+                    });
+                }
+                current_display.clear();
+                current_keys.clear();
+                current_group_start = None;
+                last_key_time = event.time_ms;
+                continue;
+            }
+
+            if let Some(start) = current_group_start
+                && !current_display.is_empty()
+            {
+                segment_counter += 1;
+                segments.push(KeyboardTrackSegment {
+                    id: format!("kb-{segment_counter}"),
+                    start: start / 1000.0,
+                    end: (last_key_time + linger_duration_ms) / 1000.0,
+                    display_text: current_display.clone(),
+                    keys: current_keys.clone(),
+                    fade_duration_override: None,
+                    position_override: None,
+                    color_override: None,
+                    background_color_override: None,
+                    font_size_override: None,
+                    uppercase_override: None,
+                });
+                current_display.clear();
+                current_keys.clear();
+                current_group_start = None;
+            }
+
+            if (event.time_ms - last_key_time) > grouping_threshold_ms {
+                segment_counter += 1;
+                segments.push(KeyboardTrackSegment {
+                    id: format!("kb-{segment_counter}"),
+                    start: event.time_ms / 1000.0,
+                    end: (event.time_ms + linger_duration_ms) / 1000.0,
+                    display_text: "␣".to_string(),
+                    keys: vec![KeyPressDisplay {
+                        key: event.key.clone(),
+                        time_offset: 0.0,
+                    }],
+                    fade_duration_override: None,
+                    position_override: None,
+                    color_override: None,
+                    background_color_override: None,
+                    font_size_override: None,
+                    uppercase_override: None,
+                });
+            }
+
+            last_key_time = event.time_ms;
+            continue;
+        }
+
         let should_start_new_group = current_group_start.is_none()
             || (event.time_ms - last_key_time) > grouping_threshold_ms
             || is_modifier;
@@ -235,6 +312,7 @@ pub fn group_key_events(
                     color_override: None,
                     background_color_override: None,
                     font_size_override: None,
+                    uppercase_override: None,
                 });
             }
             current_display.clear();
@@ -274,7 +352,7 @@ pub fn group_key_events(
         if has_command_mod && show_modifiers {
             let prefix = modifier_prefix(&active_mods);
             let key_display = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
-            let combo = format!("{prefix}{key_display}");
+            let combo = format!("{prefix}{}", key_display.to_uppercase());
 
             segment_counter += 1;
             segments.push(KeyboardTrackSegment {
@@ -291,6 +369,7 @@ pub fn group_key_events(
                 color_override: None,
                 background_color_override: None,
                 font_size_override: None,
+                uppercase_override: None,
             });
 
             current_display.clear();
@@ -330,6 +409,7 @@ pub fn group_key_events(
             color_override: None,
             background_color_override: None,
             font_size_override: None,
+            uppercase_override: None,
         });
     }
 
@@ -489,6 +569,144 @@ mod tests {
     }
 
     #[test]
+    fn space_splits_continuous_typing_into_words() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("h", 100.0),
+                key_up("h", 150.0),
+                key_down("i", 200.0),
+                key_up("i", 250.0),
+                key_down("Space", 300.0),
+                key_up("Space", 350.0),
+                key_down("b", 400.0),
+                key_up("b", 450.0),
+                key_down("y", 500.0),
+                key_up("y", 550.0),
+                key_down("e", 600.0),
+                key_up("e", 650.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].display_text, "hi");
+        assert_eq!(segments[1].display_text, "bye");
+    }
+
+    #[test]
+    fn consecutive_spaces_do_not_create_empty_segments() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("a", 100.0),
+                key_up("a", 150.0),
+                key_down("Space", 200.0),
+                key_up("Space", 250.0),
+                key_down("Space", 300.0),
+                key_up("Space", 350.0),
+                key_down("b", 400.0),
+                key_up("b", 450.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].display_text, "a");
+        assert_eq!(segments[1].display_text, "b");
+    }
+
+    #[test]
+    fn space_at_start_is_ignored() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("Space", 100.0),
+                key_up("Space", 150.0),
+                key_down("h", 200.0),
+                key_up("h", 250.0),
+                key_down("i", 300.0),
+                key_up("i", 350.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "hi");
+    }
+
+    #[test]
+    fn long_sentence_splits_into_word_segments() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("s", 100.0),
+                key_up("s", 120.0),
+                key_down("e", 150.0),
+                key_up("e", 170.0),
+                key_down("e", 200.0),
+                key_up("e", 220.0),
+                key_down("m", 250.0),
+                key_up("m", 270.0),
+                key_down("Space", 300.0),
+                key_up("Space", 320.0),
+                key_down("m", 350.0),
+                key_up("m", 370.0),
+                key_down("u", 400.0),
+                key_up("u", 420.0),
+                key_down("s", 450.0),
+                key_up("s", 470.0),
+                key_down("t", 500.0),
+                key_up("t", 520.0),
+                key_down("Space", 550.0),
+                key_up("Space", 570.0),
+                key_down("o", 600.0),
+                key_up("o", 620.0),
+                key_down("r", 650.0),
+                key_up("r", 670.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0].display_text, "seem");
+        assert_eq!(segments[1].display_text, "must");
+        assert_eq!(segments[2].display_text, "or");
+    }
+
+    #[test]
+    fn standalone_space_after_gap_shows_symbol() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("a", 100.0),
+                key_up("a", 150.0),
+                key_down("Space", 2000.0),
+                key_up("Space", 2050.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].display_text, "a");
+        assert_eq!(segments[1].display_text, "␣");
+    }
+
+    #[test]
+    fn space_after_gap_with_stale_group_finalizes_both() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("h", 100.0),
+                key_up("h", 150.0),
+                key_down("i", 200.0),
+                key_up("i", 250.0),
+                key_down("Space", 2000.0),
+                key_up("Space", 2050.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].display_text, "hi");
+        assert_eq!(segments[1].display_text, "␣");
+    }
+
+    #[test]
     fn loads_unversioned_binary_keyboard_events() {
         let events = KeyboardEvents {
             presses: vec![key_down("c", 100.0), key_up("c", 150.0)],
@@ -501,5 +719,21 @@ mod tests {
 
         let loaded = KeyboardEvents::load_from_file(&path).unwrap();
         assert_eq!(loaded.presses, events.presses);
+    }
+
+    #[test]
+    fn modifier_combos_uppercase_the_key() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("LMeta", 100.0),
+                key_down("w", 150.0),
+                key_up("w", 200.0),
+                key_up("LMeta", 250.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "⌘W");
     }
 }

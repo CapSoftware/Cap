@@ -129,6 +129,8 @@ impl DecoderPoolManager {
         self.reposition_threshold
     }
 
+    const MAX_ACCESS_HISTORY_ENTRIES: usize = 10_000;
+
     pub fn find_best_decoder_for_time(
         &mut self,
         requested_time: f32,
@@ -138,6 +140,12 @@ impl DecoderPoolManager {
 
         let frame = (requested_time * self.config.fps as f32).floor() as u32;
         *self.access_history.entry(frame).or_insert(0) += 1;
+
+        if self.access_history.len() > Self::MAX_ACCESS_HISTORY_ENTRIES {
+            let threshold = self.access_history.values().copied().sum::<u64>()
+                / self.access_history.len() as u64;
+            self.access_history.retain(|_, count| *count > threshold);
+        }
 
         let mut best_decoder_id = 0;
         let mut best_distance = f32::MAX;

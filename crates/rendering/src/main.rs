@@ -110,6 +110,7 @@ async fn main() -> Result<()> {
                 cursor: Arc::new(Default::default()),
                 keyboard: Arc::new(Default::default()),
                 decoders,
+                render_display: true,
             }]
         }
         StudioRecordingMeta::MultipleSegments { inner, .. } => {
@@ -137,6 +138,7 @@ async fn main() -> Result<()> {
                     cursor,
                     keyboard,
                     decoders,
+                    render_display: true,
                 });
             }
             segments

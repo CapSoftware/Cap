@@ -13,6 +13,8 @@ use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, packet::Mut as
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
 
 static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
+const SEEK_PROBE_PACKET_LIMIT: usize = 240;
+const SEEK_PROBE_PADDING_US: i64 = 250_000;
 
 fn suppress_ffmpeg_logs() {
     unsafe {
@@ -310,6 +312,13 @@ pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
     result
 }
 
+pub fn probe_video_seek_points(path: &Path, sample_count: usize) -> Result<(), String> {
+    suppress_ffmpeg_logs();
+    let result = probe_video_seek_points_inner(path, sample_count);
+    restore_ffmpeg_logs();
+    result
+}
+
 fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
     let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
@@ -381,6 +390,155 @@ fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
     Err(format!(
         "No decodable frames found after trying {packets_tried} packets"
     ))
+}
+
+fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(), String> {
+    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let duration_us = input.duration();
+    let probe_points = build_seek_probe_positions(duration_us, sample_count);
+
+    let (stream_index, decoder_ctx) = {
+        let input_stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "No video stream found".to_string())?;
+
+        let stream_index = input_stream.index();
+        let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
+            .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+
+        (stream_index, decoder_ctx)
+    };
+
+    let mut decoder = decoder_ctx
+        .decoder()
+        .video()
+        .map_err(|e| format!("Failed to create video decoder: {e}"))?;
+
+    let mut frame = ffmpeg::frame::Video::empty();
+
+    for position_us in probe_points {
+        probe_video_seek_point_with(
+            &mut input,
+            &mut decoder,
+            stream_index,
+            position_us,
+            &mut frame,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn probe_video_seek_point_with(
+    input: &mut avformat::context::Input,
+    decoder: &mut ffmpeg::decoder::Video,
+    stream_index: usize,
+    position_us: i64,
+    frame: &mut ffmpeg::frame::Video,
+) -> Result<(), String> {
+    use ffmpeg::rescale;
+
+    let seek_target = rescale::Rescale::rescale(&position_us, (1, 1_000_000), rescale::TIME_BASE);
+    decoder.flush();
+    input
+        .seek(seek_target, ..seek_target)
+        .map_err(|e| format!("Failed to seek to {position_us}us: {e}"))?;
+
+    let mut packets_tried = 0usize;
+
+    for (stream, packet) in input.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+
+        packets_tried += 1;
+
+        if let Err(e) = decoder.send_packet(&packet) {
+            if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
+                return Err(format!(
+                    "Failed to send packet after seeking to {position_us}us: {e}"
+                ));
+            }
+            continue;
+        }
+
+        match decoder.receive_frame(frame) {
+            Ok(()) => return Ok(()),
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {}
+            Err(ffmpeg::Error::Eof) => {}
+            Err(e) => {
+                if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
+                    return Err(format!(
+                        "Failed to decode after seeking to {position_us}us: {e}"
+                    ));
+                }
+            }
+        }
+
+        if packets_tried >= SEEK_PROBE_PACKET_LIMIT {
+            return Err(format!(
+                "No decodable frames found within {} packets after seeking to {position_us}us",
+                SEEK_PROBE_PACKET_LIMIT
+            ));
+        }
+    }
+
+    decoder
+        .send_eof()
+        .map_err(|e| format!("Failed to send EOF after seeking to {position_us}us: {e}"))?;
+
+    loop {
+        match decoder.receive_frame(frame) {
+            Ok(()) => return Ok(()),
+            Err(ffmpeg::Error::Eof) => break,
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
+            Err(e) => {
+                return Err(format!(
+                    "Failed to receive frame after EOF at {position_us}us: {e}"
+                ));
+            }
+        }
+    }
+
+    Err(format!(
+        "No decodable frames found after seeking to {position_us}us"
+    ))
+}
+
+fn build_seek_probe_positions(duration_us: i64, sample_count: usize) -> Vec<i64> {
+    if duration_us <= 0 {
+        return vec![0];
+    }
+
+    let baseline_ratios = [0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9];
+    let requested = sample_count.max(3).min(baseline_ratios.len() + 1);
+
+    let mut indices = vec![0usize];
+    if requested > 2 {
+        let interior = requested - 2;
+        let max_index = baseline_ratios.len() - 1;
+
+        for step in 1..=interior {
+            let index = ((step * max_index) + interior / 2) / interior;
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
+    }
+
+    indices.sort_unstable();
+    indices.dedup();
+
+    let mut positions: Vec<i64> = indices
+        .into_iter()
+        .map(|index| ((duration_us as f64) * baseline_ratios[index]).round() as i64)
+        .collect();
+
+    positions.push((duration_us - SEEK_PROBE_PADDING_US).max(0));
+    positions.sort_unstable();
+    positions.dedup();
+    positions
 }
 
 pub fn get_media_duration(path: &Path) -> Option<Duration> {
@@ -505,4 +663,35 @@ fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), Rem
 
 pub fn remux_file(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
     remux_to_regular_mp4(input_path, output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_seek_probe_positions;
+
+    #[test]
+    fn seek_probe_positions_cover_start_middle_and_end() {
+        let positions = build_seek_probe_positions(10_000_000, 6);
+
+        assert_eq!(positions.first().copied(), Some(0));
+        assert!(
+            positions.iter().any(|p| *p >= 2_000_000 && *p <= 8_000_000),
+            "expected an interior probe position"
+        );
+        assert!(
+            positions.last().copied().unwrap_or_default() >= 9_000_000,
+            "expected a near-end probe position"
+        );
+    }
+
+    #[test]
+    fn seek_probe_positions_are_sorted_and_unique() {
+        let positions = build_seek_probe_positions(1_000_000, 12);
+
+        assert!(!positions.is_empty());
+
+        for window in positions.windows(2) {
+            assert!(window[0] < window[1]);
+        }
+    }
 }
