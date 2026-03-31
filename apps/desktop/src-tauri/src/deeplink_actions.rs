@@ -32,6 +32,7 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    StartDefaultRecording,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -152,6 +153,31 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::StartDefaultRecording => {
+                let state = app.state::<ArcLock<App>>();
+                let settings = crate::recording_settings::RecordingSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+
+                let _ = crate::set_mic_input(state.clone(), settings.mic_name).await;
+                let _ = crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None).await;
+
+                let inputs = StartRecordingInputs {
+                    mode: crate::recording::RecordingMode::Screen,
+                    capture_target: settings.target.unwrap_or_else(|| {
+                        ScreenCaptureTarget::Display {
+                            id: cap_recording::sources::screen_capture::Display::primary().id(),
+                        }
+                    }),
+                    capture_system_audio: settings.system_audio,
+                    organization_id: settings.organization_id,
+                };
+
+                crate::recording::start_recording(app.clone(), state, inputs)
+                    .await
+                    .map(|_| ())
             }
         }
     }
