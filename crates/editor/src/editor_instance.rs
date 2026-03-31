@@ -83,11 +83,11 @@ pub struct EditorInstance {
         watch::Sender<ProjectConfiguration>,
         watch::Receiver<ProjectConfiguration>,
     ),
-    // ws_shutdown_token: CancellationToken,
     pub segment_medias: Arc<Vec<SegmentMedia>>,
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl EditorInstance {
@@ -306,6 +306,7 @@ impl EditorInstance {
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            runtime_handle: tokio::runtime::Handle::current(),
         });
 
         this.state.lock().await.preview_task =
@@ -490,6 +491,7 @@ impl EditorInstance {
                                         .get_frames(
                                             prefetch_segment_time as f32,
                                             !hide_camera,
+                                            true,
                                             prefetch_clip_offsets,
                                         )
                                         .await;
@@ -508,6 +510,7 @@ impl EditorInstance {
                         segment_frames_opt = segment_medias.decoders.get_frames_initial(
                             segment_time as f32,
                             !project.camera.hide,
+                            true,
                             clip_offsets,
                         ) => {
                             if preview_rx.has_changed().unwrap_or(false) {
@@ -583,7 +586,29 @@ impl EditorInstance {
 }
 
 impl Drop for EditorInstance {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        let renderer = self.renderer.clone();
+        let state = self.state.clone();
+        let handle = self.runtime_handle.clone();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            handle.spawn(async move {
+                let mut state = state.lock().await;
+                if let Some(playback) = state.playback_task.take() {
+                    playback.stop();
+                }
+                if let Some(task) = state.preview_task.take() {
+                    task.abort();
+                }
+                drop(state);
+                renderer.stop().await;
+            });
+        }));
+
+        if result.is_err() {
+            tracing::warn!("EditorInstance cleanup skipped — runtime is no longer available");
+        }
+    }
 }
 
 type PreviewFrameInstruction = (u32, u32, XY<u32>);

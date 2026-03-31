@@ -2398,12 +2398,31 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
     false
 }
 
+pub const FRAGMENTED_EXPORT_FFMPEG_MARKER: &str = ".force-ffmpeg-export";
+
+fn fragmented_export_ffmpeg_marker_path(recording_dir: &Path) -> PathBuf {
+    recording_dir.join(FRAGMENTED_EXPORT_FFMPEG_MARKER)
+}
+
+fn mark_fragmented_recording_for_ffmpeg_export(recording_dir: &Path) -> Result<(), String> {
+    std::fs::write(
+        fragmented_export_ffmpeg_marker_path(recording_dir),
+        b"fragmented-remux",
+    )
+    .map_err(|e| format!("Failed to mark recording for FFmpeg export: {e}"))
+}
+
+pub fn should_force_ffmpeg_for_recovered_project(recording_dir: &Path) -> bool {
+    fragmented_export_ffmpeg_marker_path(recording_dir).exists()
+}
+
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
     let incomplete_recording = RecoveryManager::inspect_recording(recording_dir);
 
     if let Some(recording) = incomplete_recording {
         RecoveryManager::recover(&recording)
             .map_err(|e| format!("Failed to remux recording: {e}"))?;
+        mark_fragmented_recording_for_ffmpeg_export(recording_dir)?;
         info!("Successfully remuxed fragmented recording");
         Ok(())
     } else {
@@ -2414,6 +2433,7 @@ pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn click_event(time_ms: f64) -> CursorClickEvent {
         CursorClickEvent {
@@ -2483,5 +2503,16 @@ mod tests {
             segments.is_empty(),
             "small jitter should not generate segments"
         );
+    }
+
+    #[test]
+    fn marks_fragmented_recordings_for_ffmpeg_export() {
+        let dir = tempdir().unwrap();
+
+        assert!(!should_force_ffmpeg_for_recovered_project(dir.path()));
+
+        mark_fragmented_recording_for_ffmpeg_export(dir.path()).unwrap();
+
+        assert!(should_force_ffmpeg_for_recovered_project(dir.path()));
     }
 }

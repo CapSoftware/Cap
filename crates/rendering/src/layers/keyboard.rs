@@ -322,11 +322,21 @@ impl KeyboardLayer {
             .fade_duration_override
             .unwrap_or(settings.fade_duration) as f64;
 
-        let visible_text = build_visible_text(active.segment, current_time);
+        let raw_text = build_visible_text(active.segment, current_time);
 
-        if visible_text.is_empty() {
+        if raw_text.is_empty() {
             return;
         }
+
+        let should_uppercase = active
+            .segment
+            .uppercase_override
+            .unwrap_or(settings.uppercase);
+        let visible_text = if should_uppercase {
+            raw_text.to_uppercase()
+        } else {
+            raw_text
+        };
 
         let fade_opacity = calculate_fade(
             current_time,
@@ -705,7 +715,7 @@ mod tests {
             id: "kb-1".to_string(),
             start: 1.0,
             end: 1.8,
-            display_text: "⌘t".to_string(),
+            display_text: "⌘T".to_string(),
             keys: vec![cap_project::KeyPressDisplay {
                 key: "t".to_string(),
                 time_offset: 0.0,
@@ -715,9 +725,10 @@ mod tests {
             color_override: None,
             background_color_override: None,
             font_size_override: None,
+            uppercase_override: None,
         };
 
-        assert_eq!(build_visible_text(&segment, 1.0), "⌘t");
+        assert_eq!(build_visible_text(&segment, 1.0), "⌘T");
     }
 
     #[test]

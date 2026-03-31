@@ -115,6 +115,46 @@ interface Settings {
 	organizationId?: string | null;
 }
 
+function buildExportSettings(
+	settings: Settings,
+	cursorOnly: boolean,
+	compressionBpp: number | null,
+	forceFfmpegDecoder: boolean,
+): ExportSettings {
+	const resolutionBase = {
+		x: settings.resolution.width,
+		y: settings.resolution.height,
+	};
+
+	if (cursorOnly) {
+		return {
+			format: "Mov",
+			fps: settings.fps,
+			resolution_base: resolutionBase,
+			cursor_only: true,
+		};
+	}
+
+	if (settings.format === "Mp4") {
+		return {
+			format: "Mp4",
+			fps: settings.fps,
+			resolution_base: resolutionBase,
+			compression: settings.compression,
+			custom_bpp: compressionBpp,
+			force_ffmpeg_decoder: forceFfmpegDecoder,
+			optimize_filesize: settings.optimizeFilesize,
+		};
+	}
+
+	return {
+		format: "Gif",
+		fps: settings.fps,
+		resolution_base: resolutionBase,
+		quality: null,
+	};
+}
+
 export function ExportPage() {
 	const {
 		setDialog,
@@ -125,10 +165,6 @@ export function ExportPage() {
 		meta,
 		refetchMeta,
 	} = useEditorContext();
-
-	const handleBack = () => {
-		setDialog((d) => ({ ...d, open: false }));
-	};
 
 	const projectPath = editorInstance.path;
 
@@ -168,14 +204,50 @@ export function ExportPage() {
 		"Web",
 		"Potato",
 	];
+	const [cursorOnly, setCursorOnly] = createSignal(false);
+
+	const requiresTransparentExport = () => hasTransparentBackground();
+	const disablesLinkExport = () => hasTransparentBackground() || cursorOnly();
+	const shouldUseGifMode = () =>
+		!cursorOnly() &&
+		(hasTransparentBackground() ||
+			(_settings.format === "Gif" && _settings.exportTo !== "link"));
+	const isMovCursorOnlyExport = () => cursorOnly();
+	const resetTransientExportOptions = () => {
+		setCursorOnly(false);
+	};
+	const handleBack = () => {
+		resetTransientExportOptions();
+		setDialog((d) => ({ ...d, open: false }));
+	};
 
 	const settings = mergeProps(_settings, () => {
 		const ret: Partial<Settings> = {};
-		if (hasTransparentBackground() && _settings.format === "Mp4")
-			ret.format = "Gif";
-		else if (_settings.format === "Gif" && _settings.exportTo === "link")
-			ret.format = "Mp4";
-		else if (!["Mp4", "Gif"].includes(_settings.format)) ret.format = "Mp4";
+		if (!["Mp4", "Gif"].includes(_settings.format)) ret.format = "Mp4";
+		else if (!cursorOnly()) {
+			if (requiresTransparentExport() && _settings.format === "Mp4")
+				ret.format = "Gif";
+			else if (
+				!requiresTransparentExport() &&
+				_settings.format === "Gif" &&
+				_settings.exportTo === "link"
+			)
+				ret.format = "Mp4";
+		}
+
+		if (disablesLinkExport() && _settings.exportTo === "link")
+			ret.exportTo = "file";
+
+		if (shouldUseGifMode()) {
+			if (!["720p", "1080p"].includes(_settings.resolution.value)) {
+				ret.resolution = { ...RESOLUTION_OPTIONS._720p };
+			}
+			if (GIF_FPS_OPTIONS.every((option) => option.value !== _settings.fps)) {
+				ret.fps = 15;
+			}
+		} else if (FPS_OPTIONS.every((option) => option.value !== _settings.fps)) {
+			ret.fps = 30;
+		}
 
 		if (!VALID_COMPRESSIONS.includes(_settings.compression))
 			ret.compression = "Maximum";
@@ -211,7 +283,8 @@ export function ExportPage() {
 		width: number,
 		height: number,
 		bpp: number,
-	): EstimateCacheKey => `${fps}-${width}-${height}-${bpp}`;
+		mode: "video" | "gif" | "cursor",
+	): EstimateCacheKey => `${fps}-${width}-${height}-${bpp}-${mode}`;
 
 	const updateSettings: typeof setSettings = ((
 		...args: Parameters<typeof setSettings>
@@ -260,7 +333,13 @@ export function ExportPage() {
 		bpp: number,
 		retryCount = 0,
 	) => {
-		const cacheKey = getEstimateCacheKey(fps, resWidth, resHeight, bpp);
+		const cacheKey = getEstimateCacheKey(
+			fps,
+			resWidth,
+			resHeight,
+			bpp,
+			isMovCursorOnlyExport() ? "cursor" : shouldUseGifMode() ? "gif" : "video",
+		);
 		const cachedEstimate = estimateCache.get(cacheKey);
 
 		if (cachedEstimate) {
@@ -274,6 +353,7 @@ export function ExportPage() {
 				fps,
 				resolution_base: { x: resWidth, y: resHeight },
 				compression_bpp: bpp,
+				cursor_only: cursorOnly(),
 			});
 
 			const oldUrl = previewUrl();
@@ -333,6 +413,7 @@ export function ExportPage() {
 				() => settings.fps,
 				() => settings.resolution.width,
 				() => settings.resolution.height,
+				cursorOnly,
 				compressionBpp,
 			],
 			() => {
@@ -360,30 +441,15 @@ export function ExportPage() {
 		onProgress: (progress: FramesRendered) => void,
 	) => {
 		const customBpp = advancedMode() && isCustomBpp() ? compressionBpp() : null;
+		const exportSettings = buildExportSettings(
+			settings,
+			isMovCursorOnlyExport(),
+			customBpp,
+			forceFfmpegDecoder(),
+		);
 		const { promise, cancel } = createExportTask(
 			projectPath,
-			settings.format === "Mp4"
-				? {
-						format: "Mp4",
-						fps: settings.fps,
-						resolution_base: {
-							x: settings.resolution.width,
-							y: settings.resolution.height,
-						},
-						compression: settings.compression,
-						custom_bpp: customBpp,
-						force_ffmpeg_decoder: forceFfmpegDecoder(),
-						optimize_filesize: settings.optimizeFilesize,
-					}
-				: {
-						format: "Gif",
-						fps: settings.fps,
-						resolution_base: {
-							x: settings.resolution.width,
-							y: settings.resolution.height,
-						},
-						quality: null,
-					},
+			exportSettings,
 			onProgress,
 		);
 		cancelCurrentExport = cancel;
@@ -394,6 +460,20 @@ export function ExportPage() {
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
 	const [isCancelled, setIsCancelled] = createSignal(false);
+	const exportFileExtension = () =>
+		isMovCursorOnlyExport() ? "mov" : settings.format === "Gif" ? "gif" : "mp4";
+	const exportedAssetLabel = () =>
+		isMovCursorOnlyExport()
+			? "Cursor track"
+			: settings.format === "Gif"
+				? "GIF"
+				: "Recording";
+	const exportMediumLabel = () =>
+		isMovCursorOnlyExport()
+			? "cursor track"
+			: settings.format === "Gif"
+				? "GIF"
+				: "video";
 
 	const handleCancel = async () => {
 		if (
@@ -446,11 +526,7 @@ export function ExportPage() {
 		},
 		onSuccess() {
 			setExportState({ type: "done" });
-			toast.success(
-				`${
-					settings.format === "Gif" ? "GIF" : "Recording"
-				} exported to clipboard`,
-			);
+			toast.success(`${exportedAssetLabel()} exported to clipboard`);
 		},
 	}));
 
@@ -459,7 +535,7 @@ export function ExportPage() {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
 
-			const extension = settings.format === "Gif" ? "gif" : "mp4";
+			const extension = exportFileExtension();
 			const savePath = await saveDialog({
 				filters: [
 					{
@@ -509,9 +585,7 @@ export function ExportPage() {
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
-			toast.success(
-				`${settings.format === "Gif" ? "GIF" : "Recording"} exported to file`,
-			);
+			toast.success(`${exportedAssetLabel()} exported to file`);
 		},
 	}));
 
@@ -727,7 +801,7 @@ export function ExportPage() {
 							const data = est();
 							const durationSeconds = data.totalFrames / settings.fps;
 
-							const exportSpeedMultiplier = settings.format === "Gif" ? 4 : 10;
+							const exportSpeedMultiplier = shouldUseGifMode() ? 4 : 10;
 							const totalTimeMs =
 								(data.frameRenderTimeMs * data.totalFrames) /
 								exportSpeedMultiplier;
@@ -775,7 +849,15 @@ export function ExportPage() {
 									{(option) => {
 										const Icon = option.icon;
 										const isSelected = () => settings.exportTo === option.value;
-										return (
+										const isDisabled = () =>
+											option.value === "link" && disablesLinkExport();
+										const disabledReason = () =>
+											isDisabled()
+												? cursorOnly()
+													? "Cursor-only exports can only be saved to a file or clipboard"
+													: "Transparent exports can only be saved to a file or clipboard"
+												: undefined;
+										const button = (
 											<button
 												type="button"
 												class={cx(
@@ -783,7 +865,9 @@ export function ExportPage() {
 													isSelected()
 														? "bg-gray-3 border-gray-5 text-gray-12"
 														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+													isDisabled() && "opacity-50 cursor-not-allowed",
 												)}
+												disabled={isDisabled()}
 												onClick={() => {
 													setSettings(
 														produce((newSettings) => {
@@ -807,6 +891,12 @@ export function ExportPage() {
 												/>
 												<span class="text-xs font-medium">{option.label}</span>
 											</button>
+										);
+
+										return disabledReason() ? (
+											<Tooltip content={disabledReason()}>{button}</Tooltip>
+										) : (
+											button
 										);
 									}}
 								</For>
@@ -859,15 +949,19 @@ export function ExportPage() {
 								<For each={FORMAT_OPTIONS}>
 									{(option) => {
 										const isDisabled = () =>
-											(option.value === "Mp4" && hasTransparentBackground()) ||
+											cursorOnly() ||
+											(option.value === "Mp4" && requiresTransparentExport()) ||
 											(option.value === "Gif" && settings.exportTo === "link");
 
 										const disabledReason = () =>
-											option.value === "Mp4" && hasTransparentBackground()
-												? "MP4 doesn't support transparency"
-												: option.value === "Gif" && settings.exportTo === "link"
-													? "Links require MP4 format"
-													: undefined;
+											cursorOnly()
+												? "Cursor-only export always uses transparent MOV"
+												: option.value === "Mp4" && requiresTransparentExport()
+													? "MP4 doesn't support transparency"
+													: option.value === "Gif" &&
+															settings.exportTo === "link"
+														? "Links require MP4 format"
+														: undefined;
 
 										const button = (
 											<button
@@ -933,7 +1027,7 @@ export function ExportPage() {
 							<div class="flex gap-1.5">
 								<For
 									each={
-										settings.format === "Gif"
+										shouldUseGifMode()
 											? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
 											: [
 													RESOLUTION_OPTIONS._720p,
@@ -962,11 +1056,7 @@ export function ExportPage() {
 
 						<Field name="Frame Rate" icon={<IconLucideGauge class="size-4" />}>
 							<div class="flex gap-1.5">
-								<For
-									each={
-										settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
-									}
-								>
+								<For each={shouldUseGifMode() ? GIF_FPS_OPTIONS : FPS_OPTIONS}>
 									{(option) => (
 										<button
 											type="button"
@@ -990,7 +1080,7 @@ export function ExportPage() {
 							</div>
 						</Field>
 
-						<Show when={settings.format === "Mp4"}>
+						<Show when={settings.format === "Mp4" && !cursorOnly()}>
 							<Field
 								name="Quality"
 								icon={<IconLucideSparkles class="size-4" />}
@@ -1064,97 +1154,162 @@ export function ExportPage() {
 										</span>
 									</div>
 								</button>
+							</Field>
+						</Show>
 
-								<button
-									type="button"
+						<Field
+							name="Advanced Options"
+							icon={<IconLucideSparkles class="size-4" />}
+						>
+							<button
+								type="button"
+								class={cx(
+									"w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg border transition-colors",
+									advancedMode()
+										? "bg-gray-3 border-gray-5 text-gray-12"
+										: "bg-transparent border-gray-4 text-gray-11 hover:bg-gray-3 hover:border-gray-5",
+								)}
+								onClick={() => setAdvancedMode(!advancedMode())}
+							>
+								<span>{advancedMode() ? "Hide options" : "Show options"}</span>
+								<IconCapChevronDown
 									class={cx(
-										"mt-3 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors",
-										advancedMode()
-											? "bg-gray-3 border-gray-5 text-gray-12"
-											: "bg-transparent border-gray-4 text-gray-11 hover:bg-gray-3 hover:border-gray-5",
+										"size-4 transition-transform",
+										advancedMode() && "rotate-180",
 									)}
-									onClick={() => setAdvancedMode(!advancedMode())}
-								>
-									Advanced
-								</button>
+								/>
+							</button>
 
-								<Show when={advancedMode()}>
-									<div class="mt-3 space-y-2">
-										<div class="flex items-center justify-between text-xs">
-											<span class="text-gray-11">Bits per pixel</span>
-											<span class="text-gray-12 font-medium tabular-nums">
-												{compressionBpp().toFixed(2)}
+							<Show when={advancedMode()}>
+								<div class="mt-3 space-y-4">
+									<button
+										type="button"
+										role="switch"
+										aria-checked={cursorOnly()}
+										class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
+										onClick={() => setCursorOnly(!cursorOnly())}
+									>
+										<div
+											class={cx(
+												"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+												cursorOnly() ? "bg-blue-9" : "bg-gray-5",
+											)}
+										>
+											<div
+												class={cx(
+													"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
+													cursorOnly() ? "translate-x-4" : "translate-x-0.5",
+												)}
+											/>
+										</div>
+										<div class="text-left">
+											<span class="block">Export cursor only</span>
+											<span class="text-[10px] text-gray-9">
+												Keeps the same cursor motion and clicks on a transparent
+												background
 											</span>
 										</div>
-										<input
-											type="range"
-											min="0.02"
-											max="0.5"
-											step="0.01"
-											value={compressionBpp()}
-											onInput={(e) => {
-												const value = Number.parseFloat(e.currentTarget.value);
-												setPreviewLoading(true);
-												setCompressionBpp(value);
-												const preset = COMPRESSION_OPTIONS.find(
-													(opt) => Math.abs(opt.bpp - value) < 0.001,
-												);
-												if (preset) {
-													setSettings("compression", preset.value);
-												}
-											}}
-											class="w-full h-1.5 bg-gray-4 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-9 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-110"
-										/>
-										<div class="flex justify-between text-[10px] text-gray-9">
-											<span>0.02 (tiny)</span>
-											<span>0.50 (huge)</span>
-										</div>
-										<Show when={isCustomBpp()}>
-											<p class="text-[10px] text-amber-11 mt-1">
-												Using custom bitrate
-											</p>
-										</Show>
+									</button>
 
-										<Show when={ostype() === "macos"}>
-											<div class="mt-4 pt-3 border-t border-gray-4">
-												<button
-													type="button"
-													role="switch"
-													aria-checked={forceFfmpegDecoder()}
-													aria-label="Force FFmpeg decoder"
-													class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
-													onClick={() =>
-														setForceFfmpegDecoder(!forceFfmpegDecoder())
+									<Show when={cursorOnly()}>
+										<div class="rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
+											<div class="flex items-start gap-2">
+												<IconLucideAlertTriangle class="mt-0.5 size-4 flex-shrink-0 text-amber-11" />
+												<div class="text-left">
+													<p class="text-xs font-medium text-amber-11">
+														Warning
+													</p>
+													<p class="text-[10px] text-amber-11">
+														Exports as a transparent MOV. Files are large and
+														best for compositing or editing.
+													</p>
+												</div>
+											</div>
+										</div>
+									</Show>
+
+									<Show when={settings.format === "Mp4" && !cursorOnly()}>
+										<div class="space-y-2 border-t border-gray-4 pt-3">
+											<div class="flex items-center justify-between text-xs">
+												<span class="text-gray-11">Bits per pixel</span>
+												<span class="text-gray-12 font-medium tabular-nums">
+													{compressionBpp().toFixed(2)}
+												</span>
+											</div>
+											<input
+												type="range"
+												min="0.02"
+												max="0.5"
+												step="0.01"
+												value={compressionBpp()}
+												onInput={(e) => {
+													const value = Number.parseFloat(
+														e.currentTarget.value,
+													);
+													setPreviewLoading(true);
+													setCompressionBpp(value);
+													const preset = COMPRESSION_OPTIONS.find(
+														(opt) => Math.abs(opt.bpp - value) < 0.001,
+													);
+													if (preset) {
+														setSettings("compression", preset.value);
 													}
-												>
-													<div
-														class={cx(
-															"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
-															forceFfmpegDecoder() ? "bg-blue-9" : "bg-gray-5",
-														)}
+												}}
+												class="w-full h-1.5 bg-gray-4 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-9 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-110"
+											/>
+											<div class="flex justify-between text-[10px] text-gray-9">
+												<span>0.02 (tiny)</span>
+												<span>0.50 (huge)</span>
+											</div>
+											<Show when={isCustomBpp()}>
+												<p class="text-[10px] text-amber-11 mt-1">
+													Using custom bitrate
+												</p>
+											</Show>
+
+											<Show when={ostype() === "macos"}>
+												<div class="mt-4 pt-3 border-t border-gray-4">
+													<button
+														type="button"
+														role="switch"
+														aria-checked={forceFfmpegDecoder()}
+														aria-label="Force FFmpeg decoder"
+														class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
+														onClick={() =>
+															setForceFfmpegDecoder(!forceFfmpegDecoder())
+														}
 													>
 														<div
 															class={cx(
-																"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
+																"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
 																forceFfmpegDecoder()
-																	? "translate-x-4"
-																	: "translate-x-0.5",
+																	? "bg-blue-9"
+																	: "bg-gray-5",
 															)}
-														/>
-													</div>
-													<div class="text-left">
-														<span class="block">Force FFmpeg decoder</span>
-														<span class="text-[10px] text-gray-9">
-															Skip hardware decoder (auto-fallback enabled)
-														</span>
-													</div>
-												</button>
-											</div>
-										</Show>
-									</div>
-								</Show>
-							</Field>
-						</Show>
+														>
+															<div
+																class={cx(
+																	"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
+																	forceFfmpegDecoder()
+																		? "translate-x-4"
+																		: "translate-x-0.5",
+																)}
+															/>
+														</div>
+														<div class="text-left">
+															<span class="block">Force FFmpeg decoder</span>
+															<span class="text-[10px] text-gray-9">
+																Skip hardware decoder (auto-fallback enabled)
+															</span>
+														</div>
+													</button>
+												</div>
+											</Show>
+										</div>
+									</Show>
+								</div>
+							</Show>
+						</Field>
 					</div>
 
 					<div class="p-4 border-t border-gray-3">
@@ -1296,9 +1451,7 @@ export function ExportPage() {
 													{copyState.type === "starting"
 														? "Preparing..."
 														: copyState.type === "rendering"
-															? settings.format === "Gif"
-																? "Rendering GIF..."
-																: "Rendering video..."
+															? `Rendering ${exportMediumLabel()}...`
 															: copyState.type === "copying"
 																? "Copying to clipboard..."
 																: "Copied to clipboard"}
@@ -1315,7 +1468,7 @@ export function ExportPage() {
 														<>
 															<RenderProgress
 																state={copyState}
-																format={settings.format}
+																label={exportMediumLabel()}
 															/>
 															<Button
 																variant="ghost"
@@ -1347,9 +1500,7 @@ export function ExportPage() {
 																{saveState.type === "starting"
 																	? "Preparing..."
 																	: saveState.type === "rendering"
-																		? settings.format === "Gif"
-																			? "Rendering GIF..."
-																			: "Rendering video..."
+																		? `Rendering ${exportMediumLabel()}...`
 																		: saveState.type === "copying"
 																			? "Exporting to file..."
 																			: "Export completed"}
@@ -1366,7 +1517,7 @@ export function ExportPage() {
 																	<>
 																		<RenderProgress
 																			state={copyState}
-																			format={settings.format}
+																			label={exportMediumLabel()}
 																		/>
 																		<Button
 																			variant="ghost"
@@ -1392,9 +1543,7 @@ export function ExportPage() {
 																	Export Complete
 																</h1>
 																<p class="text-sm text-gray-11">
-																	Your{" "}
-																	{settings.format === "Gif" ? "GIF" : "video"}{" "}
-																	is ready
+																	Your {exportMediumLabel()} is ready
 																</p>
 															</div>
 														</div>
@@ -1446,7 +1595,7 @@ export function ExportPage() {
 																		<>
 																			<RenderProgress
 																				state={renderState}
-																				format={settings.format}
+																				label={exportMediumLabel()}
 																			/>
 																			<Button
 																				variant="ghost"
@@ -1561,9 +1710,7 @@ export function ExportPage() {
 														}, 2000);
 														await commands.copyVideoToClipboard(path);
 														toast.success(
-															`${
-																settings.format === "Gif" ? "GIF" : "Video"
-															} copied to clipboard`,
+															`${exportedAssetLabel()} copied to clipboard`,
 														);
 													}
 												}}
@@ -1600,7 +1747,7 @@ export function ExportPage() {
 	);
 }
 
-function RenderProgress(props: { state: RenderState; format?: ExportFormat }) {
+function RenderProgress(props: { state: RenderState; label: string }) {
 	return (
 		<ProgressView
 			amount={
@@ -1612,7 +1759,7 @@ function RenderProgress(props: { state: RenderState; format?: ExportFormat }) {
 			}
 			label={
 				props.state.type === "rendering"
-					? `Rendering ${props.format === "Gif" ? "GIF" : "video"} (${
+					? `Rendering ${props.label} (${
 							props.state.progress.renderedCount
 						}/${props.state.progress.totalFrames} frames)`
 					: "Preparing to render..."

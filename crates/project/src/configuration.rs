@@ -1001,6 +1001,7 @@ pub struct KeyboardSettings {
     pub grouping_threshold_ms: f64,
     pub show_modifiers: bool,
     pub show_special_keys: bool,
+    pub uppercase: bool,
 }
 
 impl Default for KeyboardSettings {
@@ -1019,6 +1020,7 @@ impl Default for KeyboardSettings {
             grouping_threshold_ms: 500.0,
             show_modifiers: true,
             show_special_keys: true,
+            uppercase: false,
         }
     }
 }

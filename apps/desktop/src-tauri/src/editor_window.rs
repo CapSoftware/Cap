@@ -1,5 +1,5 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
-use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
+use tauri::{AppHandle, Listener, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -14,6 +14,8 @@ pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
     pub ws_port: u16,
     pub ws_shutdown_token: CancellationToken,
+    app_handle: AppHandle,
+    render_frame_event_id: tauri::EventId,
 }
 
 type PendingResult = Result<Arc<EditorInstance>, String>;
@@ -26,7 +28,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
 
     let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
-    let inner = create_editor_instance_impl(
+    let (inner, render_frame_event_id) = create_editor_instance_impl(
         &app,
         path,
         Box::new(move |output| {
@@ -67,6 +69,8 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         inner,
         ws_port,
         ws_shutdown_token,
+        app_handle: app,
+        render_frame_event_id,
     }))
 }
 
@@ -110,6 +114,40 @@ impl PendingEditorInstances {
         let mut instances = self.0.write().await;
         instances.remove(window_label)
     }
+
+    pub async fn cancel_prewarm(&self, window_label: &str) {
+        let mut instances = self.0.write().await;
+        if let Some(mut rx) = instances.remove(window_label) {
+            tokio::spawn(async move {
+                let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let instance_to_dispose = {
+                            let borrowed = rx.borrow_and_update().clone();
+                            match borrowed {
+                                Some(Ok(instance)) => Some(instance),
+                                Some(Err(_)) => break,
+                                None => None,
+                            }
+                        };
+
+                        if let Some(instance) = instance_to_dispose {
+                            instance.dispose().await;
+                            break;
+                        }
+
+                        if rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                if timeout.await.is_err() {
+                    tracing::warn!(
+                        "Timed out waiting for prewarmed editor instance to complete for cleanup"
+                    );
+                }
+            });
+        }
+    }
 }
 
 impl EditorInstance {
@@ -117,6 +155,7 @@ impl EditorInstance {
         self.inner.dispose().await;
 
         self.ws_shutdown_token.cancel();
+        self.app_handle.unlisten(self.render_frame_event_id);
     }
 }
 
@@ -243,7 +282,8 @@ impl EditorInstances {
                 let (frame_tx, frame_rx) = watch::channel(None);
 
                 let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
-                let inner = create_editor_instance_impl(
+                let app_handle = window.app_handle().clone();
+                let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
                     path,
                     Box::new(move |output| {
@@ -284,6 +324,8 @@ impl EditorInstances {
                     inner,
                     ws_port,
                     ws_shutdown_token,
+                    app_handle,
+                    render_frame_event_id,
                 });
 
                 entry.insert(instance.clone());

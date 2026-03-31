@@ -459,6 +459,7 @@ async fn benchmark_playback(
                 .get_frames_initial(
                     segment_time as f32,
                     !context.project.camera.hide,
+                    true,
                     clip_offsets,
                 )
                 .await
@@ -468,6 +469,7 @@ async fn benchmark_playback(
                 .get_frames(
                     segment_time as f32,
                     !context.project.camera.hide,
+                    true,
                     clip_offsets,
                 )
                 .await
@@ -507,7 +509,13 @@ async fn benchmark_playback(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+            .render_immediate(
+                segment_frames,
+                uniforms,
+                &segment_media.cursor,
+                true,
+                &mut layers,
+            )
             .await
         {
             Ok(_) => {
@@ -546,6 +554,7 @@ async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
         compression: ExportCompression::Social,
         custom_bpp: None,
         force_ffmpeg_decoder: false,
+        optimize_filesize: false,
     };
 
     let total_frames = exporter_base.total_frames(settings.fps);
@@ -666,7 +675,7 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
         .unwrap_or_default();
     let frames = segment_media
         .decoders
-        .get_frames_initial(0.0, !context.project.camera.hide, clip_offsets)
+        .get_frames_initial(0.0, !context.project.camera.hide, true, clip_offsets)
         .await
         .ok_or_else(|| anyhow::anyhow!("Initial frame decode returned no frame"))?;
     let cursor_smoothing =
@@ -701,7 +710,7 @@ async fn render_single_frame(context: &FixtureContext) -> Result<()> {
     );
 
     frame_renderer
-        .render_immediate(frames, uniforms, &segment_media.cursor, &mut layers)
+        .render_immediate(frames, uniforms, &segment_media.cursor, true, &mut layers)
         .await
         .map(|_| ())
         .map_err(anyhow::Error::msg)

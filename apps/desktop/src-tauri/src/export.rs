@@ -1,6 +1,7 @@
 use crate::editor_window::{OptionalWindowEditorInstance, WindowEditorInstance};
+use crate::recording::should_force_ffmpeg_for_recovered_project;
 use crate::{FramesRendered, get_video_metadata};
-use cap_export::ExporterBase;
+use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
@@ -32,6 +33,7 @@ impl Drop for ExportActiveGuard<'_> {
 pub enum ExportSettings {
     Mp4(cap_export::mp4::Mp4ExportSettings),
     Gif(cap_export::gif::GifExportSettings),
+    Mov(cap_export::mov::MovExportSettings),
 }
 
 impl ExportSettings {
@@ -39,7 +41,33 @@ impl ExportSettings {
         match self {
             ExportSettings::Mp4(settings) => settings.fps,
             ExportSettings::Gif(settings) => settings.fps,
+            ExportSettings::Mov(settings) => settings.fps,
         }
+    }
+
+    fn force_ffmpeg_decoder(&self) -> bool {
+        match self {
+            ExportSettings::Mp4(settings) => settings.force_ffmpeg_decoder,
+            ExportSettings::Gif(_) | ExportSettings::Mov(_) => false,
+        }
+    }
+
+    fn cursor_only(&self) -> bool {
+        match self {
+            ExportSettings::Mov(settings) => settings.cursor_only,
+            _ => false,
+        }
+    }
+}
+
+fn export_project_config(
+    project_config: cap_project::ProjectConfiguration,
+    cursor_only: bool,
+) -> cap_project::ProjectConfiguration {
+    if cursor_only {
+        make_cursor_only_project(project_config)
+    } else {
+        project_config
     }
 }
 
@@ -49,11 +77,16 @@ async fn do_export(
     progress: &tauri::ipc::Channel<FramesRendered>,
     force_ffmpeg: bool,
 ) -> Result<PathBuf, String> {
-    let exporter_base = ExporterBase::builder(project_path.to_path_buf())
-        .with_force_ffmpeg_decoder(force_ffmpeg)
-        .build()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut exporter_builder =
+        ExporterBase::builder(project_path.to_path_buf()).with_force_ffmpeg_decoder(force_ffmpeg);
+
+    if settings.cursor_only() {
+        let meta = RecordingMeta::load_for_project(project_path).map_err(|e| e.to_string())?;
+        exporter_builder =
+            exporter_builder.with_config(export_project_config(meta.project_config(), true));
+    }
+
+    let exporter_base = exporter_builder.build().await.map_err(|e| e.to_string())?;
 
     let total_frames = exporter_base.total_frames(settings.fps());
 
@@ -89,12 +122,30 @@ async fn do_export(
                 })
                 .await
         }
+        ExportSettings::Mov(mov_settings) => {
+            let progress = progress.clone();
+            mov_settings
+                .export(exporter_base, move |frame_index| {
+                    progress
+                        .send(FramesRendered {
+                            rendered_count: (frame_index + 1).min(total_frames),
+                            total_frames,
+                        })
+                        .is_ok()
+                })
+                .await
+        }
     }
 }
 
 fn is_frame_decode_error(error: &str) -> bool {
     error.contains("Failed to decode video frames")
         || error.contains("Too many consecutive frame failures")
+        || error.contains("waiting for frame 0")
+}
+
+fn should_force_ffmpeg_export(project_path: &Path, settings: &ExportSettings) -> bool {
+    settings.force_ffmpeg_decoder() || should_force_ffmpeg_for_recovered_project(project_path)
 }
 
 #[tauri::command]
@@ -106,7 +157,7 @@ pub async fn export_video(
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    let force_ffmpeg = false;
+    let force_ffmpeg = should_force_ffmpeg_export(&project_path, &settings);
 
     let _guard = if let Some(ref ed) = *editor {
         ed.export_active.store(true, Ordering::Release);
@@ -179,6 +230,7 @@ pub async fn get_export_estimates(
     let (resolution, fps) = match &settings {
         ExportSettings::Mp4(s) => (s.resolution_base, s.fps),
         ExportSettings::Gif(s) => (s.resolution_base, s.fps),
+        ExportSettings::Mov(s) => (s.resolution_base, s.fps),
     };
 
     let (width, height) = (resolution.x, resolution.y);
@@ -219,6 +271,16 @@ pub async fn get_export_estimates(
 
             (size_mb, time_estimate)
         }
+        ExportSettings::Mov(_) => {
+            let size_mb = estimate_cursor_only_size_mb(total_pixels, total_frames);
+            let effective_render_fps = match (width, height) {
+                (w, _) if w >= 3840 => 140.0,
+                _ => 220.0,
+            };
+            let time_estimate = total_frames / effective_render_fps;
+
+            (size_mb, time_estimate)
+        }
     };
 
     Ok(ExportEstimates {
@@ -233,6 +295,8 @@ pub struct ExportPreviewSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
     pub compression_bpp: f32,
+    #[serde(default)]
+    pub cursor_only: bool,
 }
 
 #[derive(Debug, Serialize, Type)]
@@ -243,6 +307,11 @@ pub struct ExportPreviewResult {
     pub actual_height: u32,
     pub frame_render_time_ms: f64,
     pub total_frames: u32,
+}
+
+fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
+    let bytes_per_frame = total_pixels * 0.4;
+    (bytes_per_frame * total_frames) / (1024.0 * 1024.0)
 }
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
@@ -268,7 +337,8 @@ pub async fn generate_export_preview(
         return Err("Cannot preview non-studio recordings".to_string());
     };
 
-    let project_config = recording_meta.project_config();
+    let project_config =
+        export_project_config(recording_meta.project_config(), settings.cursor_only);
 
     let recordings = Arc::new(
         ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
@@ -295,6 +365,7 @@ pub async fn generate_export_preview(
             cursor: s.cursor.clone(),
             keyboard: s.keyboard.clone(),
             decoders: s.decoders.clone(),
+            render_display: !settings.cursor_only,
         })
         .collect();
 
@@ -315,6 +386,7 @@ pub async fn generate_export_preview(
         .get_frames(
             segment_time as f32,
             !project_config.camera.hide,
+            render_segment.render_display,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
         .await
@@ -371,6 +443,7 @@ pub async fn generate_export_preview(
             segment_frames,
             uniforms,
             &render_segment.cursor,
+            render_segment.render_display,
             &mut layers,
         )
         .await
@@ -413,13 +486,17 @@ pub async fn generate_export_preview(
     };
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
-    let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
-    let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
-    let audio_bitrate = 192_000.0;
-    let total_bitrate = video_bitrate + audio_bitrate;
-    let encoder_efficiency = 0.5;
-    let estimated_size_mb =
-        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+    let estimated_size_mb = if settings.cursor_only {
+        let total_frames_f64 = (duration_seconds * fps_f64).ceil();
+        estimate_cursor_only_size_mb(total_pixels, total_frames_f64)
+    } else {
+        let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
+        let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
+        let audio_bitrate = 192_000.0;
+        let total_bitrate = video_bitrate + audio_bitrate;
+        let encoder_efficiency = 0.5;
+        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
+    };
 
     Ok(ExportPreviewResult {
         jpeg_base64,
@@ -429,6 +506,58 @@ pub async fn generate_export_preview(
         frame_render_time_ms,
         total_frames,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn export_settings_exposes_force_ffmpeg_for_mp4_only() {
+        let mp4_settings = ExportSettings::Mp4(cap_export::mp4::Mp4ExportSettings {
+            fps: 30,
+            resolution_base: XY { x: 1280, y: 720 },
+            compression: cap_export::mp4::ExportCompression::Web,
+            custom_bpp: None,
+            force_ffmpeg_decoder: true,
+            optimize_filesize: false,
+        });
+        let gif_settings = ExportSettings::Gif(cap_export::gif::GifExportSettings {
+            fps: 15,
+            resolution_base: XY { x: 1280, y: 720 },
+            quality: None,
+        });
+
+        assert!(mp4_settings.force_ffmpeg_decoder());
+        assert!(!gif_settings.force_ffmpeg_decoder());
+    }
+
+    #[test]
+    fn frame_decode_error_matcher_includes_initial_frame_timeout() {
+        assert!(is_frame_decode_error(
+            "Export timed out 3 times consecutively after 120s each waiting for frame 0"
+        ));
+    }
+
+    #[test]
+    fn recovered_projects_force_ffmpeg_for_gif_exports() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path()
+                .join(crate::recording::FRAGMENTED_EXPORT_FFMPEG_MARKER),
+            b"fragmented-remux",
+        )
+        .unwrap();
+
+        let gif_settings = ExportSettings::Gif(cap_export::gif::GifExportSettings {
+            fps: 15,
+            resolution_base: XY { x: 1280, y: 720 },
+            quality: None,
+        });
+
+        assert!(should_force_ffmpeg_export(dir.path(), &gif_settings));
+    }
 }
 
 #[tauri::command]
@@ -446,7 +575,10 @@ pub async fn generate_export_preview_fast(
         return Err("Export is in progress - preview generation skipped".to_string());
     }
 
-    let project_config = editor.project_config.1.borrow().clone();
+    let project_config = export_project_config(
+        editor.project_config.1.borrow().clone(),
+        settings.cursor_only,
+    );
 
     let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
         return Err("Frame time is outside video duration".to_string());
@@ -466,6 +598,7 @@ pub async fn generate_export_preview_fast(
         .get_frames(
             segment_time as f32,
             !project_config.camera.hide,
+            !settings.cursor_only,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
         .await;
@@ -519,7 +652,13 @@ pub async fn generate_export_preview_fast(
     );
 
     let frame = frame_renderer
-        .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+        .render_immediate(
+            segment_frames,
+            uniforms,
+            &segment_media.cursor,
+            !settings.cursor_only,
+            &mut layers,
+        )
         .await
         .map_err(|e| format!("Failed to render frame: {e}"))?;
 
@@ -555,13 +694,17 @@ pub async fn generate_export_preview_fast(
     let duration_seconds = editor.recordings.duration();
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
-    let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
-    let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
-    let audio_bitrate = 192_000.0;
-    let total_bitrate = video_bitrate + audio_bitrate;
-    let encoder_efficiency = 0.5;
-    let estimated_size_mb =
-        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+    let estimated_size_mb = if settings.cursor_only {
+        let total_frames_f64 = (duration_seconds * fps_f64).ceil();
+        estimate_cursor_only_size_mb(total_pixels, total_frames_f64)
+    } else {
+        let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
+        let video_bitrate = total_pixels * settings.compression_bpp as f64 * effective_fps;
+        let audio_bitrate = 192_000.0;
+        let total_bitrate = video_bitrate + audio_bitrate;
+        let encoder_efficiency = 0.5;
+        (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
+    };
 
     Ok(ExportPreviewResult {
         jpeg_base64,
