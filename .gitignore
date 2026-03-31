@@ -19,6 +19,8 @@ target
 target-agent
 .cursorrules
 .github/hooks
+.worktrees
+.specstory
 
 # Editor directories and files
 .vscode/*
