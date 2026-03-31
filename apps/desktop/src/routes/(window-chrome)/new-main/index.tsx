@@ -979,6 +979,8 @@ function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const isRecording = () => !!currentRecording.data;
+	const isActivelyRecording = () =>
+		currentRecording.data?.status === "recording";
 	const auth = authStore.createQuery();
 
 	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] =
@@ -1508,6 +1510,20 @@ function Page() {
 	const license = createLicenseQuery();
 
 	const signIn = createSignInMutation();
+	const stopRecording = createMutation(() => ({
+		mutationFn: async () => {
+			try {
+				await commands.stopRecording();
+			} catch (error) {
+				await dialog.message(
+					`Failed to stop recording: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+					{ title: "Stop Recording", kind: "error" },
+				);
+			}
+		},
+	}));
 
 	const BaseControls = () => (
 		<div class="space-y-2">
@@ -1994,6 +2010,26 @@ function Page() {
 					</Show>
 				</Show>
 			</div>
+			<Show when={isActivelyRecording()}>
+				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-sm">
+					<div class="pointer-events-auto">
+						<button
+							type="button"
+							disabled={stopRecording.isPending}
+							onClick={() => stopRecording.mutate()}
+							class="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-red-9 px-4 text-sm font-medium text-white transition hover:bg-red-10 disabled:cursor-not-allowed disabled:opacity-60"
+						>
+							<Show
+								when={!stopRecording.isPending}
+								fallback={<IconLucideLoader2 class="size-4 animate-spin" />}
+							>
+								<IconCapStopCircle class="size-4" />
+							</Show>
+							<span>Stop Recording</span>
+						</button>
+					</div>
+				</div>
+			</Show>
 			<RecoveryToast />
 		</div>
 	);
