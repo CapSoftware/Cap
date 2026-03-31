@@ -14,7 +14,9 @@ import {
 } from "react-hook-form";
 import { Label } from "./Label";
 
-const Form = FormProvider;
+type FormComponent = typeof FormProvider;
+
+const Form: FormComponent = FormProvider;
 
 type FormFieldContextValue<
 	TFieldValues extends FieldValues = FieldValues,
