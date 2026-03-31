@@ -110,10 +110,14 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 			candidateKeys.map((key) => s3.headObject(key).pipe(Effect.option)),
 			{ concurrency: "unbounded" },
 		);
-		for (let i = 0; i < candidateKeys.length; i++) {
-			const rawHead = headResults[i];
-			if (Option.isSome(rawHead) && (rawHead.value.ContentLength ?? 0) > 0) {
-				return candidateKeys[i];
+		for (const [index, candidateKey] of candidateKeys.entries()) {
+			const rawHead = headResults[index];
+			if (
+				rawHead &&
+				Option.isSome(rawHead) &&
+				(rawHead.value.ContentLength ?? 0) > 0
+			) {
+				return candidateKey;
 			}
 		}
 
@@ -227,12 +231,17 @@ const getPlaylistResponse = (
 					s3.listObjects({ prefix: audioPrefix, maxKeys: 1 }),
 				]);
 
-				const videoMetadata = yield* s3.headObject(
-					videoSegment.Contents?.[0]?.Key ?? "",
-				);
+				const videoSegmentKey = videoSegment.Contents?.[0]?.Key;
+				if (!videoSegmentKey) {
+					return yield* Effect.fail(new HttpApiError.NotFound());
+				}
+
+				const videoMetadata = yield* s3.headObject(videoSegmentKey);
 				const audioMetadata =
 					audioSegment?.KeyCount && audioSegment.KeyCount > 0
-						? yield* s3.headObject(audioSegment.Contents?.[0]?.Key ?? "")
+						? audioSegment.Contents?.[0]?.Key
+							? yield* s3.headObject(audioSegment.Contents[0].Key)
+							: undefined
 						: undefined;
 
 				const generatedPlaylist = generateMasterPlaylist(
