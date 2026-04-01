@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
+import {
+	fetchConvertedVideoViaMediaServer,
+	isMediaServerConfigured,
+} from "@/lib/media-client";
 import { convertRemoteVideoToMp4Buffer } from "@/lib/video-convert";
 
 function isHlsUrl(url: string): boolean {
@@ -12,6 +16,24 @@ function isMpdUrl(url: string): boolean {
 
 function isStreamingUrl(url: string): boolean {
 	return isHlsUrl(url) || isMpdUrl(url);
+}
+
+function getInputExtension(url: string): string | undefined {
+	const pathname = new URL(url).pathname.toLowerCase();
+
+	if (pathname.endsWith(".m3u8")) {
+		return ".m3u8";
+	}
+
+	if (pathname.endsWith(".mpd")) {
+		return ".mpd";
+	}
+
+	if (pathname.endsWith(".mp4")) {
+		return ".mp4";
+	}
+
+	return undefined;
 }
 
 async function fetchLoomCdnUrl(
@@ -226,6 +248,51 @@ export async function GET(request: NextRequest) {
 	);
 	if (mp4Result) return mp4Result;
 
+	if (isMediaServerConfigured()) {
+		try {
+			const convertedResponse = await fetchConvertedVideoViaMediaServer(
+				cdnUrl,
+				getInputExtension(cdnUrl),
+			);
+
+			if (convertedResponse.ok && convertedResponse.body) {
+				return new NextResponse(convertedResponse.body, {
+					headers: {
+						"Content-Type": "video/mp4",
+						"Content-Disposition": `attachment; filename="${mp4Filename}"`,
+						"Cache-Control": "no-store",
+					},
+				});
+			}
+
+			let errorMessage = "Failed to convert streaming video";
+			try {
+				const errorData = (await convertedResponse.json()) as {
+					error?: string;
+					details?: string;
+				};
+				errorMessage =
+					errorData.details ||
+					errorData.error ||
+					"Failed to convert streaming video";
+			} catch {}
+
+			throw new Error(errorMessage);
+		} catch (error) {
+			if (!errorMessageShouldFallback(error)) {
+				return NextResponse.json(
+					{
+						error:
+							error instanceof Error
+								? error.message
+								: "Failed to convert streaming video",
+					},
+					{ status: 502 },
+				);
+			}
+		}
+	}
+
 	try {
 		const mp4Buffer = await convertRemoteVideoToMp4Buffer(cdnUrl);
 
@@ -247,4 +314,12 @@ export async function GET(request: NextRequest) {
 			{ status: 502 },
 		);
 	}
+}
+
+function errorMessageShouldFallback(error: unknown): boolean {
+	if (!(error instanceof Error)) {
+		return true;
+	}
+
+	return error.message === "MEDIA_SERVER_URL is not configured";
 }
