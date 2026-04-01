@@ -60,8 +60,6 @@ const MIN_PLAYER_CONTENT_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
 const RESIZE_HANDLE_HEIGHT = 16;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
-const ACCURATE_CROP_PREVIEW_MAX_DURATION = 15 * 60;
-
 const TIMELINE_RESIZE_GRIP_MARKS = [0, 1, 2] as const;
 
 function logCropProfile(
@@ -948,28 +946,6 @@ function Dialogs() {
 											editorInstance.recordingDuration,
 										),
 									});
-
-									if (
-										editorInstance.recordingDuration >
-											ACCURATE_CROP_PREVIEW_MAX_DURATION &&
-										initialPreviewUrl
-									) {
-										logCropProfile("accurate-frame-deferred", {
-											elapsedMs: Number(
-												(performance.now() - cropOpenedAt).toFixed(2),
-											),
-											recordingDurationSec: Math.round(
-												editorInstance.recordingDuration,
-											),
-											reason: "current-preview-available",
-										});
-										scheduleAccurateFrame("deferred-long-recording", {
-											delayMs: 2000,
-											idleTimeoutMs: 500,
-											fallbackDelayMs: 0,
-										});
-										return;
-									}
 
 									scheduleAccurateFrame("immediate", {
 										idleTimeoutMs: 500,
