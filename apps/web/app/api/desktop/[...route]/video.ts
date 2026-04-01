@@ -3,6 +3,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
+	importedVideos,
 	organizationMembers,
 	organizations,
 	s3Buckets,
@@ -269,7 +270,7 @@ app.delete(
 				.select({ video: videos, bucket: s3Buckets })
 				.from(videos)
 				.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-				.where(eq(videos.id, videoId));
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
 			if (!result)
 				return c.json(
@@ -278,6 +279,7 @@ app.delete(
 				);
 
 			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
+			await db().delete(importedVideos).where(eq(importedVideos.id, videoId));
 
 			await db()
 				.delete(videos)
