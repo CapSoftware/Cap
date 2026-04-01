@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	checkHasAudioTrackViaMediaServer,
 	extractAudioViaMediaServer,
+	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
 
@@ -187,6 +188,52 @@ describe("media-client", () => {
 			await expect(
 				extractAudioViaMediaServer("https://example.com/video.mp4"),
 			).rejects.toThrow("FFmpeg process exited with code 1");
+		});
+	});
+
+	describe("fetchConvertedVideoViaMediaServer", () => {
+		beforeEach(async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValue({
+				MEDIA_SERVER_URL: "http://localhost:3456",
+			} as ReturnType<typeof serverEnv>);
+		});
+
+		it("throws error when MEDIA_SERVER_URL is not configured", async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValue({
+				MEDIA_SERVER_URL: undefined,
+			} as unknown as ReturnType<typeof serverEnv>);
+
+			await expect(
+				fetchConvertedVideoViaMediaServer("https://example.com/video.m3u8"),
+			).rejects.toThrow("MEDIA_SERVER_URL is not configured");
+		});
+
+		it("posts conversion request to the media server", async () => {
+			const mockResponse = {
+				ok: true,
+				status: 200,
+			} as Response;
+			mockFetch.mockResolvedValueOnce(mockResponse);
+
+			const result = await fetchConvertedVideoViaMediaServer(
+				"https://example.com/video.m3u8",
+				".m3u8",
+			);
+
+			expect(result).toBe(mockResponse);
+			expect(mockFetch).toHaveBeenCalledWith(
+				"http://localhost:3456/video/convert",
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						videoUrl: "https://example.com/video.m3u8",
+						inputExtension: ".m3u8",
+					}),
+				},
+			);
 		});
 	});
 });
