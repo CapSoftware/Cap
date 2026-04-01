@@ -8,7 +8,6 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
-import { convertRemoteVideoToMp4Buffer } from "@/lib/video-convert";
 
 interface ImportLoomPayload {
 	videoId: string;
@@ -90,18 +89,6 @@ async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
 }
 
 async function downloadVideoContent(downloadUrl: string): Promise<Buffer> {
-	if (isStreamingUrl(downloadUrl)) {
-		try {
-			return await convertRemoteVideoToMp4Buffer(downloadUrl);
-		} catch (error) {
-			throw new FatalError(
-				error instanceof Error
-					? error.message
-					: "Failed to convert Loom video to MP4",
-			);
-		}
-	}
-
 	const loomResponse = await fetch(downloadUrl);
 	if (!loomResponse.ok) {
 		throw new FatalError(
@@ -133,14 +120,19 @@ interface VideoProcessingResult {
 	};
 }
 
+interface LoomProcessingInput {
+	sourceVideoUrl?: string;
+	inputExtension?: string;
+}
+
 export async function importLoomVideoWorkflow(
 	payload: ImportLoomPayload,
 ): Promise<VideoProcessingResult> {
 	"use workflow";
 
-	await downloadLoomToS3(payload);
+	const processingInput = await downloadLoomToS3(payload);
 
-	const result = await processVideoOnMediaServer(payload);
+	const result = await processVideoOnMediaServer(payload, processingInput);
 
 	await saveMetadataAndComplete(payload.videoId, result.metadata);
 
@@ -151,7 +143,27 @@ export async function importLoomVideoWorkflow(
 	};
 }
 
-async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
+function getInputExtension(url: string): string | undefined {
+	const pathname = new URL(url).pathname.toLowerCase();
+
+	if (pathname.endsWith(".m3u8")) {
+		return ".m3u8";
+	}
+
+	if (pathname.endsWith(".mpd")) {
+		return ".mpd";
+	}
+
+	if (pathname.endsWith(".mp4")) {
+		return ".mp4";
+	}
+
+	return undefined;
+}
+
+async function downloadLoomToS3(
+	payload: ImportLoomPayload,
+): Promise<LoomProcessingInput> {
 	"use step";
 
 	const { videoId, loomVideoId, rawFileKey, bucketId } = payload;
@@ -168,6 +180,23 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
 	const freshDownloadUrl = await fetchFreshLoomDownloadUrl(loomVideoId);
+
+	if (isStreamingUrl(freshDownloadUrl)) {
+		await db()
+			.update(videoUploads)
+			.set({
+				phase: "processing",
+				processingProgress: 0,
+				processingMessage: "Starting video processing...",
+				updatedAt: new Date(),
+			})
+			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+		return {
+			sourceVideoUrl: freshDownloadUrl,
+			inputExtension: getInputExtension(freshDownloadUrl),
+		};
+	}
 
 	const bucketIdOption = Option.fromNullable(bucketId).pipe(
 		Option.map((id) => S3Bucket.S3BucketId.make(id)),
@@ -212,6 +241,8 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+	return {};
 }
 
 interface MediaServerProcessResult {
@@ -239,6 +270,7 @@ async function startMediaServerProcessJob(
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
 		webhookUrl: string;
+		inputExtension?: string;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
@@ -280,6 +312,7 @@ async function startMediaServerProcessJob(
 
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
+	processingInput: LoomProcessingInput,
 ): Promise<MediaServerProcessResult> {
 	"use step";
 
@@ -322,14 +355,16 @@ async function processVideoOnMediaServer(
 		}).pipe(runPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const sourceVideoUrl = processingInput.sourceVideoUrl ?? rawVideoUrl;
 
 	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
 		userId,
-		videoUrl: rawVideoUrl,
+		videoUrl: sourceVideoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		webhookUrl,
+		inputExtension: processingInput.inputExtension,
 	});
 
 	return await pollForCompletion(mediaServerUrl, jobId);
