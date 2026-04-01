@@ -465,7 +465,7 @@ function TranscriptEditor(props: {
 			} else {
 				props.onDeleteWords(indices);
 			}
-			setSelectedIndices(new Set());
+			setSelectedIndices(new Set<number>());
 			setAnchorIndex(-1);
 		} else if (e.key === "ArrowLeft") {
 			e.preventDefault();
@@ -488,7 +488,7 @@ function TranscriptEditor(props: {
 
 	const handleContainerClick = (e: MouseEvent) => {
 		if (e.target === scrollContainerRef) {
-			setSelectedIndices(new Set());
+			setSelectedIndices(new Set<number>());
 			setAnchorIndex(-1);
 		}
 	};
@@ -544,7 +544,7 @@ function TranscriptEditor(props: {
 		} else {
 			props.onDeleteWord(flatIndexOf(word));
 		}
-		setSelectedIndices(new Set());
+		setSelectedIndices(new Set<number>());
 		setAnchorIndex(-1);
 	};
 

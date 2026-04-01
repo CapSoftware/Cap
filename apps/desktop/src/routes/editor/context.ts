@@ -69,17 +69,19 @@ export type LayoutMode = { type: "export" } | { type: "transcript" };
 export type CurrentDialog = ModalDialog | LayoutMode;
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
+export type OpenLayoutMode = { open: true } & LayoutMode;
+export type OpenModalDialog = { open: true } & ModalDialog;
 
 const LAYOUT_MODE_TYPES: Set<CurrentDialog["type"]> = new Set([
 	"export",
 	"transcript",
 ]);
 
-export function isLayoutMode(d: DialogState): boolean {
+export function isLayoutMode(d: DialogState): d is OpenLayoutMode {
 	return d.open && "type" in d && LAYOUT_MODE_TYPES.has(d.type);
 }
 
-export function isModalDialog(d: DialogState): boolean {
+export function isModalDialog(d: DialogState): d is OpenModalDialog {
 	return d.open && "type" in d && !LAYOUT_MODE_TYPES.has(d.type);
 }
 
