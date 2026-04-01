@@ -3,6 +3,7 @@ import {
 	canPlayRawContentType,
 	detectCrossOriginSupport,
 	resolvePlaybackSource,
+	shouldFallbackToRawPlaybackSource,
 } from "@/app/s/[videoId]/_components/playback-source";
 
 function createResponse(
@@ -149,6 +150,40 @@ describe("resolvePlaybackSource", () => {
 		});
 	});
 
+	it("can prefer the raw preview after the MP4 source fails in the player", async () => {
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+			createResponse("https://cap.so/raw-upload.webm", {
+				status: 206,
+				headers: { "content-type": "video/webm;codecs=vp9,opus" },
+				redirected: true,
+			}),
+		);
+
+		const result = await resolvePlaybackSource({
+			videoSrc: "/api/playlist?videoType=mp4",
+			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+			preferredSource: "raw",
+			fetchImpl,
+			now: () => 250,
+			createVideoElement: () => ({
+				canPlayType: vi.fn().mockReturnValue("probably"),
+			}),
+		});
+
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"/api/playlist?videoType=raw-preview&_t=250",
+			{
+				headers: { range: "bytes=0-0" },
+			},
+		);
+		expect(result).toEqual({
+			url: "https://cap.so/raw-upload.webm",
+			type: "raw",
+			supportsCrossOrigin: false,
+		});
+	});
+
 	it("rejects raw webm previews when the browser cannot play them", async () => {
 		const fetchImpl = vi
 			.fn<typeof fetch>()
@@ -194,5 +229,16 @@ describe("resolvePlaybackSource", () => {
 		});
 
 		expect(result).toBeNull();
+	});
+});
+
+describe("shouldFallbackToRawPlaybackSource", () => {
+	it("allows a single mp4-to-raw fallback", () => {
+		expect(shouldFallbackToRawPlaybackSource("mp4", "/raw", false)).toBe(true);
+		expect(shouldFallbackToRawPlaybackSource("mp4", "/raw", true)).toBe(false);
+		expect(shouldFallbackToRawPlaybackSource("raw", "/raw", true)).toBe(false);
+		expect(shouldFallbackToRawPlaybackSource("mp4", undefined, false)).toBe(
+			false,
+		);
 	});
 });

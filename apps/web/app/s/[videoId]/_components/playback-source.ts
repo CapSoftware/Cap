@@ -18,6 +18,7 @@ type ResolvePlaybackSourceInput = {
 	fetchImpl?: typeof fetch;
 	now?: () => number;
 	createVideoElement?: () => Pick<HTMLVideoElement, "canPlayType">;
+	preferredSource?: "mp4" | "raw";
 };
 
 function appendCacheBust(url: string, timestamp: number): string {
@@ -92,6 +93,16 @@ export function canPlayRawContentType(
 	);
 }
 
+export function shouldFallbackToRawPlaybackSource(
+	resolvedSourceType: ResolvedPlaybackSource["type"] | null | undefined,
+	rawFallbackSrc: string | undefined,
+	hasTriedRawFallback: boolean,
+): boolean {
+	return Boolean(
+		rawFallbackSrc && resolvedSourceType === "mp4" && !hasTriedRawFallback,
+	);
+}
+
 export async function resolvePlaybackSource({
 	videoSrc,
 	rawFallbackSrc,
@@ -99,7 +110,39 @@ export async function resolvePlaybackSource({
 	fetchImpl = fetch,
 	now = () => Date.now(),
 	createVideoElement,
+	preferredSource = "mp4",
 }: ResolvePlaybackSourceInput): Promise<ResolvedPlaybackSource | null> {
+	const resolveRaw = async (): Promise<ResolvedPlaybackSource | null> => {
+		if (!rawFallbackSrc) {
+			return null;
+		}
+
+		const rawResult = await probePlaybackSource(rawFallbackSrc, fetchImpl, now);
+
+		if (!rawResult) {
+			return null;
+		}
+
+		const contentType = rawResult.response.headers.get("content-type") ?? "";
+
+		if (
+			!canPlayRawContentType(contentType, rawResult.url, createVideoElement)
+		) {
+			return null;
+		}
+
+		return {
+			url: rawResult.url,
+			type: "raw",
+			supportsCrossOrigin:
+				enableCrossOrigin && detectCrossOriginSupport(rawResult.url),
+		};
+	};
+
+	if (preferredSource === "raw") {
+		return await resolveRaw();
+	}
+
 	const mp4Result = await probePlaybackSource(videoSrc, fetchImpl, now);
 
 	if (mp4Result) {
@@ -111,26 +154,5 @@ export async function resolvePlaybackSource({
 		};
 	}
 
-	if (!rawFallbackSrc) {
-		return null;
-	}
-
-	const rawResult = await probePlaybackSource(rawFallbackSrc, fetchImpl, now);
-
-	if (!rawResult) {
-		return null;
-	}
-
-	const contentType = rawResult.response.headers.get("content-type") ?? "";
-
-	if (!canPlayRawContentType(contentType, rawResult.url, createVideoElement)) {
-		return null;
-	}
-
-	return {
-		url: rawResult.url,
-		type: "raw",
-		supportsCrossOrigin:
-			enableCrossOrigin && detectCrossOriginSupport(rawResult.url),
-	};
+	return await resolveRaw();
 }

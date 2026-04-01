@@ -18,6 +18,7 @@ async fn main() -> Result<(), String> {
         compression: ExportCompression::Maximum,
         custom_bpp: None,
         force_ffmpeg_decoder: false,
+        optimize_filesize: false,
     };
 
     let temp_out = tempfile::Builder::new()

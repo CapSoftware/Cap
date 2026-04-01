@@ -428,6 +428,7 @@ async fn run_mp4_export(
         compression,
         custom_bpp: None,
         force_ffmpeg_decoder: false,
+        optimize_filesize: false,
     };
 
     let total_frames = exporter_base.total_frames(fps);
