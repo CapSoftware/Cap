@@ -1,4 +1,5 @@
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
+import { arch, type as osType } from "@tauri-apps/plugin-os";
 
 import { defaultCaptionSettings } from "~/store/captions";
 import {
@@ -11,13 +12,31 @@ import {
 	type TimelineSegment,
 } from "~/utils/tauri";
 export const DEFAULT_CAPTION_MODEL = "best";
+export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
 export const CAPTION_MODEL_FOLDER = "transcription_models";
 export const PARAKEET_DIR_MODELS = new Set(["best", "best-max"]);
 
+export function supportsParakeetTranscription() {
+	return !(osType() === "macos" && arch() === "x86_64");
+}
+
+export function resolveCaptionModel(model: string | null | undefined) {
+	const fallbackModel = supportsParakeetTranscription()
+		? DEFAULT_CAPTION_MODEL
+		: DEFAULT_WHISPER_CAPTION_MODEL;
+
+	if (!model) return fallbackModel;
+	if (!supportsParakeetTranscription() && PARAKEET_DIR_MODELS.has(model)) {
+		return DEFAULT_WHISPER_CAPTION_MODEL;
+	}
+	return model;
+}
+
 export function getSelectedTranscriptionSettings() {
-	const model =
-		localStorage.getItem("selectedTranscriptionModel") ?? DEFAULT_CAPTION_MODEL;
+	const model = resolveCaptionModel(
+		localStorage.getItem("selectedTranscriptionModel"),
+	);
 	const language =
 		localStorage.getItem("selectedTranscriptionLanguage") ??
 		DEFAULT_CAPTION_LANGUAGE;
@@ -274,8 +293,11 @@ export async function transcribeEditorCaptions(
 	modelName = DEFAULT_CAPTION_MODEL,
 	language = DEFAULT_CAPTION_LANGUAGE,
 ): Promise<CaptionData> {
-	const modelPath = await getModelPath(modelName);
-	const engine = PARAKEET_DIR_MODELS.has(modelName) ? "Parakeet" : "Whisper";
+	const resolvedModelName = resolveCaptionModel(modelName);
+	const modelPath = await getModelPath(resolvedModelName);
+	const engine = PARAKEET_DIR_MODELS.has(resolvedModelName)
+		? "Parakeet"
+		: "Whisper";
 	return await commands.transcribeAudio(videoPath, modelPath, language, engine);
 }
 
@@ -346,6 +368,12 @@ export function getCaptionGenerationErrorMessage(error: unknown) {
 
 	if (message.includes("Failed to load Whisper model")) {
 		return "Failed to load the caption model. Try downloading it again";
+	}
+
+	if (
+		message.includes("Parakeet transcription is not available on Intel macOS")
+	) {
+		return "Parakeet models are not available on Intel Macs. Use a Whisper model instead";
 	}
 
 	return message;
