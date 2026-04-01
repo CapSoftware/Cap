@@ -19,6 +19,10 @@ import {
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import {
+	isPermissionGranted as isPermitted,
+	requestAndVerifyPermission,
+} from "~/utils/os-permissions";
+import {
 	commands,
 	type OSPermission,
 	type OSPermissionStatus,
@@ -107,10 +111,6 @@ const modes: ModeDetail[] = [
 		],
 	},
 ];
-
-function isPermitted(status?: OSPermissionStatus): boolean {
-	return status === "granted" || status === "notNeeded";
-}
 
 type SetupPermission = {
 	name: string;
@@ -2001,19 +2001,16 @@ function PermissionsStep(props: {
 		if (requestingPermission()) return;
 		setRequestingPermission(true);
 		try {
-			await commands.requestPermission(permission);
+			const status = check()?.[permission] as OSPermissionStatus | undefined;
 			setInitialCheck(false);
-			const result = await commands.doPermissionsCheck(false);
-			setCheck(result as unknown as Record<string, OSPermissionStatus>);
-			const notYetPermitted =
-				(permission === "screenRecording" &&
-					!isPermitted(result.screenRecording)) ||
-				(permission === "accessibility" && !isPermitted(result.accessibility));
-			if (notYetPermitted) {
-				await commands.openPermissionSettings(permission);
-				if (permission === "screenRecording") {
-					await maybePromptRestartForScreenRecording();
-				}
+			const result = await requestAndVerifyPermission(
+				commands,
+				permission,
+				status,
+			);
+			setCheck(result.check as unknown as Record<string, OSPermissionStatus>);
+			if (result.openedSettings && permission === "screenRecording") {
+				await maybePromptRestartForScreenRecording();
 			}
 		} catch (err) {
 			console.error(`Error requesting permission: ${err}`);
