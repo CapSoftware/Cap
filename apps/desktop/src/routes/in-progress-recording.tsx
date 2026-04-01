@@ -1,4 +1,3 @@
-import { createElementBounds } from "@solid-primitives/bounds";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -111,8 +110,8 @@ function InProgressRecordingInner() {
 	const [startingDismissed, setStartingDismissed] = createSignal(false);
 	const [interactiveAreaRef, setInteractiveAreaRef] =
 		createSignal<HTMLDivElement | null>(null);
-	const interactiveBounds = createElementBounds(interactiveAreaRef);
 	let settingsButtonRef: HTMLButtonElement | undefined;
+	let lastInteractiveBoundsKey = "";
 	const recordingMode = createMemo(
 		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
 	);
@@ -292,28 +291,53 @@ function InProgressRecordingInner() {
 		void refreshCameraWindowState();
 	});
 
-	createEffect(() => {
+	const syncInteractiveAreaBounds = () => {
 		const element = interactiveAreaRef();
 		if (!element) {
-			void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+			if (lastInteractiveBoundsKey !== "") {
+				lastInteractiveBoundsKey = "";
+				void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+			}
 			return;
 		}
 
-		const left = interactiveBounds.left ?? 0;
-		const top = interactiveBounds.top ?? 0;
-		const width = interactiveBounds.width ?? 0;
-		const height = interactiveBounds.height ?? 0;
+		const rect = element.getBoundingClientRect();
+		if (rect.width === 0 || rect.height === 0) return;
 
-		if (width === 0 || height === 0) return;
+		const key = [rect.left, rect.top, rect.width, rect.height]
+			.map((value) => value.toFixed(2))
+			.join(":");
+		if (key === lastInteractiveBoundsKey) return;
 
+		lastInteractiveBoundsKey = key;
 		void commands.setFakeWindowBounds(FAKE_WINDOW_BOUNDS_NAME, {
-			position: { x: left, y: top },
-			size: { width, height },
+			position: { x: rect.left, y: rect.top },
+			size: { width: rect.width, height: rect.height },
 		});
+	};
+
+	createEffect(() => {
+		interactiveAreaRef();
+		queueMicrotask(syncInteractiveAreaBounds);
+	});
+
+	createEffect(() => {
+		state();
+		issuePanelVisible();
+		queueMicrotask(syncInteractiveAreaBounds);
 	});
 
 	onCleanup(() => {
+		lastInteractiveBoundsKey = "";
 		void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+	});
+
+	onMount(() => {
+		const onResize = () => syncInteractiveAreaBounds();
+		window.addEventListener("resize", onResize);
+		onCleanup(() => window.removeEventListener("resize", onResize));
+		requestAnimationFrame(() => syncInteractiveAreaBounds());
+		setTimeout(() => syncInteractiveAreaBounds(), 150);
 	});
 
 	createTimer(
@@ -323,6 +347,8 @@ function InProgressRecordingInner() {
 		2000,
 		setInterval,
 	);
+
+	createTimer(syncInteractiveAreaBounds, 250, setInterval);
 
 	createEffect(() => {
 		if (
