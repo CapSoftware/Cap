@@ -1176,7 +1176,7 @@ fn infer_camera_buffer_layout(
         PixelFormat::MJPEG | PixelFormat::H264 => return None,
     };
 
-    if total_rows == 0 || data_len % total_rows != 0 {
+    if total_rows == 0 || !data_len.is_multiple_of(total_rows) {
         return None;
     }
 
@@ -1193,7 +1193,7 @@ fn infer_camera_buffer_layout(
             })
         }
         PixelFormat::YUV420P | PixelFormat::YV12 => {
-            if primary_stride < width || primary_stride % 2 != 0 {
+            if primary_stride < width || !primary_stride.is_multiple_of(2) {
                 return None;
             }
             let secondary_stride = primary_stride / 2;
