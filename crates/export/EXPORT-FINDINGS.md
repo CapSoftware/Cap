@@ -218,6 +218,44 @@ total_size = bytes_per_frame * total_frames
 2. Consider running in release mode for more realistic GIF performance numbers
 3. Calibrate estimation constants once real-world data is available
 
+### Session 2026-03-25 (Export Pipeline Optimizations)
+
+**Goal**: Run export benchmarks, identify and implement safe performance improvements on macOS
+
+**What was done**:
+1. Ran full export benchmarks (11 presets) to establish baseline
+2. Deep analysis of export pipeline: mp4.rs, gif.rs, h264.rs, enc-gif, rendering
+3. Identified 4 optimization opportunities, implemented 3 (1 reverted after testing)
+4. Verified all optimizations with multiple benchmark runs
+5. Confirmed no regressions via A/B testing of channel size change
+
+**Changes Made**:
+- `crates/enc-gif/src/lib.rs`: Replaced per-pixel `push(RGBA8::new(...))` double loop with bulk `slice::from_raw_parts` + `extend_from_slice`. When stride matches width*4, entire frame is cast in one operation. When stride differs, copies row-by-row via slice (O(height) instead of O(width*height)).
+- `crates/enc-ffmpeg/src/video/h264.rs`: Trimmed macOS encoder priority from `[h264_videotoolbox, h264_qsv, h264_nvenc, h264_amf, h264_mf, libx264]` to `[h264_videotoolbox, libx264]`. The 4 removed encoders never exist on macOS and just add failed init attempts.
+- `crates/export/src/mp4.rs`: Increased NV12 render channel capacity from 2 to 8, allowing better pipeline overlap between GPU rendering and H.264 encoding. Memory cost: ~25MB at 1080p, ~100MB at 4K (acceptable for export).
+- REVERTED: VideoToolbox `g` (keyframe interval) — tested and found it caused FPS regression on synthetic content. VT manages GOP internally; forcing it adds overhead.
+
+**Benchmark Results**:
+- Overall: 9/9 MP4 passed, 2/2 GIF passed (all above targets)
+- MP4 720p: 347-370 fps (target: >=30)
+- MP4 1080p/30: 272-289 fps (target: >=30)
+- MP4 1080p/60: 304 fps (target: >=30)
+- MP4 4K: 108-109 fps (target: >=15)
+- GIF 720p: 1.7-1.8 fps (debug build, expected)
+- A/B test confirmed channel 2→8 is neutral on synthetic content (identical FPS within noise)
+
+**Estimation Accuracy**:
+- MP4 avg error on synthetic: high (expected - synthetic content compresses much better than real recordings)
+- Real-recording calibration from 2026-02-16 session still valid (avg 3.0% error)
+
+**Key findings from pipeline analysis**:
+1. The NV12 export pipeline (GPU render → readback → pool → copy to FFmpeg AVFrame) has inherent CPU copy overhead but is well-optimized for the current FFmpeg-based architecture
+2. Software NV12 fallback (`render_nv12_software_path`) is slow but only triggers when hardware GPU adapter unavailable
+3. The AVFoundation encoder (`crates/enc-avfoundation/src/mp4.rs`) is only used for live recording, not export — a future IOSurface/CVPixelBuffer bridge from wgpu to VideoToolbox could eliminate the CPU NV12 copy in export, but that's a major architectural change
+4. GIF encoding is gifski-bound (CPU quantization), not renderer-bound; the `add_frame` optimization reduces overhead of frame delivery to gifski
+
+**Stopping point**: Three safe optimizations implemented and verified. Further improvements would require architectural changes (IOSurface bridge, alternative encoder API for zero-copy) or release-mode GIF benchmarks.
+
 ### Template for new sessions:
 
 ```markdown

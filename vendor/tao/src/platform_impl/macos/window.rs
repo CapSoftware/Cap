@@ -471,6 +471,7 @@ pub struct SharedState {
   /// bar in exclusive fullscreen but want to restore the original options when
   /// transitioning back to borderless fullscreen.
   save_presentation_opts: Option<NSApplicationPresentationOptions>,
+  #[allow(dead_code)]
   pub saved_desktop_display_mode: Option<(CGDisplay, CGDisplayMode)>,
   pub current_theme: Theme,
 }
@@ -508,6 +509,7 @@ pub struct UnownedWindow {
   decorations: AtomicBool,
   cursor_state: Weak<Mutex<CursorState>>,
   transparent: bool,
+  #[allow(dead_code)]
   pub inner_rect: Option<PhysicalSize<u32>>,
 }
 

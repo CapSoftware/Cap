@@ -58,6 +58,13 @@
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
 	},
+	"pnpm": {
+		"peerDependencyRules": {
+			"allowedVersions": {
+				"next-auth>next": ">=16.0.0"
+			}
+		}
+	},
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",
 	"engines": {

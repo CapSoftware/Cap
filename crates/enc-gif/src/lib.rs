@@ -100,7 +100,6 @@ impl GifEncoderWrapper {
         })
     }
 
-    /// Add a frame to the GIF
     pub fn add_frame(
         &mut self,
         frame_data: &[u8],
@@ -115,44 +114,37 @@ impl GifEncoderWrapper {
             .as_mut()
             .ok_or(GifEncodingError::EncoderFinished)?;
 
-        // Calculate expected size
-        let expected_bytes_per_row = (self.width as usize) * 4; // RGBA
-        let expected_total_bytes = expected_bytes_per_row * (self.height as usize);
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let expected_bytes_per_row = w * 4;
 
-        // Validate frame data size
-        if bytes_per_row < expected_bytes_per_row || frame_data.len() < expected_total_bytes {
+        if bytes_per_row < expected_bytes_per_row
+            || frame_data.len() < bytes_per_row * h.saturating_sub(1) + expected_bytes_per_row
+        {
             return Err(GifEncodingError::InvalidFrameData);
         }
 
-        // Convert RGBA data to gifski's expected format
-        let mut rgba_pixels = Vec::with_capacity(self.width as usize * self.height as usize);
-
-        for y in 0..self.height {
-            let src_row_start = (y as usize) * bytes_per_row;
-
-            for x in 0..self.width {
-                let pixel_start = src_row_start + (x as usize) * 4;
-
-                if pixel_start + 3 < frame_data.len() {
-                    let r = frame_data[pixel_start];
-                    let g = frame_data[pixel_start + 1];
-                    let b = frame_data[pixel_start + 2];
-                    let a = frame_data[pixel_start + 3];
-
-                    rgba_pixels.push(RGBA8::new(r, g, b, a));
-                } else {
-                    return Err(GifEncodingError::InvalidFrameData);
-                }
+        let img = if bytes_per_row == expected_bytes_per_row {
+            let pixel_count = w * h;
+            let byte_slice = &frame_data[..pixel_count * 4];
+            let pixels: &[RGBA8] = unsafe {
+                std::slice::from_raw_parts(byte_slice.as_ptr().cast::<RGBA8>(), pixel_count)
+            };
+            imgref::Img::new(pixels.to_vec(), w, h)
+        } else {
+            let mut rgba_pixels = Vec::with_capacity(w * h);
+            for y in 0..h {
+                let row_start = y * bytes_per_row;
+                let row_bytes = &frame_data[row_start..row_start + expected_bytes_per_row];
+                let row_pixels: &[RGBA8] =
+                    unsafe { std::slice::from_raw_parts(row_bytes.as_ptr().cast::<RGBA8>(), w) };
+                rgba_pixels.extend_from_slice(row_pixels);
             }
-        }
+            imgref::Img::new(rgba_pixels, w, h)
+        };
 
-        // Create imgref for gifski
-        let img = imgref::Img::new(rgba_pixels, self.width as usize, self.height as usize);
-
-        // Calculate presentation timestamp based on frame index and fps
         let pts = (self.frame_index as f64) / (self.fps as f64);
 
-        // Add frame to collector
         collector
             .add_frame_rgba(self.frame_index as usize, img, pts)
             .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;

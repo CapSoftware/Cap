@@ -1,4 +1,3 @@
-import { createElementBounds } from "@solid-primitives/bounds";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -108,10 +107,11 @@ function InProgressRecordingInner() {
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
+	const [startingDismissed, setStartingDismissed] = createSignal(false);
 	const [interactiveAreaRef, setInteractiveAreaRef] =
 		createSignal<HTMLDivElement | null>(null);
-	const interactiveBounds = createElementBounds(interactiveAreaRef);
 	let settingsButtonRef: HTMLButtonElement | undefined;
+	let lastInteractiveBoundsKey = "";
 	const recordingMode = createMemo(
 		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
 	);
@@ -125,7 +125,7 @@ function InProgressRecordingInner() {
 		);
 	});
 
-	const hasDisconnectedInput = () =>
+	const _hasDisconnectedInput = () =>
 		disconnectedInputs.microphone || disconnectedInputs.camera;
 
 	const issueMessages = createMemo(() => {
@@ -184,6 +184,7 @@ function InProgressRecordingInner() {
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		switch (payload.variant) {
 			case "Countdown":
+				setStartingDismissed(false);
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
 				setDegradedReason(null);
@@ -194,7 +195,9 @@ function InProgressRecordingInner() {
 					current: payload.value,
 				});
 				break;
-			case "Started":
+			case "Started": {
+				const wasStartingDismissed = startingDismissed();
+				setStartingDismissed(false);
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
 				setDegradedReason(null);
@@ -202,7 +205,11 @@ function InProgressRecordingInner() {
 				setState({ variant: "recording" });
 				setStart(Date.now());
 				setTime(Date.now());
+				if (wasStartingDismissed) {
+					void getCurrentWindow().show();
+				}
 				break;
+			}
 			case "Paused":
 				if (state().variant === "recording") {
 					setPauseResumes((a) => [...a, { pause: Date.now() }]);
@@ -243,14 +250,24 @@ function InProgressRecordingInner() {
 
 	createEffect(() => {
 		const s = state();
-		if (s.variant === "initializing" || s.variant === "countdown") {
-			const recording = currentRecording.data as CurrentRecording | undefined;
-			if (recording?.status === "recording") {
-				setDisconnectedInputs({ microphone: false, camera: false });
-				setRecordingFailure(null);
-				setState({ variant: "recording" });
-				setStart(Date.now());
-			}
+		const recording = currentRecording.data as
+			| CurrentRecording
+			| null
+			| undefined;
+		if (s.variant !== "initializing" && s.variant !== "countdown") return;
+		if (currentRecording.isPending) return;
+		if (recording?.status === "recording") {
+			setStartingDismissed(false);
+			setDisconnectedInputs({ microphone: false, camera: false });
+			setRecordingFailure(null);
+			setState({ variant: "recording" });
+			setStart(Date.now());
+			setTime(Date.now());
+			return;
+		}
+		if (s.variant === "initializing" && !recording) {
+			setState({ variant: "stopped" });
+			void getCurrentWindow().hide();
 		}
 	});
 
@@ -274,28 +291,53 @@ function InProgressRecordingInner() {
 		void refreshCameraWindowState();
 	});
 
-	createEffect(() => {
+	const syncInteractiveAreaBounds = () => {
 		const element = interactiveAreaRef();
 		if (!element) {
-			void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+			if (lastInteractiveBoundsKey !== "") {
+				lastInteractiveBoundsKey = "";
+				void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+			}
 			return;
 		}
 
-		const left = interactiveBounds.left ?? 0;
-		const top = interactiveBounds.top ?? 0;
-		const width = interactiveBounds.width ?? 0;
-		const height = interactiveBounds.height ?? 0;
+		const rect = element.getBoundingClientRect();
+		if (rect.width === 0 || rect.height === 0) return;
 
-		if (width === 0 || height === 0) return;
+		const key = [rect.left, rect.top, rect.width, rect.height]
+			.map((value) => value.toFixed(2))
+			.join(":");
+		if (key === lastInteractiveBoundsKey) return;
 
+		lastInteractiveBoundsKey = key;
 		void commands.setFakeWindowBounds(FAKE_WINDOW_BOUNDS_NAME, {
-			position: { x: left, y: top },
-			size: { width, height },
+			position: { x: rect.left, y: rect.top },
+			size: { width: rect.width, height: rect.height },
 		});
+	};
+
+	createEffect(() => {
+		interactiveAreaRef();
+		queueMicrotask(syncInteractiveAreaBounds);
+	});
+
+	createEffect(() => {
+		state();
+		issuePanelVisible();
+		queueMicrotask(syncInteractiveAreaBounds);
 	});
 
 	onCleanup(() => {
+		lastInteractiveBoundsKey = "";
 		void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+	});
+
+	onMount(() => {
+		const onResize = () => syncInteractiveAreaBounds();
+		window.addEventListener("resize", onResize);
+		onCleanup(() => window.removeEventListener("resize", onResize));
+		requestAnimationFrame(() => syncInteractiveAreaBounds());
+		setTimeout(() => syncInteractiveAreaBounds(), 150);
 	});
 
 	createTimer(
@@ -305,6 +347,8 @@ function InProgressRecordingInner() {
 		2000,
 		setInterval,
 	);
+
+	createTimer(syncInteractiveAreaBounds, 250, setInterval);
 
 	createEffect(() => {
 		if (
@@ -556,6 +600,11 @@ function InProgressRecordingInner() {
 	};
 
 	const isInitializing = () => state().variant === "initializing";
+	const closeStartingBar = async () => {
+		setStartingDismissed(true);
+		setState({ variant: "stopped" });
+		await getCurrentWindow().hide();
+	};
 	const isCountdown = () => state().variant === "countdown";
 	const countdownCurrent = () => {
 		const s = state();
@@ -587,19 +636,27 @@ function InProgressRecordingInner() {
 					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] animate-in fade-in">
 						<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
 							<div class="flex flex-1 flex-row justify-between">
-								<button
-									disabled={
-										stopRecording.isPending || isInitializing() || isCountdown()
+								<Show
+									when={!isInitializing()}
+									fallback={
+										<div class="flex flex-row items-center gap-[0.375rem] rounded-lg py-[0.25rem] px-[0.5rem] text-gray-12">
+											<IconLucideLoader2 class="size-4 animate-spin" />
+											<span class="text-[0.875rem] font-[500] tabular-nums">
+												Starting
+											</span>
+										</div>
 									}
-									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12] disabled:opacity-60 disabled:hover:bg-transparent"
-									type="button"
-									onClick={() => stopRecording.mutate()}
-									title="Stop recording"
-									aria-label="Stop recording"
 								>
-									<IconCapStopCircle />
-									<span class="text-[0.875rem] font-[500] tabular-nums">
-										<Show when={!isInitializing()} fallback="Starting">
+									<button
+										disabled={stopRecording.isPending || isCountdown()}
+										class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12] disabled:opacity-60 disabled:hover:bg-transparent"
+										type="button"
+										onClick={() => stopRecording.mutate()}
+										title="Stop recording"
+										aria-label="Stop recording"
+									>
+										<IconCapStopCircle />
+										<span class="text-[0.875rem] font-[500] tabular-nums">
 											<Show
 												when={!isCountdown()}
 												fallback={
@@ -656,9 +713,9 @@ function InProgressRecordingInner() {
 													{formatTime(remainingRecordingTime() / 1000)}
 												</Show>
 											</Show>
-										</Show>
-									</span>
-								</button>
+										</span>
+									</button>
+								</Show>
 
 								<div class="flex items-center gap-1">
 									<div
@@ -709,72 +766,88 @@ function InProgressRecordingInner() {
 											</div>
 										)}
 									</Show>
-									<Show when={hasRecordingIssue()}>
+									<Show
+										when={!isInitializing()}
+										fallback={
+											<ActionButton
+												onClick={() => {
+													void closeStartingBar();
+												}}
+												title="Close recording controls"
+												aria-label="Close recording controls"
+											>
+												<IconLucideX class="size-5" />
+											</ActionButton>
+										}
+									>
+										<Show when={hasRecordingIssue()}>
+											<ActionButton
+												class={cx(
+													"text-red-10 hover:bg-red-3/40",
+													issuePanelVisible() &&
+														"bg-red-3/40 ring-1 ring-red-8",
+												)}
+												onClick={() => toggleIssuePanel()}
+												title={issueMessages().join(", ")}
+												aria-pressed={issuePanelVisible() ? "true" : "false"}
+												aria-label="Recording issues"
+											>
+												<IconLucideAlertTriangle class="size-5" />
+											</ActionButton>
+										</Show>
+
+										{canPauseRecording() && (
+											<ActionButton
+												disabled={togglePause.isPending || isCountdown()}
+												onClick={() => togglePause.mutate()}
+												title={
+													state().variant === "paused"
+														? "Resume recording"
+														: "Pause recording"
+												}
+												aria-label={
+													state().variant === "paused"
+														? "Resume recording"
+														: "Pause recording"
+												}
+											>
+												{state().variant === "paused" ? (
+													<IconCapPlayCircle />
+												) : (
+													<IconCapPauseCircle />
+												)}
+											</ActionButton>
+										)}
+
 										<ActionButton
-											class={cx(
-												"text-red-10 hover:bg-red-3/40",
-												issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8",
-											)}
-											onClick={() => toggleIssuePanel()}
-											title={issueMessages().join(", ")}
-											aria-pressed={issuePanelVisible() ? "true" : "false"}
-											aria-label="Recording issues"
+											disabled={restartRecording.isPending || isCountdown()}
+											onClick={() => restartRecording.mutate()}
+											title="Restart recording"
+											aria-label="Restart recording"
 										>
-											<IconLucideAlertTriangle class="size-5" />
+											<IconCapRestart />
+										</ActionButton>
+										<ActionButton
+											disabled={deleteRecording.isPending || isCountdown()}
+											onClick={() => deleteRecording.mutate()}
+											title="Delete recording"
+											aria-label="Delete recording"
+										>
+											<IconCapTrash />
+										</ActionButton>
+										<ActionButton
+											ref={(el) => {
+												settingsButtonRef = el ?? undefined;
+											}}
+											onClick={() => {
+												void openRecordingSettingsMenu();
+											}}
+											title="Recording settings"
+											aria-label="Recording settings"
+										>
+											<IconCapSettings class="size-5" />
 										</ActionButton>
 									</Show>
-
-									{canPauseRecording() && (
-										<ActionButton
-											disabled={togglePause.isPending || isCountdown()}
-											onClick={() => togglePause.mutate()}
-											title={
-												state().variant === "paused"
-													? "Resume recording"
-													: "Pause recording"
-											}
-											aria-label={
-												state().variant === "paused"
-													? "Resume recording"
-													: "Pause recording"
-											}
-										>
-											{state().variant === "paused" ? (
-												<IconCapPlayCircle />
-											) : (
-												<IconCapPauseCircle />
-											)}
-										</ActionButton>
-									)}
-
-									<ActionButton
-										disabled={restartRecording.isPending || isCountdown()}
-										onClick={() => restartRecording.mutate()}
-										title="Restart recording"
-										aria-label="Restart recording"
-									>
-										<IconCapRestart />
-									</ActionButton>
-									<ActionButton
-										disabled={deleteRecording.isPending || isCountdown()}
-										onClick={() => deleteRecording.mutate()}
-										title="Delete recording"
-										aria-label="Delete recording"
-									>
-										<IconCapTrash />
-									</ActionButton>
-									<ActionButton
-										ref={(el) => {
-											settingsButtonRef = el ?? undefined;
-										}}
-										onClick={() => {
-											void openRecordingSettingsMenu();
-										}}
-										title="Recording settings"
-										aria-label="Recording settings"
-									>
-										<IconCapSettings class="size-5" />
-									</ActionButton>
 								</div>
 							</div>
 						</div>

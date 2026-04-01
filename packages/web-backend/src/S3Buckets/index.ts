@@ -126,7 +126,6 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					return Effect.succeed<typeof s3>({
 						...s3,
 						getSignedObjectUrl: getCloudFrontSignedUrl,
-						getInternalSignedObjectUrl: getCloudFrontSignedUrl,
 					});
 				}),
 			),

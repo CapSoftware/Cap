@@ -1,0 +1,18 @@
+---
+title: Caption & Keyboard Tracks, Faster Exports & Stability Improvements
+app: Cap Desktop
+publishedAt: "2026-03-27"
+version: 0.4.81
+image:
+---
+
+- **Caption tracks in the timeline** — Captions now appear as editable segments directly in the editor timeline. You can drag, trim, split, and rearrange them alongside your other tracks. Per-segment styling overrides, text tools, and presets are available in the sidebar so you can fix transcripts and fine-tune appearance without leaving the editor.
+- **Keyboard press overlay** — Key presses are captured during recording and shown as their own timeline track. Each segment can be edited just like captions—adjust timing, text, and styling—so keyboard shortcuts and typing stay readable in the final export.
+- **New onboarding flow** — The first-run experience now walks you through permissions and setup with clearer steps and better copy. Help is easier to find from the main window, including a macOS title bar shortcut, so learning the difference between Studio and Instant Mode takes seconds.
+- **Faster exports** — Reworked the export pipeline with cursor precomputation, encoder tuning, and better decode-render overlap. The unnecessary pre-export delay was removed, and size and time estimates are now calibrated from real-world data. GPU-accelerated NV12 encoding is used when available with an automatic CPU fallback.
+- **Smoother editor playback** — Improved frame cache lookups, adaptive readahead, and resolution-aware prefetch so scrubbing and playback stay responsive on longer recordings. Per-frame overhead was reduced across the board.
+- **Better Windows playback** — MediaFoundation decoding now uses batching and zero-copy frame handling with FFmpeg fallback when hardware decode isn't available. WebGPU prefers DirectX 12 on Windows for lower-latency rendering.
+- **More reliable recording** — macOS capture tracks pending timestamps and stops cleanly when the muxer can't accept more samples. Corrupt MP4s are repaired more often during upload, the camera window always hides when recording ends, and closing the app or switching devices no longer leaves stray processes behind.
+- **Tighter audio–video sync** — Audio drift ahead of video is now limited, timestamp offsets are deferred until video is ready, and system audio start times stay aligned with the rest of the mix.
+- **Crop and padding fixes** — Padding and backgrounds now respect the active crop region, so the exported frame matches what you see in the editor.
+- **Improved stability** — Graceful app exit with full resource cleanup, safer camera and WebSocket lifecycle handling, and hardened shutdown paths to prevent crashes on exit.

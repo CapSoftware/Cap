@@ -15,7 +15,7 @@ const api: ApiFetcher = async (args) => {
 
 	const resp = await fetch(args.path, args);
 
-	let body;
+	let body: unknown;
 
 	const contentType = resp.headers.get("content-type");
 	if (contentType === "application/json") {

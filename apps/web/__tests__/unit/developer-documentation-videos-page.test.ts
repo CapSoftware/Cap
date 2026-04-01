@@ -160,7 +160,7 @@ describe("DeveloperDocumentationVideosPage FAQ schema", () => {
 			name: "What is a developer documentation video?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});

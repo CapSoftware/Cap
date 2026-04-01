@@ -1948,7 +1948,7 @@ fn report_to_markdown(report: &TestReport) -> String {
         ));
 
         if !seg.fps_ok {
-            md.push_str(&format!("| | ⚠️ | FPS outside tolerance |\n"));
+            md.push_str("| | ⚠️ | FPS outside tolerance |\n");
         }
         if !seg.jitter_ok {
             md.push_str(&format!(
@@ -2099,7 +2099,7 @@ fn generate_benchmark_markdown(
                 tags.join("`, `")
             ));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     md.push_str("<details>\n<summary>Detailed Results</summary>\n\n");

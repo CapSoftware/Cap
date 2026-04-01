@@ -20,7 +20,6 @@ import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
 	enhanceAudioFromUrl,
-	isAudioEnhancementConfigured,
 } from "@/lib/audio-enhance";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
 import { startAiGeneration } from "@/lib/generate-ai";
@@ -28,6 +27,7 @@ import {
 	checkHasAudioTrackViaMediaServer,
 	extractAudioViaMediaServer,
 	isMediaServerConfigured,
+	probeVideoViaMediaServer,
 } from "@/lib/media-client";
 import { runPromise } from "@/lib/server";
 import { type DeepgramResult, formatToWebVTT } from "@/lib/transcribe-utils";
@@ -184,19 +184,44 @@ async function extractAudio(
 	const videoUrl = await resolveVideoSourceUrl(videoId, userId, bucketId);
 
 	const useMediaServer = isMediaServerConfigured();
+	console.log(
+		`[transcribe] Audio detection: useMediaServer=${useMediaServer}, videoId=${videoId}`,
+	);
 
 	let hasAudio: boolean;
 	let audioBuffer: Buffer;
 
 	if (useMediaServer) {
-		hasAudio = await checkHasAudioTrackViaMediaServer(videoUrl);
+		try {
+			const probe = await probeVideoViaMediaServer(videoUrl);
+			console.log(
+				`[transcribe] Probe result for ${videoId}: audioCodec=${probe.audioCodec}, videoCodec=${probe.videoCodec}, duration=${probe.duration}, audioChannels=${probe.audioChannels}, sampleRate=${probe.sampleRate}`,
+			);
+			hasAudio = probe.audioCodec !== null;
+		} catch (probeError) {
+			console.error(
+				`[transcribe] Probe failed for ${videoId}, falling back to audio check:`,
+				probeError,
+			);
+			hasAudio = await checkHasAudioTrackViaMediaServer(videoUrl);
+			console.log(
+				`[transcribe] Fallback audio check result for ${videoId}: hasAudio=${hasAudio}`,
+			);
+		}
+
 		if (!hasAudio) {
+			console.log(
+				`[transcribe] No audio track detected for ${videoId} via media server`,
+			);
 			return null;
 		}
 
 		audioBuffer = await extractAudioViaMediaServer(videoUrl);
 	} else {
 		hasAudio = await checkHasAudioTrack(videoUrl);
+		console.log(
+			`[transcribe] Local ffmpeg audio check for ${videoId}: hasAudio=${hasAudio}`,
+		);
 		if (!hasAudio) {
 			return null;
 		}
@@ -210,6 +235,10 @@ async function extractAudio(
 		}
 	}
 
+	console.log(
+		`[transcribe] Extracted audio for ${videoId}: ${audioBuffer.length} bytes`,
+	);
+
 	const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
 
 	await bucket
@@ -219,7 +248,7 @@ async function extractAudio(
 		.pipe(runPromise);
 
 	const audioSignedUrl = await bucket
-		.getSignedObjectUrl(audioKey)
+		.getInternalSignedObjectUrl(audioKey)
 		.pipe(runPromise);
 
 	return audioSignedUrl;
@@ -249,7 +278,7 @@ async function resolveVideoSourceUrl(
 	);
 
 	for (const key of candidateKeys) {
-		const url = await bucket.getSignedObjectUrl(key).pipe(runPromise);
+		const url = await bucket.getInternalSignedObjectUrl(key).pipe(runPromise);
 		const response = await fetch(url, {
 			method: "GET",
 			headers: { range: "bytes=0-0" },
@@ -352,7 +381,7 @@ async function queueAiGeneration(
 	await startAiGeneration(videoId as Video.VideoId, userId);
 }
 
-async function markEnhancedAudioProcessing(videoId: string): Promise<void> {
+async function _markEnhancedAudioProcessing(videoId: string): Promise<void> {
 	"use step";
 
 	const [video] = await db()
@@ -373,7 +402,7 @@ async function markEnhancedAudioProcessing(videoId: string): Promise<void> {
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
-async function enhanceAndSaveAudio(
+async function _enhanceAndSaveAudio(
 	videoId: string,
 	userId: string,
 	audioUrl: string,

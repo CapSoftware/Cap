@@ -143,6 +143,51 @@ export async function extractAudioViaMediaServer(
 	return Buffer.from(arrayBuffer);
 }
 
+export interface MediaServerProbeResult {
+	duration: number;
+	width: number;
+	height: number;
+	fps: number;
+	videoCodec: string;
+	audioCodec: string | null;
+	audioChannels: number | null;
+	sampleRate: number | null;
+	bitrate: number;
+	fileSize: number;
+}
+
+export async function probeVideoViaMediaServer(
+	videoUrl: string,
+): Promise<MediaServerProbeResult> {
+	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+	if (!mediaServerUrl) {
+		throw new Error("MEDIA_SERVER_URL is not configured");
+	}
+
+	const response = await fetchWithRetry(`${mediaServerUrl}/video/probe`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ videoUrl }),
+	});
+
+	if (!response.ok) {
+		let errorData: MediaServerError;
+		try {
+			errorData = (await response.json()) as MediaServerError;
+		} catch {
+			throw new Error(
+				`Video probe failed: ${response.status} ${response.statusText}`,
+			);
+		}
+		throw new Error(
+			errorData.details || errorData.error || "Video probe failed",
+		);
+	}
+
+	const data = (await response.json()) as { metadata: MediaServerProbeResult };
+	return data.metadata;
+}
+
 export async function convertAudioToMp3ViaMediaServer(
 	audioUrl: string,
 ): Promise<Buffer> {

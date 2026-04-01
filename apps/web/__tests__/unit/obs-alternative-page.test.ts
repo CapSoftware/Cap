@@ -153,7 +153,7 @@ describe("ObsAlternativePage FAQ schema", () => {
 			name: "Why would I use Cap instead of OBS Studio?",
 			acceptedAnswer: {
 				"@type": "Answer",
-				text: faqs[0]!.answer,
+				text: faqs[0]?.answer,
 			},
 		});
 	});

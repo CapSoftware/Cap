@@ -113,6 +113,8 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 
 	activeProcesses++;
 
+	const truncatedUrl = videoUrl.substring(0, 100);
+
 	const proc = registerSubprocess(
 		spawn({
 			cmd: ["ffmpeg", "-i", videoUrl, "-hide_banner"],
@@ -131,7 +133,24 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 					MAX_STDERR_BYTES,
 				);
 				await proc.exited;
-				return /Stream #\d+:\d+.*Audio:/.test(stderrText);
+
+				const hasVideoStream = /Stream #\d+:\d+.*Video:/.test(stderrText);
+				const hasAudioStream = /Stream #\d+:\d+.*Audio:/.test(stderrText);
+
+				if (!hasVideoStream) {
+					console.error(
+						`[checkHasAudioTrack] No video stream found for ${truncatedUrl}... — ffmpeg may not be able to access the URL. stderr: ${stderrText.substring(0, 500)}`,
+					);
+					throw new Error(
+						`ffmpeg could not read video file: no streams detected. stderr: ${stderrText.substring(0, 300)}`,
+					);
+				}
+
+				console.log(
+					`[checkHasAudioTrack] Result for ${truncatedUrl}...: hasVideo=${hasVideoStream}, hasAudio=${hasAudioStream}`,
+				);
+
+				return hasAudioStream;
 			})(),
 			CHECK_TIMEOUT_MS,
 			() => terminateProcess(proc),

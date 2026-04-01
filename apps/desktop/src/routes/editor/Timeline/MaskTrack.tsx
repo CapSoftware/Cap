@@ -147,6 +147,31 @@ export function MaskTrack(props: {
 		addSegmentAt(timelineTime);
 	};
 
+	const syncPreviewTimeToSegment = (
+		e: MouseEvent & { currentTarget: HTMLDivElement; target: Element },
+		segment: { start: number; end: number },
+	) => {
+		const rect = e.currentTarget.getBoundingClientRect();
+		if (rect.width <= 0) return null;
+		const fraction = Math.min(
+			Math.max((e.clientX - rect.left) / rect.width, 0),
+			1,
+		);
+		const time = segment.start + (segment.end - segment.start) * fraction;
+		setPreviewTime(time);
+		return time;
+	};
+
+	const setHoveredSegmentState = (
+		e: MouseEvent & { currentTarget: HTMLDivElement; target: Element },
+		index: number,
+		segment: { start: number; end: number },
+	) => {
+		const time = syncPreviewTimeToSegment(e, segment);
+		setEditorState("timeline", "hoveredMaskIndex", index);
+		setEditorState("timeline", "hoveredMaskTime", time);
+	};
+
 	function createMouseDownDrag<T>(
 		segmentIndex: () => number,
 		setup: () => T,
@@ -253,6 +278,8 @@ export function MaskTrack(props: {
 			onMouseLeave={() => {
 				setHoveringTrack(false);
 				setEditorState("timeline", "hoveredTrack", null);
+				setEditorState("timeline", "hoveredMaskIndex", null);
+				setEditorState("timeline", "hoveredMaskTime", null);
 			}}
 			onMouseDown={handleBackgroundMouseDown}
 		>
@@ -289,12 +316,38 @@ export function MaskTrack(props: {
 							data-mask-segment
 							data-index={index}
 							class={cx(
-								"border duration-200 hover:border-gray-12 transition-colors group",
+								"duration-200 transition-colors group",
 								"bg-gradient-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022]",
-								isSelected() ? "border-gray-12" : "border-transparent",
+								isSelected()
+									? "border border-gray-12"
+									: "!border-0 hover:!border hover:border-gray-12",
 							)}
 							innerClass="ring-red-5"
 							segment={segment}
+							onMouseEnter={(e) => {
+								setHoveredSegmentState(e, index, segment);
+							}}
+							onMouseOver={(e) => {
+								setHoveredSegmentState(e, index, segment);
+							}}
+							onMouseMove={(e) => {
+								setHoveredSegmentState(e, index, segment);
+							}}
+							onMouseLeave={() => {
+								setEditorState("timeline", "hoveredMaskIndex", null);
+								setEditorState("timeline", "hoveredMaskTime", null);
+							}}
+							onMouseOut={(e) => {
+								const relatedTarget = e.relatedTarget;
+								if (
+									relatedTarget instanceof Node &&
+									e.currentTarget.contains(relatedTarget)
+								) {
+									return;
+								}
+								setEditorState("timeline", "hoveredMaskIndex", null);
+								setEditorState("timeline", "hoveredMaskTime", null);
+							}}
 							onMouseDown={(e) => {
 								e.stopPropagation();
 								if (editorState.timeline.interactMode === "split") {

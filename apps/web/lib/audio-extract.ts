@@ -194,12 +194,16 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	let ffmpeg: string;
 	try {
 		ffmpeg = getFfmpegPath();
-	} catch {
-		return false;
+	} catch (err) {
+		console.error(
+			`[checkHasAudioTrack] ffmpeg binary not found, cannot check audio track:`,
+			err,
+		);
+		throw new Error("ffmpeg binary not available — cannot check audio track");
 	}
 	const ffmpegArgs = ["-i", videoUrl, "-hide_banner"];
 
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		const proc = spawn(ffmpeg, ffmpegArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
@@ -210,12 +214,29 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 			stderr += data.toString();
 		});
 
-		proc.on("error", () => {
-			resolve(false);
+		proc.on("error", (err) => {
+			console.error(`[checkHasAudioTrack] ffmpeg process error:`, err);
+			reject(new Error(`ffmpeg process error: ${err.message}`));
 		});
 
 		proc.on("close", () => {
-			resolve(/Stream #\d+:\d+.*Audio:/.test(stderr));
+			const hasVideo = /Stream #\d+:\d+.*Video:/.test(stderr);
+			const hasAudio = /Stream #\d+:\d+.*Audio:/.test(stderr);
+
+			if (!hasVideo) {
+				console.error(
+					`[checkHasAudioTrack] No video stream found — ffmpeg may not be able to read the file. stderr: ${stderr.substring(0, 500)}`,
+				);
+				reject(
+					new Error(`ffmpeg could not read video file: no streams detected`),
+				);
+				return;
+			}
+
+			console.log(
+				`[checkHasAudioTrack] Result: hasVideo=${hasVideo}, hasAudio=${hasAudio}`,
+			);
+			resolve(hasAudio);
 		});
 	});
 }

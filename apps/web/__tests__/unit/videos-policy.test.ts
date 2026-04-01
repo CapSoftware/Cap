@@ -5,7 +5,7 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { Context, Effect, Option } from "effect";
+import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 const TEST_VIDEO_ID = "test-video-1" as Video.VideoId;

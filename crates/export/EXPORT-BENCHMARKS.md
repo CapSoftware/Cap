@@ -50,17 +50,17 @@ cargo run -p cap-export --example export-benchmark-runner -- full --duration 60 
 
 <!-- EXPORT_BENCHMARK_RESULTS_START -->
 
-### Benchmark Run: 2026-02-16 11:02:26 UTC
+### Benchmark Run: 2026-03-25 13:12:31 UTC
 
-*Local time: 2026-02-16 11:02:26*
+*Local time: 2026-03-25 13:12:31*
 
 **Overall Result:** ALL PASS (9/9)
 
-**Test Video:** 72s at 1920x1080 30fps
+**Test Video:** 30s at 1920x1080 30fps
 
-**Notes:** Final calibration: encoder_efficiency=0.5 applied, FPS tapering, real-world data
+**Notes:** Post-optimization: trimmed macOS encoder priority, increased NV12 render channel 2->8, optimized GIF add_frame
 
-**Command:** `cargo run -p cap-export --example export-benchmark-runner -- mp4-only --duration 72 --recording-path /Users/richie/Library/Application Support/so.cap.desktop.dev/recordings/Odyssey G93SC (Display) 2026-02-16 10.06 AM.cap --benchmark-output`
+**Command:** `cargo run -p cap-export --example export-benchmark-runner -- mp4-only --duration 30 --benchmark-output`
 
 <details>
 <summary>System Information</summary>
@@ -74,20 +74,20 @@ cargo run -p cap-export --example export-benchmark-runner -- full --duration 60 
 
 | Preset | Time(s) | FPS | Size(MB) | Estimated(MB) | Size Err(%) | Time Est(s) | Time Err(%) | Status |
 |--------|---------|-----|----------|---------------|-------------|-------------|-------------|--------|
-| MP4 720p/30fps/Maximum | 7.58 | 283.4 | 35.79 | 36.22 | +1.2 | 7.41 | -2.3 | PASS |
-| MP4 720p/30fps/Social | 7.78 | 276.2 | 18.93 | 18.52 | -2.2 | 7.41 | -4.8 | PASS |
-| MP4 720p/30fps/Web | 7.03 | 305.6 | 12.13 | 10.26 | -15.4 | 7.41 | +5.4 | PASS |
-| MP4 1080p/30fps/Maximum | 7.66 | 280.3 | 80.27 | 80.46 | +0.2 | 7.41 | -3.4 | PASS |
-| MP4 1080p/30fps/Social | 8.62 | 249.2 | 41.19 | 40.64 | -1.3 | 7.41 | -14.1 | PASS |
-| MP4 1080p/30fps/Web | 7.50 | 286.3 | 23.37 | 22.06 | -5.6 | 7.41 | -1.3 | PASS |
-| MP4 1080p/60fps/Maximum | 15.15 | 283.5 | 127.65 | 128.25 | +0.5 | 14.81 | -2.2 | PASS |
-| MP4 4K/30fps/Maximum | 20.22 | 106.3 | 319.82 | 319.39 | -0.1 | 12.27 | -39.3 | PASS |
-| MP4 4K/30fps/Social | 12.26 | 175.2 | 161.26 | 160.11 | -0.7 | 12.27 | +0.1 | PASS |
+| MP4 720p/30fps/Maximum | 2.48 | 362.3 | 6.01 | 15.17 | +152.6 | 3.10 | +24.9 | PASS |
+| MP4 720p/30fps/Social | 2.59 | 347.2 | 5.98 | 7.76 | +29.7 | 3.10 | +19.7 | PASS |
+| MP4 720p/30fps/Web | 2.57 | 350.3 | 5.71 | 4.30 | -24.7 | 3.10 | +20.8 | PASS |
+| MP4 1080p/30fps/Maximum | 3.12 | 288.8 | 3.99 | 33.71 | +745.9 | 3.10 | -0.4 | PASS |
+| MP4 1080p/30fps/Social | 3.31 | 272.3 | 3.95 | 17.03 | +330.8 | 3.10 | -6.1 | PASS |
+| MP4 1080p/30fps/Web | 3.31 | 271.9 | 3.93 | 9.24 | +135.0 | 3.10 | -6.3 | PASS |
+| MP4 1080p/60fps/Maximum | 5.93 | 303.8 | 5.50 | 53.74 | +876.3 | 6.21 | +4.8 | PASS |
+| MP4 4K/30fps/Maximum | 8.28 | 108.7 | 6.63 | 133.83 | +1920.0 | 5.14 | -37.9 | PASS |
+| MP4 4K/30fps/Social | 8.27 | 108.8 | 6.54 | 67.09 | +926.1 | 5.14 | -37.8 | PASS |
 
 #### Estimation Accuracy
 
-- **MP4 Size**: avg error -2.6%, avg |error| 3.0%
-- **MP4 Time**: avg error -6.9%, avg |error| 8.1%
+- **MP4 Size**: avg error +565.7%, avg |error| 571.2%
+- **MP4 Time**: avg error -2.0%, avg |error| 17.6%
 
 #### Calibration Data
 
@@ -95,15 +95,15 @@ Use these actual-vs-estimated ratios to tune the estimation algorithm:
 
 | Preset | Actual(MB) | Estimated(MB) | Ratio (actual/est) | Suggested BPP Multiplier |
 |--------|------------|---------------|--------------------|--------------------------|
-| MP4 720p/30fps/Maximum | 35.79 | 36.22 | 0.9882 | 0.2965 (current: 0.30) |
-| MP4 720p/30fps/Social | 18.93 | 18.52 | 1.0224 | 0.1534 (current: 0.15) |
-| MP4 720p/30fps/Web | 12.13 | 10.26 | 1.1827 | 0.0946 (current: 0.08) |
-| MP4 1080p/30fps/Maximum | 80.27 | 80.46 | 0.9976 | 0.2993 (current: 0.30) |
-| MP4 1080p/30fps/Social | 41.19 | 40.64 | 1.0134 | 0.1520 (current: 0.15) |
-| MP4 1080p/30fps/Web | 23.37 | 22.06 | 1.0593 | 0.0847 (current: 0.08) |
-| MP4 1080p/60fps/Maximum | 127.65 | 128.25 | 0.9953 | 0.2986 (current: 0.30) |
-| MP4 4K/30fps/Maximum | 319.82 | 319.39 | 1.0013 | 0.3004 (current: 0.30) |
-| MP4 4K/30fps/Social | 161.26 | 160.11 | 1.0072 | 0.1511 (current: 0.15) |
+| MP4 720p/30fps/Maximum | 6.01 | 15.17 | 0.3958 | 0.1187 (current: 0.30) |
+| MP4 720p/30fps/Social | 5.98 | 7.76 | 0.7709 | 0.1156 (current: 0.15) |
+| MP4 720p/30fps/Web | 5.71 | 4.30 | 1.3286 | 0.1063 (current: 0.08) |
+| MP4 1080p/30fps/Maximum | 3.99 | 33.71 | 0.1182 | 0.0355 (current: 0.30) |
+| MP4 1080p/30fps/Social | 3.95 | 17.03 | 0.2321 | 0.0348 (current: 0.15) |
+| MP4 1080p/30fps/Web | 3.93 | 9.24 | 0.4255 | 0.0340 (current: 0.08) |
+| MP4 1080p/60fps/Maximum | 5.50 | 53.74 | 0.1024 | 0.0307 (current: 0.30) |
+| MP4 4K/30fps/Maximum | 6.63 | 133.83 | 0.0495 | 0.0149 (current: 0.30) |
+| MP4 4K/30fps/Social | 6.54 | 67.09 | 0.0975 | 0.0146 (current: 0.15) |
 
 ---
 

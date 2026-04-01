@@ -45,6 +45,7 @@ impl MP4File {
     pub fn init(
         tag: &'static str,
         mut output: PathBuf,
+        faststart: bool,
         video: impl FnOnce(&mut format::context::Output) -> Result<H264Encoder, H264EncoderError>,
         audio: impl FnOnce(
             &mut format::context::Output,
@@ -68,8 +69,16 @@ impl MP4File {
 
         info!("Prepared encoders for mp4 file");
 
-        // make sure this happens after adding all encoders!
-        output.write_header().map_err(InitError::Ffmpeg)?;
+        if faststart {
+            let mut opts = ffmpeg::Dictionary::new();
+            opts.set("movflags", "+faststart");
+            output
+                .write_header_with(opts)
+                .map(|_| ())
+                .map_err(InitError::Ffmpeg)?;
+        } else {
+            output.write_header().map_err(InitError::Ffmpeg)?;
+        }
 
         Ok(Self {
             tag,

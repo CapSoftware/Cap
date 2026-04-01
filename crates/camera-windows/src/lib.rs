@@ -367,7 +367,7 @@ impl VideoDeviceInfo {
                         };
 
                         let bi_height = video_info.bmiHeader.biHeight;
-                        let is_bottom_up = bi_height > 0;
+                        let is_bottom_up = directshow_frame_is_bottom_up(format, bi_height);
                         let height = bi_height.unsigned_abs() as usize;
 
                         callback(Frame {
@@ -501,6 +501,10 @@ impl PixelFormat {
                 | PixelFormat::RGB565
         )
     }
+}
+
+fn directshow_frame_is_bottom_up(pixel_format: PixelFormat, bi_height: i32) -> bool {
+    bi_height > 0 && pixel_format.is_traditionally_bottom_up()
 }
 
 #[derive(Clone)]
@@ -706,8 +710,11 @@ impl VideoFormat {
         }
 
         let video_info = unsafe { inner.video_info() };
+        let pixel_format = DSPixelFormat::new(&inner)
+            .ok_or(VideoFormatError::InvalidPixelFormat(inner.subtype))?
+            .format;
         let bi_height = video_info.bmiHeader.biHeight;
-        let is_bottom_up = bi_height > 0;
+        let is_bottom_up = directshow_frame_is_bottom_up(pixel_format, bi_height);
         let height = bi_height.unsigned_abs();
 
         Ok(VideoFormat {
@@ -715,9 +722,7 @@ impl VideoFormat {
             height,
             frame_rate: ((10_000_000.0 / video_info.AvgTimePerFrame as f32) * 100.0).round()
                 / 100.0,
-            pixel_format: DSPixelFormat::new(&inner)
-                .ok_or(VideoFormatError::InvalidPixelFormat(inner.subtype))?
-                .format,
+            pixel_format,
             is_bottom_up,
             inner: VideoFormatInner::DirectShow(inner),
         })
@@ -815,5 +820,26 @@ impl DSPixelFormat {
             format: get_ffmpeg()?,
             ds: subtype,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PixelFormat, directshow_frame_is_bottom_up};
+
+    #[test]
+    fn directshow_rgb_with_positive_height_is_bottom_up() {
+        assert!(directshow_frame_is_bottom_up(PixelFormat::RGB32, 1080));
+    }
+
+    #[test]
+    fn directshow_yuv_with_positive_height_is_not_bottom_up() {
+        assert!(!directshow_frame_is_bottom_up(PixelFormat::YUYV422, 1080));
+        assert!(!directshow_frame_is_bottom_up(PixelFormat::NV12, 1080));
+    }
+
+    #[test]
+    fn directshow_negative_height_is_not_bottom_up() {
+        assert!(!directshow_frame_is_bottom_up(PixelFormat::RGB32, -1080));
     }
 }

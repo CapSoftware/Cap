@@ -13,6 +13,8 @@ import {
 	createMemo,
 	createResource,
 	createSignal,
+	ErrorBoundary,
+	For,
 	Match,
 	on,
 	onCleanup,
@@ -53,17 +55,53 @@ import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
-const RESIZE_HANDLE_HEIGHT = 8;
+const RESIZE_HANDLE_HEIGHT = 16;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
+
+const TIMELINE_RESIZE_GRIP_MARKS = [0, 1, 2] as const;
+
+function getEditorErrorMessage(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function getPreviewProjectConfig(
+	project: ReturnType<typeof useEditorContext>["project"],
+	editorState: ReturnType<typeof useEditorContext>["editorState"],
+) {
+	const config = serializeProjectConfiguration(project);
+
+	if (!editorState.timeline.tracks.caption && config.captions) {
+		config.captions = {
+			...config.captions,
+			settings: {
+				...config.captions.settings,
+				enabled: false,
+			},
+		};
+	}
+
+	if (!editorState.timeline.tracks.keyboard && config.keyboard) {
+		config.keyboard = {
+			...config.keyboard,
+			settings: {
+				...config.keyboard.settings,
+				enabled: false,
+			},
+		};
+	}
+
+	return config;
+}
 
 export function Editor() {
 	const [projectPath] = createResource(() => commands.getEditorProjectPath());
 
 	const rawMetaQuery = createQuery(() => ({
 		queryKey: ["editor", "raw-meta", projectPath()],
-		queryFn: projectPath()
-			? () => commands.getRecordingMetaByPath(projectPath()!)
-			: skipToken,
+		queryFn: (() => {
+			const path = projectPath();
+			return path ? () => commands.getRecordingMetaByPath(path) : skipToken;
+		})(),
 		staleTime: Infinity,
 		gcTime: 0,
 		refetchOnWindowFocus: false,
@@ -134,17 +172,32 @@ export function Editor() {
 				</div>
 			}
 		>
-			<Match when={importStatus() === "importing" && projectPath()}>
-				<ImportProgress
-					projectPath={projectPath()!}
-					onComplete={handleImportComplete}
-					onError={(error) => console.error("Import failed:", error)}
-				/>
+			<Match
+				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
+			>
+				{(path) => (
+					<ImportProgress
+						projectPath={path()}
+						onComplete={handleImportComplete}
+						onError={(error) => console.error("Import failed:", error)}
+					/>
+				)}
 			</Match>
-			<Match when={importStatus() === "ready" && projectPath()}>
-				<EditorInstanceContextProvider>
-					<EditorContent projectPath={projectPath()!} />
-				</EditorInstanceContextProvider>
+			<Match when={importStatus() === "ready" ? (projectPath() ?? null) : null}>
+				{(path) => (
+					<ErrorBoundary
+						fallback={(error) => (
+							<EditorErrorScreen
+								error={getEditorErrorMessage(error)}
+								projectPath={path()}
+							/>
+						)}
+					>
+						<EditorInstanceContextProvider>
+							<EditorContent projectPath={path()} />
+						</EditorInstanceContextProvider>
+					</ErrorBoundary>
+				)}
 			</Match>
 		</Switch>
 	);
@@ -156,12 +209,12 @@ function EditorContent(props: { projectPath: string }) {
 	const errorInfo = () => {
 		const error = ctx.editorInstance.error;
 		if (!error) return null;
-		const errorMessage = error instanceof Error ? error.message : String(error);
+		const errorMessage = getEditorErrorMessage(error);
 		return { error: errorMessage, projectPath: props.projectPath };
 	};
 
 	const readyData = () => {
-		const editorInstance = ctx.editorInstance();
+		const editorInstance = ctx.editorInstance.latest;
 		if (!editorInstance || !ctx.metaQuery.data) return null;
 
 		return {
@@ -225,6 +278,10 @@ function Inner() {
 		{ name: "editorTimelineHeight" },
 	);
 	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
+	const [timelineViewportOverflow, setTimelineViewportOverflow] = createSignal<{
+		overflow: number;
+		visibleTrackCount: number;
+	} | null>(null);
 
 	const clampTimelineHeight = (value: number) => {
 		const available = layoutBounds.height ?? 0;
@@ -269,6 +326,23 @@ function Inner() {
 		if (!available) return;
 		setStoredTimelineHeight((height) => clampTimelineHeight(height));
 	});
+
+	createEffect(
+		on(timelineViewportOverflow, (next, prev) => {
+			if (
+				next &&
+				prev &&
+				next.visibleTrackCount > prev.visibleTrackCount &&
+				next.overflow > 0
+			) {
+				setStoredTimelineHeight((height) =>
+					clampTimelineHeight(height + next.overflow),
+				);
+			}
+
+			return next;
+		}),
+	);
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
 		throttledRenderFrame.clear();
@@ -329,7 +403,7 @@ function Inner() {
 	);
 
 	const doConfigUpdate = async (time: number) => {
-		const config = serializeProjectConfiguration(project);
+		const config = getPreviewProjectConfig(project, editorState);
 		const frameNumber = Math.max(Math.floor(time * FPS), 0);
 		const resBase = previewResolutionBase();
 		try {
@@ -356,6 +430,10 @@ function Inner() {
 		on(
 			() => {
 				trackDeep(project);
+				return {
+					caption: editorState.timeline.tracks.caption,
+					keyboard: editorState.timeline.tracks.keyboard,
+				};
 			},
 			() => {
 				updateConfigAndRender(frameNumberToRender());
@@ -387,18 +465,27 @@ function Inner() {
 								<div
 									role="separator"
 									aria-orientation="horizontal"
-									class="flex-none transition-colors hover:bg-gray-3/30"
+									class="flex-none shrink-0 border-t border-gray-4 dark:border-gray-5 bg-gray-2/95 dark:bg-gray-3/55 transition-colors hover:bg-gray-3/70 dark:hover:bg-gray-4/55"
 									style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
 								>
 									<div
-										class="flex justify-center items-center h-full cursor-row-resize select-none group"
-										classList={{ "bg-gray-3/50": isResizingTimeline() }}
+										class="flex flex-col gap-0.5 justify-center items-center h-full w-full cursor-row-resize select-none group"
+										classList={{
+											"bg-gray-3/55 dark:bg-gray-4/50": isResizingTimeline(),
+										}}
 										onMouseDown={handleTimelineResizeStart}
+										aria-label="Resize timeline height"
 									>
-										<div
-											class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
-											classList={{ "bg-gray-7": isResizingTimeline() }}
-										/>
+										<For each={TIMELINE_RESIZE_GRIP_MARKS}>
+											{() => (
+												<div
+													class="h-0.5 w-20 max-w-[85%] rounded-full bg-gray-6 dark:bg-gray-7 shadow-[0_1px_0_rgb(0_0_0_/0.06)] transition-colors group-hover:bg-gray-9 dark:group-hover:bg-gray-11"
+													classList={{
+														"bg-gray-9 dark:bg-gray-11": isResizingTimeline(),
+													}}
+												/>
+											)}
+										</For>
 									</div>
 								</div>
 							</div>
@@ -409,7 +496,9 @@ function Inner() {
 							style={{ height: `${timelineHeight()}px` }}
 						>
 							<div class="h-full">
-								<Timeline />
+								<Timeline
+									onViewportOverflowChange={setTimelineViewportOverflow}
+								/>
 							</div>
 						</div>
 					</div>
@@ -501,7 +590,7 @@ function Dialogs() {
 						>
 							{(dialog) => {
 								const [name, setName] = createSignal(
-									presets.query.data?.presets[dialog().presetIndex].name!,
+									presets.query.data?.presets[dialog().presetIndex]?.name ?? "",
 								);
 
 								const renamePreset = createMutation(() => ({

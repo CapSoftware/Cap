@@ -1,9 +1,11 @@
+import { Button } from "@cap/ui-solid";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import { Array, Option } from "effect";
 import {
 	batch,
+	createEffect,
 	createMemo,
 	createRoot,
 	createSignal,
@@ -49,6 +51,7 @@ export function ZoomTrack(props: {
 		editorState,
 		totalDuration,
 		projectActions,
+		meta,
 	} = useEditorContext();
 
 	const { duration, secsPerPixel } = useTimelineContext();
@@ -56,8 +59,27 @@ export function ZoomTrack(props: {
 
 	const [creatingSegmentViaDrag, setCreatingSegmentViaDrag] =
 		createSignal(false);
+	const [isGeneratingAutoZoom, setIsGeneratingAutoZoom] = createSignal(false);
+	const [isHoveringGenerateZoomButton, setIsHoveringGenerateZoomButton] =
+		createSignal(false);
+	const [
+		sessionDismissedGenerateZoomPrompt,
+		setSessionDismissedGenerateZoomPrompt,
+	] = createSignal(false);
+
+	const hasZoomSegments = () =>
+		(project.timeline?.zoomSegments?.length ?? 0) > 0;
+
+	const hasRecordedCursorData = () => meta().hasRecordedCursorData;
+
+	createEffect(() => {
+		if (hasZoomSegments() || sessionDismissedGenerateZoomPrompt()) {
+			setIsHoveringGenerateZoomButton(false);
+		}
+	});
 
 	const handleGenerateZoomSegments = async () => {
+		setIsGeneratingAutoZoom(true);
 		try {
 			const zoomSegments = await commands.generateZoomSegmentsFromClicks();
 			setProject("timeline", "zoomSegments", zoomSegments);
@@ -69,6 +91,8 @@ export function ZoomTrack(props: {
 			}
 		} catch (error) {
 			console.error("Failed to generate zoom segments:", error);
+		} finally {
+			setIsGeneratingAutoZoom(false);
 		}
 	};
 
@@ -203,17 +227,16 @@ export function ZoomTrack(props: {
 										start: baseSegment.start,
 										end: Math.max(minEndTime, endTime),
 										amount: 1.5,
-										mode: {
-											manual: {
-												x: 0.5,
-												y: 0.5,
-											},
-										},
+										mode: "auto",
 									});
 
 									createdSegmentIndex = index;
 								}),
 							);
+							setEditorState("timeline", "selection", {
+								type: "zoom",
+								indices: [createdSegmentIndex],
+							});
 						});
 						segmentCreated = true;
 					};
@@ -275,13 +298,44 @@ export function ZoomTrack(props: {
 			}}
 		>
 			<Show
-				when={project.timeline?.zoomSegments}
+				when={hasZoomSegments()}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-						<div>Click to add zoom segment</div>
-						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
-							(Smoothly zoom in on important areas)
-						</div>
+					<div class="relative z-[1] isolate text-center text-sm text-[--text-tertiary] flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-auto px-2 py-1">
+						<Show
+							when={
+								hasRecordedCursorData() && !sessionDismissedGenerateZoomPrompt()
+							}
+						>
+							<div
+								class="relative z-10 flex items-center gap-1"
+								onMouseEnter={() => setIsHoveringGenerateZoomButton(true)}
+								onMouseLeave={() => setIsHoveringGenerateZoomButton(false)}
+								onMouseDown={(e) => e.stopPropagation()}
+							>
+								<Button
+									variant="gray"
+									size="md"
+									class="shadow-md border-gray-7 dark:border-gray-8 font-medium"
+									disabled={isGeneratingAutoZoom()}
+									onClick={() => {
+										void handleGenerateZoomSegments();
+									}}
+								>
+									{isGeneratingAutoZoom()
+										? "Generating..."
+										: "Click to generate zoom segments"}
+								</Button>
+								<button
+									type="button"
+									class="flex shrink-0 justify-center items-center rounded-full outline-none text-gray-11 hover:text-gray-12 hover:bg-gray-5 focus-visible:ring-2 focus-visible:ring-gray-8 size-8 transition-colors"
+									disabled={isGeneratingAutoZoom()}
+									aria-label="Dismiss for this session"
+									onClick={() => setSessionDismissedGenerateZoomPrompt(true)}
+								>
+									<IconLucideX class="size-4" />
+								</button>
+							</div>
+						</Show>
 					</div>
 				}
 			>
@@ -622,12 +676,14 @@ export function ZoomTrack(props: {
 			</Show>
 			<Show
 				when={
-					!useTrackContext().trackState.draggingSegment && newSegmentDetails()
+					!isHoveringGenerateZoomButton() &&
+					!useTrackContext().trackState.draggingSegment &&
+					newSegmentDetails()
 				}
 			>
 				{(details) => (
 					<SegmentRoot
-						class="pointer-events-none"
+						class="pointer-events-none z-0"
 						innerClass="ring-red-300"
 						segment={details()}
 					>

@@ -28,6 +28,7 @@ pub struct H264EncoderBuilder {
     external_conversion: bool,
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
+    crf: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -62,6 +63,7 @@ impl H264EncoderBuilder {
             external_conversion: false,
             encoder_priority_override: None,
             is_export: false,
+            crf: None,
         }
     }
 
@@ -101,6 +103,11 @@ impl H264EncoderBuilder {
         self
     }
 
+    pub fn with_crf(mut self, crf: u8) -> Self {
+        self.crf = Some(crf);
+        self
+    }
+
     pub fn build(
         self,
         output: &mut format::context::Output,
@@ -128,6 +135,7 @@ impl H264EncoderBuilder {
             self.preset,
             self.encoder_priority_override,
             self.is_export,
+            self.crf,
         );
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
@@ -147,6 +155,7 @@ impl H264EncoderBuilder {
                 output_height,
                 self.bpp,
                 self.external_conversion,
+                self.crf,
             ) {
                 Ok(encoder) => {
                     let is_hardware = matches!(
@@ -207,6 +216,7 @@ impl H264EncoderBuilder {
         output_height: u32,
         bpp: f32,
         external_conversion: bool,
+        crf: Option<u8>,
     ) -> Result<H264Encoder, H264EncoderError> {
         let encoder_supports_input_format = codec
             .video()
@@ -331,14 +341,17 @@ impl H264EncoderBuilder {
                 ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
         }
 
-        let bitrate = get_bitrate(
-            output_width,
-            output_height,
-            input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
-            bpp,
-        );
-
-        encoder.set_bit_rate(bitrate);
+        if crf.is_some() {
+            encoder.set_bit_rate(0);
+        } else {
+            let bitrate = get_bitrate(
+                output_width,
+                output_height,
+                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+                bpp,
+            );
+            encoder.set_bit_rate(bitrate);
+        }
 
         let encoder = encoder.open_with(encoder_options)?;
 
@@ -604,14 +617,7 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset) -> bool {
 fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
-        &[
-            "h264_videotoolbox",
-            "h264_qsv",
-            "h264_nvenc",
-            "h264_amf",
-            "h264_mf",
-            "libx264",
-        ]
+        &["h264_videotoolbox", "libx264"]
     }
 
     #[cfg(target_os = "windows")]
@@ -683,6 +689,7 @@ fn get_codec_and_options(
     preset: H264Preset,
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
+    crf: Option<u8>,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
     let denominator = config.frame_rate.denominator();
@@ -693,10 +700,15 @@ fn get_codec_and_options(
         .max(1.0) as i32;
     let keyframe_interval_str = keyframe_interval.to_string();
 
-    let encoder_priority =
-        get_encoder_priority_with_override(config, preset, encoder_priority_override);
+    let encoder_priority = if crf.is_some() {
+        &["libx264"] as &[&str]
+    } else {
+        get_encoder_priority_with_override(config, preset, encoder_priority_override)
+    };
 
     let mut encoders = Vec::new();
+
+    let crf_str = crf.map(|v| v.to_string());
 
     for encoder_name in encoder_priority {
         let Some(codec) = encoder::find_by_name(encoder_name) else {
@@ -767,7 +779,11 @@ fn get_codec_and_options(
                 options.set("g", &keyframe_interval_str);
             }
             "libx264" => {
-                if is_export {
+                if let Some(ref crf_val) = crf_str {
+                    options.set("preset", "slow");
+                    options.set("crf", crf_val);
+                    options.set("pix_fmt", "yuv420p");
+                } else if is_export {
                     options.set(
                         "preset",
                         match preset {

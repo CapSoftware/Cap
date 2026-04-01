@@ -56,12 +56,17 @@ export function getSectionMarker(
 			const leftTime = prevSegmentRecordingDuration - prevSegment.end;
 			const rightTime = nextSegment.start;
 
-			const left = leftTime === 0 ? null : { type: "time", time: leftTime };
-			const right = rightTime === 0 ? null : { type: "time", time: rightTime };
+			const left: SectionMarker | null =
+				leftTime === 0 ? null : { type: "time", time: leftTime };
+			const right: SectionMarker | null =
+				rightTime === 0 ? null : { type: "time", time: rightTime };
 
-			if (left === null && right === null) return null;
-
-			return { type: "dual", left, right } as any;
+			if (left === null) {
+				if (right === null) return null;
+				return { type: "dual", left: null, right };
+			}
+			if (right === null) return { type: "dual", left, right: null };
+			return { type: "dual", left, right };
 		}
 	}
 

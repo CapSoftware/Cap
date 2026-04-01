@@ -1125,7 +1125,7 @@ fn generate_benchmark_markdown(
                 tags.join("`, `")
             ));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     md.push_str("<details>\n<summary>Detailed Results</summary>\n\n");

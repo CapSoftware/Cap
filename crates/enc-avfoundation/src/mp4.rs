@@ -34,6 +34,8 @@ pub struct MP4Encoder {
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
     is_writing: bool,
+    session_started: bool,
+    is_finishing: bool,
     is_paused: bool,
     writer_failed: bool,
     video_frames_appended: usize,
@@ -79,6 +81,8 @@ pub enum QueueFrameError {
     Failed,
     #[error("WriterFailed/{0}")]
     WriterFailed(arc::R<ns::Error>),
+    #[error("Finished")]
+    Finished,
     #[error("Construct/{0}")]
     Construct(cidre::os::Error),
     #[error("NotReadyForMore")]
@@ -365,6 +369,8 @@ impl MP4Encoder {
             pause_timestamp: None,
             timestamp_offset: Duration::ZERO,
             is_writing: false,
+            session_started: false,
+            is_finishing: false,
             is_paused: false,
             writer_failed: false,
             video_frames_appended: 0,
@@ -384,6 +390,10 @@ impl MP4Encoder {
     ) -> Result<(), QueueFrameError> {
         if self.writer_failed {
             return Err(QueueFrameError::Failed);
+        }
+
+        if self.is_finishing {
+            return Err(QueueFrameError::Finished);
         }
 
         if self.is_paused {
@@ -415,7 +425,8 @@ impl MP4Encoder {
             }
         }
 
-        if !self.is_writing {
+        if !self.session_started {
+            self.session_started = true;
             self.is_writing = true;
             self.asset_writer
                 .start_session_at_src_time(cm::Time::zero());
@@ -502,6 +513,10 @@ impl MP4Encoder {
             return Err(QueueFrameError::Failed);
         }
 
+        if self.is_finishing {
+            return Err(QueueFrameError::Finished);
+        }
+
         if self.is_paused {
             return Ok(());
         }
@@ -517,7 +532,8 @@ impl MP4Encoder {
             self.pause_timestamp = None;
         }
 
-        if !self.is_writing {
+        if !self.session_started {
+            self.session_started = true;
             self.is_writing = true;
             self.asset_writer
                 .start_session_at_src_time(cm::Time::zero());
@@ -805,7 +821,7 @@ impl MP4Encoder {
         &mut self,
         timestamp: Option<Duration>,
     ) -> Result<arc::R<av::AssetWriter>, FinishError> {
-        if !self.is_writing {
+        if !self.session_started || self.is_finishing {
             return Err(FinishError::NotWriting);
         }
 
@@ -830,6 +846,7 @@ impl MP4Encoder {
 
         let end_timestamp = finish_timestamp.unwrap_or(last_frame_ts);
 
+        self.is_finishing = true;
         self.is_writing = false;
 
         let mut end_session_time = end_timestamp.saturating_sub(self.timestamp_offset);
@@ -922,6 +939,7 @@ fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use cap_media_info::RawVideoFormat;
@@ -1248,6 +1266,12 @@ mod tests {
                     let _ = std::fs::remove_file(&output);
                     return Err(format!("Failed after {appended} frames at pts={pts_us}us"));
                 }
+                Err(QueueFrameError::Finished) => {
+                    let _ = std::fs::remove_file(&output);
+                    return Err(format!(
+                        "Finished after {appended} frames at pts={pts_us}us"
+                    ));
+                }
                 Err(err) => {
                     let _ = std::fs::remove_file(&output);
                     return Err(format!(
@@ -1370,6 +1394,10 @@ mod tests {
                                     errors.push(format!("Failed at ts={:?}", ts));
                                     break;
                                 }
+                                Err(QueueFrameError::Finished) => {
+                                    errors.push(format!("Finished at ts={:?}", ts));
+                                    break;
+                                }
                                 Err(e) => {
                                     dropped += 1;
                                     let _ = e;
@@ -1440,6 +1468,10 @@ mod tests {
                                 }
                                 Err(QueueFrameError::Failed) => {
                                     errors.push(format!("Audio Failed at frame {i}"));
+                                    break;
+                                }
+                                Err(QueueFrameError::Finished) => {
+                                    errors.push(format!("Audio Finished at frame {i}"));
                                     break;
                                 }
                                 Err(e) => {
@@ -2017,6 +2049,13 @@ mod tests {
                             writer_status_name(&asset_writer)
                         ));
                     }
+                    Err(QueueFrameError::Finished) => {
+                        return Err(format!(
+                            "Finished after {appended} frames at pts={pts_us}us \
+                             (writer status: {})",
+                            writer_status_name(&asset_writer)
+                        ));
+                    }
                     Err(e) => {
                         return Err(format!("Error after {appended} frames: {e}"));
                     }
@@ -2312,6 +2351,15 @@ mod tests {
                             ),
                         ));
                     }
+                    Err(QueueFrameError::Finished) => {
+                        return Err((
+                            appended,
+                            format!(
+                                "Finished at pts={pts_us}us after {appended} frames (status: {})",
+                                writer_status_name(asset_writer)
+                            ),
+                        ));
+                    }
                     Err(e) => {
                         return Err((appended, format!("Error at pts={pts_us}us: {e}")));
                     }
@@ -2432,9 +2480,9 @@ mod tests {
             .scan(0i64, |pts, i| {
                 let current = *pts;
                 let step = match i % 12 {
-                    0 | 1 | 2 => 8_333,
+                    0..=2 => 8_333,
                     3 => 33_333,
-                    4 | 5 | 6 => 12_000,
+                    4..=6 => 12_000,
                     _ => frame_60,
                 };
                 *pts += step;
@@ -2802,6 +2850,10 @@ mod tests {
                 }
                 Err(QueueFrameError::Failed) => {
                     post_jump_errors.push(format!("Failed at frame {i}"));
+                    break;
+                }
+                Err(QueueFrameError::Finished) => {
+                    post_jump_errors.push(format!("Finished at frame {i}"));
                     break;
                 }
                 Err(QueueFrameError::NotReadyForMore) => {}
@@ -3238,6 +3290,10 @@ mod tests {
                         errors.push(format!("Failed at sandwich frame {frame_idx}"));
                         break;
                     }
+                    Err(QueueFrameError::Finished) => {
+                        errors.push(format!("Finished at sandwich frame {frame_idx}"));
+                        break;
+                    }
                     Err(_) => {}
                 }
             }
@@ -3253,6 +3309,10 @@ mod tests {
                 }
                 Err(QueueFrameError::Failed) => {
                     errors.push(format!("Failed at frame {frame_idx}"));
+                    break;
+                }
+                Err(QueueFrameError::Finished) => {
+                    errors.push(format!("Finished at frame {frame_idx}"));
                     break;
                 }
                 Err(_) => {}
@@ -3399,7 +3459,9 @@ mod tests {
             assert!(
                 !matches!(
                     result,
-                    Err(QueueFrameError::WriterFailed(_)) | Err(QueueFrameError::Failed)
+                    Err(QueueFrameError::WriterFailed(_))
+                        | Err(QueueFrameError::Failed)
+                        | Err(QueueFrameError::Finished)
                 ),
                 "Should not fail during normal encoding at frame {i}: {result:?}"
             );
@@ -3417,6 +3479,39 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(2)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn late_frames_after_finish_are_rejected() {
+        let output = test_output_path("late_frames_after_finish");
+        let video = valid_video_config();
+        let audio = wireless_audio_config();
+
+        let mut encoder =
+            MP4Encoder::init_instant_mode(output.clone(), video, Some(audio), None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+        let frame = create_test_video_frame(&pool, 0, 33_333);
+        encoder.queue_video_frame(frame, Duration::ZERO).unwrap();
+
+        let finish_result = encoder.finish(Some(Duration::from_secs(1)));
+        assert!(finish_result.is_ok(), "Finish failed: {finish_result:?}");
+
+        let late_audio = create_test_audio_frame(48000, 3840);
+        let late_audio_result = encoder.queue_audio_frame(&late_audio, Duration::from_millis(80));
+        assert!(
+            matches!(late_audio_result, Err(QueueFrameError::Finished)),
+            "Late audio frame should be rejected after finish, got: {late_audio_result:?}"
+        );
+
+        let late_video = create_test_video_frame(&pool, 80_000, 33_333);
+        let late_video_result = encoder.queue_video_frame(late_video, Duration::from_millis(80));
+        assert!(
+            matches!(late_video_result, Err(QueueFrameError::Finished)),
+            "Late video frame should be rejected after finish, got: {late_video_result:?}"
+        );
+
         let _ = std::fs::remove_file(&output);
     }
 }

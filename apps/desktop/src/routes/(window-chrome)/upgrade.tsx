@@ -65,7 +65,7 @@ export default function Page() {
 					"message" in resp.body
 				)
 					throw resp.body.message;
-				throw new Error((resp.body as any).toString());
+				throw new Error(String(resp.body));
 			}
 		},
 		onSuccess: async () => {
@@ -552,7 +552,7 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
 				return { ...resp.body, licenseKey: vars.licenseKey };
 			if (typeof resp.body === "object" && resp.body && "message" in resp.body)
 				throw resp.body.message;
-			throw new Error((resp.body as any).toString());
+			throw new Error(String(resp.body));
 		},
 		onSuccess: async (value) => {
 			await generalSettingsStore.set({

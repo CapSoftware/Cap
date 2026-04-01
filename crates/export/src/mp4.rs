@@ -37,6 +37,15 @@ impl ExportCompression {
             Self::Potato => 0.04,
         }
     }
+
+    pub fn crf_value(&self) -> u8 {
+        match self {
+            Self::Maximum => 24,
+            Self::Social => 28,
+            Self::Web => 32,
+            Self::Potato => 36,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -61,6 +70,8 @@ pub struct Mp4ExportSettings {
     pub custom_bpp: Option<f32>,
     #[serde(default)]
     pub force_ffmpeg_decoder: bool,
+    #[serde(default)]
+    pub optimize_filesize: bool,
 }
 
 impl Mp4ExportSettings {
@@ -185,13 +196,19 @@ impl Mp4ExportSettings {
             let mut encoder = MP4File::init(
                 "output",
                 base.output_path.clone(),
+                self.optimize_filesize,
                 |o| {
-                    H264Encoder::builder(video_info)
+                    let builder = H264Encoder::builder(video_info)
                         .with_bpp(self.effective_bpp())
                         .with_export_priority()
                         .with_export_settings()
-                        .with_external_conversion()
-                        .build(o)
+                        .with_external_conversion();
+                    let builder = if self.optimize_filesize {
+                        builder.with_crf(self.compression.crf_value())
+                    } else {
+                        builder
+                    };
+                    builder.build(o)
                 },
                 |o| {
                     has_audio.then(|| {
@@ -312,6 +329,7 @@ impl Mp4ExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
                 })
                 .collect(),
@@ -505,7 +523,6 @@ struct Nv12ExportFrame {
     height: u32,
     y_stride: u32,
     pts: i64,
-    audio: Option<ffmpeg::frame::Audio>,
 }
 
 #[cfg(test)]
@@ -584,7 +601,7 @@ async fn export_render_to_channel(
     mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     project_path: PathBuf,
 ) -> Result<(), cap_rendering::RenderingError> {
-    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(2);
+    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
 
     let screenshot_project_path = project_path;
 
@@ -745,7 +762,6 @@ mod tests {
             height,
             y_stride: width,
             pts: 42,
-            audio: None,
         };
 
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);

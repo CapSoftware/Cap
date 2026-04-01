@@ -1,9 +1,11 @@
 mod configuration;
 pub mod cursor;
+pub mod keyboard;
 mod meta;
 
 pub use configuration::*;
 pub use cursor::*;
+pub use keyboard::*;
 pub use meta::*;
 
 use serde::{Deserialize, Serialize};
