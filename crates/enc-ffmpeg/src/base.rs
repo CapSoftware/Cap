@@ -85,6 +85,12 @@ impl EncoderBase {
                 }
             }
 
+            if let (Some(pts), Some(dts)) = (self.packet.pts(), self.packet.dts())
+                && pts < dts
+            {
+                self.packet.set_pts(Some(dts));
+            }
+
             self.last_written_dts = self.packet.dts();
             self.packet.write_interleaved(output)?;
         }

@@ -1140,9 +1140,138 @@ impl Default for CameraBuffers {
     }
 }
 
-fn convert_uyvy_to_yuyv_into(src: &[u8], dst: &mut [u8], width: u32, height: u32) {
-    let total_bytes = (width * height * 2) as usize;
-    let src_len = src.len().min(total_bytes).min(dst.len());
+#[derive(Clone, Copy)]
+struct CameraBufferLayout {
+    primary_stride: usize,
+    secondary_stride: usize,
+}
+
+fn infer_camera_buffer_layout(
+    pixel_format: cap_camera_windows::PixelFormat,
+    width: usize,
+    height: usize,
+    data_len: usize,
+) -> Option<CameraBufferLayout> {
+    use cap_camera_windows::PixelFormat;
+
+    if width == 0 || height == 0 || data_len == 0 {
+        return None;
+    }
+
+    let total_rows = match pixel_format {
+        PixelFormat::NV12
+        | PixelFormat::NV21
+        | PixelFormat::YUV420P
+        | PixelFormat::YV12
+        | PixelFormat::P010 => height + (height / 2),
+        PixelFormat::YUYV422
+        | PixelFormat::UYVY422
+        | PixelFormat::GRAY16
+        | PixelFormat::RGB565
+        | PixelFormat::ARGB
+        | PixelFormat::RGB32
+        | PixelFormat::RGB24
+        | PixelFormat::BGR24
+        | PixelFormat::GRAY8 => height,
+        PixelFormat::MJPEG | PixelFormat::H264 => return None,
+    };
+
+    if total_rows == 0 || !data_len.is_multiple_of(total_rows) {
+        return None;
+    }
+
+    let primary_stride = data_len / total_rows;
+
+    match pixel_format {
+        PixelFormat::NV12 | PixelFormat::NV21 => {
+            if primary_stride < width {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride: primary_stride,
+            })
+        }
+        PixelFormat::YUV420P | PixelFormat::YV12 => {
+            if primary_stride < width || !primary_stride.is_multiple_of(2) {
+                return None;
+            }
+            let secondary_stride = primary_stride / 2;
+            if secondary_stride < width / 2 {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride,
+            })
+        }
+        PixelFormat::P010 => {
+            if primary_stride < width * 2 {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride: primary_stride,
+            })
+        }
+        PixelFormat::YUYV422 | PixelFormat::UYVY422 | PixelFormat::GRAY16 | PixelFormat::RGB565 => {
+            if primary_stride < width * 2 {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride: primary_stride,
+            })
+        }
+        PixelFormat::ARGB | PixelFormat::RGB32 => {
+            if primary_stride < width * 4 {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride: primary_stride,
+            })
+        }
+        PixelFormat::RGB24 | PixelFormat::BGR24 => {
+            if primary_stride < width * 3 {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride: primary_stride,
+            })
+        }
+        PixelFormat::GRAY8 => {
+            if primary_stride < width {
+                return None;
+            }
+            Some(CameraBufferLayout {
+                primary_stride,
+                secondary_stride: primary_stride,
+            })
+        }
+        PixelFormat::MJPEG | PixelFormat::H264 => None,
+    }
+}
+
+fn compact_primary_stride(pixel_format: cap_camera_windows::PixelFormat, width: usize) -> usize {
+    use cap_camera_windows::PixelFormat;
+
+    match pixel_format {
+        PixelFormat::NV12 | PixelFormat::NV21 | PixelFormat::YUV420P | PixelFormat::YV12 => width,
+        PixelFormat::P010 => width * 2,
+        PixelFormat::YUYV422 | PixelFormat::UYVY422 | PixelFormat::GRAY16 | PixelFormat::RGB565 => {
+            width * 2
+        }
+        PixelFormat::ARGB | PixelFormat::RGB32 => width * 4,
+        PixelFormat::RGB24 | PixelFormat::BGR24 => width * 3,
+        PixelFormat::GRAY8 => width,
+        PixelFormat::MJPEG | PixelFormat::H264 => 0,
+    }
+}
+
+fn convert_uyvy_row_to_yuyv_into(src: &[u8], dst: &mut [u8]) {
+    let src_len = src.len().min(dst.len());
 
     #[cfg(target_arch = "x86_64")]
     {
@@ -1155,6 +1284,32 @@ fn convert_uyvy_to_yuyv_into(src: &[u8], dst: &mut [u8], width: u32, height: u32
     }
 
     convert_uyvy_to_yuyv_scalar(src, dst, src_len);
+}
+
+fn convert_uyvy_to_yuyv_into(
+    src: &[u8],
+    dst: &mut [u8],
+    width: u32,
+    height: u32,
+    src_stride: usize,
+    flip: bool,
+) {
+    let row_bytes = (width * 2) as usize;
+    let height = height as usize;
+
+    for row in 0..height {
+        let src_row = if flip { height - 1 - row } else { row };
+        let src_start = src_row.saturating_mul(src_stride);
+        let dst_start = row.saturating_mul(row_bytes);
+        let src_end = src_start.saturating_add(row_bytes).min(src.len());
+        let dst_end = dst_start.saturating_add(row_bytes).min(dst.len());
+
+        if src_end <= src_start || dst_end <= dst_start || dst_end - dst_start < row_bytes {
+            continue;
+        }
+
+        convert_uyvy_row_to_yuyv_into(&src[src_start..src_end], &mut dst[dst_start..dst_end]);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1190,10 +1345,16 @@ fn convert_uyvy_to_yuyv_scalar(src: &[u8], dst: &mut [u8], len: usize) {
     }
 }
 
-fn convert_uyvy_to_yuyv(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+fn convert_uyvy_to_yuyv(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    src_stride: usize,
+    flip: bool,
+) -> Vec<u8> {
     let total_bytes = (width * height * 2) as usize;
     let mut dst = vec![0u8; total_bytes];
-    convert_uyvy_to_yuyv_into(src, &mut dst, width, height);
+    convert_uyvy_to_yuyv_into(src, &mut dst, width, height, src_stride, flip);
     dst
 }
 
@@ -1227,11 +1388,29 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
         .lock()
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let layout = infer_camera_buffer_layout(frame.pixel_format, width, height, data.len())
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to infer camera buffer layout for {:?} {}x{} ({} bytes)",
+                frame.pixel_format,
+                frame.width,
+                frame.height,
+                data.len()
+            )
+        })?;
 
     let converted_data_storage;
     let (final_data, final_format): (&[u8], ffmpeg::format::Pixel) =
         if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-            converted_data_storage = convert_uyvy_to_yuyv(data, frame.width, frame.height);
+            converted_data_storage = convert_uyvy_to_yuyv(
+                data,
+                frame.width,
+                frame.height,
+                layout.primary_stride,
+                frame.is_bottom_up,
+            );
             (
                 converted_data_storage.as_slice(),
                 ffmpeg::format::Pixel::YUYV422,
@@ -1241,14 +1420,13 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
         };
 
     let mut ffmpeg_frame = ffmpeg::frame::Video::new(final_format, frame.width, frame.height);
-    let flip = frame.is_bottom_up;
-    let width = frame.width as usize;
-    let height = frame.height as usize;
+    let flip = frame.is_bottom_up && frame.pixel_format != cap_camera_windows::PixelFormat::UYVY422;
 
     match frame.pixel_format {
         cap_camera_windows::PixelFormat::NV12 => {
-            let y_size = width * height;
-            let uv_size = y_size / 2;
+            let uv_height = height / 2;
+            let y_size = layout.primary_stride * height;
+            let uv_size = layout.secondary_stride * uv_height;
             if final_data.len() >= y_size + uv_size {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_uv = ffmpeg_frame.stride(1);
@@ -1257,6 +1435,7 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
+                    layout.primary_stride,
                     stride_y,
                     flip,
                 );
@@ -1264,15 +1443,17 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     &final_data[y_size..y_size + uv_size],
                     ffmpeg_frame.data_mut(1),
                     width,
-                    height / 2,
+                    uv_height,
+                    layout.secondary_stride,
                     stride_uv,
                     flip,
                 );
             }
         }
         cap_camera_windows::PixelFormat::NV21 => {
-            let y_size = width * height;
-            let uv_size = y_size / 2;
+            let uv_height = height / 2;
+            let y_size = layout.primary_stride * height;
+            let uv_size = layout.secondary_stride * uv_height;
             if final_data.len() >= y_size + uv_size {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_uv = ffmpeg_frame.stride(1);
@@ -1281,16 +1462,16 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
+                    layout.primary_stride,
                     stride_y,
                     flip,
                 );
                 let uv_data = &final_data[y_size..y_size + uv_size];
-                let uv_height = height / 2;
                 let dest = ffmpeg_frame.data_mut(1);
                 for row in 0..uv_height {
                     let src_row = if flip { uv_height - 1 - row } else { row };
                     for x in 0..width / 2 {
-                        let src_idx = src_row * width + x * 2;
+                        let src_idx = src_row * layout.secondary_stride + x * 2;
                         let dst_idx = row * stride_uv + x * 2;
                         if src_idx + 1 < uv_data.len() && dst_idx + 1 < dest.len() {
                             dest[dst_idx] = uv_data[src_idx + 1];
@@ -1302,7 +1483,11 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
         }
         cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
             let row_bytes = width * 2;
-            let size = row_bytes * height;
+            let size = if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
+                row_bytes * height
+            } else {
+                layout.primary_stride * height
+            };
             if final_data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
@@ -1310,6 +1495,11 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
+                    if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
+                        row_bytes
+                    } else {
+                        layout.primary_stride
+                    },
                     stride,
                     flip,
                 );
@@ -1317,7 +1507,7 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
         }
         cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
             let row_bytes = width * 4;
-            let size = row_bytes * height;
+            let size = layout.primary_stride * height;
             if final_data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
@@ -1325,6 +1515,7 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
+                    layout.primary_stride,
                     stride,
                     flip,
                 );
@@ -1332,7 +1523,7 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
         }
         cap_camera_windows::PixelFormat::RGB24 | cap_camera_windows::PixelFormat::BGR24 => {
             let row_bytes = width * 3;
-            let size = row_bytes * height;
+            let size = layout.primary_stride * height;
             if final_data.len() >= size {
                 let stride = ffmpeg_frame.stride(0);
                 copy_plane(
@@ -1340,14 +1531,16 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     row_bytes,
                     height,
+                    layout.primary_stride,
                     stride,
                     flip,
                 );
             }
         }
         cap_camera_windows::PixelFormat::YUV420P => {
-            let y_size = width * height;
-            let uv_size = y_size / 4;
+            let uv_height = height / 2;
+            let y_size = layout.primary_stride * height;
+            let uv_size = layout.secondary_stride * uv_height;
             if final_data.len() >= y_size + uv_size * 2 {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_u = ffmpeg_frame.stride(1);
@@ -1357,6 +1550,7 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
+                    layout.primary_stride,
                     stride_y,
                     flip,
                 );
@@ -1364,23 +1558,26 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     &final_data[y_size..y_size + uv_size],
                     ffmpeg_frame.data_mut(1),
                     width / 2,
-                    height / 2,
+                    uv_height,
+                    layout.secondary_stride,
                     stride_u,
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size + uv_size..],
+                    &final_data[y_size + uv_size..y_size + uv_size * 2],
                     ffmpeg_frame.data_mut(2),
                     width / 2,
-                    height / 2,
+                    uv_height,
+                    layout.secondary_stride,
                     stride_v,
                     flip,
                 );
             }
         }
         cap_camera_windows::PixelFormat::YV12 => {
-            let y_size = width * height;
-            let uv_size = y_size / 4;
+            let uv_height = height / 2;
+            let y_size = layout.primary_stride * height;
+            let uv_size = layout.secondary_stride * uv_height;
             if final_data.len() >= y_size + uv_size * 2 {
                 let stride_y = ffmpeg_frame.stride(0);
                 let stride_u = ffmpeg_frame.stride(1);
@@ -1390,14 +1587,16 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     ffmpeg_frame.data_mut(0),
                     width,
                     height,
+                    layout.primary_stride,
                     stride_y,
                     flip,
                 );
                 copy_plane(
-                    &final_data[y_size + uv_size..],
+                    &final_data[y_size + uv_size..y_size + uv_size * 2],
                     ffmpeg_frame.data_mut(1),
                     width / 2,
-                    height / 2,
+                    uv_height,
+                    layout.secondary_stride,
                     stride_u,
                     flip,
                 );
@@ -1405,7 +1604,8 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
                     &final_data[y_size..y_size + uv_size],
                     ffmpeg_frame.data_mut(2),
                     width / 2,
-                    height / 2,
+                    uv_height,
+                    layout.secondary_stride,
                     stride_v,
                     flip,
                 );
@@ -1417,11 +1617,19 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
     Ok(ffmpeg_frame)
 }
 
-fn copy_plane(src: &[u8], dst: &mut [u8], width: usize, height: usize, stride: usize, flip: bool) {
+fn copy_plane(
+    src: &[u8],
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+    src_stride: usize,
+    dst_stride: usize,
+    flip: bool,
+) {
     for row in 0..height {
         let src_row = if flip { height - 1 - row } else { row };
-        let src_start = src_row * width;
-        let dst_start = row * stride;
+        let src_start = src_row * src_stride;
+        let dst_start = row * dst_stride;
         let copy_len = width.min(src.len().saturating_sub(src_start));
         if copy_len > 0 && dst_start + copy_len <= dst.len() {
             dst[dst_start..dst_start + copy_len]
@@ -1497,39 +1705,27 @@ fn flip_buffer_size(
     }
 }
 
-fn flip_rows_into(data: &[u8], dst: &mut [u8], row_size: usize, height: usize) {
-    for row in 0..height {
-        let src_row = height - 1 - row;
-        let src_start = src_row * row_size;
-        let dst_start = row * row_size;
-        if src_start + row_size <= data.len() && dst_start + row_size <= dst.len() {
-            dst[dst_start..dst_start + row_size]
-                .copy_from_slice(&data[src_start..src_start + row_size]);
-        }
-    }
-}
-
 fn flip_camera_buffer_into(
     data: &[u8],
     dst: &mut [u8],
     width: usize,
     height: usize,
     pixel_format: cap_camera_windows::PixelFormat,
+    layout: CameraBufferLayout,
 ) {
     use cap_camera_windows::PixelFormat;
 
     match pixel_format {
         PixelFormat::NV12 | PixelFormat::NV21 => {
-            let y_size = width * height;
-
-            flip_rows_into(data, dst, width, height);
+            let y_size = layout.primary_stride * height;
+            copy_plane(data, dst, width, height, layout.primary_stride, width, true);
 
             let uv_height = height / 2;
             let uv_row_size = width;
             for row in 0..uv_height {
                 let src_row = uv_height - 1 - row;
-                let src_start = y_size + src_row * uv_row_size;
-                let dst_start = y_size + row * uv_row_size;
+                let src_start = y_size + src_row * layout.secondary_stride;
+                let dst_start = width * height + row * uv_row_size;
                 if src_start + uv_row_size <= data.len() && dst_start + uv_row_size <= dst.len() {
                     dst[dst_start..dst_start + uv_row_size]
                         .copy_from_slice(&data[src_start..src_start + uv_row_size]);
@@ -1537,25 +1733,25 @@ fn flip_camera_buffer_into(
             }
         }
         PixelFormat::YUV420P | PixelFormat::YV12 => {
-            let y_size = width * height;
+            let y_size = layout.primary_stride * height;
             let uv_width = width / 2;
             let uv_height = height / 2;
-            let uv_plane_size = uv_width * uv_height;
+            let uv_plane_size = layout.secondary_stride * uv_height;
 
-            flip_rows_into(data, dst, width, height);
+            copy_plane(data, dst, width, height, layout.primary_stride, width, true);
 
             let u_offset = y_size;
             let v_offset = y_size + uv_plane_size;
             for row in 0..uv_height {
                 let src_row = uv_height - 1 - row;
-                let src_u_start = u_offset + src_row * uv_width;
-                let dst_u_start = u_offset + row * uv_width;
+                let src_u_start = u_offset + src_row * layout.secondary_stride;
+                let dst_u_start = width * height + row * uv_width;
                 if src_u_start + uv_width <= data.len() && dst_u_start + uv_width <= dst.len() {
                     dst[dst_u_start..dst_u_start + uv_width]
                         .copy_from_slice(&data[src_u_start..src_u_start + uv_width]);
                 }
-                let src_v_start = v_offset + src_row * uv_width;
-                let dst_v_start = v_offset + row * uv_width;
+                let src_v_start = v_offset + src_row * layout.secondary_stride;
+                let dst_v_start = width * height + (uv_width * uv_height) + row * uv_width;
                 if src_v_start + uv_width <= data.len() && dst_v_start + uv_width <= dst.len() {
                     dst[dst_v_start..dst_v_start + uv_width]
                         .copy_from_slice(&data[src_v_start..src_v_start + uv_width]);
@@ -1563,17 +1759,25 @@ fn flip_camera_buffer_into(
             }
         }
         PixelFormat::P010 => {
-            let y_size = width * height * 2;
+            let y_size = layout.primary_stride * height;
             let y_row_size = width * 2;
 
-            flip_rows_into(data, dst, y_row_size, height);
+            copy_plane(
+                data,
+                dst,
+                y_row_size,
+                height,
+                layout.primary_stride,
+                y_row_size,
+                true,
+            );
 
             let uv_height = height / 2;
             let uv_row_size = width * 2;
             for row in 0..uv_height {
                 let src_row = uv_height - 1 - row;
-                let src_start = y_size + src_row * uv_row_size;
-                let dst_start = y_size + row * uv_row_size;
+                let src_start = y_size + src_row * layout.secondary_stride;
+                let dst_start = y_row_size * height + row * uv_row_size;
                 if src_start + uv_row_size <= data.len() && dst_start + uv_row_size <= dst.len() {
                     dst[dst_start..dst_start + uv_row_size]
                         .copy_from_slice(&data[src_start..src_start + uv_row_size]);
@@ -1581,16 +1785,40 @@ fn flip_camera_buffer_into(
             }
         }
         PixelFormat::YUYV422 | PixelFormat::UYVY422 | PixelFormat::GRAY16 | PixelFormat::RGB565 => {
-            flip_rows_into(data, dst, width * 2, height);
+            copy_plane(
+                data,
+                dst,
+                width * 2,
+                height,
+                layout.primary_stride,
+                width * 2,
+                true,
+            );
         }
         PixelFormat::ARGB | PixelFormat::RGB32 => {
-            flip_rows_into(data, dst, width * 4, height);
+            copy_plane(
+                data,
+                dst,
+                width * 4,
+                height,
+                layout.primary_stride,
+                width * 4,
+                true,
+            );
         }
         PixelFormat::RGB24 | PixelFormat::BGR24 => {
-            flip_rows_into(data, dst, width * 3, height);
+            copy_plane(
+                data,
+                dst,
+                width * 3,
+                height,
+                layout.primary_stride,
+                width * 3,
+                true,
+            );
         }
         PixelFormat::GRAY8 => {
-            flip_rows_into(data, dst, width, height);
+            copy_plane(data, dst, width, height, layout.primary_stride, width, true);
         }
         PixelFormat::MJPEG | PixelFormat::H264 => {
             let copy_len = data.len().min(dst.len());
@@ -1612,13 +1840,6 @@ pub fn upload_mf_buffer_to_texture(
     use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
     let dxgi_format = frame.dxgi_format();
-    let bytes_per_pixel: u32 = match frame.pixel_format {
-        cap_camera_windows::PixelFormat::NV12 => 1,
-        cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => 2,
-        cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => 4,
-        cap_camera_windows::PixelFormat::RGB24 => 3,
-        _ => 2,
-    };
 
     let buffer_guard = frame
         .buffer
@@ -1626,16 +1847,46 @@ pub fn upload_mf_buffer_to_texture(
         .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?;
     let lock = buffer_guard.lock()?;
     let original_data = &*lock;
+    let layout = infer_camera_buffer_layout(
+        frame.pixel_format,
+        frame.width as usize,
+        frame.height as usize,
+        original_data.len(),
+    )
+    .ok_or_else(|| {
+        windows::core::Error::new(
+            windows::core::HRESULT(-1),
+            format!(
+                "Failed to infer camera buffer layout for {:?} {}x{} ({} bytes)",
+                frame.pixel_format,
+                frame.width,
+                frame.height,
+                original_data.len()
+            ),
+        )
+    })?;
 
     let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
     let needs_flip = frame.is_bottom_up;
+    let mut row_pitch = layout.primary_stride as u32;
 
     let data: &[u8] = match (needs_uyvy_conversion, needs_flip) {
         (false, false) => original_data,
         (true, false) => {
             let uyvy_size = (frame.width * frame.height * 2) as usize;
             let dst = buffers.ensure_uyvy_capacity(uyvy_size);
-            convert_uyvy_to_yuyv_into(original_data, dst, frame.width, frame.height);
+            convert_uyvy_to_yuyv_into(
+                original_data,
+                dst,
+                frame.width,
+                frame.height,
+                layout.primary_stride,
+                false,
+            );
+            row_pitch = compact_primary_stride(
+                cap_camera_windows::PixelFormat::YUYV422,
+                frame.width as usize,
+            ) as u32;
             dst
         }
         (false, true) => {
@@ -1651,7 +1902,9 @@ pub fn upload_mf_buffer_to_texture(
                 frame.width as usize,
                 frame.height as usize,
                 frame.pixel_format,
+                layout,
             );
+            row_pitch = compact_primary_stride(frame.pixel_format, frame.width as usize) as u32;
             dst
         }
         (true, true) => {
@@ -1674,6 +1927,8 @@ pub fn upload_mf_buffer_to_texture(
                 &mut buffers.uyvy_buffer[..uyvy_size],
                 frame.width,
                 frame.height,
+                layout.primary_stride,
+                false,
             );
 
             flip_camera_buffer_into(
@@ -1681,13 +1936,19 @@ pub fn upload_mf_buffer_to_texture(
                 &mut buffers.flip_buffer[..flip_size],
                 frame.width as usize,
                 frame.height as usize,
-                frame.pixel_format,
+                cap_camera_windows::PixelFormat::YUYV422,
+                CameraBufferLayout {
+                    primary_stride: frame.width as usize * 2,
+                    secondary_stride: frame.width as usize * 2,
+                },
             );
+            row_pitch = compact_primary_stride(
+                cap_camera_windows::PixelFormat::YUYV422,
+                frame.width as usize,
+            ) as u32;
             &buffers.flip_buffer[..flip_size]
         }
     };
-
-    let row_pitch = frame.width * bytes_per_pixel;
 
     let texture_desc = D3D11_TEXTURE2D_DESC {
         Width: frame.width,
