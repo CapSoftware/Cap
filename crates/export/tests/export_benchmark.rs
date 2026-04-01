@@ -27,6 +27,7 @@ async fn run_export(project_path: PathBuf) -> Result<(PathBuf, Duration, u32), S
         compression: ExportCompression::Maximum,
         custom_bpp: None,
         force_ffmpeg_decoder: false,
+        optimize_filesize: false,
     };
 
     let start = Instant::now();

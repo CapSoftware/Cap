@@ -546,6 +546,7 @@ async fn benchmark_export(recording_path: &Path) -> Result<ExportMetrics> {
         compression: ExportCompression::Social,
         custom_bpp: None,
         force_ffmpeg_decoder: false,
+        optimize_filesize: false,
     };
 
     let total_frames = exporter_base.total_frames(settings.fps);
