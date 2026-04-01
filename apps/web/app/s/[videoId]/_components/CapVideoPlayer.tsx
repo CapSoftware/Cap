@@ -23,6 +23,7 @@ import {
 import {
 	type ResolvedPlaybackSource,
 	resolvePlaybackSource,
+	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
 import {
 	MediaPlayer,
@@ -139,6 +140,8 @@ export function CapVideoPlayer({
 	const [hasError, setHasError] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
+	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
+	const [hasTriedRawFallback, setHasTriedRawFallback] = useState(false);
 	const queryClient = useQueryClient();
 
 	useEffect(() => {
@@ -166,7 +169,13 @@ export function CapVideoPlayer({
 	const shouldDeferResolvedSource = shouldDeferPlaybackSource(uploadProgress);
 
 	const resolvedSrc = useQuery<ResolvedPlaybackSource | null>({
-		queryKey: ["resolvedSrc", videoSrc, rawFallbackSrc, enableCrossOrigin],
+		queryKey: [
+			"resolvedSrc",
+			videoSrc,
+			rawFallbackSrc,
+			enableCrossOrigin,
+			preferredSource,
+		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
 			: () =>
@@ -174,6 +183,7 @@ export function CapVideoPlayer({
 						videoSrc,
 						rawFallbackSrc,
 						enableCrossOrigin,
+						preferredSource,
 					}),
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
@@ -186,6 +196,8 @@ export function CapVideoPlayer({
 		setVideoLoaded(false);
 		setHasError(false);
 		setShowPlayButton(false);
+		setPreferredSource("mp4");
+		setHasTriedRawFallback(false);
 	}, [videoSrc, rawFallbackSrc]);
 
 	// Track video duration for comment markers
@@ -280,6 +292,21 @@ export function CapVideoPlayer({
 		};
 
 		const handleError = () => {
+			if (
+				shouldFallbackToRawPlaybackSource(
+					resolvedSrc.data?.type,
+					rawFallbackSrc,
+					hasTriedRawFallback,
+				)
+			) {
+				setHasTriedRawFallback(true);
+				setPreferredSource("raw");
+				setVideoLoaded(false);
+				setHasError(false);
+				setShowPlayButton(false);
+				return;
+			}
+
 			setHasError(true);
 		};
 
@@ -365,7 +392,14 @@ export function CapVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [hasPlayedOnce, resolvedSrc.isPending, videoRef.current]);
+	}, [
+		hasPlayedOnce,
+		hasTriedRawFallback,
+		rawFallbackSrc,
+		resolvedSrc.data?.type,
+		resolvedSrc.isPending,
+		videoRef.current,
+	]);
 
 	const generateVideoFrameThumbnail = useCallback(
 		(time: number): string => {
@@ -443,12 +477,19 @@ export function CapVideoPlayer({
 		) {
 			setHasError(false);
 			void queryClient.invalidateQueries({
-				queryKey: ["resolvedSrc", videoSrc, rawFallbackSrc, enableCrossOrigin],
+				queryKey: [
+					"resolvedSrc",
+					videoSrc,
+					rawFallbackSrc,
+					enableCrossOrigin,
+					preferredSource,
+				],
 			});
 		}
 		prevUploadProgress.current = uploadProgress;
 	}, [
 		enableCrossOrigin,
+		preferredSource,
 		queryClient,
 		rawFallbackSrc,
 		uploadProgress,

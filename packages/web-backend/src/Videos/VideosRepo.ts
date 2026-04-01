@@ -48,6 +48,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			db.use(async (db) => {
 				await db.transaction(async (db) => {
 					await Promise.all([
+						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
 						db
 							.delete(Db.videoUploads)

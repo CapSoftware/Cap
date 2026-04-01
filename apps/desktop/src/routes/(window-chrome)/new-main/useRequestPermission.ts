@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { devicesSnapshot } from "~/utils/devices";
+import { requestAndVerifyPermission } from "~/utils/os-permissions";
 import { commands, type OSPermissionStatus } from "~/utils/tauri";
 
 export default function useRequestPermission() {
@@ -11,22 +12,10 @@ export default function useRequestPermission() {
 		currentStatus?: OSPermissionStatus,
 	) {
 		try {
-			if (currentStatus === "denied") {
-				await commands.openPermissionSettings(type);
-				return;
-			}
-
 			const window = getCurrentWindow();
 			await window.setAlwaysOnTop(false);
 			try {
-				await commands.requestPermission(type);
-
-				const check = await commands.doPermissionsCheck(false);
-				const status = type === "camera" ? check.camera : check.microphone;
-
-				if (status !== "granted") {
-					await commands.openPermissionSettings(type);
-				}
+				await requestAndVerifyPermission(commands, type, currentStatus);
 			} finally {
 				await window.setAlwaysOnTop(true);
 			}
