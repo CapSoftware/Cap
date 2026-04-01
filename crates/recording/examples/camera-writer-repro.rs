@@ -301,6 +301,10 @@ fn main() -> anyhow::Result<()> {
                     queue_failures.push("Failed".to_string());
                     break;
                 }
+                Err(QueueFrameError::Finished) => {
+                    queue_failures.push("Finished".to_string());
+                    break;
+                }
                 Err(err) => {
                     queue_failures.push(err.to_string());
                     break;
