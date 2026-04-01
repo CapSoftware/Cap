@@ -748,7 +748,10 @@ async function processVideoAsync(
 			progress: 100,
 			message: "Processing complete",
 		});
-		await sendWebhook(getJob(jobId)!);
+		const completedJob = getJob(jobId);
+		if (completedJob) {
+			await sendWebhook(completedJob);
+		}
 
 		await inputTempFile.cleanup();
 		await outputTempFile.cleanup();
@@ -892,7 +895,10 @@ video.post("/process/:jobId/cancel", async (c) => {
 		message: "Processing cancelled by user",
 	});
 
-	await sendWebhook(getJob(jobId)!);
+	const cancelledJob = getJob(jobId);
+	if (cancelledJob) {
+		await sendWebhook(cancelledJob);
+	}
 
 	return c.json({
 		success: true,
