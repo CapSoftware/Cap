@@ -11,14 +11,17 @@ const packageJson = JSON.parse(
 );
 const { version } = packageJson;
 
+const ffmpegTracingIncludes = [
+	"./node_modules/ffmpeg-static/ffmpeg",
+	"./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
+];
+
 const nextConfig = {
 	reactStrictMode: true,
 	serverExternalPackages: ["ffmpeg-static", "prettier"],
 	outputFileTracingIncludes: {
-		"/app/.well-known/workflow/v1/step": [
-			"./node_modules/ffmpeg-static/ffmpeg",
-			"./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
-		],
+		"/.well-known/workflow/v1/step": ffmpegTracingIncludes,
+		"/api/tools/loom-download": ffmpegTracingIncludes,
 	},
 	transpilePackages: [
 		"@cap/ui",
