@@ -12,6 +12,8 @@ pub struct NV12BufferPool {
     buffers: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
+const MAX_POOLED_BUFFERS: usize = 8;
+
 struct PooledNv12Buffer {
     data: Vec<u8>,
     pool: Option<Arc<Mutex<Vec<Vec<u8>>>>>,
@@ -26,7 +28,9 @@ impl Drop for PooledNv12Buffer {
         let mut data = std::mem::take(&mut self.data);
         data.clear();
 
-        if let Ok(mut buffers) = pool.lock() {
+        if let Ok(mut buffers) = pool.lock()
+            && buffers.len() < MAX_POOLED_BUFFERS
+        {
             buffers.push(data);
         }
     }

@@ -338,12 +338,22 @@ async fn run_full_pipeline_benchmark(
         let segment_frames_opt = if i == 0 {
             segment_media
                 .decoders
-                .get_frames_initial(segment_time as f32, !project.camera.hide, clip_offsets)
+                .get_frames_initial(
+                    segment_time as f32,
+                    !project.camera.hide,
+                    true,
+                    clip_offsets,
+                )
                 .await
         } else {
             segment_media
                 .decoders
-                .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
+                .get_frames(
+                    segment_time as f32,
+                    !project.camera.hide,
+                    true,
+                    clip_offsets,
+                )
                 .await
         };
         let decode_elapsed_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
@@ -382,7 +392,13 @@ async fn run_full_pipeline_benchmark(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+            .render_immediate(
+                segment_frames,
+                uniforms,
+                &segment_media.cursor,
+                true,
+                &mut layers,
+            )
             .await
         {
             Ok(_frame) => {
@@ -510,7 +526,12 @@ async fn run_scrubbing_benchmark(
         let decode_start = Instant::now();
         let segment_frames_opt = segment_media
             .decoders
-            .get_frames_initial(segment_time as f32, !project.camera.hide, clip_offsets)
+            .get_frames_initial(
+                segment_time as f32,
+                !project.camera.hide,
+                true,
+                clip_offsets,
+            )
             .await;
         let decode_elapsed_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -550,7 +571,13 @@ async fn run_scrubbing_benchmark(
 
         let render_start = Instant::now();
         match frame_renderer
-            .render_immediate(segment_frames, uniforms, &segment_media.cursor, &mut layers)
+            .render_immediate(
+                segment_frames,
+                uniforms,
+                &segment_media.cursor,
+                true,
+                &mut layers,
+            )
             .await
         {
             Ok(_frame) => {

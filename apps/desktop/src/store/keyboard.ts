@@ -12,6 +12,7 @@ export type KeyboardSettings = {
 	groupingThresholdMs: number;
 	showModifiers: boolean;
 	showSpecialKeys: boolean;
+	uppercase: boolean;
 };
 
 export const defaultKeyboardSettings: KeyboardSettings = {
@@ -28,4 +29,5 @@ export const defaultKeyboardSettings: KeyboardSettings = {
 	groupingThresholdMs: 500,
 	showModifiers: true,
 	showSpecialKeys: true,
+	uppercase: false,
 };

@@ -138,10 +138,18 @@ impl DisplayLayer {
     ) -> (bool, u32, u32) {
         self.pending_copy = None;
 
-        let frame_data = segment_frames.screen_frame.data();
-        let actual_width = segment_frames.screen_frame.width();
-        let actual_height = segment_frames.screen_frame.height();
-        let format = segment_frames.screen_frame.format();
+        let Some(screen_frame) = &segment_frames.screen_frame else {
+            tracing::debug!(
+                "DisplayLayer::prepare - screen_frame is None, skipping display rendering"
+            );
+            uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+            return (true, frame_size.x, frame_size.y);
+        };
+
+        let frame_data = screen_frame.data();
+        let actual_width = screen_frame.width();
+        let actual_height = screen_frame.height();
+        let format = screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
 
         let skipped = self
@@ -196,8 +204,6 @@ impl DisplayLayer {
                     true
                 }
                 PixelFormat::Nv12 => {
-                    let screen_frame = &segment_frames.screen_frame;
-
                     #[cfg(target_os = "macos")]
                     if !self.prefer_cpu_conversion {
                         if let (Some(y_data), Some(uv_data)) =
@@ -410,7 +416,6 @@ impl DisplayLayer {
                     }
                 }
                 PixelFormat::Yuv420p => {
-                    let screen_frame = &segment_frames.screen_frame;
                     let y_plane = screen_frame.y_plane();
                     let u_plane = screen_frame.u_plane();
                     let v_plane = screen_frame.v_plane();
@@ -485,9 +490,17 @@ impl DisplayLayer {
     ) -> (bool, u32, u32) {
         self.pending_copy = None;
 
-        let actual_width = segment_frames.screen_frame.width();
-        let actual_height = segment_frames.screen_frame.height();
-        let format = segment_frames.screen_frame.format();
+        let Some(screen_frame) = &segment_frames.screen_frame else {
+            tracing::debug!(
+                "DisplayLayer::prepare_with_encoder - screen_frame is None, skipping display rendering"
+            );
+            uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+            return (true, frame_size.x, frame_size.y);
+        };
+
+        let actual_width = screen_frame.width();
+        let actual_height = screen_frame.height();
+        let format = screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
 
         let skipped = self
@@ -518,7 +531,7 @@ impl DisplayLayer {
 
             let frame_uploaded = match format {
                 PixelFormat::Rgba => {
-                    let frame_data = segment_frames.screen_frame.data();
+                    let frame_data = screen_frame.data();
                     let src_bytes_per_row = frame_size.x * 4;
 
                     queue.write_texture(
@@ -543,8 +556,6 @@ impl DisplayLayer {
                     true
                 }
                 PixelFormat::Nv12 => {
-                    let screen_frame = &segment_frames.screen_frame;
-
                     #[cfg(target_os = "windows")]
                     let d3d11_zero_copy_succeeded = {
                         let mut succeeded = false;
@@ -740,7 +751,6 @@ impl DisplayLayer {
                     }
                 }
                 PixelFormat::Yuv420p => {
-                    let screen_frame = &segment_frames.screen_frame;
                     let y_plane = screen_frame.y_plane();
                     let u_plane = screen_frame.u_plane();
                     let v_plane = screen_frame.v_plane();

@@ -328,12 +328,18 @@ impl Playback {
                                     .get_frames_initial(
                                         segment_time as f32,
                                         !hide_camera,
+                                        true,
                                         clip_offsets,
                                     )
                                     .await
                             } else {
                                 decoders
-                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .get_frames(
+                                        segment_time as f32,
+                                        !hide_camera,
+                                        true,
+                                        clip_offsets,
+                                    )
                                     .await
                             };
                             (frame_num, segment_index, result)
@@ -389,7 +395,12 @@ impl Playback {
                             prefetched_behind.insert(behind_frame);
                             in_flight.push(Box::pin(async move {
                                 let result = decoders
-                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .get_frames(
+                                        segment_time as f32,
+                                        !hide_camera,
+                                        true,
+                                        clip_offsets,
+                                    )
                                     .await;
                                 (behind_frame, segment_index, result)
                             }));

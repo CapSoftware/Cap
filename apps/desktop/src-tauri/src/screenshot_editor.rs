@@ -339,11 +339,11 @@ impl ScreenshotEditorInstances {
                             break;
                         }
                         let segment_frames = DecodedSegmentFrames {
-                            screen_frame: DecodedFrame::new(
+                            screen_frame: Some(DecodedFrame::new(
                                 decoded_frame.data().to_vec(),
                                 decoded_frame.width(),
                                 decoded_frame.height(),
-                            ),
+                            )),
                             camera_frame: None,
                             segment_time: 0.0,
                             recording_time: 0.0,
@@ -383,6 +383,7 @@ impl ScreenshotEditorInstances {
                                 segment_frames,
                                 uniforms,
                                 &cap_project::CursorEvents::default(),
+                                true,
                                 &mut layers,
                             )
                             .await;

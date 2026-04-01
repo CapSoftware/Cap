@@ -1109,6 +1109,8 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
         )
         .await;
     }
+
+    captions::release_ml_models().await;
 }
 
 pub async fn request_app_exit(app: AppHandle) {
@@ -2784,11 +2786,13 @@ async fn get_display_frame_for_cropping(
 
     let segment_frames = segment_medias
         .decoders
-        .get_frames(segment_time as f32, false, clip_offsets)
+        .get_frames(segment_time as f32, false, true, clip_offsets)
         .await
         .ok_or_else(|| "Failed to get frame".to_string())?;
 
-    let screen_frame = segment_frames.screen_frame;
+    let screen_frame = segment_frames
+        .screen_frame
+        .ok_or_else(|| "Failed to get screen frame".to_string())?;
     let width = screen_frame.width();
     let height = screen_frame.height();
 
@@ -3211,6 +3215,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
+            captions::download_parakeet_model,
+            captions::check_parakeet_model_exists,
+            captions::delete_parakeet_model,
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
@@ -3718,6 +3725,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 let window_ids = EditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
+                                let label = window.label().to_string();
+                                let pending = editor_window::PendingEditorInstances::get(app);
+                                tokio::spawn(async move {
+                                    pending.cancel_prewarm(&label).await;
+                                });
+
                                 tokio::spawn(EditorInstances::remove(window.clone()));
 
                                 restore_main_windows_if_no_editors(app);
@@ -3969,12 +3982,16 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
         )
     });
 
-    if !has_other_editors && CapWindowId::Settings.get(app).is_none() {
-        if let Some(main) = CapWindowId::Main.get(app) {
-            let _ = main.show();
+    if !has_other_editors {
+        if CapWindowId::Settings.get(app).is_none() {
+            if let Some(main) = CapWindowId::Main.get(app) {
+                let _ = main.show();
+            }
+
+            restore_camera_window(app);
         }
 
-        restore_camera_window(app);
+        tokio::spawn(captions::release_ml_models());
     }
 }
 
@@ -4151,7 +4168,7 @@ async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
     frame_cb: Box<dyn FnMut(cap_editor::EditorFrameOutput) + Send>,
-) -> Result<Arc<EditorInstance>, String> {
+) -> Result<(Arc<EditorInstance>, tauri::EventId), String> {
     let app = app.clone();
 
     wait_for_recording_ready(&app, &path).await?;
@@ -4180,7 +4197,7 @@ async fn create_editor_instance_impl(
         .await?
     };
 
-    RenderFrameEvent::listen_any(&app, {
+    let event_id = RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx.send_modify(|v| {
@@ -4193,7 +4210,7 @@ async fn create_editor_instance_impl(
         }
     });
 
-    Ok(instance)
+    Ok((instance, event_id))
 }
 
 async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), String> {

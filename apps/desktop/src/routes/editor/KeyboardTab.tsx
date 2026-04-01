@@ -410,6 +410,16 @@ export function KeyboardTab() {
 									/>
 								</div>
 							</div>
+
+							<div class="flex flex-col gap-2">
+								<div class="flex items-center justify-between">
+									<span class="text-gray-11 text-sm">Uppercase</span>
+									<Toggle
+										checked={getSetting("uppercase")}
+										onChange={(checked) => updateSetting("uppercase", checked)}
+									/>
+								</div>
+							</div>
 						</div>
 					</Field>
 
@@ -501,6 +511,22 @@ export function KeyboardTab() {
 											minValue={0}
 											maxValue={50}
 											step={1}
+										/>
+									</Subfield>
+									<Subfield name="Uppercase">
+										<Toggle
+											checked={
+												seg().uppercaseOverride ?? getSetting("uppercase")
+											}
+											onChange={(checked) =>
+												setProject(
+													"timeline",
+													"keyboardSegments",
+													selectedIndex(),
+													"uppercaseOverride",
+													checked,
+												)
+											}
 										/>
 									</Subfield>
 								</div>

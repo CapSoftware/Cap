@@ -26,8 +26,9 @@ import { defaultCaptionSettings } from "~/store/captions";
 import { defaultKeyboardSettings } from "~/store/keyboard";
 import { commands } from "~/utils/tauri";
 import {
-	createCaptionTrackSegments,
+	applyCaptionResultToProject,
 	getCaptionGenerationErrorMessage,
+	getSelectedTranscriptionSettings,
 	transcribeEditorCaptions,
 } from "../captions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
@@ -615,7 +616,12 @@ export function Timeline(props: {
 		setEditorState("captions", "isGenerating", true);
 
 		try {
-			const result = await transcribeEditorCaptions(editorInstance.path);
+			const { model, language } = getSelectedTranscriptionSettings();
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				model,
+				language,
+			);
 
 			if (result.segments.length < 1) {
 				toast.error(
@@ -625,39 +631,18 @@ export function Timeline(props: {
 			}
 
 			setProject(
-				produce((currentProject) => {
-					currentProject.captions ??= {
-						segments: [],
-						settings: { ...defaultCaptionSettings, enabled: true },
-					};
-					currentProject.captions.segments = result.segments;
-					currentProject.captions.settings = {
-						...defaultCaptionSettings,
-						...currentProject.captions.settings,
-						enabled: true,
-					};
-					currentProject.timeline ??= {
-						segments: [
-							{
-								start: 0,
-								end: duration(),
-								timescale: 1,
-							},
-						],
-						zoomSegments: [],
-						sceneSegments: [],
-						maskSegments: [],
-						textSegments: [],
-						captionSegments: [],
-						keyboardSegments: [],
-					};
-					currentProject.timeline.captionSegments = createCaptionTrackSegments(
+				produce((p) => {
+					applyCaptionResultToProject(
+						p,
 						result.segments,
+						editorInstance.recordings.segments,
+						duration(),
 					);
 				}),
 			);
 
 			setEditorState("timeline", "tracks", "caption", true);
+			setEditorState("captions", "isStale", false);
 			toast.success("Captions generated successfully!");
 		} catch (error) {
 			console.error("Error generating captions:", error);

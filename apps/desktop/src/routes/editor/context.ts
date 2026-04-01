@@ -58,14 +58,32 @@ import {
 } from "./timelineTracks";
 import { createProgressBar } from "./utils";
 
-export type CurrentDialog =
+export type ModalDialog =
 	| { type: "createPreset" }
 	| { type: "renamePreset"; presetIndex: number }
 	| { type: "deletePreset"; presetIndex: number }
-	| { type: "crop"; position: XY<number>; size: XY<number> }
-	| { type: "export" };
+	| { type: "crop"; position: XY<number>; size: XY<number> };
+
+export type LayoutMode = { type: "export" } | { type: "transcript" };
+
+export type CurrentDialog = ModalDialog | LayoutMode;
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
+export type OpenLayoutMode = { open: true } & LayoutMode;
+export type OpenModalDialog = { open: true } & ModalDialog;
+
+const LAYOUT_MODE_TYPES: Set<CurrentDialog["type"]> = new Set([
+	"export",
+	"transcript",
+]);
+
+export function isLayoutMode(d: DialogState): d is OpenLayoutMode {
+	return d.open && "type" in d && LAYOUT_MODE_TYPES.has(d.type);
+}
+
+export function isModalDialog(d: DialogState): d is OpenModalDialog {
+	return d.open && "type" in d && !LAYOUT_MODE_TYPES.has(d.type);
+}
 
 export const FPS = 60;
 
@@ -777,6 +795,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				isDownloading: false,
 				downloadProgress: 0,
 				downloadingModel: null as string | null,
+				isStale: false,
+				staleDismissed: false,
 			},
 			timeline: {
 				interactMode: "seek" as "seek" | "split",
@@ -854,14 +874,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			createSignal(false);
 
 		createEffect(() => {
-			if ((project.timeline?.keyboardSegments?.length ?? 0) < 1) return;
-			if (project.keyboard) return;
-			setProject("keyboard", {
-				settings: { ...defaultKeyboardSettings, enabled: true },
-			});
-		});
-
-		createEffect(() => {
 			if (didInitializeKeyboardSegments()) return;
 			if (!project.timeline) return;
 			if (!hasRecordedKeyboardEvents()) {
@@ -889,7 +901,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					batch(() => {
 						if (!project.keyboard) {
 							setProject("keyboard", {
-								settings: { ...defaultKeyboardSettings, enabled: true },
+								settings: {
+									...defaultKeyboardSettings,
+									enabled: true,
+								},
 							});
 						} else {
 							setProject("keyboard", "settings", "enabled", true);
@@ -902,6 +917,37 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				}
 			})();
 		});
+
+		createEffect(
+			on(
+				() => {
+					const segs = project.timeline?.segments;
+					if (!segs || segs.length === 0) return "";
+					return segs
+						.map(
+							(s) =>
+								`${s.start}|${s.end}|${s.timescale}|${s.recordingSegment ?? 0}`,
+						)
+						.join(",");
+				},
+				(current, prev) => {
+					if (prev === undefined || prev === "") return;
+					if (current === prev) return;
+
+					const hasCaptions =
+						(project.timeline?.captionSegments?.length ?? 0) > 0 ||
+						(project.captions?.segments?.length ?? 0) > 0;
+
+					if (hasCaptions) {
+						batch(() => {
+							setEditorState("captions", "isStale", true);
+							setEditorState("captions", "staleDismissed", false);
+						});
+					}
+				},
+				{ defer: true },
+			),
+		);
 
 		return {
 			...editorInstanceContext,

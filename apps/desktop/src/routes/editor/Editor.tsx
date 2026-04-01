@@ -40,6 +40,7 @@ import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
 	FPS,
+	isModalDialog,
 	serializeProjectConfiguration,
 	useEditorContext,
 	useEditorInstanceContext,
@@ -50,6 +51,7 @@ import { Header } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
+import { TranscriptPanel } from "./TranscriptPage";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
@@ -266,6 +268,11 @@ function Inner() {
 		return "type" in d && d.type === "export" && d.open;
 	};
 
+	const isTranscriptMode = () => {
+		const d = dialog();
+		return "type" in d && d.type === "transcript" && d.open;
+	};
+
 	const isCropMode = () => {
 		const d = dialog();
 		return "type" in d && d.type === "crop" && d.open;
@@ -442,8 +449,55 @@ function Inner() {
 		),
 	);
 
+	const fullscreenMode = () => {
+		if (isExportMode()) return "export" as const;
+		return null;
+	};
+
+	const MIN_SPLIT_RATIO = 0.25;
+	const MAX_SPLIT_RATIO = 0.75;
+	const DEFAULT_SPLIT_RATIO = 0.5;
+
+	const [splitRatio, setSplitRatio] = makePersisted(
+		createSignal(DEFAULT_SPLIT_RATIO),
+		{ name: "editorTranscriptSplitRatio" },
+	);
+	const [isResizingSplit, setIsResizingSplit] = createSignal(false);
+	const [splitContainerRef, setSplitContainerRef] =
+		createSignal<HTMLDivElement>();
+
+	const handleSplitResizeStart = (event: MouseEvent) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		const startX = event.clientX;
+		const startRatio = splitRatio();
+		const container = splitContainerRef();
+		if (!container) return;
+		const containerWidth = container.offsetWidth;
+		setIsResizingSplit(true);
+
+		const handleMove = (moveEvent: MouseEvent) => {
+			const delta = moveEvent.clientX - startX;
+			const ratioDelta = delta / containerWidth;
+			const newRatio = Math.min(
+				MAX_SPLIT_RATIO,
+				Math.max(MIN_SPLIT_RATIO, startRatio + ratioDelta),
+			);
+			setSplitRatio(newRatio);
+		};
+
+		const handleUp = () => {
+			setIsResizingSplit(false);
+			window.removeEventListener("mousemove", handleMove);
+			window.removeEventListener("mouseup", handleUp);
+		};
+
+		window.addEventListener("mousemove", handleMove);
+		window.addEventListener("mouseup", handleUp);
+	};
+
 	return (
-		<Show when={!isExportMode()} fallback={<ExportPage />}>
+		<Show when={!fullscreenMode()} fallback={<ExportPage />}>
 			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
 				<Header />
 				<div
@@ -455,12 +509,21 @@ function Inner() {
 						class="flex overflow-hidden flex-col flex-1 min-h-0"
 					>
 						<div
-							class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
+							ref={setSplitContainerRef}
+							class="flex overflow-hidden flex-row flex-1 min-h-0 px-2"
 							style={{
 								"min-height": `${MIN_PLAYER_HEIGHT}px`,
 							}}
 						>
-							<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
+							<div
+								class="flex flex-col rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden"
+								style={{
+									flex: isTranscriptMode()
+										? `0 0 ${splitRatio() * 100}%`
+										: "1 1 0%",
+									"min-width": "0",
+								}}
+							>
 								<PlayerContent />
 								<div
 									role="separator"
@@ -489,7 +552,39 @@ function Inner() {
 									</div>
 								</div>
 							</div>
-							<ConfigSidebar />
+							<Show when={!isTranscriptMode()}>
+								<div class="min-h-0 flex overflow-hidden ml-2">
+									<ConfigSidebar />
+								</div>
+							</Show>
+							<Show when={isTranscriptMode()}>
+								<div
+									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
+									style={{ width: "12px" }}
+									onMouseDown={handleSplitResizeStart}
+									aria-label="Resize transcript panel"
+									role="separator"
+									aria-orientation="vertical"
+								>
+									<div
+										class="w-1 h-10 rounded-full bg-gray-6 dark:bg-gray-7 transition-colors group-hover:bg-gray-9 dark:group-hover:bg-gray-11"
+										classList={{
+											"bg-gray-9 dark:bg-gray-11": isResizingSplit(),
+										}}
+									/>
+								</div>
+								<div
+									class="flex flex-col min-h-0 overflow-hidden rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 animate-in fade-in duration-150"
+									style={{
+										flex: isResizingSplit()
+											? `0 0 calc(${(1 - splitRatio()) * 100}% - 12px)`
+											: `0 0 calc(${(1 - splitRatio()) * 100}% - 12px)`,
+										"min-width": "0",
+									}}
+								>
+									<TranscriptPanel />
+								</div>
+							</Show>
 						</div>
 						<div
 							class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
@@ -512,6 +607,8 @@ function Inner() {
 function Dialogs() {
 	const { dialog, setDialog, presets, project } = useEditorContext();
 
+	const isDialogType = () => isModalDialog(dialog());
+
 	return (
 		<Dialog.Root
 			size={(() => {
@@ -524,7 +621,7 @@ function Dialogs() {
 				if ("type" in d && d.type === "export") return "max-w-[740px]";
 				return "";
 			})()}
-			open={dialog().open}
+			open={isDialogType()}
 			onOpenChange={(o) => {
 				if (!o) setDialog((d) => ({ ...d, open: false }));
 			}}
@@ -532,7 +629,7 @@ function Dialogs() {
 			<Show
 				when={(() => {
 					const d = dialog();
-					if ("type" in d && d.type !== "export") return d;
+					if (isModalDialog(d)) return d;
 				})()}
 			>
 				{(dialog) => (
