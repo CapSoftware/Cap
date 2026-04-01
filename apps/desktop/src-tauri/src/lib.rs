@@ -2852,7 +2852,7 @@ async fn get_display_frame_for_cropping(
     let encode_elapsed_ms = encode_started_at.elapsed().as_secs_f64() * 1000.0;
     let total_elapsed_ms = total_started_at.elapsed().as_secs_f64() * 1000.0;
 
-    info!(
+    debug!(
         target: "cap_crop_profile",
         frame_number = frame_number,
         time_secs = time_secs,
