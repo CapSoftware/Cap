@@ -50,6 +50,7 @@ export function PlayerContent() {
 		setEditorState,
 		zoomOutLimit,
 		setProject,
+		canvasControls,
 		previewResolutionBase,
 		previewQuality,
 		setPreviewQuality,
@@ -158,12 +159,28 @@ export function PlayerContent() {
 	const cropDialogHandler = async () => {
 		const startedAt = performance.now();
 		const display = editorInstance.recordings.segments[0].display;
+		const controls = canvasControls();
+		let previewUrl: string | null = null;
 		logCropProfile("click", {
 			recordingDurationSec: Math.round(editorInstance.recordingDuration),
 			playbackTimeSec: Number(editorState.playbackTime.toFixed(3)),
 			displayWidth: display.width,
 			displayHeight: display.height,
 			wasPlaying: editorState.playing,
+		});
+		if (controls?.hasRenderedFrame()) {
+			try {
+				const previewFrame = await controls.captureFrame();
+				if (previewFrame) {
+					previewUrl = URL.createObjectURL(previewFrame);
+				}
+			} catch (error) {
+				console.warn("Preview frame capture failed:", error);
+			}
+		}
+		logCropProfile("preview-frame-captured", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
+			available: previewUrl !== null,
 		});
 		setDialog({
 			open: true,
@@ -177,6 +194,7 @@ export function PlayerContent() {
 					y: display.height,
 				}),
 			},
+			previewUrl,
 		});
 		logCropProfile("dialog-opened", {
 			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
