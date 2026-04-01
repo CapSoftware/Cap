@@ -6,6 +6,7 @@ use ffmpeg::{
     software::resampling,
 };
 use futures::StreamExt;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -24,6 +25,9 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 pub use cap_project::{CaptionSegment, CaptionSettings, CaptionWord};
 
 use crate::{general_settings::GeneralSettingsStore, http_client};
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const PARAKEET_UNSUPPORTED_MESSAGE: &str = "Parakeet transcription is not available on Intel macOS";
 
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub enum TranscriptionEngine {
@@ -48,20 +52,27 @@ impl Default for CaptionData {
 
 lazy_static::lazy_static! {
     static ref WHISPER_CONTEXT: Arc<Mutex<Option<Arc<WhisperContext>>>> = Arc::new(Mutex::new(None));
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+lazy_static::lazy_static! {
     static ref PARAKEET_CONTEXT: Mutex<Option<CachedParakeetContext>> = Mutex::new(None);
 }
 
 const WHISPER_SAMPLE_RATE: u32 = 16000;
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 struct CachedParakeetContext {
     model_dir: String,
     model: Arc<std::sync::Mutex<ParakeetTDT>>,
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn parakeet_model_dir_matches(cached_model_dir: &str, model_dir: &Path) -> bool {
     cached_model_dir == model_dir.to_string_lossy()
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 async fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
     let mut ctx = PARAKEET_CONTEXT.lock().await;
     if ctx
@@ -76,6 +87,9 @@ async fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
     }
 }
 
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+async fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
+
 pub async fn release_ml_models() {
     {
         let mut ctx = WHISPER_CONTEXT.lock().await;
@@ -84,6 +98,7 @@ pub async fn release_ml_models() {
             *ctx = None;
         }
     }
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     {
         let mut ctx = PARAKEET_CONTEXT.lock().await;
         if ctx.is_some() {
@@ -932,6 +947,7 @@ fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
     }
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn process_with_parakeet(
     audio_path: &std::path::Path,
     model_dir: &str,
@@ -1025,6 +1041,14 @@ fn process_with_parakeet(
         segments,
         settings: Some(cap_project::CaptionSettings::default()),
     })
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn process_with_parakeet(
+    _audio_path: &std::path::Path,
+    _model_dir: &str,
+) -> Result<CaptionData, String> {
+    Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
 }
 
 #[tauri::command]
@@ -1754,6 +1778,7 @@ fn parakeet_model_files_for_dir(
     }
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -1879,6 +1904,15 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
     Ok(())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(_app))]
+pub async fn download_parakeet_model(_app: AppHandle, _output_dir: String) -> Result<(), String> {
+    Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -1900,6 +1934,17 @@ pub async fn check_parakeet_model_exists(
         && validated_dir.join("decoder_joint-model.int8.onnx").exists();
 
     Ok(has_vocab && (has_full_model || has_int8_model))
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(_app))]
+pub async fn check_parakeet_model_exists(
+    _app: AppHandle,
+    _model_dir: String,
+) -> Result<bool, String> {
+    Ok(false)
 }
 
 #[tauri::command]
@@ -2021,7 +2066,7 @@ fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{parakeet_model_dir_matches, resolve_path_with_base};
+    use super::resolve_path_with_base;
     use tempfile::tempdir;
 
     #[test]
@@ -2056,22 +2101,28 @@ mod tests {
         assert_eq!(resolved, expected);
     }
 
-    #[test]
-    fn parakeet_model_dir_match_uses_full_directory_path() {
-        let dir = tempdir().unwrap();
-        let model_dir = dir.path().join("models").join("parakeet-best");
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    mod parakeet {
+        use super::super::parakeet_model_dir_matches;
+        use tempfile::tempdir;
 
-        assert!(parakeet_model_dir_matches(
-            model_dir.to_string_lossy().as_ref(),
-            &model_dir
-        ));
-        assert!(!parakeet_model_dir_matches(
-            dir.path()
-                .join("models")
-                .join("parakeet-best-max")
-                .to_string_lossy()
-                .as_ref(),
-            &model_dir
-        ));
+        #[test]
+        fn parakeet_model_dir_match_uses_full_directory_path() {
+            let dir = tempdir().unwrap();
+            let model_dir = dir.path().join("models").join("parakeet-best");
+
+            assert!(parakeet_model_dir_matches(
+                model_dir.to_string_lossy().as_ref(),
+                &model_dir
+            ));
+            assert!(!parakeet_model_dir_matches(
+                dir.path()
+                    .join("models")
+                    .join("parakeet-best-max")
+                    .to_string_lossy()
+                    .as_ref(),
+                &model_dir
+            ));
+        }
     }
 }
