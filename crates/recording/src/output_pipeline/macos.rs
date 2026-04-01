@@ -388,6 +388,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
                                     }
+                                    Err(QueueFrameError::Finished) => return Ok(()),
                                     Err(e) => {
                                         warn!("Failed to encode video frame: {e}");
                                         break;
@@ -510,6 +511,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                             set_fatal_error(&audio_fatal_error, message.clone());
                                             return Err(anyhow!(message));
                                         }
+                                        Err(QueueFrameError::Finished) => return Ok(()),
                                         Err(e) => {
                                             warn!("Failed to encode audio frame: {e}");
                                             break;
@@ -874,6 +876,7 @@ impl Muxer for AVFoundationCameraMuxer {
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
                                     }
+                                    Err(QueueFrameError::Finished) => return Ok(()),
                                     Err(e) => {
                                         warn!("Failed to encode camera frame: {e}");
                                         break;
