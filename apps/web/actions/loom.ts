@@ -245,8 +245,17 @@ export async function importFromLoom({
 	}
 
 	const existing = await db()
-		.select()
+		.select({
+			videoId: videos.id,
+		})
 		.from(importedVideos)
+		.leftJoin(
+			videos,
+			and(
+				eq(videos.id, importedVideos.id),
+				eq(videos.orgId, importedVideos.orgId),
+			),
+		)
 		.where(
 			and(
 				eq(importedVideos.orgId, orgId),
@@ -255,11 +264,23 @@ export async function importFromLoom({
 			),
 		);
 
-	if (existing.length > 0) {
+	if (existing.some((row) => row.videoId !== null)) {
 		return {
 			success: false,
 			error: "This Loom video has already been imported.",
 		};
+	}
+
+	if (existing.length > 0) {
+		await db()
+			.delete(importedVideos)
+			.where(
+				and(
+					eq(importedVideos.orgId, orgId),
+					eq(importedVideos.source, "loom"),
+					eq(importedVideos.sourceId, loomVideoId),
+				),
+			);
 	}
 
 	const downloadUrl = await getLoomDownloadUrl(loomVideoId);
@@ -308,9 +329,8 @@ export async function importFromLoom({
 		processingMessage: "Importing from Loom...",
 	});
 
-	const importId = nanoId();
 	await db().insert(importedVideos).values({
-		id: importId,
+		id: videoId,
 		orgId,
 		source: "loom",
 		sourceId: loomVideoId,
