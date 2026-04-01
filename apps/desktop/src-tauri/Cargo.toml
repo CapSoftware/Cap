@@ -74,7 +74,6 @@ keyed_priority_queue = "0.4.2"
 sentry.workspace = true
 clipboard-rs = "0.2.2"
 whisper-rs = "0.11.0"
-parakeet-rs = "0.3.4"
 lazy_static = "1.4.0"
 log = "0.4.20"
 
@@ -136,6 +135,9 @@ objc = "0.2.7"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }
+
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+parakeet-rs = "0.3.4"
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
