@@ -26,9 +26,12 @@ import {
 	applyCaptionResultToProject,
 	CAPTION_MODEL_FOLDER,
 	DEFAULT_CAPTION_MODEL,
+	DEFAULT_WHISPER_CAPTION_MODEL,
 	getCaptionGenerationErrorMessage,
 	getModelPath,
 	PARAKEET_DIR_MODELS,
+	resolveCaptionModel,
+	supportsParakeetTranscription,
 	syncCaptionWordsWithText,
 	transcribeEditorCaptions,
 } from "./captions";
@@ -186,7 +189,9 @@ export function CaptionsTab() {
 		setProject("captions", "settings", key, value);
 	};
 
-	const [selectedModel, setSelectedModel] = createSignal(DEFAULT_CAPTION_MODEL);
+	const [selectedModel, setSelectedModel] = createSignal(
+		resolveCaptionModel(DEFAULT_CAPTION_MODEL),
+	);
 	const [selectedLanguage, setSelectedLanguage] = createSignal("auto");
 	const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
 
@@ -203,8 +208,15 @@ export function CaptionsTab() {
 	const setIsGenerating = (value: boolean) =>
 		setEditorState("captions", "isGenerating", value);
 	const [hasAudio, setHasAudio] = createSignal(false);
+	const availableModelOptions = createMemo(() =>
+		supportsParakeetTranscription()
+			? MODEL_OPTIONS
+			: MODEL_OPTIONS.filter((model) => !PARAKEET_DIR_MODELS.has(model.name)),
+	);
 	const selectedModelOption = createMemo(
-		() => MODEL_OPTIONS.find((model) => model.name === selectedModel()) ?? null,
+		() =>
+			availableModelOptions().find((model) => model.name === selectedModel()) ??
+			null,
 	);
 
 	createEffect(
@@ -231,7 +243,7 @@ export function CaptionsTab() {
 			}
 
 			const models = await Promise.all(
-				MODEL_OPTIONS.map(async (model) => {
+				availableModelOptions().map(async (model) => {
 					const downloaded = await checkModelExists(model.name);
 					return { name: model.name, downloaded };
 				}),
@@ -242,9 +254,18 @@ export function CaptionsTab() {
 				.map((m) => m.name);
 			setDownloadedModels(downloadedModelNames);
 
-			const savedModel = localStorage.getItem("selectedTranscriptionModel");
-			if (savedModel && MODEL_OPTIONS.some((m) => m.name === savedModel)) {
+			const savedModel = resolveCaptionModel(
+				localStorage.getItem("selectedTranscriptionModel"),
+			);
+			if (
+				savedModel &&
+				availableModelOptions().some((model) => model.name === savedModel)
+			) {
 				setSelectedModel(savedModel);
+			} else {
+				setSelectedModel(
+					availableModelOptions()[0]?.name ?? DEFAULT_WHISPER_CAPTION_MODEL,
+				);
 			}
 
 			const savedLanguage = localStorage.getItem(
@@ -430,13 +451,13 @@ export function CaptionsTab() {
 					<div class="space-y-4">
 						<Subfield name="Model" class="items-start">
 							<KSelect<string>
-								options={MODEL_OPTIONS.map((model) => model.name)}
+								options={availableModelOptions().map((model) => model.name)}
 								value={selectedModel()}
 								onChange={(value: string | null) => {
 									if (value) setSelectedModel(value);
 								}}
 								itemComponent={(props) => {
-									const model = MODEL_OPTIONS.find(
+									const model = availableModelOptions().find(
 										(option) => option.name === props.item.rawValue,
 									);
 
@@ -532,6 +553,13 @@ export function CaptionsTab() {
 							</KSelect>
 						</Subfield>
 
+						<Show when={!supportsParakeetTranscription()}>
+							<p class="text-xs text-gray-10">
+								Parakeet caption models are unavailable on Intel Macs. Whisper
+								models remain available.
+							</p>
+						</Show>
+
 						<Subfield name="Language">
 							<KSelect<string>
 								options={LANGUAGE_OPTIONS.map((l) => l.code)}
@@ -600,7 +628,7 @@ export function CaptionsTab() {
 														<IconLucideDownload class="size-4" />
 														Download{" "}
 														{
-															MODEL_OPTIONS.find(
+															availableModelOptions().find(
 																(m) => m.name === selectedModel(),
 															)?.label
 														}{" "}
