@@ -2,10 +2,17 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 
 let cachedFfmpegPath: string | null = null;
+
+function getPathCandidates(): string[] {
+	return (process.env.PATH ?? "")
+		.split(delimiter)
+		.filter(Boolean)
+		.map((segment) => join(segment, "ffmpeg"));
+}
 
 export function getFfmpegPath(): string {
 	if (cachedFfmpegPath) {
@@ -21,6 +28,11 @@ export function getFfmpegPath(): string {
 		),
 		"/var/task/node_modules/ffmpeg-static/ffmpeg",
 		"/var/task/node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
+		process.env.FFMPEG_PATH,
+		"/opt/homebrew/bin/ffmpeg",
+		"/usr/local/bin/ffmpeg",
+		"/usr/bin/ffmpeg",
+		...getPathCandidates(),
 	].filter(Boolean) as string[];
 
 	for (const path of candidatePaths) {
