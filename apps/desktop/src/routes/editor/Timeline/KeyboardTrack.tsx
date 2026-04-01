@@ -27,12 +27,17 @@ export function KeyboardTrack(props: {
 		projectHistory,
 		projectActions,
 	} = useEditorContext();
-	const { secsPerPixel, timelineBounds } = useTimelineContext();
+	const { secsPerPixel } = useTimelineContext();
 
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
 	const keyboardSegments = () => project.timeline?.keyboardSegments ?? [];
+	const selectedKeyboardIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "keyboard") return null;
+		return new Set(selection.indices);
+	});
 
 	const neighborBounds = (index: number) => {
 		const segments = keyboardSegments();
@@ -139,9 +144,9 @@ export function KeyboardTrack(props: {
 			>
 				{(segment, i) => {
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "keyboard") return false;
-						return selection.indices.includes(i());
+						const indices = selectedKeyboardIndices();
+						if (!indices) return false;
+						return indices.has(i());
 					});
 
 					const segmentWidth = () => segment.end - segment.start;

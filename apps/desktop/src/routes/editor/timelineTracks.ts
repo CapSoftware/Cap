@@ -37,18 +37,31 @@ export function getTrackRows<T extends TrackSegment>(segments: T[]) {
 }
 
 export function getUsedTrackCount<T extends TrackSegment>(segments: T[]) {
-	if (segments.length === 0) return 0;
-	return Math.max(...segments.map((segment) => getSegmentTrack(segment))) + 1;
+	let maxTrack = -1;
+	for (let i = 0; i < segments.length; i++) {
+		const track = getSegmentTrack(segments[i]);
+		if (track > maxTrack) {
+			maxTrack = track;
+		}
+	}
+	return maxTrack + 1;
 }
 
 export function getTrackRowsWithCount<T extends TrackSegment>(
 	segments: T[],
 	count: number,
 ) {
-	const maxRow = Math.max(
-		count - 1,
-		...segments.map((segment) => getSegmentTrack(segment)),
-	);
+	let maxRow = count - 1;
+	for (let i = 0; i < segments.length; i++) {
+		const track = getSegmentTrack(segments[i]);
+		if (track > maxRow) {
+			maxRow = track;
+		}
+	}
 	if (maxRow < 0) return [];
-	return Array.from({ length: maxRow + 1 }, (_, index) => index);
+	const rows = new Array<number>(maxRow + 1);
+	for (let i = 0; i <= maxRow; i++) {
+		rows[i] = i;
+	}
+	return rows;
 }

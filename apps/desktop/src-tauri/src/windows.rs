@@ -2120,7 +2120,8 @@ impl ShowCapWindow {
             .visible(false)
             .accept_first_mouse(true)
             .shadow(true)
-            .theme(theme);
+            .theme(theme)
+            .devtools(cfg!(debug_assertions));
 
         if !id.is_transparent() {
             let is_dark = match theme {

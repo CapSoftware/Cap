@@ -18,6 +18,7 @@ import {
 	Match,
 	on,
 	onCleanup,
+	onMount,
 	Show,
 	Switch,
 } from "solid-js";
@@ -59,8 +60,15 @@ const MIN_PLAYER_CONTENT_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
 const RESIZE_HANDLE_HEIGHT = 16;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
-
 const TIMELINE_RESIZE_GRIP_MARKS = [0, 1, 2] as const;
+
+function logCropProfile(
+	stage: string,
+	data: Record<string, number | string | boolean | null> = {},
+) {
+	if (!import.meta.env.DEV) return;
+	console.info("[crop-profile]", stage, data);
+}
 
 function getEditorErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
@@ -772,24 +780,182 @@ function Dialogs() {
 								const [crop, setCrop] = createSignal(CROP_ZERO);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
+								const initialPreviewUrl = dialog().previewUrl ?? null;
 								const [frameBlobUrl, setFrameBlobUrl] = createSignal<
 									string | null
-								>(null);
+								>(initialPreviewUrl);
+								const [frameSource, setFrameSource] = createSignal<
+									"captured-preview" | "accurate-frame" | "screenshot"
+								>(initialPreviewUrl ? "captured-preview" : "screenshot");
+								const cropOpenedAt = performance.now();
+								const screenshotSrc = convertFileSrc(
+									`${editorInstance.path}/screenshots/display.jpg`,
+								);
 
-								commands
-									.getDisplayFrameForCropping(FPS)
-									.then((pngBytes) => {
-										const blob = new Blob([new Uint8Array(pngBytes)], {
-											type: "image/png",
-										});
-										const url = URL.createObjectURL(blob);
-										setFrameBlobUrl(url);
-									})
-									.catch((error: unknown) => {
-										console.warn("Display frame fetch failed:", error);
+								let cancelled = false;
+								let frameLoadDelayTimeoutId:
+									| ReturnType<typeof globalThis.setTimeout>
+									| undefined;
+								let frameLoadTimeoutId:
+									| ReturnType<typeof globalThis.setTimeout>
+									| undefined;
+								let frameLoadIdleId: number | undefined;
+								let accurateFrameRequested = false;
+								const idleWindow = globalThis as typeof globalThis & {
+									requestIdleCallback?: (
+										callback: () => void,
+										options?: { timeout?: number },
+									) => number;
+									cancelIdleCallback?: (handle: number) => void;
+								};
+
+								const clearScheduledAccurateFrame = () => {
+									if (frameLoadDelayTimeoutId !== undefined) {
+										globalThis.clearTimeout(frameLoadDelayTimeoutId);
+										frameLoadDelayTimeoutId = undefined;
+									}
+									if (frameLoadIdleId !== undefined) {
+										idleWindow.cancelIdleCallback?.(frameLoadIdleId);
+										frameLoadIdleId = undefined;
+									}
+									if (frameLoadTimeoutId !== undefined) {
+										globalThis.clearTimeout(frameLoadTimeoutId);
+										frameLoadTimeoutId = undefined;
+									}
+								};
+
+								const setPreviewBlob = (
+									blob: Blob,
+									source: "accurate-frame",
+								) => {
+									const nextUrl = URL.createObjectURL(blob);
+									const previousUrl = frameBlobUrl();
+									setFrameBlobUrl(nextUrl);
+									setFrameSource(source);
+									if (previousUrl) {
+										URL.revokeObjectURL(previousUrl);
+									}
+								};
+
+								const requestAccurateFrame = (reason: string) => {
+									if (accurateFrameRequested || cancelled) return;
+
+									clearScheduledAccurateFrame();
+
+									accurateFrameRequested = true;
+									const frameRequestStartedAt = performance.now();
+									logCropProfile("accurate-frame-request-start", {
+										elapsedMs: Number(
+											(frameRequestStartedAt - cropOpenedAt).toFixed(2),
+										),
+										reason,
 									});
 
+									void commands
+										.getDisplayFrameForCropping(FPS)
+										.then((pngBytes) => {
+											if (cancelled) return;
+
+											setPreviewBlob(
+												new Blob([new Uint8Array(pngBytes)], {
+													type: "image/png",
+												}),
+												"accurate-frame",
+											);
+											logCropProfile("accurate-frame-request-finish", {
+												elapsedMs: Number(
+													(performance.now() - cropOpenedAt).toFixed(2),
+												),
+												requestMs: Number(
+													(performance.now() - frameRequestStartedAt).toFixed(
+														2,
+													),
+												),
+												reason,
+											});
+										})
+										.catch((error: unknown) => {
+											if (cancelled) return;
+											console.warn("Display frame fetch failed:", error);
+											logCropProfile("accurate-frame-request-failed", {
+												elapsedMs: Number(
+													(performance.now() - cropOpenedAt).toFixed(2),
+												),
+												requestMs: Number(
+													(performance.now() - frameRequestStartedAt).toFixed(
+														2,
+													),
+												),
+												message:
+													error instanceof Error
+														? error.message
+														: String(error),
+												reason,
+											});
+										});
+								};
+
+								const scheduleAccurateFrame = (
+									reason: string,
+									options: {
+										delayMs?: number;
+										idleTimeoutMs: number;
+										fallbackDelayMs: number;
+									},
+								) => {
+									const queueIdleFrame = () => {
+										const loadFrame = () => requestAccurateFrame(reason);
+
+										if (idleWindow.requestIdleCallback) {
+											frameLoadIdleId = idleWindow.requestIdleCallback(
+												() => {
+													frameLoadIdleId = undefined;
+													loadFrame();
+												},
+												{
+													timeout: options.idleTimeoutMs,
+												},
+											);
+											return;
+										}
+
+										frameLoadTimeoutId = globalThis.setTimeout(() => {
+											frameLoadTimeoutId = undefined;
+											loadFrame();
+										}, options.fallbackDelayMs);
+									};
+
+									if (!options.delayMs) {
+										queueIdleFrame();
+										return;
+									}
+
+									frameLoadDelayTimeoutId = globalThis.setTimeout(() => {
+										frameLoadDelayTimeoutId = undefined;
+										if (cancelled || accurateFrameRequested) return;
+										queueIdleFrame();
+									}, options.delayMs);
+								};
+
+								onMount(() => {
+									logCropProfile("dialog-mounted", {
+										elapsedMs: Number(
+											(performance.now() - cropOpenedAt).toFixed(2),
+										),
+										recordingDurationSec: Math.round(
+											editorInstance.recordingDuration,
+										),
+									});
+
+									scheduleAccurateFrame("immediate", {
+										idleTimeoutMs: 500,
+										fallbackDelayMs: 16,
+									});
+								});
+
 								onCleanup(() => {
+									cancelled = true;
+									clearScheduledAccurateFrame();
 									const url = frameBlobUrl();
 									if (url) {
 										URL.revokeObjectURL(url);
@@ -959,12 +1125,33 @@ function Dialogs() {
 														<img
 															class="shadow pointer-events-none max-h-[70vh]"
 															alt="Current frame"
-															src={
-																frameBlobUrl() ??
-																convertFileSrc(
-																	`${editorInstance.path}/screenshots/display.jpg`,
-																)
+															onError={() => {
+																const failedSource = frameSource();
+																logCropProfile("preview-image-failed", {
+																	elapsedMs: Number(
+																		(performance.now() - cropOpenedAt).toFixed(
+																			2,
+																		),
+																	),
+																	source: failedSource,
+																});
+																requestAccurateFrame(
+																	failedSource === "screenshot"
+																		? "screenshot-load-failed"
+																		: "preview-load-failed",
+																);
+															}}
+															onLoad={() =>
+																logCropProfile("preview-image-loaded", {
+																	elapsedMs: Number(
+																		(performance.now() - cropOpenedAt).toFixed(
+																			2,
+																		),
+																	),
+																	source: frameSource(),
+																})
 															}
+															src={frameBlobUrl() ?? screenshotSrc}
 														/>
 													</Cropper>
 												</div>

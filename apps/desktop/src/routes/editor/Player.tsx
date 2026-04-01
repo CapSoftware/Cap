@@ -18,7 +18,6 @@ import {
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
-import { preloadCropVideoFull } from "./cropVideoPreloader";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { TextOverlay } from "./TextOverlay";
@@ -33,6 +32,14 @@ import {
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
+function logCropProfile(
+	stage: string,
+	data: Record<string, number | string | boolean | null> = {},
+) {
+	if (!import.meta.env.DEV) return;
+	console.info("[crop-profile]", stage, data);
+}
+
 export function PlayerContent() {
 	const {
 		project,
@@ -43,6 +50,7 @@ export function PlayerContent() {
 		setEditorState,
 		zoomOutLimit,
 		setProject,
+		canvasControls,
 		previewResolutionBase,
 		previewQuality,
 		setPreviewQuality,
@@ -149,7 +157,31 @@ export function PlayerContent() {
 	};
 
 	const cropDialogHandler = async () => {
+		const startedAt = performance.now();
 		const display = editorInstance.recordings.segments[0].display;
+		const controls = canvasControls();
+		let previewUrl: string | null = null;
+		logCropProfile("click", {
+			recordingDurationSec: Math.round(editorInstance.recordingDuration),
+			playbackTimeSec: Number(editorState.playbackTime.toFixed(3)),
+			displayWidth: display.width,
+			displayHeight: display.height,
+			wasPlaying: editorState.playing,
+		});
+		if (controls?.hasRenderedFrame()) {
+			try {
+				const previewFrame = await controls.captureFrame();
+				if (previewFrame) {
+					previewUrl = URL.createObjectURL(previewFrame);
+				}
+			} catch (error) {
+				console.warn("Preview frame capture failed:", error);
+			}
+		}
+		logCropProfile("preview-frame-captured", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
+			available: previewUrl !== null,
+		});
 		setDialog({
 			open: true,
 			type: "crop",
@@ -162,8 +194,15 @@ export function PlayerContent() {
 					y: display.height,
 				}),
 			},
+			previewUrl,
+		});
+		logCropProfile("dialog-opened", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
 		});
 		await commands.stopPlayback();
+		logCropProfile("playback-stopped", {
+			elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
+		});
 		setEditorState("playing", false);
 	};
 
@@ -283,8 +322,6 @@ export function PlayerContent() {
 					<EditorButton
 						tooltipText="Crop Video"
 						onClick={cropDialogHandler}
-						onMouseEnter={preloadCropVideoFull}
-						onFocus={preloadCropVideoFull}
 						leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 					>
 						Crop

@@ -7,6 +7,7 @@ import { cx } from "cva";
 import {
 	batch,
 	createEffect,
+	createMemo,
 	createRoot,
 	createSignal,
 	For,
@@ -161,7 +162,7 @@ export function Timeline(props: {
 	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
 	const captionTrackVisible = () => trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
-	const trackOptions = () =>
+	const trackOptions = createMemo(() =>
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
@@ -179,26 +180,33 @@ export function Timeline(props: {
 			available: definition.type === "scene" ? sceneAvailable() : true,
 			supportsMultiple:
 				definition.type === "mask" || definition.type === "text",
-		}));
+		})),
+	);
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
-	const textTrackRows = () =>
+	const textTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
 			project.timeline?.textSegments ?? [],
 			trackState().text,
-		);
-	const maskTrackRows = () =>
+		),
+	);
+	const maskTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
 			project.timeline?.maskSegments ?? [],
 			trackState().mask,
-		);
-	const visibleTrackCount = () =>
-		2 +
-		(captionTrackVisible() ? 1 : 0) +
-		(keyboardTrackVisible() ? 1 : 0) +
-		textTrackRows().length +
-		maskTrackRows().length +
-		(sceneTrackVisible() ? 1 : 0);
-	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
+		),
+	);
+	const visibleTrackCount = createMemo(
+		() =>
+			2 +
+			(captionTrackVisible() ? 1 : 0) +
+			(keyboardTrackVisible() ? 1 : 0) +
+			textTrackRows().length +
+			maskTrackRows().length +
+			(sceneTrackVisible() ? 1 : 0),
+	);
+	const trackHeight = createMemo(() =>
+		visibleTrackCount() > 2 ? "3rem" : "3.25rem",
+	);
 
 	createEffect(() => {
 		const visibleTracks = visibleTrackCount();
