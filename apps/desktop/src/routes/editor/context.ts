@@ -58,7 +58,12 @@ export type ModalDialog =
 	| { type: "createPreset" }
 	| { type: "renamePreset"; presetIndex: number }
 	| { type: "deletePreset"; presetIndex: number }
-	| { type: "crop"; position: XY<number>; size: XY<number> };
+	| {
+			type: "crop";
+			position: XY<number>;
+			size: XY<number>;
+			previewUrl?: string | null;
+	  };
 
 export type LayoutMode = { type: "export" } | { type: "transcript" };
 
