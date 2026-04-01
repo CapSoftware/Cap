@@ -137,8 +137,8 @@ describe("importFromLoom", () => {
 	it("removes a stale Loom row and recreates it with the Cap video id", async () => {
 		whereMock
 			.mockResolvedValueOnce([{ importedVideoId: "stale-row", videoId: null }])
-			.mockResolvedValueOnce([{ id: "bucket-1" }])
-			.mockResolvedValueOnce(undefined);
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce([{ id: "bucket-1" }]);
 
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockImplementation(async (input) => {
