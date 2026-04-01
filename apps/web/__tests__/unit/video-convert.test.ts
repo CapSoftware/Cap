@@ -6,7 +6,11 @@ vi.mock("ffmpeg-static", () => ({
 }));
 
 const mockReadFile = vi.fn(async (_path: string) => Buffer.from("video-data"));
-const mockUnlink = vi.fn(async (_path: string) => undefined);
+const mockMkdtemp = vi.fn(async (_prefix: string) => "/tmp/cap-video-test");
+const mockWriteFile = vi.fn(
+	async (_path: string, _content: string) => undefined,
+);
+const mockRm = vi.fn(async (_path: string) => undefined);
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -15,8 +19,11 @@ vi.mock("node:fs", async (importOriginal) => {
 		existsSync: (path: string) => path === "/usr/local/bin/ffmpeg",
 		promises: {
 			...actual.promises,
+			mkdtemp: (prefix: string) => mockMkdtemp(prefix),
 			readFile: (path: string) => mockReadFile(path),
-			unlink: (path: string) => mockUnlink(path),
+			rm: (path: string) => mockRm(path),
+			writeFile: (path: string, content: string) =>
+				mockWriteFile(path, content),
 		},
 	};
 });
@@ -42,9 +49,40 @@ describe("video-convert", () => {
 		vi.clearAllMocks();
 		spawnedProcesses = [];
 		spawnArgs = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = input.toString();
+
+				if (url.includes("video.m3u8")) {
+					return {
+						ok: true,
+						text: async () =>
+							'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1500000,AUDIO="audio"\nmedia-video.m3u8\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT="YES",URI="media-audio.m3u8"',
+					} as Response;
+				}
+
+				if (url.includes("media-video.m3u8")) {
+					return {
+						ok: true,
+						text: async () => "#EXTM3U\n#EXTINF:1,\nsegment-video.ts",
+					} as Response;
+				}
+
+				if (url.includes("media-audio.m3u8")) {
+					return {
+						ok: true,
+						text: async () => "#EXTM3U\n#EXTINF:1,\nsegment-audio.aac",
+					} as Response;
+				}
+
+				throw new Error(`Unexpected fetch: ${url}`);
+			}),
+		);
 	});
 
 	afterEach(() => {
+		vi.unstubAllGlobals();
 		vi.resetModules();
 	});
 
@@ -67,6 +105,7 @@ describe("video-convert", () => {
 		expect(spawnArgs).toHaveLength(1);
 		expect(spawnArgs[0]?.args).toContain("-c");
 		expect(spawnArgs[0]?.args).toContain("copy");
+		expect(mockWriteFile).toHaveBeenCalled();
 	});
 
 	it("falls back to transcoding when stream copy fails", async () => {
