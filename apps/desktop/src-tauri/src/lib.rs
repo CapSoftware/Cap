@@ -2764,11 +2764,15 @@ async fn get_display_frame_for_cropping(
     use cap_rendering::{PixelFormat, cpu_yuv};
     use image::{ImageEncoder, codecs::png::PngEncoder};
     use std::io::Cursor;
+    use std::time::Instant;
+
+    let total_started_at = Instant::now();
 
     let frame_number = editor_instance.state.lock().await.playhead_position;
     let time_secs = frame_number as f64 / fps as f64;
 
     let project = editor_instance.project_config.1.borrow().clone();
+    let lookup_started_at = Instant::now();
 
     let (segment_time, segment) = project
         .get_segment_time(time_secs)
@@ -2785,12 +2789,15 @@ async fn get_display_frame_for_cropping(
         .find(|v| v.index == segment.recording_clip)
         .map(|v| v.offsets)
         .unwrap_or(ClipOffsets::default());
+    let lookup_elapsed_ms = lookup_started_at.elapsed().as_secs_f64() * 1000.0;
 
+    let decode_started_at = Instant::now();
     let segment_frames = segment_medias
         .decoders
         .get_frames(segment_time as f32, false, true, clip_offsets)
         .await
         .ok_or_else(|| "Failed to get frame".to_string())?;
+    let decode_elapsed_ms = decode_started_at.elapsed().as_secs_f64() * 1000.0;
 
     let screen_frame = segment_frames
         .screen_frame
@@ -2798,6 +2805,7 @@ async fn get_display_frame_for_cropping(
     let width = screen_frame.width();
     let height = screen_frame.height();
 
+    let convert_started_at = Instant::now();
     let rgba_data = match screen_frame.format() {
         PixelFormat::Rgba => screen_frame.data().to_vec(),
         PixelFormat::Nv12 => {
@@ -2833,12 +2841,31 @@ async fn get_display_frame_for_cropping(
             rgba
         }
     };
+    let convert_elapsed_ms = convert_started_at.elapsed().as_secs_f64() * 1000.0;
 
+    let encode_started_at = Instant::now();
     let mut png_data = Cursor::new(Vec::new());
     let encoder = PngEncoder::new(&mut png_data);
     encoder
         .write_image(&rgba_data, width, height, image::ExtendedColorType::Rgba8)
         .map_err(|e| format!("Failed to encode PNG: {e}"))?;
+    let encode_elapsed_ms = encode_started_at.elapsed().as_secs_f64() * 1000.0;
+    let total_elapsed_ms = total_started_at.elapsed().as_secs_f64() * 1000.0;
+
+    info!(
+        target: "cap_crop_profile",
+        frame_number = frame_number,
+        time_secs = time_secs,
+        segment_time = segment_time,
+        width = width,
+        height = height,
+        lookup_ms = lookup_elapsed_ms,
+        decode_ms = decode_elapsed_ms,
+        convert_ms = convert_elapsed_ms,
+        encode_ms = encode_elapsed_ms,
+        total_ms = total_elapsed_ms,
+        "crop frame profile"
+    );
 
     Ok(png_data.into_inner())
 }

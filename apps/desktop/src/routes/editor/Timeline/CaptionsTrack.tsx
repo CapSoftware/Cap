@@ -29,12 +29,17 @@ export function CaptionsTrack(props: {
 		projectHistory,
 		projectActions,
 	} = useEditorContext();
-	const { secsPerPixel, timelineBounds } = useTimelineContext();
+	const { secsPerPixel } = useTimelineContext();
 
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
 	const captionSegments = () => project.timeline?.captionSegments ?? [];
+	const selectedCaptionIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "caption") return null;
+		return new Set(selection.indices);
+	});
 
 	const neighborBounds = (index: number) => {
 		const segments = captionSegments();
@@ -147,9 +152,9 @@ export function CaptionsTrack(props: {
 			>
 				{(segment, i) => {
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "caption") return false;
-						return selection.indices.includes(i());
+						const indices = selectedCaptionIndices();
+						if (!indices) return false;
+						return indices.has(i());
 					});
 
 					const segmentWidth = () => segment.end - segment.start;

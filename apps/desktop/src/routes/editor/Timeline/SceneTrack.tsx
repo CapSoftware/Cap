@@ -50,6 +50,11 @@ export function SceneTrack(props: {
 
 	const { duration, secsPerPixel } = useTimelineContext();
 	const setPreviewTime = useSetPreviewTime();
+	const selectedSceneIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "scene") return null;
+		return new Set(selection.indices);
+	});
 
 	const [hoveringSegment, setHoveringSegment] = createSignal(false);
 	const [hoveredTime, setHoveredTime] = createSignal<number>();
@@ -349,16 +354,9 @@ export function SceneTrack(props: {
 					}
 
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "scene") return false;
-
-						const segmentIndex = project.timeline?.sceneSegments?.findIndex(
-							(s) => s.start === segment.start && s.end === segment.end,
-						);
-
-						if (segmentIndex === undefined || segmentIndex === -1) return false;
-
-						return selection.indices.includes(segmentIndex);
+						const indices = selectedSceneIndices();
+						if (!indices) return false;
+						return indices.has(i());
 					});
 
 					return (

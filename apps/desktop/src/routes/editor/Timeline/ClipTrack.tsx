@@ -325,6 +325,19 @@ export function ClipTrack(
 
 	const segments = (): Array<TimelineSegment> =>
 		project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
+	const selectedClipIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "clip") return null;
+		return new Set(selection.indices);
+	});
+	const totalClipTimelineDuration = createMemo(() => {
+		const segs = segments();
+		let total = 0;
+		for (let i = 0; i < segs.length; i++) {
+			total += (segs[i].end - segs[i].start) / segs[i].timescale;
+		}
+		return total;
+	});
 
 	const segmentOffsets = createMemo(() => {
 		const segs = segments();
@@ -421,17 +434,9 @@ export function ClipTrack(
 					}));
 
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "clip") return false;
-						const seg = segment();
-
-						const segmentIndex = project.timeline?.segments?.findIndex(
-							(s) => s.start === seg.start && s.end === seg.end,
-						);
-
-						if (segmentIndex === undefined || segmentIndex === -1) return false;
-
-						return selection.indices.includes(segmentIndex);
+						const indices = selectedClipIndices();
+						if (!indices) return false;
+						return indices.has(i());
 					});
 
 					const micWaveform = () => {
@@ -678,13 +683,8 @@ export function ClipTrack(
 
 										const availableTimelineDuration =
 											editorInstance.recordingDuration -
-											segments().reduce(
-												(acc, s, segmentI) =>
-													segmentI === i()
-														? acc
-														: acc + (s.end - s.start) / s.timescale,
-												0,
-											);
+											(totalClipTimelineDuration() -
+												(seg.end - seg.start) / seg.timescale);
 
 										const maxDuration = Math.min(
 											maxSegmentDuration,
@@ -796,13 +796,8 @@ export function ClipTrack(
 
 										const availableTimelineDuration =
 											editorInstance.recordingDuration -
-											segments().reduce(
-												(acc, s, segmentI) =>
-													segmentI === i()
-														? acc
-														: acc + (s.end - s.start) / s.timescale,
-												0,
-											);
+											(totalClipTimelineDuration() -
+												(seg.end - seg.start) / seg.timescale);
 
 										const nextSegment = segments()[i() + 1];
 										const nextSegmentIsSameClip =

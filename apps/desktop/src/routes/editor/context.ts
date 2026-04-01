@@ -45,10 +45,6 @@ import {
 	type TimelineConfiguration,
 	type XY,
 } from "~/utils/tauri";
-import {
-	cleanup as cleanupCropVideoPreloader,
-	preloadCropVideoMetadata,
-} from "./cropVideoPreloader";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
 import {
@@ -1043,7 +1039,6 @@ const createEditorInstanceContext = () => {
 	onCleanup(() => {
 		disposeWorkerReadyEffect?.();
 		canvasControls()?.dispose();
-		cleanupCropVideoPreloader();
 	});
 
 	const [editorInstance, { refetch: refetchEditorInstance }] = createResource(
@@ -1078,10 +1073,6 @@ const createEditorInstanceContext = () => {
 			}
 
 			console.log("[Editor] Editor instance created, setting up WebSocket");
-
-			preloadCropVideoMetadata(
-				`${instance.path}/content/segments/segment-0/display.mp4`,
-			);
 
 			const requestFrame = () => {
 				events.renderFrameEvent.emit({

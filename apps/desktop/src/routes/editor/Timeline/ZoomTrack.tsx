@@ -69,6 +69,11 @@ export function ZoomTrack(props: {
 
 	const hasZoomSegments = () =>
 		(project.timeline?.zoomSegments?.length ?? 0) > 0;
+	const selectedZoomIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "zoom") return null;
+		return new Set(selection.indices);
+	});
 
 	const hasRecordedCursorData = () => meta().hasRecordedCursorData;
 
@@ -465,17 +470,9 @@ export function ZoomTrack(props: {
 						}
 
 						const isSelected = createMemo(() => {
-							const selection = editorState.timeline.selection;
-							if (!selection || selection.type !== "zoom") return false;
-
-							const segmentIndex = project.timeline?.zoomSegments?.findIndex(
-								(s) => s.start === segment().start && s.end === segment().end,
-							);
-
-							if (segmentIndex === undefined || segmentIndex === -1)
-								return false;
-
-							return selection.indices.includes(segmentIndex);
+							const indices = selectedZoomIndices();
+							if (!indices) return false;
+							return indices.has(i);
 						});
 
 						return (
