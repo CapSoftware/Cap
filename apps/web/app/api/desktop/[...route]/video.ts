@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { hashPassword } from "@cap/database/crypto";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
@@ -15,7 +16,7 @@ import { dub, userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, lte, or } from "drizzle-orm";
+import { and, count, desc, eq, lte, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -23,6 +24,7 @@ import { runPromise } from "@/lib/server";
 import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
+import type { VideoMetadata } from "@cap/database/types/metadata";
 
 export const app = new Hono().use(withAuth);
 
@@ -380,5 +382,175 @@ app.post(
 			console.error("Error in progress update endpoint:", error);
 			return c.json({ error: "Internal server error" }, { status: 500 });
 		}
+	},
+);
+
+app.get(
+	"/info",
+	zValidator("query", z.object({ videoId: z.string() })),
+	async (c) => {
+		const videoId = Video.VideoId.make(c.req.valid("query").videoId);
+		const user = c.get("user");
+
+		const [result] = await db()
+			.select()
+			.from(videos)
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+		if (!result)
+			return c.json({ error: "Video not found" }, { status: 404 });
+
+		const meta = (result.metadata ?? {}) as VideoMetadata;
+
+		return c.json({
+			id: result.id,
+			name: result.name,
+			createdAt: result.createdAt,
+			duration: result.duration,
+			width: result.width,
+			height: result.height,
+			public: result.public,
+			hasPassword: result.password !== null,
+			transcriptionStatus: result.transcriptionStatus,
+			aiTitle: meta.aiTitle ?? null,
+			summary: meta.summary ?? null,
+			chapters: meta.chapters ?? null,
+		});
+	},
+);
+
+app.get(
+	"/transcript",
+	zValidator("query", z.object({ videoId: z.string() })),
+	async (c) => {
+		const videoId = Video.VideoId.make(c.req.valid("query").videoId);
+		const user = c.get("user");
+
+		const [result] = await db()
+			.select({ video: videos, bucket: s3Buckets })
+			.from(videos)
+			.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+		if (!result?.video)
+			return c.json({ error: "Video not found" }, { status: 404 });
+
+		if (result.video.transcriptionStatus !== "COMPLETE")
+			return c.json({
+				error: "Transcript not ready",
+				status: result.video.transcriptionStatus,
+			}, { status: 404 });
+
+		try {
+			const vttContent = await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(
+					Option.fromNullable(result.bucket?.id),
+				);
+				return yield* bucket.getObject(
+					`${result.video.ownerId}/${videoId}/transcription.vtt`,
+				);
+			}).pipe(runPromise);
+
+			if (Option.isNone(vttContent))
+				return c.json({ error: "Transcript file not found" }, { status: 404 });
+
+			return c.json({ content: vttContent.value });
+		} catch (error) {
+			console.error("Error fetching transcript:", error);
+			return c.json({ error: "Failed to fetch transcript" }, { status: 500 });
+		}
+	},
+);
+
+app.post(
+	"/password",
+	zValidator(
+		"json",
+		z.object({
+			videoId: z.string(),
+			password: z.string().nullable(),
+		}),
+	),
+	async (c) => {
+		const { videoId: videoIdRaw, password } = c.req.valid("json");
+		const videoId = Video.VideoId.make(videoIdRaw);
+		const user = c.get("user");
+
+		const [video] = await db()
+			.select()
+			.from(videos)
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+		if (!video)
+			return c.json({ error: "Video not found" }, { status: 404 });
+
+		if (password === null) {
+			await db()
+				.update(videos)
+				.set({ password: null })
+				.where(eq(videos.id, videoId));
+			return c.json({ success: true, message: "Password removed" });
+		}
+
+		const hashed = await hashPassword(password);
+		await db()
+			.update(videos)
+			.set({ password: hashed })
+			.where(eq(videos.id, videoId));
+
+		return c.json({ success: true, message: "Password set" });
+	},
+);
+
+app.get(
+	"/list",
+	zValidator(
+		"query",
+		z.object({
+			orgId: z.string().optional(),
+			limit: z.coerce.number().int().min(1).max(100).default(20),
+			offset: z.coerce.number().int().min(0).default(0),
+		}),
+	),
+	async (c) => {
+		const { orgId, limit, offset } = c.req.valid("query");
+		const user = c.get("user");
+
+		const conditions = [eq(videos.ownerId, user.id)];
+
+		if (orgId) {
+			conditions.push(eq(videos.orgId, Organisation.OrganisationId.make(orgId)));
+		}
+
+		const whereClause = and(...conditions);
+
+		const [data, countResult] = await Promise.all([
+			db()
+				.select({
+					id: videos.id,
+					name: videos.name,
+					createdAt: videos.createdAt,
+					duration: videos.duration,
+					hasPassword: videos.password,
+					transcriptionStatus: videos.transcriptionStatus,
+				})
+				.from(videos)
+				.where(whereClause)
+				.orderBy(desc(videos.createdAt))
+				.limit(limit)
+				.offset(offset),
+			db()
+				.select({ total: count() })
+				.from(videos)
+				.where(whereClause),
+		]);
+
+		return c.json({
+			data: data.map((v) => ({
+				...v,
+				hasPassword: v.hasPassword !== null,
+			})),
+			total: countResult[0]?.total ?? 0,
+		});
 	},
 );

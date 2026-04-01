@@ -3,30 +3,53 @@ name = "cap"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+record = [
+    "dep:cap-project",
+    "dep:cap-rendering",
+    "dep:cap-editor",
+    "dep:cap-media",
+    "dep:cap-recording",
+    "dep:cap-export",
+    "dep:cap-camera",
+    "dep:scap-targets",
+    "dep:ffmpeg",
+    "dep:flume",
+    "dep:libc",
+]
+
 [dependencies]
 clap = { version = "4.5.23", features = ["derive"] }
 cap-utils = { path = "../../crates/utils" }
-cap-project = { path = "../../crates/project" }
-cap-rendering = { path = "../../crates/rendering" }
-cap-editor = { path = "../../crates/editor" }
-cap-media = { path = "../../crates/media" }
+cap-project = { path = "../../crates/project", optional = true }
+cap-rendering = { path = "../../crates/rendering", optional = true }
+cap-editor = { path = "../../crates/editor", optional = true }
+cap-media = { path = "../../crates/media", optional = true }
 cap-flags = { path = "../../crates/flags" }
-cap-recording = { path = "../../crates/recording" }
-cap-export = { path = "../../crates/export" }
-cap-camera = { path = "../../crates/camera" }
-scap-targets = { path = "../../crates/scap-targets" }
+cap-recording = { path = "../../crates/recording", optional = true }
+cap-export = { path = "../../crates/export", optional = true }
+cap-camera = { path = "../../crates/camera", optional = true }
+cap-upload = { path = "../../crates/upload" }
+scap-targets = { path = "../../crates/scap-targets", optional = true }
 serde = { workspace = true }
 serde_json = "1.0.133"
 tokio.workspace = true
 uuid = { version = "1.11.1", features = ["v4"] }
-ffmpeg = { workspace = true }
+ffmpeg = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
-flume.workspace = true
+flume = { workspace = true, optional = true }
+indicatif = "0.17"
+open = "5"
+percent-encoding = { workspace = true }
+libc = { version = "0.2", optional = true }
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
 workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre = { workspace = true, optional = true }
 
 [lints]
 workspace = true
