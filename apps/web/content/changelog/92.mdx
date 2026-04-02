@@ -1,0 +1,20 @@
+---
+title: Transcript Editor, Better Transcriptions, ProRes Cursor Export & Bug Fixes
+app: Cap Desktop
+publishedAt: "2026-04-02"
+version: 0.4.82
+image:
+---
+
+- **Transcript editor** — Captions are now editable at the word level in a dedicated transcript panel. Click, Ctrl+click, or Shift+click to select words, navigate with the keyboard, and delete words with automatic ripple-delete across all timeline tracks. Active words highlight in sync with playback position.
+- **Optimize file size toggle** — A new toggle on the export page enables CRF-based encoding for smaller output files. MP4s are now written with the faststart flag so playback begins before the full file downloads.
+- **Cursor-only ProRes export** — Export just the cursor as a transparent ProRes 4444 MOV file. The display stream is skipped entirely during render so cursor-only exports stay fast regardless of recording resolution.
+- **Faster, more accurate transcriptions** — A new on-device transcription engine powered by Parakeet TDT runs alongside Whisper. The best available model is selected automatically, with Parakeet disabled on Intel Macs where it isn't supported. Model files download to a staging directory and swap in atomically, and the global model cache is released when the editor closes.
+- **Stop recording overlay** — A full-window stop button now appears on the main window while a recording is active, making it easier to end a session without hunting for the controls.
+- **Faster crop dialog** — Opening the crop dialog now shows an instant canvas-frame snapshot while the accurate backend frame loads in the background. If the accurate frame fails, the editor falls back gracefully to a screenshot. Timeline computation is memoized with Set-based selection lookups, sorted segment caches, and precomputed clip durations to cut overhead on long recordings.
+- **Smoother cursor and zoom** — New Smooth and Fast cursor animation presets join the existing options. The cursor spring simulation no longer clamps at screen edges, producing more natural motion. Zoom focus tracking uses a gentler viewport pan that keeps the cursor visible within a small margin instead of abruptly shifting.
+- **Better playback prefetch** — Cursor timelines and zoom interpolators are now built once outside the frame loop instead of per-frame. Buffer-gap handling no longer resets the prefetch pipeline, and frame fallback uses a unified backward-preferred lookup with a wider search window.
+- **Streamlined macOS permissions** — Permission requests, verification, and open-settings flows are centralized in a shared utility used by both onboarding and the main window. On Windows and Linux the permissions step is skipped entirely.
+- **More reliable recording** — The macOS MP4 encoder now exits cleanly when the frame queue finishes, frames submitted after finish are rejected with proper session state tracking, and the audio finish wait is extended to avoid truncated recordings in instant mode.
+- **Camera and export fixes** — The camera preview re-opens correctly when the same device is already active. Windows camera exports no longer show snow or artifacts thanks to proper buffer stride handling. 4K 60fps software exports no longer fail from timestamp ordering issues, with B-frames disabled in the high-throughput path and a pts/dts safety clamp before muxing.
+- **Screenshot shortcut fix** — The screenshot area picker shortcut no longer silently fails when recording settings are missing fields from a previous version.
