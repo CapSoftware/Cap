@@ -139,10 +139,7 @@ export function Editor() {
 				<Header />
 				<AnnotationConfigBar />
 			</div>
-			<div
-				class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in"
-				data-tauri-drag-region
-			>
+			<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in">
 				<Show when={layersPanelOpen()}>
 					<LayersPanel />
 				</Show>
@@ -235,6 +232,19 @@ function Dialogs() {
 											width: originalSize.x,
 											height: originalSize.y,
 										};
+
+								const previewSize = () => {
+									const srcW = originalSize.x;
+									const srcH = originalSize.y;
+									const maxW = Math.min(windowSize().width * 0.8, 768);
+									const maxH = windowSize().height * 0.65;
+									const ratio = Math.min(maxW / srcW, maxH / srcH);
+
+									return {
+										width: `${srcW * ratio}px`,
+										height: `${srcH * ratio}px`,
+									};
+								};
 
 								const [snapToRatio, setSnapToRatioEnabled] = makePersisted(
 									createSignal(true),
@@ -377,53 +387,35 @@ function Dialogs() {
 										</Dialog.Header>
 										<Dialog.Content>
 											<div class="flex flex-row justify-center items-center">
-												<div
-													class="rounded overflow-hidden relative select-none"
-													style={{
-														width: (() => {
-															const srcW = originalSize.x;
-															const srcH = originalSize.y;
-															const maxW = Math.min(
-																windowSize().width * 0.8,
-																768,
-															);
-															const maxH = windowSize().height * 0.65;
-															const ratio = Math.min(maxW / srcW, maxH / srcH);
-															return `${srcW * ratio}px`;
-														})(),
-														height: (() => {
-															const srcW = originalSize.x;
-															const srcH = originalSize.y;
-															const maxW = Math.min(
-																windowSize().width * 0.8,
-																768,
-															);
-															const maxH = windowSize().height * 0.65;
-															const ratio = Math.min(maxW / srcW, maxH / srcH);
-															return `${srcH * ratio}px`;
-														})(),
-													}}
-												>
-													<Cropper
-														ref={cropperRef}
-														onCropChange={setCrop}
-														aspectRatio={aspect() ?? undefined}
-														targetSize={{
-															x: originalSize.x,
-															y: originalSize.y,
-														}}
-														initialCrop={initialBounds}
-														snapToRatioEnabled={snapToRatio()}
-														showBounds={true}
-														allowLightMode={true}
-														onContextMenu={(e) => showCropOptionsMenu(e, true)}
+												<div class="rounded-[1.25rem] bg-gray-2/80 p-3 shadow-sm ring-1 ring-black/5 dark:bg-gray-3/80">
+													<div
+														class="relative rounded overflow-visible select-none"
+														style={previewSize()}
 													>
-														<img
-															class="w-full h-full pointer-events-none select-none"
-															alt="screenshot"
-															src={convertFileSrc(imagePath())}
-														/>
-													</Cropper>
+														<Cropper
+															ref={cropperRef}
+															onCropChange={setCrop}
+															aspectRatio={aspect() ?? undefined}
+															targetSize={{
+																x: originalSize.x,
+																y: originalSize.y,
+															}}
+															initialCrop={initialBounds}
+															snapToRatioEnabled={snapToRatio()}
+															showBounds={true}
+															useBackdropFilter={true}
+															allowLightMode={true}
+															onContextMenu={(e) =>
+																showCropOptionsMenu(e, true)
+															}
+														>
+															<img
+																class="w-full h-full pointer-events-none select-none shadow"
+																alt="screenshot"
+																src={convertFileSrc(imagePath())}
+															/>
+														</Cropper>
+													</div>
 												</div>
 											</div>
 										</Dialog.Content>
