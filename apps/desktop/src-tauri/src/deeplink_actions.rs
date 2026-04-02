@@ -32,6 +32,9 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    StartDefaultRecording,
+    PauseRecording,
+    ResumeRecording,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -86,6 +89,16 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .to_file_path()
                 .map(|project_path| Self::OpenEditor { project_path })
                 .map_err(|_| ActionParseFromUrlError::Invalid);
+        }
+
+        if url.scheme() == "cap" {
+            return match url.host_str() {
+                Some("record") => Ok(Self::StartDefaultRecording),
+                Some("stop") => Ok(Self::StopRecording),
+                Some("pause") => Ok(Self::PauseRecording),
+                Some("resume") => Ok(Self::ResumeRecording),
+                _ => Err(ActionParseFromUrlError::Invalid),
+            };
         }
 
         match url.domain() {
@@ -152,6 +165,15 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
+            }
+            DeepLinkAction::StartDefaultRecording => {
+                app.emit("request-open-recording-picker", ()).map_err(|e| e.to_string())
+            }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::ResumeRecording => {
+                crate::recording::resume_recording(app.clone(), app.state()).await
             }
         }
     }
