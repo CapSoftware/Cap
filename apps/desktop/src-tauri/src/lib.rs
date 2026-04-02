@@ -66,7 +66,9 @@ use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
-    ScreenshotEditorInstances, create_screenshot_editor_instance, update_screenshot_config,
+    PendingScreenshotEditorInstances, ScreenshotEditorInstances, WindowScreenshotEditorInstance,
+    create_screenshot_editor_instance, render_screenshot_for_export, render_screenshot_png,
+    update_screenshot_config,
 };
 
 mod gpu_context;
@@ -199,6 +201,22 @@ fn app_is_exiting(app: &AppHandle) -> bool {
         Some(state) => state.is_exiting(),
         None => false,
     }
+}
+
+fn should_show_onboarding(app: &AppHandle) -> bool {
+    let settings = GeneralSettingsStore::get(app).ok().flatten();
+    let startup_completed = settings
+        .as_ref()
+        .map(|s| s.has_completed_startup)
+        .unwrap_or(false);
+    let onboarding_completed = settings
+        .as_ref()
+        .map(|s| s.has_completed_onboarding)
+        .unwrap_or(false);
+
+    !startup_completed
+        || !onboarding_completed
+        || !permissions::do_permissions_check(false).necessary_granted()
 }
 
 fn now_millis() -> u64 {
@@ -1751,6 +1769,25 @@ async fn copy_image_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(clipboard, instance))]
+async fn copy_rendered_screenshot_to_clipboard(
+    clipboard: MutableState<'_, ClipboardContext>,
+    instance: WindowScreenshotEditorInstance,
+) -> Result<(), String> {
+    let data = render_screenshot_png(&instance).await?;
+
+    let img_data = clipboard_rs::RustImageData::from_bytes(&data)
+        .map_err(|e| format!("Failed to create image data from bytes: {e}"))?;
+    clipboard
+        .write()
+        .await
+        .set_image(img_data)
+        .map_err(|err| format!("Failed to copy image to clipboard: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(_app))]
 async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     let path_str = path.to_str().ok_or("Invalid path")?;
@@ -3183,6 +3220,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
             copy_image_to_clipboard,
+            copy_rendered_screenshot_to_clipboard,
             open_file_path,
             get_video_metadata,
             create_editor_instance,
@@ -3196,6 +3234,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             generate_keyboard_segments,
+            render_screenshot_for_export,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -3550,20 +3589,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    let settings = GeneralSettingsStore::get(&app).ok().flatten();
-                    let startup_completed = settings
-                        .as_ref()
-                        .map(|s| s.has_completed_startup)
-                        .unwrap_or(false);
-                    let onboarding_completed = settings
-                        .as_ref()
-                        .map(|s| s.has_completed_onboarding)
-                        .unwrap_or(false);
-
-                    if !startup_completed
-                        || !onboarding_completed
-                        || !permissions.necessary_granted()
-                    {
+                    if should_show_onboarding(&app) {
                         println!("Showing onboarding");
                         let _ = ShowCapWindow::Onboarding.show(&app).await;
                     } else {
@@ -3769,6 +3795,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     ScreenshotEditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
+                                let label = window.label().to_string();
+                                let pending = PendingScreenshotEditorInstances::get(app);
+                                tokio::spawn(async move {
+                                    pending.cancel_prewarm(&label).await;
+                                });
+
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 restore_main_windows_if_no_editors(app);
@@ -3925,7 +3957,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .run(move |_handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                if let Some(onboarding) = CapWindowId::Onboarding.get(_handle) {
+                let should_focus_onboarding = should_show_onboarding(_handle);
+
+                if should_focus_onboarding
+                    && let Some(onboarding) = CapWindowId::Onboarding.get(_handle)
+                {
                     onboarding.show().ok();
                     onboarding.set_focus().ok();
                     return;
@@ -3936,7 +3972,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
-                        || label.as_str() == "onboarding"
+                        || (should_focus_onboarding && label.as_str() == "onboarding")
                 });
 
                 if has_window {
@@ -3948,7 +3984,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
-                                || label.as_str() == "onboarding"
+                                || (should_focus_onboarding && label.as_str() == "onboarding")
                         })
                         .map(|(_, window)| window.clone())
                     {
