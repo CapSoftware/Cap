@@ -32,6 +32,7 @@ use crate::{
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
+    screenshot_editor::PendingScreenshotEditorInstances,
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
@@ -538,6 +539,7 @@ impl CapWindowId {
         matches!(
             self,
             Self::Main
+                | Self::Onboarding
                 | Self::Camera
                 | Self::WindowCaptureOccluder { .. }
                 | Self::CaptureArea
@@ -560,6 +562,7 @@ impl CapWindowId {
             }
             Self::Camera
             | Self::Main
+            | Self::Onboarding
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay
@@ -643,14 +646,14 @@ impl ShowCapWindow {
 
         if let Self::ScreenshotEditor { path } = &self {
             let state = app.state::<ScreenshotEditorWindowIds>();
-            let mut s = state.ids.lock().unwrap();
-            if !s.iter().any(|(p, _)| p == path) {
-                s.push((
-                    path.clone(),
-                    state
+            {
+                let mut s = state.ids.lock().unwrap();
+                if !s.iter().any(|(p, _)| p == path) {
+                    let id = state
                         .counter
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-                ));
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    s.push((path.clone(), id));
+                }
             }
         }
 
@@ -956,9 +959,7 @@ impl ShowCapWindow {
         if !matches!(self, Self::Camera { .. } | Self::InProgressRecording { .. })
             && let Some(window) = self.id(app).get(app)
         {
-            if matches!(self, Self::Main { .. })
-                && !permissions::do_permissions_check(false).necessary_granted()
-            {
+            if matches!(self, Self::Main { .. }) && crate::should_show_onboarding(app) {
                 return Box::pin(Self::Onboarding.show(app)).await;
             }
 
@@ -987,6 +988,10 @@ impl ShowCapWindow {
             } else {
                 if let Self::Main { .. } = self {
                     restore_main_window_inputs(app).await;
+                }
+
+                if let Self::Onboarding = self {
+                    let _ = window.set_ignore_cursor_events(false);
                 }
 
                 window.show().ok();
@@ -1349,20 +1354,36 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::ScreenshotEditor { path: _ } => {
+            Self::ScreenshotEditor { path } => {
                 hide_recording_windows(app);
 
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Regular)
                     .ok();
 
-                let window = self
+                let window_label = self.id(app).label();
+                let pending = PendingScreenshotEditorInstances::get(app);
+                PendingScreenshotEditorInstances::start_prewarm(
+                    app,
+                    window_label.clone(),
+                    path.clone(),
+                )
+                .await;
+
+                let window = match self
                     .window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .min_inner_size(800.0, 600.0)
                     .focused(true)
-                    .build()?;
+                    .build()
+                {
+                    Ok(window) => window,
+                    Err(error) => {
+                        pending.cancel_prewarm(&window_label).await;
+                        return Err(error);
+                    }
+                };
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(1240.0, 800.0);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
@@ -1474,12 +1495,14 @@ impl ShowCapWindow {
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
+                    .transparent(true)
                     .focused(true)
                     .shadow(true)
                     .build()?;
 
                 let (pos_x, pos_y) = cursor_monitor.center_position(width, height);
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+                let _ = window.set_ignore_cursor_events(false);
 
                 #[cfg(windows)]
                 {
