@@ -134,9 +134,9 @@ export function KeyboardTrack(props: {
 			<For
 				each={keyboardSegments()}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
+					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
 						<div>No keyboard events</div>
-						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
 							Record keyboard presses or generate from recording
 						</div>
 					</div>
@@ -157,7 +157,7 @@ export function KeyboardTrack(props: {
 							data-index={i()}
 							class={cx(
 								"border duration-200 hover:border-sky-6 transition-colors group",
-								"bg-gradient-to-r from-[#0d1830] via-[#142445] to-[#0d1830] shadow-[inset_0_8px_12px_3px_rgba(120,180,255,0.16)]",
+								"bg-linear-to-r from-[#0d1830] via-[#142445] to-[#0d1830] shadow-[inset_0_8px_12px_3px_rgba(120,180,255,0.16)]",
 								isSelected() ? "border-sky-7" : "border-transparent",
 							)}
 							innerClass="ring-sky-6"

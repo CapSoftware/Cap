@@ -175,7 +175,7 @@ export default function DeviceSelectOverlay<T>(
 								placeholder="Search..."
 								value={searchQuery()}
 								onInput={(e) => setSearchQuery(e.currentTarget.value)}
-								class="w-full px-3 py-1.5 text-sm rounded-lg outline-none placeholder:text-white/40 text-white"
+								class="w-full px-3 py-1.5 text-sm rounded-lg outline-hidden placeholder:text-white/40 text-white"
 								style={{
 									"background-color": "rgba(255, 255, 255, 0.1)",
 									border: "1px solid rgba(255, 255, 255, 0.1)",

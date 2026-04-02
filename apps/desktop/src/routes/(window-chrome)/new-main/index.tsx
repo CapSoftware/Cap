@@ -239,7 +239,7 @@ function CameraListItem(props: {
 			disabled={props.disabled}
 			onClick={props.onSelect}
 			class={cx(
-				"flex flex-col gap-0.5 px-3 py-2.5 rounded-lg text-sm text-left outline-none",
+				"flex flex-col gap-0.5 px-3 py-2.5 rounded-lg text-sm text-left outline-hidden",
 				props.isSelected
 					? "bg-blue-500 text-white"
 					: props.isFocused
@@ -298,7 +298,7 @@ function MicrophoneListItem(props: {
 			disabled={props.disabled}
 			onClick={props.onSelect}
 			class={cx(
-				"relative overflow-hidden flex flex-col gap-0.5 px-3 py-2.5 rounded-lg text-sm text-left outline-none",
+				"relative overflow-hidden flex flex-col gap-0.5 px-3 py-2.5 rounded-lg text-sm text-left outline-hidden",
 				props.isSelected
 					? "bg-blue-500 text-white"
 					: props.isFocused
@@ -481,7 +481,7 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 	return (
 		<div
 			ref={containerRef}
-			class="flex flex-col gap-1 outline-none"
+			class="flex flex-col gap-1 outline-hidden"
 			tabIndex={0}
 			onKeyDown={handleKeyDown}
 		>
@@ -508,7 +508,7 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 					disabled={props.disabled}
 					onClick={() => handleSelect(null)}
 					class={cx(
-						"flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left outline-none",
+						"flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left outline-hidden",
 						isNoneSelected()
 							? "bg-blue-500 text-white"
 							: focusedIndex() === 0
@@ -777,7 +777,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					onClick={() => props.onBack()}
 					class="flex gap-1 items-center rounded-md px-1.5 text-xs
 					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12
-					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
+					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
 					<span class="font-medium text-gray-12">Back</span>
@@ -967,7 +967,7 @@ function MainWindowHelpButton() {
 				onClick={() => {
 					commands.showWindow("Onboarding");
 				}}
-				class="flex shrink-0 justify-center items-center size-5 focus:outline-none"
+				class="flex shrink-0 justify-center items-center size-5 focus:outline-hidden"
 			>
 				<IconLucideCircleHelp class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 			</button>
@@ -1715,7 +1715,7 @@ function Page() {
 	return (
 		<div
 			onMouseEnter={handleMouseEnter}
-			class="flex relative flex-col px-[13px] gap-2 pb-[8px] h-full min-h-0 text-[--text-primary]"
+			class="flex relative flex-col px-[13px] gap-2 pb-[8px] h-full min-h-0 text-(--text-primary)"
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
@@ -1732,7 +1732,7 @@ function Page() {
 									await commands.showWindow({ Settings: { page: "general" } });
 									getCurrentWindow().hide();
 								}}
-								class="flex items-center justify-center size-5 -ml-[1.5px] focus:outline-none"
+								class="flex items-center justify-center size-5 -ml-[1.5px] focus:outline-hidden"
 							>
 								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1751,7 +1751,7 @@ function Page() {
 										return next;
 									});
 								}}
-								class="flex justify-center items-center size-5 focus:outline-none"
+								class="flex justify-center items-center size-5 focus:outline-hidden"
 							>
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1770,7 +1770,7 @@ function Page() {
 										return next;
 									});
 								}}
-								class="flex justify-center items-center size-5 focus:outline-none"
+								class="flex justify-center items-center size-5 focus:outline-hidden"
 							>
 								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1782,7 +1782,7 @@ function Page() {
 								onClick={() => {
 									new WebviewWindow("debug", { url: "/debug" });
 								}}
-								class="flex justify-center items-center focus:outline-none"
+								class="flex justify-center items-center focus:outline-hidden"
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -1794,7 +1794,7 @@ function Page() {
 				<div class="flex items-center justify-between mt-[16px] mb-[6px]">
 					<div class="flex items-center space-x-1">
 						<a
-							class="*:w-[92px] *:h-auto text-[--text-primary]"
+							class="*:w-[92px] *:h-auto text-(--text-primary)"
 							target="_blank"
 							href={
 								auth.data
@@ -1816,7 +1816,7 @@ function Page() {
 									class={cx(
 										"text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5",
 										license.data?.type === "pro"
-											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+											? "bg-(--blue-400) text-gray-1 dark:text-gray-12"
 											: "bg-gray-3 cursor-pointer hover:bg-gray-5",
 									)}
 								>
@@ -2013,7 +2013,7 @@ function Page() {
 				</Show>
 			</div>
 			<Show when={isActivelyRecording()}>
-				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-sm">
+				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">
 					<div class="pointer-events-auto">
 						<button
 							type="button"

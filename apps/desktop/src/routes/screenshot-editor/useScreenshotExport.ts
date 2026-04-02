@@ -146,7 +146,7 @@ export function useScreenshotExport() {
 			if (regionWidth <= 0 || regionHeight <= 0) continue;
 
 			const level = Math.max(1, ann.maskLevel ?? 16);
-			const type = ann.maskType ?? "blur";
+			const type = ann.maskType ?? "blur-sm";
 
 			if (type === "pixelate") {
 				const blockSize = Math.max(2, Math.round(level));

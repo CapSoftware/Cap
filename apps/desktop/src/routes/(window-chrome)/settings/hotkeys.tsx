@@ -133,7 +133,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 												>
 													{(binding) => <HotkeyText binding={binding()} />}
 												</Show>
-												<div class="flex flex-row items-center gap-[0.125rem]">
+												<div class="flex flex-row items-center gap-0.5">
 													<Show when={hotkeys[item()]}>
 														<button
 															class="w-fit"
@@ -237,7 +237,7 @@ function HotkeyText(props: { binding: Hotkey }) {
 		<div class="flex gap-1 items-center w-fit group">
 			<For each={keys}>
 				{(key) => (
-					<kbd class="inline-flex justify-center text-xs items-center px-1.5 text-[13px] font-medium rounded border h-6 min-w-6 text-gray-11 bg-gray-5 border-gray-6 group-hover:border-gray-8 transition-colors duration-200 group-hover:bg-gray-7">
+					<kbd class="inline-flex justify-center w-fit text-xs items-center p-2 text-[13px] font-medium rounded-sm border size-6 text-gray-11 bg-gray-5 border-gray-6 group-hover:border-gray-8 transition-colors duration-200 group-hover:bg-gray-7">
 						{key}
 					</kbd>
 				)}

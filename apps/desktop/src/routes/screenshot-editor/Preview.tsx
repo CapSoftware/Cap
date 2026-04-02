@@ -325,12 +325,12 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			{/* Preview Area */}
 			<div
 				ref={setCanvasContainerRef}
-				class="flex-1 relative flex items-center justify-center overflow-hidden outline-none"
+				class="flex-1 relative flex items-center justify-center overflow-hidden outline-hidden"
 				style={gridStyle}
 				onWheel={handleWheel}
 				onMouseDown={handleMiddleMouseDown}
 			>
-				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
+				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-xs p-1 border border-gray-4">
 					<EditorButton
 						tooltipText="Zoom Out"
 						kbd={["meta", "-"]}
@@ -489,7 +489,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 								if (regionWidth <= 0 || regionHeight <= 0) continue;
 
 								const level = Math.max(1, mask.maskLevel ?? 16);
-								const type = mask.maskType ?? "blur";
+								const type = mask.maskType ?? "blur-sm";
 
 								if (type === "pixelate") {
 									const blockSize = Math.max(2, Math.round(level));

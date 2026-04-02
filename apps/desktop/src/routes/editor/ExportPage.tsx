@@ -707,7 +707,7 @@ export function ExportPage() {
 						ostype() !== "windows" && "pr-2",
 					)}
 				>
-					{ostype() === "macos" && <div class="h-full w-[4rem]" />}
+					{ostype() === "macos" && <div class="h-full w-16" />}
 					<Button
 						variant="gray"
 						onClick={handleBack}
@@ -744,7 +744,7 @@ export function ExportPage() {
 										}
 									>
 										<div class="absolute inset-4 rounded-lg bg-gray-4 overflow-hidden">
-											<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
+											<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
 										</div>
 									</Show>
 								</div>
@@ -759,7 +759,7 @@ export function ExportPage() {
 									/>
 									<Show when={previewLoading()}>
 										<div class="absolute inset-0 z-50 overflow-hidden pointer-events-none">
-											<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
+											<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
 										</div>
 									</Show>
 									<button
@@ -780,19 +780,19 @@ export function ExportPage() {
 							<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
 								<span class="flex items-center gap-1.5">
 									<IconLucideClock class="size-3.5" />
-									<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-10 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideMonitor class="size-3.5" />
-									<span class="h-3.5 w-20 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-20 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideHardDrive class="size-3.5" />
-									<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-16 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideZap class="size-3.5" />
-									<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-12 bg-gray-4 rounded-sm animate-pulse" />
 								</span>
 							</div>
 						}
@@ -1134,7 +1134,7 @@ export function ExportPage() {
 								>
 									<div
 										class={cx(
-											"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+											"w-8 h-4 rounded-full transition-colors relative shrink-0",
 											settings.optimizeFilesize ? "bg-blue-9" : "bg-gray-5",
 										)}
 									>
@@ -1191,7 +1191,7 @@ export function ExportPage() {
 									>
 										<div
 											class={cx(
-												"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+												"w-8 h-4 rounded-full transition-colors relative shrink-0",
 												cursorOnly() ? "bg-blue-9" : "bg-gray-5",
 											)}
 										>
@@ -1214,7 +1214,7 @@ export function ExportPage() {
 									<Show when={cursorOnly()}>
 										<div class="rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
 											<div class="flex items-start gap-2">
-												<IconLucideAlertTriangle class="mt-0.5 size-4 flex-shrink-0 text-amber-11" />
+												<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
 												<div class="text-left">
 													<p class="text-xs font-medium text-amber-11">
 														Warning
@@ -1281,7 +1281,7 @@ export function ExportPage() {
 													>
 														<div
 															class={cx(
-																"w-8 h-4 rounded-full transition-colors relative flex-shrink-0",
+																"w-8 h-4 rounded-full transition-colors relative shrink-0",
 																forceFfmpegDecoder()
 																	? "bg-blue-9"
 																	: "bg-gray-5",
@@ -1433,7 +1433,7 @@ export function ExportPage() {
 
 					return (
 						<div
-							class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 text-gray-12 backdrop-blur-sm"
+							class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 text-gray-12 backdrop-blur-xs"
 							style={{
 								"background-color":
 									"color-mix(in srgb, var(--gray-1) 85%, transparent)",

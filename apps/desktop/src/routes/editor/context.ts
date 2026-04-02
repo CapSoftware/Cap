@@ -132,7 +132,7 @@ export type CustomDomainResponse = {
 	domain_verified: boolean | null;
 };
 
-export type CornerRoundingType = "rounded" | "squircle";
+export type CornerRoundingType = "rounded-sm" | "squircle";
 
 type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 

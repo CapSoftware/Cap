@@ -33,7 +33,7 @@ export function AnnotationConfigBar() {
 			{(ann) => {
 				const type = () => ann().type;
 				const isMask = () => type() === "mask";
-				const maskType = () => ann().maskType ?? "blur";
+				const maskType = () => ann().maskType ?? "blur-sm";
 				const maskLevel = () => ann().maskLevel ?? 16;
 				return (
 					<div
@@ -101,11 +101,11 @@ export function AnnotationConfigBar() {
 											type="button"
 											class={cx(
 												"px-2.5 h-6 rounded-md text-xs font-medium transition-colors",
-												maskType() === "blur"
+												maskType() === "blur-sm"
 													? "bg-blue-9 text-white"
 													: "bg-gray-3 text-gray-11 hover:bg-gray-4",
 											)}
-											onClick={() => update("maskType", "blur")}
+											onClick={() => update("maskType", "blur-sm")}
 										>
 											Blur
 										</button>
@@ -209,7 +209,7 @@ function ColorPickerButton(props: {
 
 	return (
 		<Popover placement="bottom" gutter={8}>
-			<Popover.Trigger class="outline-none group">
+			<Popover.Trigger class="outline-hidden group">
 				<div class="size-5 rounded-full border border-gray-5 transition-all group-hover:scale-110 group-hover:border-gray-7 group-active:scale-95 overflow-hidden">
 					<div
 						class="w-full h-full"
@@ -224,7 +224,7 @@ function ColorPickerButton(props: {
 				</div>
 			</Popover.Trigger>
 			<Popover.Portal>
-				<Popover.Content class="z-[200] w-[220px] overflow-hidden rounded-lg border border-gray-4 bg-gray-1 dark:bg-gray-2 shadow-lg animate-in fade-in zoom-in-95 p-2.5">
+				<Popover.Content class="z-200 w-[220px] overflow-hidden rounded-lg border border-gray-4 bg-gray-1 dark:bg-gray-2 shadow-lg animate-in fade-in zoom-in-95 p-2.5">
 					<div class="flex flex-col gap-2.5">
 						<RgbInput
 							value={rgbValue()}

@@ -198,7 +198,7 @@ export default function TargetCard(props: TargetCardProps) {
 		return parts.map((part) => {
 			if (part.toLowerCase() === lowercaseQuery) {
 				return (
-					<span class="rounded bg-blue-9/20 px-[1px] text-gray-12">{part}</span>
+					<span class="rounded-sm bg-blue-9/20 px-px text-gray-12">{part}</span>
 				);
 			}
 			return part;
@@ -314,12 +314,12 @@ export default function TargetCard(props: TargetCardProps) {
 			disabled={local.disabled}
 			data-variant={local.variant}
 			class={cx(
-				"group flex flex-col overflow-hidden rounded-lg border border-transparent bg-gray-3 text-left outline-none transition-colors duration-100 hover:bg-gray-4 focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1",
+				"group flex flex-col overflow-hidden rounded-lg border border-transparent bg-gray-3 text-left outline-hidden transition-colors duration-100 hover:bg-gray-4 focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1",
 				local.disabled && "pointer-events-none opacity-60",
 				local.class,
 			)}
 		>
-			<div class="relative h-[4.75rem] w-full overflow-hidden bg-gray-4/40">
+			<div class="relative h-19 w-full overflow-hidden bg-gray-4/40">
 				<Show
 					when={imageExists() ? thumbnailSrc() : undefined}
 					fallback={
@@ -354,10 +354,10 @@ export default function TargetCard(props: TargetCardProps) {
 					)}
 				</Show>
 				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
-				<div class="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t to-transparent pointer-events-none from-black/40" />
+				<div class="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent pointer-events-none from-black/40" />
 				<Show when={recordingFailed() || recordingUploadFailed()}>
 					<div class="absolute inset-0 flex items-center justify-center bg-black/75">
-						<div class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-9/20 text-red-11">
+						<div class="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-red-9/20 text-red-11">
 							<IconPhWarningBold class="size-2.5" />
 							<span class="text-[10px] font-medium">
 								{recordingFailed() ? "Recording failed" : "Upload failed"}
@@ -391,7 +391,7 @@ export default function TargetCard(props: TargetCardProps) {
 								role="button"
 								tabIndex={-1}
 								onClick={handleOpenEditor}
-								class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+								class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 							>
 								<IconLucideEdit class="size-3.5" />
 							</div>
@@ -401,7 +401,7 @@ export default function TargetCard(props: TargetCardProps) {
 								role="button"
 								tabIndex={-1}
 								onClick={handleCopy}
-								class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+								class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 							>
 								<IconLucideCopy class="size-3.5" />
 							</div>
@@ -411,7 +411,7 @@ export default function TargetCard(props: TargetCardProps) {
 								role="button"
 								tabIndex={-1}
 								onClick={handleSave}
-								class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+								class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 							>
 								<IconLucideSave class="size-3.5" />
 							</div>
@@ -436,7 +436,7 @@ export default function TargetCard(props: TargetCardProps) {
 											role="button"
 											tabIndex={-1}
 											onClick={handleOpenRecordingEditor}
-											class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+											class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 										>
 											<IconLucideEdit class="size-3.5" />
 										</div>
@@ -453,7 +453,7 @@ export default function TargetCard(props: TargetCardProps) {
 													role="button"
 													tabIndex={-1}
 													onClick={handleReupload}
-													class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+													class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 												>
 													<IconLucideRotateCcw class="size-3.5" />
 												</div>
@@ -475,7 +475,7 @@ export default function TargetCard(props: TargetCardProps) {
 											role="button"
 											tabIndex={-1}
 											onClick={handleOpenRecordingLink}
-											class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+											class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 										>
 											<IconCapLink class="size-3.5" />
 										</div>
@@ -486,7 +486,7 @@ export default function TargetCard(props: TargetCardProps) {
 										role="button"
 										tabIndex={-1}
 										onClick={handleOpenRecordingFolder}
-										class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+										class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 									>
 										<IconLucideFolder class="size-3.5" />
 									</div>
@@ -496,7 +496,7 @@ export default function TargetCard(props: TargetCardProps) {
 										role="button"
 										tabIndex={-1}
 										onClick={handleDeleteRecording}
-										class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+										class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 									>
 										<IconCapTrash class="size-3.5" />
 									</div>
@@ -522,12 +522,12 @@ export function TargetCardSkeleton(props: { class?: string }) {
 				props.class,
 			)}
 		>
-			<div class="h-[4.75rem] w-full animate-pulse bg-gray-4" />
+			<div class="h-19 w-full animate-pulse bg-gray-4" />
 			<div class="flex flex-row items-start gap-2 px-2 py-1.5">
 				<div class="flex-1 space-y-1">
-					<div class="w-3/4 h-3 rounded bg-gray-4" />
-					<div class="h-2.5 w-1/2 rounded bg-gray-4" />
-					<div class="h-2.5 w-2/5 rounded bg-gray-4" />
+					<div class="w-3/4 h-3 rounded-sm bg-gray-4" />
+					<div class="h-2.5 w-1/2 rounded-sm bg-gray-4" />
+					<div class="h-2.5 w-2/5 rounded-sm bg-gray-4" />
 				</div>
 			</div>
 		</div>

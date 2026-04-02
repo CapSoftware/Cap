@@ -586,7 +586,7 @@ export function AnnotationLayer(props: {
 								class="overflow-visible"
 							>
 								<div
-									class="text-editor bg-transparent outline-none p-0 m-0"
+									class="text-editor bg-transparent outline-hidden p-0 m-0"
 									contentEditable
 									style={{
 										"font-size": `${ann.height}px`,

@@ -13,15 +13,15 @@ export function ShadowPopover() {
 	return (
 		<Popover
 			placement="bottom-start"
-			open={activePopover() === "shadow"}
+			open={activePopover() === "shadow-sm"}
 			onOpenChange={(open) => {
-				if (!open && activePopover() === "shadow") setActivePopover(null);
+				if (!open && activePopover() === "shadow-sm") setActivePopover(null);
 			}}
 		>
 			<Popover.Anchor
 				as={EditorButton}
 				onClick={() =>
-					setActivePopover(activePopover() === "shadow" ? null : "shadow")
+					setActivePopover(activePopover() === "shadow-sm" ? null : "shadow-sm")
 				}
 				leftIcon={<IconCapShadow class="size-4" />}
 				tooltipText="Shadow"
@@ -36,7 +36,7 @@ export function ShadowPopover() {
 								value={[project.background.shadow ?? 0]}
 								onChange={(v) => {
 									batch(() => {
-										setProject("background", "shadow", v[0]);
+										setProject("background", "shadow-sm", v[0]);
 										if (v[0] > 0 && !project.background.advancedShadow) {
 											setProject("background", "advancedShadow", {
 												size: 50,

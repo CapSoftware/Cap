@@ -182,7 +182,7 @@ function createScreenshotEditorContext() {
 	);
 
 	const [activePopover, setActivePopover] = createSignal<
-		"background" | "padding" | "rounding" | "shadow" | "border" | null
+		"background" | "padding" | "rounding" | "shadow-sm" | "border" | null
 	>(null);
 
 	const [dialog, setDialog] = createSignal<DialogState>({

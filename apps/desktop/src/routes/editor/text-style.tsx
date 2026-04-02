@@ -62,10 +62,10 @@ export function HexColorInput(props: {
 	};
 
 	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
+		<div class="flex flex-row items-center gap-3 relative">
 			<button
 				type="button"
-				class="size-[2rem] rounded-[0.5rem]"
+				class="size-8 rounded-lg"
 				style={{
 					"background-color": text(),
 					"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(text())}`,
@@ -75,7 +75,7 @@ export function HexColorInput(props: {
 			<input
 				ref={colorInput}
 				type="color"
-				class="absolute left-0 bottom-0 size-[2rem] opacity-0"
+				class="absolute left-0 bottom-0 size-8 opacity-0"
 				value={text()}
 				onChange={(e) => {
 					setText(e.target.value);
@@ -83,7 +83,7 @@ export function HexColorInput(props: {
 				}}
 			/>
 			<TextInput
-				class="w-[5rem] p-[0.375rem] border border-gray-3 text-gray-12 rounded-[0.5rem] bg-gray-2"
+				class="w-20 p-1.5 border border-gray-3 text-gray-12 rounded-lg bg-gray-2"
 				value={text()}
 				onFocus={() => {
 					prevColor = props.value;

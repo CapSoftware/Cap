@@ -144,12 +144,12 @@ function AppearanceSection(props: {
 								<button
 									type="button"
 									aria-checked={props.currentTheme === theme.id}
-									class="flex flex-col items-center rounded-md group focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
+									class="flex flex-col items-center rounded-md group focus:outline-hidden focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
 									onClick={() => props.onThemeChange(theme.id)}
 								>
 									<div
 										class={cx(
-											`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
+											`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-hidden ring-offset-gray-50 transition-all duration-200`,
 											{
 												"ring-2 ring-gray-12 ring-offset-2":
 													props.currentTheme === theme.id,
@@ -779,7 +779,7 @@ function DefaultProjectNameCard(props: {
 						Choose the template to use as the default project and file name.
 					</p>
 				</div>
-				<div class="flex flex-shrink-0 gap-2">
+				<div class="flex shrink-0 gap-2">
 					<Button
 						size="sm"
 						variant="gray"
@@ -831,7 +831,7 @@ function DefaultProjectNameCard(props: {
 				</div>
 
 				<Collapsible class="w-full rounded-lg">
-					<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-none px-0.5 py-1">
+					<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-hidden px-0.5 py-1">
 						<IconCapChevronDown class="size-4 ui-group-expanded:rotate-180 transition-transform duration-300 ease-in-out" />
 						<p class="py-0.5 px-1">How to customize?</p>
 					</Collapsible.Trigger>
@@ -979,7 +979,7 @@ function ExcludedWindowsCard(props: {
 						</p>
 					</Show>
 				</div>
-				<div class="flex flex-shrink-0 gap-2">
+				<div class="flex shrink-0 gap-2">
 					<Button
 						variant="gray"
 						size="sm"
@@ -1055,8 +1055,8 @@ function ExcludedWindowsSkeleton() {
 				{(width) => (
 					<div class="flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5 animate-pulse">
 						<div class="flex flex-col gap-1 leading-tight">
-							<div class={cx("h-3 rounded bg-gray-4", width)} />
-							<div class="h-2 w-16 rounded bg-gray-4" />
+							<div class={cx("h-3 rounded-sm bg-gray-4", width)} />
+							<div class="h-2 w-16 rounded-sm bg-gray-4" />
 						</div>
 						<div class="size-6 rounded-full bg-gray-4" />
 					</div>

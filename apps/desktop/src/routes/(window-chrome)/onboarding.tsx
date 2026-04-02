@@ -271,25 +271,25 @@ function OnboardingAmbientBackdrop() {
 			<div class="startup-grain" />
 			<div
 				ref={bindCloud1}
-				class="absolute top-0 right-0 opacity-70 pointer-events-none z-[1]"
+				class="absolute top-0 right-0 opacity-70 pointer-events-none z-1"
 			>
 				<img
-					class="startup-cloud-image w-[100vw] md:w-[80vw] -mr-40"
+					class="startup-cloud-image w-screen md:w-[80vw] -mr-40"
 					src={cloud1}
 					alt=""
 				/>
 			</div>
 			<div
 				ref={bindCloud2}
-				class="absolute top-0 left-0 opacity-70 pointer-events-none z-[1]"
+				class="absolute top-0 left-0 opacity-70 pointer-events-none z-1"
 			>
 				<img
-					class="startup-cloud-image w-[100vw] md:w-[80vw] -ml-40"
+					class="startup-cloud-image w-screen md:w-[80vw] -ml-40"
 					src={cloud2}
 					alt=""
 				/>
 			</div>
-			<div class="absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none z-[1]">
+			<div class="absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none z-1">
 				<div ref={bindCloud3Inner}>
 					<img
 						class="startup-cloud-image w-[180vw] md:w-[180vw]"
@@ -611,7 +611,7 @@ function StepNavigation(props: {
 							onClick={props.onNext}
 							variant="primary"
 							size="md"
-							class="gap-2 px-10 py-3 min-h-12 min-w-[9.5rem] text-[15px] font-medium"
+							class="gap-2 px-10 py-3 min-h-12 min-w-38 text-[15px] font-medium"
 							disabled={props.nextDisabled}
 						>
 							{props.nextLabel}
@@ -704,7 +704,7 @@ function ModesOverviewStep(props: { active: boolean }) {
 				<For each={modes}>
 					{(mode, index) => (
 						<div
-							class="flex-1 flex flex-col items-center gap-3 p-5 rounded-2xl border border-gray-4 bg-white dark:bg-gray-2 transition-all duration-500 ease-out shadow-sm"
+							class="flex-1 flex flex-col items-center gap-3 p-5 rounded-2xl border border-gray-4 bg-white dark:bg-gray-2 transition-all duration-500 ease-out shadow-xs"
 							style={{
 								"transition-delay": `${200 + index() * 100}ms`,
 								opacity: visible() ? 1 : 0,
@@ -797,7 +797,7 @@ function ModeDetailStep(props: {
 			</div>
 
 			<div class="flex-1 min-w-0 flex items-center justify-center">
-				<div class="w-full h-full relative rounded-2xl bg-white dark:bg-gray-2 border border-gray-4 overflow-visible shadow-sm">
+				<div class="w-full h-full relative rounded-2xl bg-white dark:bg-gray-2 border border-gray-4 overflow-visible shadow-xs">
 					{props.children}
 				</div>
 			</div>
@@ -1000,7 +1000,7 @@ function ShortcutsStep(props: { active: boolean }) {
 				<For each={settingsAreas}>
 					{(area, index) => (
 						<div
-							class="flex flex-col gap-1 px-4 py-3 rounded-xl border border-gray-4 bg-white dark:bg-gray-2 transition-all duration-500 shadow-sm"
+							class="flex flex-col gap-1 px-4 py-3 rounded-xl border border-gray-4 bg-white dark:bg-gray-2 transition-all duration-500 shadow-xs"
 							style={{
 								"transition-delay": `${150 + index() * 80}ms`,
 								opacity: visible() ? 1 : 0,
@@ -1061,7 +1061,7 @@ function FaqStep(props: { active: boolean }) {
 
 			<div
 				class={cx(
-					"w-full max-w-[480px] rounded-xl border border-gray-4 bg-white dark:bg-gray-2 overflow-hidden transition-all duration-500 delay-100 shadow-sm",
+					"w-full max-w-[480px] rounded-xl border border-gray-4 bg-white dark:bg-gray-2 overflow-hidden transition-all duration-500 delay-100 shadow-xs",
 					visible() ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4",
 				)}
 			>
@@ -1224,7 +1224,7 @@ function StartRecordingClickMock(props: {
 			<div class="relative w-full">
 				<div
 					class={cx(
-						"flex h-11 w-full overflow-hidden rounded-full bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 text-white transition-transform duration-500 ease-out dark:from-blue-9 dark:via-blue-9 dark:to-blue-10",
+						"flex h-11 w-full overflow-hidden rounded-full bg-linear-to-r from-blue-10 via-blue-10 to-blue-11 text-white transition-transform duration-500 ease-out dark:from-blue-9 dark:via-blue-9 dark:to-blue-10",
 						cursorStage() === 2 && "scale-[0.98]",
 					)}
 				>
@@ -1284,28 +1284,28 @@ function RecordingBar(props: {
 	class?: string;
 }) {
 	const actionIconWrap =
-		"h-8 w-8 flex shrink-0 items-center justify-center rounded-lg p-[0.25rem] text-gray-11";
+		"h-8 w-8 flex shrink-0 items-center justify-center rounded-lg p-1 text-gray-11";
 
 	return (
 		<div class={cx("h-10 w-full min-w-[280px] rounded-2xl", props.class)}>
 			<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl border border-gray-5 bg-white dark:bg-gray-1 shadow-[0_1px_3px_rgba(0,0,0,0.1)]">
-				<div class="flex min-w-0 flex-1 flex-col gap-2 p-[0.25rem]">
+				<div class="flex min-w-0 flex-1 flex-col gap-2 p-1">
 					<div class="flex min-h-0 flex-1 flex-row items-center justify-between">
 						<Show
 							when={!props.stopped}
 							fallback={
-								<div class="flex flex-row items-center gap-[0.375rem] rounded-lg px-[0.5rem] py-[0.25rem] text-gray-10">
+								<div class="flex flex-row items-center gap-1.5 rounded-lg px-2 py-1 text-gray-10">
 									<div class="size-2 shrink-0 rounded-full bg-gray-8" />
-									<span class="text-[0.875rem] font-[500]">Stopped</span>
+									<span class="text-[0.875rem] font-medium">Stopped</span>
 								</div>
 							}
 						>
 							<button
 								type="button"
-								class="flex shrink-0 flex-row items-center gap-[0.25rem] rounded-lg px-[0.5rem] py-[0.25rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12]"
+								class="flex shrink-0 flex-row items-center gap-1 rounded-lg px-2 py-1 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12"
 							>
 								<IconCapStopCircle class="size-5 shrink-0" />
-								<span class="text-[0.875rem] font-[500] tabular-nums">
+								<span class="text-[0.875rem] font-medium tabular-nums">
 									{props.time}
 								</span>
 							</button>
@@ -1342,7 +1342,7 @@ function RecordingBar(props: {
 				</div>
 				<div
 					class={cx(
-						"flex w-9 shrink-0 cursor-default items-center justify-center border-l border-gray-5 p-[0.25rem] text-gray-10",
+						"flex w-9 shrink-0 cursor-default items-center justify-center border-l border-gray-5 p-1 text-gray-10",
 						props.stopped && "opacity-45",
 					)}
 					aria-hidden="true"
@@ -1395,20 +1395,20 @@ function InstantMockup(props: { active: boolean }) {
 					<div class="relative min-h-[52px] w-full max-w-[400px]">
 						<div
 							class={cx(
-								"flex w-full justify-center transition-all duration-[720ms] ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+								"flex w-full justify-center transition-all duration-720 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
 								phase() === 1
-									? "relative z-[2] translate-y-0 scale-100 opacity-100"
-									: "pointer-events-none absolute inset-0 z-[1] flex items-center justify-center opacity-0 scale-[0.94] -translate-y-2",
+									? "relative z-2 translate-y-0 scale-100 opacity-100"
+									: "pointer-events-none absolute inset-0 z-1 flex items-center justify-center opacity-0 scale-[0.94] -translate-y-2",
 							)}
 						>
 							<StartRecordingClickMock active={phase() === 1} mode="instant" />
 						</div>
 						<div
 							class={cx(
-								"w-full transition-all duration-[720ms] ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+								"w-full transition-all duration-720 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
 								phase() >= 2 && phase() < 7
-									? "relative z-[2] translate-y-0 scale-100 opacity-100"
-									: "pointer-events-none absolute inset-0 z-[1] flex items-center justify-center opacity-0 scale-[0.94] translate-y-3",
+									? "relative z-2 translate-y-0 scale-100 opacity-100"
+									: "pointer-events-none absolute inset-0 z-1 flex items-center justify-center opacity-0 scale-[0.94] translate-y-3",
 							)}
 						>
 							<div class="w-full shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
@@ -1515,7 +1515,7 @@ function StudioMockup(props: { active: boolean }) {
 			<div class="relative flex-1 w-full max-w-[420px] min-h-[248px] mx-auto flex items-center justify-center">
 				<div
 					class={cx(
-						"absolute inset-0 z-[1] flex flex-col items-center justify-center transition-opacity duration-[600ms] ease-out",
+						"absolute inset-0 z-1 flex flex-col items-center justify-center transition-opacity duration-600 ease-out",
 						showRecording()
 							? "opacity-100 blur-0"
 							: "pointer-events-none opacity-0 blur-[2px]",
@@ -1524,20 +1524,20 @@ function StudioMockup(props: { active: boolean }) {
 					<div class="relative min-h-[52px] w-full max-w-[400px]">
 						<div
 							class={cx(
-								"flex w-full justify-center transition-all duration-[720ms] ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+								"flex w-full justify-center transition-all duration-720 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
 								phase() === 1
-									? "relative z-[2] translate-y-0 scale-100 opacity-100"
-									: "pointer-events-none absolute inset-0 z-[1] flex items-center justify-center opacity-0 scale-[0.94] -translate-y-2",
+									? "relative z-2 translate-y-0 scale-100 opacity-100"
+									: "pointer-events-none absolute inset-0 z-1 flex items-center justify-center opacity-0 scale-[0.94] -translate-y-2",
 							)}
 						>
 							<StartRecordingClickMock active={phase() === 1} mode="studio" />
 						</div>
 						<div
 							class={cx(
-								"w-full transition-all duration-[720ms] ease-[cubic-bezier(0.34,1.3,0.64,1)]",
+								"w-full transition-all duration-720 ease-[cubic-bezier(0.34,1.3,0.64,1)]",
 								phase() >= 2 && phase() < 7
-									? "relative z-[2] translate-y-0 scale-100 opacity-100"
-									: "pointer-events-none absolute inset-0 z-[1] flex items-center justify-center opacity-0 scale-[0.94] translate-y-3",
+									? "relative z-2 translate-y-0 scale-100 opacity-100"
+									: "pointer-events-none absolute inset-0 z-1 flex items-center justify-center opacity-0 scale-[0.94] translate-y-3",
 							)}
 						>
 							<div class="w-full shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
@@ -1552,7 +1552,7 @@ function StudioMockup(props: { active: boolean }) {
 
 				<div
 					class={cx(
-						"absolute inset-0 flex flex-col rounded-xl overflow-hidden border border-gray-3 bg-white dark:bg-gray-1 shadow-lg transition-all duration-[600ms] ease-out z-[2]",
+						"absolute inset-0 flex flex-col rounded-xl overflow-hidden border border-gray-3 bg-white dark:bg-gray-1 shadow-lg transition-all duration-600 ease-out z-2",
 						showEditor()
 							? "opacity-100 scale-100 translate-y-0 blur-0"
 							: "opacity-0 scale-[0.96] translate-y-3 blur-[2px] pointer-events-none",
@@ -1600,7 +1600,7 @@ function StudioMockup(props: { active: boolean }) {
 									<div class="flex flex-col gap-1.5 p-3 w-full">
 										<div class="w-3/4 h-1.5 rounded-full bg-gray-5/50" />
 										<div class="w-1/2 h-1.5 rounded-full bg-gray-5/30" />
-										<div class="w-full h-5 rounded bg-gray-5/20 mt-1" />
+										<div class="w-full h-5 rounded-sm bg-gray-5/20 mt-1" />
 									</div>
 								</div>
 							</div>
@@ -1617,13 +1617,13 @@ function StudioMockup(props: { active: boolean }) {
 							<div class="text-[8px] text-gray-9 font-medium uppercase tracking-wider">
 								Style
 							</div>
-							<div class="h-5 rounded border border-gray-3 bg-white dark:bg-gray-2" />
+							<div class="h-5 rounded-sm border border-gray-3 bg-white dark:bg-gray-2" />
 							<div class="text-[8px] text-gray-9 font-medium uppercase tracking-wider mt-1">
 								Background
 							</div>
 							<div class="flex gap-1">
-								<div class="size-4 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 border border-gray-3" />
-								<div class="size-4 rounded-full bg-gradient-to-br from-pink-400 to-orange-400 border border-gray-3" />
+								<div class="size-4 rounded-full bg-linear-to-br from-blue-400 to-purple-500 border border-gray-3" />
+								<div class="size-4 rounded-full bg-linear-to-br from-pink-400 to-orange-400 border border-gray-3" />
 								<div class="size-4 rounded-full bg-gray-4 border border-gray-3" />
 							</div>
 						</div>
@@ -1782,7 +1782,7 @@ function StartupOverlay(props: {
 
 		const tryPlay = () => {
 			if (!audioEl || audioEl.muted) return;
-			void audioEl.play().catch(() => {});
+			void audioEl.play().catch(() => { });
 		};
 
 		tryPlay();
@@ -1804,7 +1804,7 @@ function StartupOverlay(props: {
 		setAudioState("isMuted", next);
 		if (audioEl) {
 			audioEl.muted = next;
-			if (!next) void audioEl.play().catch(() => {});
+			if (!next) void audioEl.play().catch(() => { });
 		}
 	};
 
@@ -1830,14 +1830,14 @@ function StartupOverlay(props: {
 	return (
 		<div
 			class={cx(
-				"absolute inset-0 z-50 flex flex-col min-h-full h-full overflow-hidden custom-bg transition-all duration-[600ms] text-solid-white bg-white",
+				"absolute inset-0 z-50 flex flex-col min-h-full h-full overflow-hidden custom-bg transition-all duration-600 text-solid-white bg-white",
 				props.isExiting && "opacity-0 scale-105 pointer-events-none",
 			)}
 		>
 			<div class="startup-grain" />
 
 			<div
-				class="absolute top-3 z-[210]"
+				class="absolute top-3 z-210"
 				style={{
 					[ostype() === "macos" ? "right" : "left"]: "12px",
 				}}
@@ -1861,12 +1861,12 @@ function StartupOverlay(props: {
 			<div
 				ref={bindCloud1}
 				class={cx(
-					"absolute top-0 right-0 opacity-70 pointer-events-none startup-cloud-1 z-[1]",
+					"absolute top-0 right-0 opacity-70 pointer-events-none startup-cloud-1 z-1",
 					props.isExiting && "startup-cloud-transition exiting",
 				)}
 			>
 				<img
-					class="startup-cloud-image w-[100vw] md:w-[80vw] -mr-40"
+					class="startup-cloud-image w-screen md:w-[80vw] -mr-40"
 					src={cloud1}
 					alt=""
 				/>
@@ -1874,19 +1874,19 @@ function StartupOverlay(props: {
 			<div
 				ref={bindCloud2}
 				class={cx(
-					"absolute top-0 left-0 opacity-70 pointer-events-none startup-cloud-2 z-[1]",
+					"absolute top-0 left-0 opacity-70 pointer-events-none startup-cloud-2 z-1",
 					props.isExiting && "startup-cloud-transition exiting",
 				)}
 			>
 				<img
-					class="startup-cloud-image w-[100vw] md:w-[80vw] -ml-40"
+					class="startup-cloud-image w-screen md:w-[80vw] -ml-40"
 					src={cloud2}
 					alt=""
 				/>
 			</div>
 			<div
 				class={cx(
-					"absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none z-[1]",
+					"absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none z-1",
 					props.isExiting && "startup-cloud-transition startup-cloud-3 exiting",
 				)}
 			>
@@ -1901,7 +1901,7 @@ function StartupOverlay(props: {
 
 			<div
 				class={cx(
-					"flex flex-col items-center justify-center flex-1 relative px-4 z-[5]",
+					"flex flex-col items-center justify-center flex-1 relative px-4 z-5",
 					props.isExiting && "opacity-0 scale-[1.1]",
 				)}
 				style={{ transition: "all 600ms cubic-bezier(0.4, 0, 0.2, 1)" }}
@@ -1932,7 +1932,7 @@ function StartupOverlay(props: {
 					<span>Get Started</span>
 					<span class="text-[11px] font-normal text-[rgba(22,27,38,0.58)] leading-tight inline-flex items-center justify-center gap-1">
 						<span>Click here, or press</span>
-						<kbd class="rounded border border-[rgba(22,27,38,0.14)] bg-[rgba(22,27,38,0.08)] px-1 py-px text-[10px] font-medium text-[#161b26] shadow-[0_1px_0_rgba(255,255,255,0.7)_inset]">
+						<kbd class="rounded border border-gray-6 bg-white dark:bg-gray-3 px-1 py-px text-[10px] font-medium text-gray-11 shadow-[0_1px_0_rgba(0,0,0,0.04)]">
 							Space
 						</kbd>
 					</span>
@@ -2029,7 +2029,7 @@ function PermissionsStep(props: {
 			}
 		} catch (err) {
 			console.error(`Error requesting permission: ${err}`);
-			fetchPermissions().catch(() => {});
+			fetchPermissions().catch(() => { });
 		} finally {
 			setRequestingPermission(false);
 		}
@@ -2088,7 +2088,7 @@ function PermissionsStep(props: {
 						return (
 							<Show when={permStatus() !== "notNeeded"}>
 								<div
-									class="flex items-center gap-4 px-4 py-3 rounded-xl border border-gray-4 bg-white dark:bg-gray-2 transition-all duration-500 shadow-sm"
+									class="flex items-center gap-4 px-4 py-3 rounded-xl border border-gray-4 bg-white dark:bg-gray-2 transition-all duration-500 shadow-xs"
 									style={{
 										"transition-delay": `${150 + index() * 80}ms`,
 										opacity: visible() ? 1 : 0,
@@ -2127,13 +2127,13 @@ function PermissionsStep(props: {
 											disabled={requestingPermission()}
 											onClick={() =>
 												permission.requiresManualGrant ||
-												permStatus() === "denied"
+													permStatus() === "denied"
 													? openSettings(permission.key)
 													: requestPermission(permission.key)
 											}
 										>
 											{permission.requiresManualGrant ||
-											permStatus() === "denied"
+												permStatus() === "denied"
 												? "Open Settings"
 												: "Grant"}
 										</Button>
@@ -2300,13 +2300,13 @@ function ScreenshotMockup(props: { active: boolean }) {
 								<div class="size-2 rounded-full bg-gray-6" />
 							</div>
 							<div class="flex items-center gap-1.5 absolute left-1/2 -translate-x-1/2">
-								<div class="size-4 rounded bg-white dark:bg-gray-3 border border-gray-4" />
-								<div class="size-4 rounded bg-white dark:bg-gray-3 border border-gray-4" />
+								<div class="size-4 rounded-sm bg-white dark:bg-gray-3 border border-gray-4" />
+								<div class="size-4 rounded-sm bg-white dark:bg-gray-3 border border-gray-4" />
 								<div class="w-px h-5 bg-gray-4 mx-0.5" />
-								<div class="size-4 rounded bg-blue-3 border border-blue-5" />
-								<div class="size-4 rounded bg-white dark:bg-gray-3 border border-gray-4" />
+								<div class="size-4 rounded-sm bg-blue-3 border border-blue-5" />
+								<div class="size-4 rounded-sm bg-white dark:bg-gray-3 border border-gray-4" />
 								<div class="w-px h-5 bg-gray-4 mx-0.5" />
-								<div class="size-4 rounded bg-white dark:bg-gray-3 border border-gray-4" />
+								<div class="size-4 rounded-sm bg-white dark:bg-gray-3 border border-gray-4" />
 							</div>
 							<div class="flex flex-1 flex-row items-center justify-end gap-1.5">
 								<div class="flex items-center gap-1 px-2 py-1 rounded-md bg-white dark:bg-gray-3 border border-gray-4 text-[9px] text-gray-11 font-medium">
@@ -2321,9 +2321,9 @@ function ScreenshotMockup(props: { active: boolean }) {
 						</div>
 
 						<div class="p-3 flex items-center justify-center">
-							<div class="relative w-full h-[140px] rounded overflow-hidden">
+							<div class="relative w-full h-[140px] rounded-sm overflow-hidden">
 								<div
-									class="absolute inset-0 transition-opacity duration-[1000ms] ease-out"
+									class="absolute inset-0 transition-opacity duration-1000 ease-out"
 									style={{
 										background:
 											"linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
@@ -2332,7 +2332,7 @@ function ScreenshotMockup(props: { active: boolean }) {
 								/>
 
 								<div
-									class="absolute transition-all duration-[1000ms] ease-out"
+									class="absolute transition-all duration-1000 ease-out"
 									style={{
 										top: phase() >= 8 ? "8%" : "0",
 										left: phase() >= 8 ? "8%" : "0",
@@ -2341,7 +2341,7 @@ function ScreenshotMockup(props: { active: boolean }) {
 									}}
 								>
 									<div
-										class="w-full h-full bg-white dark:bg-gray-3 flex flex-col gap-2 p-3 transition-all duration-[1000ms]"
+										class="w-full h-full bg-white dark:bg-gray-3 flex flex-col gap-2 p-3 transition-all duration-1000"
 										style={{
 											"border-radius": phase() >= 8 ? "8px" : "0px",
 											"box-shadow":
@@ -2352,8 +2352,8 @@ function ScreenshotMockup(props: { active: boolean }) {
 										<div class="w-28 h-2 rounded-full bg-gray-5/40" />
 										<div class="w-20 h-2 rounded-full bg-gray-5/50" />
 										<div class="mt-1 flex gap-2">
-											<div class="flex-1 h-8 rounded bg-gray-5/30" />
-											<div class="flex-1 h-8 rounded bg-gray-5/20" />
+											<div class="flex-1 h-8 rounded-sm bg-gray-5/30" />
+											<div class="flex-1 h-8 rounded-sm bg-gray-5/20" />
 										</div>
 									</div>
 								</div>

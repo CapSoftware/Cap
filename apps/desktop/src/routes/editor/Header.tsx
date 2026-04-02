@@ -141,7 +141,7 @@ export function Header() {
 				data-tauri-drag-region
 				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
 			>
-				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
+				{ostype() === "macos" && <div class="h-full w-16" />}
 				<EditorButton
 					onClick={async () => {
 						clearTimelineSelection();
@@ -394,7 +394,7 @@ function NameEditor(props: { name: string }) {
 				<input
 					ref={prettyNameRef}
 					class={cx(
-						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-none peer whitespace-pre",
+						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-hidden peer whitespace-pre",
 						truncated() && "truncate",
 						(prettyName().length < 5 || prettyName().length > 100) &&
 							"focus:border-red-500",

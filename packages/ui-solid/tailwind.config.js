@@ -110,9 +110,9 @@ module.exports = {
 		},
 	},
 	plugins: [
-		require("tailwindcss-animate"),
+		// require("tailwindcss-animate"),
 		require("@tailwindcss/typography"),
-		require("@kobalte/tailwindcss"),
-		require("tailwind-scrollbar"),
+		// require("@kobalte/tailwindcss"),
+		// require("tailwind-scrollbar"),
 	],
 };

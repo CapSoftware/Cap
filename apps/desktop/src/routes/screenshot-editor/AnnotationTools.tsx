@@ -20,7 +20,7 @@ export function AnnotationTools() {
 					type="button"
 					onClick={() => setLayersPanelOpen(!layersPanelOpen())}
 					class={cx(
-						"flex items-center justify-center rounded-[0.5rem] transition-all size-8",
+						"flex items-center justify-center rounded-lg transition-all size-8",
 						layersPanelOpen()
 							? "bg-blue-3 text-blue-11"
 							: "bg-transparent hover:bg-gray-3 text-gray-11",
@@ -87,7 +87,7 @@ function ToolButton(props: {
 					}
 				}}
 				class={cx(
-					"flex items-center justify-center rounded-[0.5rem] transition-all size-8",
+					"flex items-center justify-center rounded-lg transition-all size-8",
 					activeTool() === props.tool
 						? "bg-blue-3 text-blue-11"
 						: "bg-transparent hover:bg-gray-3 text-gray-11",

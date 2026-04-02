@@ -14,10 +14,10 @@ import {
 	topSlideAnimateClasses,
 } from "../ui";
 
-export type CornerRoundingType = "rounded" | "squircle";
+export type CornerRoundingType = "rounded-sm" | "squircle";
 const CORNER_STYLE_OPTIONS = [
 	{ name: "Squircle", value: "squircle" },
-	{ name: "Rounded", value: "rounded" },
+	{ name: "Rounded", value: "rounded-sm" },
 ] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
 function hasNoVisibleBackground(source: {
@@ -144,14 +144,14 @@ function CornerStyleSelect(props: {
 					<KSelect.Value<{
 						name: string;
 						value: CornerRoundingType;
-					}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+					}> class="flex-1 text-sm text-left truncate text-(--gray-500) font-normal">
 						{(state) => <span>{state.selectedOption().name}</span>}
 					</KSelect.Value>
 					<KSelect.Icon<ValidComponent>
 						as={(iconProps) => (
 							<IconCapChevronDown
 								{...iconProps}
-								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
 							/>
 						)}
 					/>
