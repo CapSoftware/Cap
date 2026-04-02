@@ -1958,6 +1958,31 @@ impl ProjectUniforms {
         project.background.padding / 100.0 * SCREEN_MAX_PADDING
     }
 
+    fn round_base_dimension(value: f64) -> u32 {
+        (((value.ceil() as u32) + 1) & !1).max(2)
+    }
+
+    fn fixed_aspect_base_size(crop: &Crop, target_aspect: f64, padding_factor: f64) -> (u32, u32) {
+        let crop_aspect = crop.aspect_ratio() as f64;
+        let padding = f64::from(u32::max(crop.size.x, crop.size.y)) * padding_factor * 2.0;
+
+        if crop_aspect > target_aspect {
+            let width = crop.size.x as f64 + padding;
+            let height = width / target_aspect;
+            (
+                Self::round_base_dimension(width),
+                Self::round_base_dimension(height),
+            )
+        } else {
+            let height = crop.size.y as f64 + padding;
+            let width = height * target_aspect;
+            (
+                Self::round_base_dimension(width),
+                Self::round_base_dimension(height),
+            )
+        }
+    }
+
     pub fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
         project.background.crop.as_ref().cloned().unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
@@ -1980,50 +2005,27 @@ impl ProjectUniforms {
 
     pub fn get_base_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
-        let crop_aspect = crop.aspect_ratio();
+        let padding_factor = Self::auto_padding_factor(project);
 
         match &project.aspect_ratio {
             None => {
-                let scale = 1.0 + Self::auto_padding_factor(project) * 2.0;
+                let scale = 1.0 + padding_factor * 2.0;
                 let width = ((crop.size.x as f64 * scale) as u32 + 1) & !1;
                 let height = ((crop.size.y as f64 * scale) as u32 + 1) & !1;
                 (width, height)
             }
-            Some(AspectRatio::Square) => {
-                let size = if crop_aspect > 1.0 {
-                    crop.size.y
-                } else {
-                    crop.size.x
-                };
-                (size, size)
-            }
+            Some(AspectRatio::Square) => Self::fixed_aspect_base_size(&crop, 1.0, padding_factor),
             Some(AspectRatio::Wide) => {
-                if crop_aspect > 16.0 / 9.0 {
-                    (((crop.size.y as f32 * 16.0 / 9.0) as u32), crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 9.0 / 16.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 16.0 / 9.0, padding_factor)
             }
             Some(AspectRatio::Vertical) => {
-                if crop_aspect > 9.0 / 16.0 {
-                    ((crop.size.y as f32 * 9.0 / 16.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 16.0 / 9.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 9.0 / 16.0, padding_factor)
             }
             Some(AspectRatio::Classic) => {
-                if crop_aspect > 4.0 / 3.0 {
-                    ((crop.size.y as f32 * 4.0 / 3.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 3.0 / 4.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 4.0 / 3.0, padding_factor)
             }
             Some(AspectRatio::Tall) => {
-                if crop_aspect > 3.0 / 4.0 {
-                    ((crop.size.y as f32 * 3.0 / 4.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 4.0 / 3.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 3.0 / 4.0, padding_factor)
             }
         }
     }
@@ -2090,12 +2092,19 @@ impl ProjectUniforms {
                 output_size.x / f64::max(base_w as f64, 1.0),
                 output_size.y / f64::max(base_h as f64, 1.0),
             );
-            base_padding * output_scale
+            let max_padding = f64::max(
+                f64::min((output_size.x - 1.0) / 2.0, (output_size.y - 1.0) / 2.0),
+                0.0,
+            );
+            (base_padding * output_scale).min(max_padding)
         };
 
         let is_height_constrained = cropped_aspect <= output_aspect;
 
-        let available_size = output_size - 2.0 * padding;
+        let available_size = XY::new(
+            (output_size.x - 2.0 * padding).max(1.0),
+            (output_size.y - 2.0 * padding).max(1.0),
+        );
 
         let target_size = if is_height_constrained {
             XY::new(available_size.y * cropped_aspect, available_size.y)
@@ -2974,6 +2983,40 @@ mod tests {
 
         assert_eq!((width, height), (1200, 600));
         assert_eq!(offset.coord, XY::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn fixed_aspect_ratio_clamps_padding_to_keep_display_visible() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.aspect_ratio = Some(AspectRatio::Vertical);
+        project.background.padding = 100.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let offset = ProjectUniforms::display_offset(&options, &project, XY::new(width, height));
+        let size = ProjectUniforms::display_size(&options, &project, XY::new(width, height));
+
+        assert!(offset.x >= 0.0);
+        assert!(offset.y >= 0.0);
+        assert!(size.x >= 1.0);
+        assert!(size.y >= 1.0);
+        assert!(offset.x + size.x <= width as f64 + f64::EPSILON);
+        assert!(offset.y + size.y <= height as f64 + f64::EPSILON);
+    }
+
+    #[test]
+    fn fixed_aspect_ratio_preserves_source_resolution_with_padding() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.aspect_ratio = Some(AspectRatio::Square);
+        project.background.padding = 20.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let size = ProjectUniforms::display_size(&options, &project, XY::new(width, height));
+
+        assert_eq!((width, height), (2228, 2228));
+        assert!((size.x - 1920.0).abs() <= 1.0);
+        assert!((size.y - 1080.0).abs() <= 1.0);
     }
 }
 
