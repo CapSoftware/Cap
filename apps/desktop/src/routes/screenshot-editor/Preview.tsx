@@ -12,6 +12,7 @@ import IconCapZoomOut from "~icons/cap/zoom-out";
 import { EditorButton, Slider } from "../editor/ui";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { useScreenshotEditorContext } from "./context";
+import { getImageRect } from "./layout";
 
 // CSS for checkerboard grid
 const gridStyle = {
@@ -23,13 +24,111 @@ const gridStyle = {
 };
 
 export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
-	const { latestFrame, annotations, focusAnnotationId, setFocusAnnotationId } =
-		useScreenshotEditorContext();
+	const {
+		latestFrame,
+		annotations,
+		focusAnnotationId,
+		setFocusAnnotationId,
+		activePopover,
+		setActivePopover,
+		setPreviewCanvas,
+		setPreviewMaskCanvas,
+		project,
+		originalImageSize,
+	} = useScreenshotEditorContext();
 	let canvasRef: HTMLCanvasElement | undefined;
+	let viewportRef: HTMLDivElement | undefined;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
+	const padding = 20;
+
+	const frame = () => {
+		const f = latestFrame();
+		if (!f) {
+			return {
+				width: 0,
+				height: 0,
+				bitmap: null,
+			};
+		}
+		return f;
+	};
+
+	const frameWidth = () => frame().width;
+	const frameHeight = () => frame().height;
+
+	const imageRect = createMemo(() => {
+		return getImageRect(
+			{ width: frameWidth(), height: frameHeight() },
+			originalImageSize(),
+			project.background.padding,
+			project.background.crop,
+		);
+	});
+
+	const bounds = createMemo(() => {
+		return {
+			x: 0,
+			y: 0,
+			width: frameWidth(),
+			height: frameHeight(),
+		};
+	});
+
+	const availableWidth = () =>
+		Math.max((containerBounds.width ?? 0) - padding * 2, 0);
+	const availableHeight = () =>
+		Math.max((containerBounds.height ?? 0) - padding * 2, 0);
+
+	const containerAspect = () => {
+		const width = availableWidth();
+		const height = availableHeight();
+		if (width === 0 || height === 0) return 1;
+		return width / height;
+	};
+
+	const contentAspect = () => {
+		const width = bounds().width;
+		const height = bounds().height;
+		if (width === 0 || height === 0) return containerAspect();
+		return width / height;
+	};
+
+	const size = () => {
+		let width: number;
+		let height: number;
+		if (contentAspect() < containerAspect()) {
+			height = availableHeight();
+			width = height * contentAspect();
+		} else {
+			width = availableWidth();
+			height = width / contentAspect();
+		}
+
+		return {
+			width: Math.min(width, bounds().width),
+			height: Math.min(height, bounds().height),
+		};
+	};
+
+	const fitScale = () => {
+		if (bounds().width === 0) return 1;
+		return size().width / bounds().width;
+	};
+
+	const cssScale = () => fitScale() * props.zoom;
+	const scaledWidth = () => frameWidth() * cssScale();
+	const scaledHeight = () => frameHeight() * cssScale();
+	const imageShadow = () =>
+		props.zoom > 1
+			? "none"
+			: "0 4px 20px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.1)";
+	const contentLeft = () =>
+		(size().width - scaledWidth()) / 2 - bounds().x * cssScale() + pan().x;
+	const contentTop = () =>
+		(size().height - scaledHeight()) / 2 - bounds().y * cssScale() + pan().y;
 
 	const [pan, setPan] = createSignal({ x: 0, y: 0 });
 	const [isDragging, setIsDragging] = createSignal(false);
@@ -57,6 +156,8 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 	});
 
 	onCleanup(() => {
+		setPreviewCanvas(null);
+		setPreviewMaskCanvas(null);
 		const bitmap = previousBitmap();
 		if (bitmap) {
 			bitmap.close();
@@ -106,6 +207,47 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			const delta = -e.deltaY;
 			const zoomStep = 0.005;
 			const newZoom = Math.max(0.1, Math.min(3, props.zoom + delta * zoomStep));
+			const rect = viewportRef?.getBoundingClientRect();
+			const currentScale = fitScale() * props.zoom;
+			const nextScale = fitScale() * newZoom;
+			const sizeData = size();
+			const boundsData = bounds();
+
+			if (
+				rect &&
+				currentScale > 0 &&
+				nextScale > 0 &&
+				sizeData.width > 0 &&
+				sizeData.height > 0
+			) {
+				const pointerX = e.clientX - rect.left;
+				const pointerY = e.clientY - rect.top;
+				const currentPan = pan();
+				const contentX =
+					boundsData.x +
+					(pointerX -
+						(sizeData.width - sizeData.width * props.zoom) / 2 -
+						currentPan.x) /
+						currentScale;
+				const contentY =
+					boundsData.y +
+					(pointerY -
+						(sizeData.height - sizeData.height * props.zoom) / 2 -
+						currentPan.y) /
+						currentScale;
+
+				setPan({
+					x:
+						pointerX -
+						(sizeData.width - sizeData.width * newZoom) / 2 -
+						(contentX - boundsData.x) * nextScale,
+					y:
+						pointerY -
+						(sizeData.height - sizeData.height * newZoom) / 2 -
+						(contentY - boundsData.y) * nextScale,
+				});
+			}
+
 			props.setZoom(newZoom);
 		} else {
 			setPan((p) => ({
@@ -115,28 +257,32 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		}
 	};
 
-	const handleMouseDown = (e: MouseEvent) => {
-		if (e.button !== 0) return;
-		e.preventDefault();
+	const startPanDrag = (clientX: number, clientY: number) => {
 		setIsDragging(true);
 		setDragStart({
-			x: e.clientX,
-			y: e.clientY,
+			x: clientX,
+			y: clientY,
 			panX: pan().x,
 			panY: pan().y,
 		});
 	};
 
+	const handleMouseDown = (e: MouseEvent) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		startPanDrag(e.clientX, e.clientY);
+	};
+
 	const handleMiddleMouseDown = (e: MouseEvent) => {
 		if (e.button !== 1) return;
 		e.preventDefault();
-		setIsDragging(true);
-		setDragStart({
-			x: e.clientX,
-			y: e.clientY,
-			panX: pan().x,
-			panY: pan().y,
-		});
+		startPanDrag(e.clientX, e.clientY);
+	};
+
+	const dismissActivePopover = () => {
+		if (activePopover()) {
+			setActivePopover(null);
+		}
 	};
 
 	const handleMouseMove = (e: MouseEvent) => {
@@ -214,86 +360,6 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 					fallback={<div class="text-gray-11">Loading preview...</div>}
 				>
 					{(_) => {
-						const padding = 20;
-						const frame = () => {
-							const f = latestFrame();
-							if (!f)
-								return {
-									width: 0,
-									height: 0,
-									bitmap: null,
-								};
-							return f;
-						};
-
-						const frameWidth = () => frame().width;
-						const frameHeight = () => frame().height;
-
-						const imageRect = createMemo(() => {
-							return {
-								x: 0,
-								y: 0,
-								width: frameWidth(),
-								height: frameHeight(),
-							};
-						});
-
-						const bounds = createMemo(() => {
-							return {
-								x: 0,
-								y: 0,
-								width: frameWidth(),
-								height: frameHeight(),
-							};
-						});
-
-						const availableWidth = () =>
-							Math.max((containerBounds.width ?? 0) - padding * 2, 0);
-						const availableHeight = () =>
-							Math.max((containerBounds.height ?? 0) - padding * 2, 0);
-
-						const containerAspect = () => {
-							const width = availableWidth();
-							const height = availableHeight();
-							if (width === 0 || height === 0) return 1;
-							return width / height;
-						};
-
-						const contentAspect = () => {
-							const width = bounds().width;
-							const height = bounds().height;
-							if (width === 0 || height === 0) return containerAspect();
-							return width / height;
-						};
-
-						const size = () => {
-							let width: number;
-							let height: number;
-							if (contentAspect() < containerAspect()) {
-								height = availableHeight();
-								width = height * contentAspect();
-							} else {
-								width = availableWidth();
-								height = width / contentAspect();
-							}
-
-							return {
-								width: Math.min(width, bounds().width),
-								height: Math.min(height, bounds().height),
-							};
-						};
-
-						const fitScale = () => {
-							if (bounds().width === 0) return 1;
-							return size().width / bounds().width;
-						};
-
-						const cssScale = () => fitScale() * props.zoom;
-						const scaledWidth = () => frameWidth() * cssScale();
-						const scaledHeight = () => frameHeight() * cssScale();
-						const canvasLeft = () => -bounds().x * cssScale();
-						const canvasTop = () => -bounds().y * cssScale();
-
 						createEffect(
 							on(focusAnnotationId, (annId) => {
 								if (!annId) return;
@@ -489,55 +555,72 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 									onMouseDown={handleMouseDown}
 								/>
 								<div
+									ref={viewportRef}
 									style={{
-										width: `${size().width * props.zoom}px`,
-										height: `${size().height * props.zoom}px`,
+										width: `${size().width}px`,
+										height: `${size().height}px`,
 										position: "relative",
-										transform: `translate(${pan().x}px, ${pan().y}px)`,
-										"will-change": "transform",
 										"z-index": 1,
 										cursor: "default",
-										overflow: "hidden",
-										"box-shadow":
-											"0 4px 20px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.1)",
-										"border-radius": "4px",
+										overflow: "visible",
 									}}
 									class="block"
+									onMouseDown={dismissActivePopover}
 								>
-									<canvas
-										ref={canvasRef}
-										width={frameWidth()}
-										height={frameHeight()}
+									<div
 										style={{
 											position: "absolute",
-											left: `${canvasLeft()}px`,
-											top: `${canvasTop()}px`,
+											left: `${contentLeft()}px`,
+											top: `${contentTop()}px`,
 											width: `${scaledWidth()}px`,
 											height: `${scaledHeight()}px`,
+											"will-change": "transform",
+											overflow: "hidden",
+											"border-radius": "4px",
+											"box-shadow": imageShadow(),
 										}}
-									/>
-									<canvas
-										ref={(el) => {
-											maskCanvasRef = el ?? maskCanvasRef;
-											renderMaskOverlays();
-										}}
-										width={frameWidth()}
-										height={frameHeight()}
-										style={{
-											position: "absolute",
-											left: `${canvasLeft()}px`,
-											top: `${canvasTop()}px`,
-											width: `${scaledWidth()}px`,
-											height: `${scaledHeight()}px`,
-											"pointer-events": "none",
-										}}
-									/>
-									<AnnotationLayer
-										bounds={bounds()}
-										cssWidth={size().width * props.zoom}
-										cssHeight={size().height * props.zoom}
-										imageRect={imageRect()}
-									/>
+									>
+										<canvas
+											ref={(el) => {
+												canvasRef = el;
+												setPreviewCanvas(el);
+											}}
+											width={frameWidth()}
+											height={frameHeight()}
+											style={{
+												position: "absolute",
+												left: "0px",
+												top: "0px",
+												width: `${scaledWidth()}px`,
+												height: `${scaledHeight()}px`,
+											}}
+										/>
+										<canvas
+											ref={(el) => {
+												maskCanvasRef = el ?? maskCanvasRef;
+												setPreviewMaskCanvas(el);
+												renderMaskOverlays();
+											}}
+											width={frameWidth()}
+											height={frameHeight()}
+											style={{
+												position: "absolute",
+												left: "0px",
+												top: "0px",
+												width: `${scaledWidth()}px`,
+												height: `${scaledHeight()}px`,
+												"pointer-events": "none",
+											}}
+										/>
+										<AnnotationLayer
+											bounds={bounds()}
+											cssWidth={scaledWidth()}
+											cssHeight={scaledHeight()}
+											imageRect={imageRect()}
+											isPanning={isDragging()}
+											onBackgroundMouseDown={handleMouseDown}
+										/>
+									</div>
 								</div>
 							</div>
 						);
