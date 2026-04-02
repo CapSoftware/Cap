@@ -100,7 +100,10 @@ function Inner(props: ParentProps) {
 	});
 
 	return (
-		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
+		<div
+			data-tauri-drag-region="none"
+			class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in"
+		>
 			{props.children}
 		</div>
 	);
