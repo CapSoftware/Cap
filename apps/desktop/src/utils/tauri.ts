@@ -119,6 +119,9 @@ async copyScreenshotToClipboard(path: string) : Promise<null> {
 async copyImageToClipboard(data: number[]) : Promise<null> {
     return await TAURI_INVOKE("copy_image_to_clipboard", { data });
 },
+async copyRenderedScreenshotToClipboard() : Promise<null> {
+    return await TAURI_INVOKE("copy_rendered_screenshot_to_clipboard");
+},
 async openFilePath(path: string) : Promise<null> {
     return await TAURI_INVOKE("open_file_path", { path });
 },
@@ -158,6 +161,9 @@ async generateZoomSegmentsFromClicks() : Promise<ZoomSegment[]> {
 async generateKeyboardSegments(groupingThresholdMs: number, lingerDurationMs: number, showModifiers: boolean, showSpecialKeys: boolean) : Promise<KeyboardTrackSegment[]> {
     return await TAURI_INVOKE("generate_keyboard_segments", { groupingThresholdMs, lingerDurationMs, showModifiers, showSpecialKeys });
 },
+async renderScreenshotForExport() : Promise<number[]> {
+    return await TAURI_INVOKE("render_screenshot_for_export");
+},
 async openPermissionSettings(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("open_permission_settings", { permission });
 },
@@ -179,8 +185,8 @@ async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
 async createScreenshotEditorInstance() : Promise<SerializedScreenshotEditorInstance> {
     return await TAURI_INVOKE("create_screenshot_editor_instance");
 },
-async updateScreenshotConfig(config: ProjectConfiguration, save: boolean) : Promise<null> {
-    return await TAURI_INVOKE("update_screenshot_config", { config, save });
+async updateScreenshotConfig(config: ProjectConfiguration, save: boolean, revision: number) : Promise<null> {
+    return await TAURI_INVOKE("update_screenshot_config", { config, save, revision });
 },
 async getRecordingMeta(path: string, fileType: FileType) : Promise<RecordingMetaWithMetadata> {
     return await TAURI_INVOKE("get_recording_meta", { path, fileType });
