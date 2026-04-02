@@ -385,6 +385,12 @@ export const WebRecorderDialog = () => {
 															href={download.url}
 															download={download.fileName}
 															className="font-medium text-blue-11 hover:text-blue-12"
+															onClick={() =>
+																setTimeout(
+																	() => dismissRecoveredDownload(download.id),
+																	500,
+																)
+															}
 														>
 															Download
 														</a>
