@@ -25,7 +25,11 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: RecordingMode,
     },
+    PauseRecording,
+    ResumeRecording,
+    TogglePauseRecording,
     StopRecording,
+    TakeScreenshot,
     OpenEditor {
         project_path: PathBuf,
     },
@@ -34,26 +38,151 @@ pub enum DeepLinkAction {
     },
 }
 
+pub enum ActionParseFromUrlError {
+    ParseFailed,
+    Invalid,
+    NotAction,
+}
+
+impl TryFrom<&Url> for DeepLinkAction {
+    type Error = ActionParseFromUrlError;
+
+    fn try_from(url: &Url) -> Result<Self, Self::Error> {
+        if url.scheme() != "cap-desktop" {
+            return Err(ActionParseFromUrlError::NotAction);
+        }
+
+        match url.domain() {
+            Some("pause") => Ok(Self::PauseRecording),
+            Some("resume") => Ok(Self::ResumeRecording),
+            Some("toggle-pause") => Ok(Self::TogglePauseRecording),
+            Some("stop") => Ok(Self::StopRecording),
+            Some("screenshot") => Ok(Self::TakeScreenshot),
+            _ => {
+                if url.domain() == Some("action") {
+                    let params = url.query_pairs().collect::<std::collections::HashMap<_, _>>();
+                    let json_value = params.get("value").ok_or(ActionParseFromUrlError::Invalid)?;
+                    let action: Self = serde_json::from_str(json_value)
+                        .map_err(|_| ActionParseFromUrlError::ParseFailed)?;
+                    Ok(action)
+                } else {
+                    Err(ActionParseFromUrlError::Invalid)
+                }
+            }
+        }
+    }
+}
+
+impl DeepLinkAction {
+    pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        trace!("Executing deep link action: {:?}", self);
+
+        match self {
+            Self::PauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::pause_recording(app.clone(), state.clone()).await?;
+                let _ = ShowCapWindow::Main { init_target_mode: None }.show(app).await;
+                Ok(())
+            }
+            Self::ResumeRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::resume_recording(app.clone(), state.clone()).await?;
+                let _ = ShowCapWindow::Main { init_target_mode: None }.show(app).await;
+                Ok(())
+            }
+            Self::TogglePauseRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::toggle_pause_recording(app.clone(), state.clone()).await?;
+                let _ = ShowCapWindow::Main { init_target_mode: None }.show(app).await;
+                Ok(())
+            }
+            Self::StopRecording => {
+                let state = app.state::<ArcLock<App>>();
+                crate::recording::stop_recording(app.clone(), state.clone()).await?;
+                let _ = ShowCapWindow::Main { init_target_mode: None }.show(app).await;
+                Ok(())
+            }
+            Self::TakeScreenshot => {
+                use scap_targets::Display;
+                let display = Display::get_containing_cursor().unwrap_or_else(Display::primary);
+                let target = ScreenCaptureTarget::Display { id: display.id() };
+
+                match crate::recording::take_screenshot(app.clone(), target).await {
+                    Ok(path) => {
+                        let _ = ShowCapWindow::ScreenshotEditor { path }.show(app).await;
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("Failed to take screenshot: {e}")),
+                }
+            }
+            Self::StartRecording {
+                capture_mode,
+                camera,
+                mic_label,
+                capture_system_audio,
+                mode,
+            } => {
+                let state = app.state::<ArcLock<App>>();
+
+                let capture_target = match capture_mode {
+                    CaptureMode::Screen(name) => cap_recording::sources::screen_capture::list_displays()
+                        .into_iter()
+                        .find(|(s, _)| s.name == *name)
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                        .ok_or(format!("No screen with name \"{}\"", &name))?,
+                    CaptureMode::Window(name) => cap_recording::sources::screen_capture::list_windows()
+                        .into_iter()
+                        .find(|(w, _)| w.name == *name)
+                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                };
+
+                let inputs = StartRecordingInputs {
+                    capture_target,
+                    capture_system_audio,
+                    mode,
+                    organization_id: None,
+                };
+
+                if let Some(camera_id) = camera {
+                    crate::set_camera_input(app.clone(), state.clone(), Some(camera_id.clone()), None)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+
+                if let Some(mic) = mic_label {
+                    crate::set_mic_input(state.clone(), Some(mic.clone()))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+
+                crate::recording::start_recording(app.clone(), state.clone(), inputs)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Self::OpenEditor { project_path } => {
+                crate::open_project_from_path(Path::new(&project_path), app.clone())
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Self::OpenSettings { page } => {
+                crate::show_window(app.clone(), ShowCapWindow::Settings { page: page.clone() })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+        }
+    }
+}
+
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     trace!("Handling deep actions for: {:?}", &urls);
 
     let actions: Vec<_> = urls
         .into_iter()
         .filter(|url| !url.as_str().is_empty())
-        .filter_map(|url| {
-            DeepLinkAction::try_from(&url)
-                .map_err(|e| match e {
-                    ActionParseFromUrlError::ParseFailed(msg) => {
-                        eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
-                    }
-                    ActionParseFromUrlError::Invalid => {
-                        eprintln!("Invalid deep link format \"{}\"", &url)
-                    }
-                    // Likely login action, not handled here.
-                    ActionParseFromUrlError::NotAction => {}
-                })
-                .ok()
-        })
+        .filter_map(|url| DeepLinkAction::try_from(&url).ok())
         .collect();
 
     if actions.is_empty() {
@@ -64,95 +193,8 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {e}");
+                trace!("Failed to handle deep link action: {}", e);
             }
         }
     });
-}
-
-pub enum ActionParseFromUrlError {
-    ParseFailed(String),
-    Invalid,
-    NotAction,
-}
-
-impl TryFrom<&Url> for DeepLinkAction {
-    type Error = ActionParseFromUrlError;
-
-    fn try_from(url: &Url) -> Result<Self, Self::Error> {
-        #[cfg(target_os = "macos")]
-        if url.scheme() == "file" {
-            return url
-                .to_file_path()
-                .map(|project_path| Self::OpenEditor { project_path })
-                .map_err(|_| ActionParseFromUrlError::Invalid);
-        }
-
-        match url.domain() {
-            Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
-            _ => Err(ActionParseFromUrlError::Invalid),
-        }?;
-
-        let params = url
-            .query_pairs()
-            .collect::<std::collections::HashMap<_, _>>();
-        let json_value = params
-            .get("value")
-            .ok_or(ActionParseFromUrlError::Invalid)?;
-        let action: Self = serde_json::from_str(json_value)
-            .map_err(|e| ActionParseFromUrlError::ParseFailed(e.to_string()))?;
-        Ok(action)
-    }
-}
-
-impl DeepLinkAction {
-    pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
-        match self {
-            DeepLinkAction::StartRecording {
-                capture_mode,
-                camera,
-                mic_label,
-                capture_system_audio,
-                mode,
-            } => {
-                let state = app.state::<ArcLock<App>>();
-
-                crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
-                crate::set_mic_input(state.clone(), mic_label).await?;
-
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
-
-                let inputs = StartRecordingInputs {
-                    mode,
-                    capture_target,
-                    capture_system_audio,
-                    organization_id: None,
-                };
-
-                crate::recording::start_recording(app.clone(), state, inputs)
-                    .await
-                    .map(|_| ())
-            }
-            DeepLinkAction::StopRecording => {
-                crate::recording::stop_recording(app.clone(), app.state()).await
-            }
-            DeepLinkAction::OpenEditor { project_path } => {
-                crate::open_project_from_path(Path::new(&project_path), app.clone())
-            }
-            DeepLinkAction::OpenSettings { page } => {
-                crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
-            }
-        }
-    }
 }

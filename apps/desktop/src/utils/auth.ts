@@ -2,7 +2,6 @@ import { createMutation } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import * as shell from "@tauri-apps/plugin-shell";
 import { z } from "zod";
 import callbackTemplate from "~/components/callback.template";
@@ -176,12 +175,14 @@ async function startDeepLinkSession(signal: AbortSignal) {
 		resolvePromise(value);
 	};
 
-	stopListening = await onOpenUrl(async (urls) => {
-		for (const urlString of urls) {
+	const unlisten = await listen<string[]>("tauri://deep-link", (event) => {
+		for (const urlString of event.payload) {
 			if (signal.aborted) return;
-			settle(parseAuthParams(new URL(urlString)));
+			const params = parseAuthParams(new URL(urlString));
+			if (params) settle(params);
 		}
 	});
+	stopListening = unlisten;
 
 	const dispose = async () => {
 		stopListening?.();
@@ -195,7 +196,7 @@ async function startDeepLinkSession(signal: AbortSignal) {
 }
 
 function parseAuthParams(url: URL) {
-	return paramsValidator.parse(
+	const parsed = paramsValidator.safeParse(
 		[...url.searchParams].reduce(
 			(acc, [key, value]) => {
 				acc[key] = value;
@@ -204,6 +205,7 @@ function parseAuthParams(url: URL) {
 			{} as Record<string, string>,
 		),
 	);
+	return parsed.success ? parsed.data : null;
 }
 
 async function processAuthData(data: AuthParams) {

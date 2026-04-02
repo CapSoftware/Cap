@@ -89,8 +89,9 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
-use tauri_plugin_deep_link::DeepLinkExt;
+use tauri::{
+    ipc::Channel, AppHandle, Emitter, Manager, State, Url, Window, WindowEvent,
+};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -3370,29 +3371,47 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
     #[allow(unused_mut)]
-    let mut builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            trace!("Single instance invoked with args {args:?}");
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        info!("Single instance invoked with args {:?}", &args);
+        let app_handle = app.clone();
 
-            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
-            let Some(cap_file) = args
-                .iter()
-                .find(|arg| arg.ends_with(".cap"))
-                .map(PathBuf::from)
-            else {
-                let app = app.clone();
-                tokio::spawn(async move {
-                    ShowCapWindow::Main {
-                        init_target_mode: None,
-                    }
-                    .show(&app)
-                    .await
-                });
-                return;
-            };
+        // 1. Handle Remote Control URLs
+        if let Some(arg) = args.get(1) {
+            if arg.starts_with("cap-desktop://") {
+                if let Ok(url) = Url::parse(arg) {
+                    crate::deeplink_actions::handle(app, vec![url]);
+                    app.emit("tauri://deep-link", vec![arg.clone()]).ok();
 
-            let _ = open_project_from_path(&cap_file, app.clone());
-        }));
+                    let ah = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = crate::windows::ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(&ah)
+                        .await;
+                    });
+                }
+            }
+        }
+
+        // 2. Handle .cap files
+        let cap_file = args.iter()
+            .find(|arg| arg.ends_with(".cap"))
+            .map(PathBuf::from);
+
+        if let Some(file) = cap_file {
+            let _ = open_project_from_path(&file, app.clone());
+        }
+
+        let ah = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::windows::ShowCapWindow::Main {
+                init_target_mode: None,
+            }
+            .show(&ah)
+            .await;
+        });
+    }));
 
     #[cfg(target_os = "macos")]
     {
@@ -3410,7 +3429,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
@@ -3657,11 +3675,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
                 let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
                 prewarmer.request(event.force).await;
-            });
-
-            let app_handle = app.clone();
-            app.deep_link().on_open_url(move |event| {
-                deeplink_actions::handle(&app_handle, event.urls());
             });
 
             Ok(())
