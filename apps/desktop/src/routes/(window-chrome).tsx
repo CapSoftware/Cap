@@ -1,5 +1,6 @@
 import type { RouteSectionProps } from "@solidjs/router";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -24,6 +25,9 @@ export default function (props: RouteSectionProps) {
 			__CAP__?: { initialTargetMode?: unknown };
 		};
 		const hasInitialTargetMode = __CAP__?.initialTargetMode != null;
+		if (location.pathname === "/") {
+			void emit("main-window-ready");
+		}
 		if (location.pathname === "/" && !hasInitialTargetMode)
 			getCurrentWindow().show();
 	});
