@@ -1311,6 +1311,17 @@ mod tests {
         }
     }
 
+    fn wired_audio_config(buffer_size: u32) -> cap_media_info::AudioInfo {
+        cap_media_info::AudioInfo {
+            sample_rate: 48000,
+            channels: 1,
+            sample_format: ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            time_base: ffmpeg::util::rational::Rational(1, 48000),
+            buffer_size,
+            is_wireless_transport: false,
+        }
+    }
+
     fn retina_video_config() -> VideoInfo {
         VideoInfo::from_raw(RawVideoFormat::Nv12, 2940, 1912, 30)
     }
@@ -3339,6 +3350,51 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(15)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_wired_mic_timestamp_gap_is_preserved() {
+        let output = test_output_path("wired_mic_timestamp_gap");
+        let video = valid_video_config();
+        let audio = wired_audio_config(1680);
+
+        let mut encoder =
+            MP4Encoder::init_instant_mode(output.clone(), video, Some(audio), None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+        let frame_a = create_test_video_frame(&pool, 0, 33_333);
+        let frame_b = create_test_video_frame(&pool, 33_333, 33_333);
+        let frame_c = create_test_video_frame(&pool, 66_666, 33_333);
+        encoder.queue_video_frame(frame_a, Duration::ZERO).unwrap();
+        encoder
+            .queue_video_frame(frame_b, Duration::from_micros(33_333))
+            .unwrap();
+        encoder
+            .queue_video_frame(frame_c, Duration::from_micros(66_666))
+            .unwrap();
+
+        let audio_frame = create_test_audio_frame(48000, 1680);
+        encoder
+            .queue_audio_frame(&audio_frame, Duration::ZERO)
+            .unwrap();
+        assert_eq!(encoder.last_audio_end_pts, Some(1680));
+
+        let gap_timestamp =
+            Duration::from_nanos((3360u128 * 1_000_000_000u128 / 48_000u128) as u64);
+        encoder
+            .queue_audio_frame(&audio_frame, gap_timestamp)
+            .unwrap();
+
+        assert_eq!(
+            encoder.last_audio_end_pts,
+            Some(5040),
+            "audio timeline should preserve a missing 1680-sample chunk"
+        );
+
+        let result = encoder.finish(Some(Duration::from_micros(120_000)));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
         let _ = std::fs::remove_file(&output);
     }
 
