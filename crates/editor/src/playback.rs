@@ -449,18 +449,14 @@ impl Playback {
             let (audio_playhead_tx, audio_playhead_rx) =
                 watch::channel(self.start_frame_number as f64 / fps as f64);
 
-            let has_audio = {
-                let _guard = tokio_handle.enter();
-                AudioPlayback {
-                    segments: get_audio_segments(&self.segment_medias),
-                    stop_rx: stop_rx.clone(),
-                    start_frame_number: self.start_frame_number,
-                    project: self.project.clone(),
-                    fps,
-                    playhead_rx: audio_playhead_rx,
-                    duration_secs: duration,
-                }
-                .spawn()
+            let audio_playback = AudioPlayback {
+                segments: get_audio_segments(&self.segment_medias),
+                stop_rx: stop_rx.clone(),
+                start_frame_number: self.start_frame_number,
+                project: self.project.clone(),
+                fps,
+                playhead_rx: audio_playhead_rx,
+                duration_secs: duration,
             };
 
             let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
@@ -541,6 +537,10 @@ impl Playback {
             let _timer_guard = WindowsTimerResolution::set_high_precision();
 
             let start = Instant::now();
+            let has_audio = {
+                let _guard = tokio_handle.enter();
+                audio_playback.spawn()
+            };
             let mut cached_project = self.project.borrow().clone();
 
             let build_cursor_timelines =
