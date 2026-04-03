@@ -2988,8 +2988,10 @@ mod tests {
     #[test]
     fn fixed_aspect_ratio_clamps_padding_to_keep_display_visible() {
         let options = render_options(1920, 1080);
-        let mut project = ProjectConfiguration::default();
-        project.aspect_ratio = Some(AspectRatio::Vertical);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Vertical),
+            ..ProjectConfiguration::default()
+        };
         project.background.padding = 100.0;
 
         let (width, height) = ProjectUniforms::get_base_size(&options, &project);
@@ -3007,8 +3009,10 @@ mod tests {
     #[test]
     fn fixed_aspect_ratio_preserves_source_resolution_with_padding() {
         let options = render_options(1920, 1080);
-        let mut project = ProjectConfiguration::default();
-        project.aspect_ratio = Some(AspectRatio::Square);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Square),
+            ..ProjectConfiguration::default()
+        };
         project.background.padding = 20.0;
 
         let (width, height) = ProjectUniforms::get_base_size(&options, &project);
