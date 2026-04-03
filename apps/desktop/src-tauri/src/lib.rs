@@ -1111,9 +1111,6 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     let (mic_feed, camera_feed, camera_shutdown) = {
         let state = app.state::<ArcLock<App>>();
         let mut app_state = state.write().await;
-        #[cfg(target_os = "macos")]
-        let camera_shutdown: Option<tokio::sync::oneshot::Receiver<()>> = None;
-        #[cfg(not(target_os = "macos"))]
         let camera_shutdown = app_state.camera_preview.begin_shutdown();
         app_state.camera_in_use = false;
         app_state.selected_camera_id = None;
