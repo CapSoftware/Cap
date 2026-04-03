@@ -67,6 +67,20 @@ fn clamp_size(size: f32) -> f32 {
     size.clamp(MIN_CAMERA_SIZE, MAX_CAMERA_SIZE)
 }
 
+fn preferred_alpha_mode(alpha_modes: &[CompositeAlphaMode]) -> CompositeAlphaMode {
+    [
+        CompositeAlphaMode::PreMultiplied,
+        CompositeAlphaMode::PostMultiplied,
+        CompositeAlphaMode::Opaque,
+        CompositeAlphaMode::Auto,
+        CompositeAlphaMode::Inherit,
+    ]
+    .into_iter()
+    .find(|mode| alpha_modes.contains(mode))
+    .or_else(|| alpha_modes.first().copied())
+    .unwrap_or(CompositeAlphaMode::Opaque)
+}
+
 pub struct CameraPreviewManager {
     store: Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String>,
     preview: Option<InitializedCameraPreview>,
@@ -483,19 +497,7 @@ impl InitializedCameraPreview {
         });
 
         let surface_capabilities = surface.get_capabilities(&adapter);
-        let alpha_mode = if surface_capabilities
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PreMultiplied)
-        {
-            CompositeAlphaMode::PreMultiplied
-        } else if surface_capabilities
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PostMultiplied)
-        {
-            CompositeAlphaMode::PostMultiplied
-        } else {
-            CompositeAlphaMode::Inherit
-        };
+        let alpha_mode = preferred_alpha_mode(&surface_capabilities.alpha_modes);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
