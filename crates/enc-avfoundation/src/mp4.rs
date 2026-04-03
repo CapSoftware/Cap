@@ -104,6 +104,14 @@ pub enum FinishError {
 }
 
 impl MP4Encoder {
+    fn effective_video_pts(&self) -> Option<Duration> {
+        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
+        match (self.last_video_pts, pending_pts) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     pub fn init(
         output: PathBuf,
         video_config: VideoInfo,
@@ -460,11 +468,7 @@ impl MP4Encoder {
 
         let mut deferred_offset: Option<Duration> = None;
 
-        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
-        let effective_last_pts = match (self.last_video_pts, pending_pts) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
+        let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
             && pts_duration <= last_pts
