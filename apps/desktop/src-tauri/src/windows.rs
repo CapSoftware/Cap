@@ -25,8 +25,8 @@ use tracing::{debug, error, instrument, warn};
 use crate::panel_manager::{PanelManager, PanelState, PanelWindowType};
 
 use crate::{
-    App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, RequestScreenCapturePrewarm,
-    RequestSetTargetMode,
+    App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
+    RequestScreenCapturePrewarm, RequestSetTargetMode,
     editor_window::PendingEditorInstances,
     fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
@@ -961,6 +961,12 @@ impl ShowCapWindow {
         {
             if matches!(self, Self::Main { .. }) && crate::should_show_onboarding(app) {
                 return Box::pin(Self::Onboarding.show(app)).await;
+            }
+
+            #[cfg(target_os = "macos")]
+            if matches!(self, Self::Main { .. }) && !app.state::<MainWindowReadyState>().is_ready()
+            {
+                return Ok(window);
             }
 
             let cursor_display_id = if let Self::Main { init_target_mode } = self {
