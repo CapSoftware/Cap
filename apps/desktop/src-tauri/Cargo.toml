@@ -150,3 +150,6 @@ winreg = "0.55"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
