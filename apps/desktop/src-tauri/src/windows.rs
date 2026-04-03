@@ -1109,9 +1109,6 @@ impl ShowCapWindow {
 
                             let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
-                            panel.order_front_regardless();
-                            panel.show();
-
                             crate::platform::apply_squircle_corners(&window, 16.0);
 
                             app.set_activation_policy(ActivationPolicy::Regular).ok();
