@@ -361,6 +361,67 @@ export function Timeline(props: {
 		resumeHistory();
 	}
 
+	function handleDeleteSingleTrack(type: "caption" | "keyboard") {
+		const resumeHistory = projectHistory.pause();
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
+				setEditorState("timeline", "selection", null);
+			}
+
+			if (type === "caption") {
+				setProject(
+					produce((project) => {
+						if (project.captions) {
+							project.captions.segments = [];
+							project.captions.settings = {
+								...defaultCaptionSettings,
+								...project.captions.settings,
+								enabled: false,
+							};
+						}
+						project.timeline ??= {
+							segments: [{ start: 0, end: duration(), timescale: 1 }],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+							captionSegments: [],
+							keyboardSegments: [],
+						};
+						project.timeline.captionSegments = [];
+					}),
+				);
+				setEditorState("timeline", "tracks", "caption", false);
+			} else {
+				setProject(
+					produce((project) => {
+						if (project.keyboard) {
+							project.keyboard.settings = {
+								...defaultKeyboardSettings,
+								...project.keyboard.settings,
+								enabled: false,
+							};
+						}
+						project.timeline ??= {
+							segments: [{ start: 0, end: duration(), timescale: 1 }],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+							captionSegments: [],
+							keyboardSegments: [],
+						};
+						project.timeline.keyboardSegments = [];
+					}),
+				);
+				setEditorState("timeline", "tracks", "keyboard", false);
+			}
+		});
+
+		resumeHistory();
+	}
+
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
 		type: "text" | "mask",
@@ -854,7 +915,10 @@ export function Timeline(props: {
 								/>
 							</TrackRow>
 							<Show when={captionTrackVisible()}>
-								<TrackRow icon={trackIcons.caption}>
+								<TrackRow
+									icon={trackIcons.caption}
+									onDelete={() => handleDeleteSingleTrack("caption")}
+								>
 									<CaptionsTrack
 										onDragStateChanged={(v) => {
 											captionSegmentDragState = v;
@@ -866,7 +930,10 @@ export function Timeline(props: {
 								</TrackRow>
 							</Show>
 							<Show when={keyboardTrackVisible()}>
-								<TrackRow icon={trackIcons.keyboard}>
+								<TrackRow
+									icon={trackIcons.keyboard}
+									onDelete={() => handleDeleteSingleTrack("keyboard")}
+								>
 									<KeyboardTrack
 										onDragStateChanged={(v) => {
 											keyboardSegmentDragState = v;
