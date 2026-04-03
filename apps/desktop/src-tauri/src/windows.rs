@@ -522,6 +522,7 @@ impl CapWindowId {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub fn activates_dock(&self) -> bool {
         matches!(
             self,
