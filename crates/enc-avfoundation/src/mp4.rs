@@ -525,6 +525,7 @@ impl MP4Encoder {
             return Ok(());
         }
 
+        let effective_video_pts = self.effective_video_pts();
         let Some(audio_input) = &mut self.audio_input else {
             return Err(QueueFrameError::NoEncoder);
         };
@@ -543,12 +544,26 @@ impl MP4Encoder {
                 .start_session_at_src_time(cm::Time::zero());
         }
 
-        if let (Some(audio_end_pts), Some(audio_ts), Some(video_pts)) = (
-            self.last_audio_end_pts,
-            self.last_audio_timescale,
-            self.last_video_pts,
-        ) {
-            let audio_secs = audio_end_pts as f64 / audio_ts as f64;
+        let sample_rate = frame.rate().max(1) as i32;
+        let requested_pts = duration_to_timescale_value(
+            timestamp
+                .checked_sub(self.timestamp_offset)
+                .unwrap_or(Duration::ZERO),
+            sample_rate,
+        );
+        let converted_last_end = match (self.last_audio_end_pts, self.last_audio_timescale) {
+            (Some(end), Some(scale)) if scale == sample_rate => Some(end),
+            (Some(end), Some(scale)) => Some(
+                duration_to_timescale_value(timescale_value_to_duration(end, scale), sample_rate)
+                    .max(end.max(0) + 1),
+            ),
+            _ => None,
+        };
+        let mut pts_value = requested_pts.max(converted_last_end.unwrap_or(0));
+
+        if let Some(video_pts) = effective_video_pts {
+            let candidate_end = pts_value.saturating_add(frame.samples() as i64);
+            let audio_secs = candidate_end as f64 / sample_rate as f64;
             let video_secs = video_pts.as_secs_f64();
             if audio_secs > video_secs + MAX_AV_DRIFT_SECS {
                 return Err(QueueFrameError::NotReadyForMore);
@@ -632,19 +647,6 @@ impl MP4Encoder {
 
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueFrameError::Construct)?;
-
-        let sample_rate = frame.rate().max(1) as i32;
-        let mut pts_value = match (self.last_audio_end_pts, self.last_audio_timescale) {
-            (Some(end), Some(scale)) if scale == sample_rate => end,
-            (Some(end), Some(scale)) => {
-                let converted = duration_to_timescale_value(
-                    timescale_value_to_duration(end, scale),
-                    sample_rate,
-                );
-                converted.max(end.max(0) + 1)
-            }
-            _ => 0,
-        };
 
         if let Some(last_end) = self.last_audio_end_pts
             && self.last_audio_timescale == Some(sample_rate)
