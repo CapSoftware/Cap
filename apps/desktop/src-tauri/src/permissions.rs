@@ -100,6 +100,10 @@ fn macos_focus_permission_window(app: &tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn macos_activate_permission_request(app: &tauri::AppHandle) {
+    if let Err(err) = app.set_dock_visibility(true) {
+        tracing::warn!("Failed to show dock icon for permission request: {err}");
+    }
+
     if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
         tracing::warn!("Failed to set activation policy to Regular: {err}");
     }
@@ -117,21 +121,21 @@ fn macos_activate_permission_request(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_restore_activation_policy(app: &tauri::AppHandle) {
+pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
     let should_hide_dock = GeneralSettingsStore::get(app)
         .ok()
         .flatten()
         .is_some_and(|settings| settings.hide_dock_icon);
 
-    if should_hide_dock
-        && app.webview_windows().keys().all(|label| {
+    let should_show_dock = !should_hide_dock
+        || app.webview_windows().keys().any(|label| {
             CapWindowId::from_str(label)
-                .map(|window_id| !window_id.activates_dock())
+                .map(|window_id| window_id.activates_dock())
                 .unwrap_or(false)
-        })
-        && let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-    {
-        tracing::warn!("Failed to restore activation policy to Accessory: {err}");
+        });
+
+    if let Err(err) = app.set_dock_visibility(should_show_dock) {
+        tracing::warn!("Failed to update dock visibility: {err}");
     }
 }
 
@@ -262,12 +266,12 @@ fn macos_open_permission_settings(app: &tauri::AppHandle, permission: &OSPermiss
                     _ => {}
                 }
                 crate::tray::refresh_tray_menu_for_app(&app);
-                macos_restore_activation_policy(&app);
+                sync_macos_dock_visibility(&app);
             });
         }
         Err(err) => {
             tracing::error!("Failed to open permission settings: {err}");
-            macos_restore_activation_policy(app);
+            sync_macos_dock_visibility(app);
         }
     }
 }
@@ -312,7 +316,7 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
         if macos_permission_needs_settings_fallback(&_permission) && !granted {
             macos_open_permission_settings(&_app, &_permission);
         } else {
-            macos_restore_activation_policy(&_app);
+            sync_macos_dock_visibility(&_app);
         }
     }
 

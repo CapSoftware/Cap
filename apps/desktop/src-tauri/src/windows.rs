@@ -1017,6 +1017,11 @@ impl ShowCapWindow {
                 }
             }
 
+            #[cfg(target_os = "macos")]
+            if self.id(app).activates_dock() {
+                crate::permissions::sync_macos_dock_visibility(app);
+            }
+
             return Ok(window);
         }
 
@@ -1031,10 +1036,6 @@ impl ShowCapWindow {
 
                 let title = CapWindowId::Main.title();
                 let should_protect = should_protect_window(app, &title);
-
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    .ok();
 
                 let window = self
                     .window_builder(app, "/")
@@ -1073,9 +1074,7 @@ impl ShowCapWindow {
                 {
                     app.run_on_main_thread({
                         let window = window.clone();
-                        let app = app.clone();
                         move || {
-                            use tauri::ActivationPolicy;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                             use tauri_nspanel::panel_delegate;
                             use crate::panel_manager::try_to_panel;
@@ -1093,7 +1092,6 @@ impl ShowCapWindow {
                                 Ok(p) => p,
                                 Err(e) => {
                                     tracing::error!("Failed to convert main window to panel: {}", e);
-                                    app.set_activation_policy(ActivationPolicy::Regular).ok();
                                     return;
                                 }
                             };
@@ -1110,8 +1108,6 @@ impl ShowCapWindow {
                             let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                             crate::platform::apply_squircle_corners(&window, 16.0);
-
-                            app.set_activation_policy(ActivationPolicy::Regular).ok();
                         }
                     })
                     .ok();
@@ -1166,10 +1162,6 @@ impl ShowCapWindow {
                     let state = state.read().await;
                     state.camera_ws_port
                 };
-
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    .ok();
 
                 let mut window_builder = self
                     .window_builder(
@@ -1237,9 +1229,7 @@ impl ShowCapWindow {
                 {
                     app.run_on_main_thread({
                         let window = window.clone();
-                        let app = app.clone();
                         move || {
-                            use tauri::ActivationPolicy;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                             use tauri_nspanel::panel_delegate;
                             use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
@@ -1263,7 +1253,6 @@ impl ShowCapWindow {
                                 Ok(p) => p,
                                 Err(e) => {
                                     tracing::error!("Failed to convert target select overlay to panel: {:?}", e);
-                                    app.set_activation_policy(ActivationPolicy::Regular).ok();
                                     return;
                                 }
                             };
@@ -1280,8 +1269,6 @@ impl ShowCapWindow {
 
                             panel.order_front_regardless();
                             panel.show();
-
-                            app.set_activation_policy(ActivationPolicy::Regular).ok();
                         }
                     })
                     .ok();
@@ -1329,10 +1316,6 @@ impl ShowCapWindow {
             Self::Editor { .. } => {
                 hide_recording_windows(app);
 
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                    .ok();
-
                 let window = self
                     .window_builder(app, "/editor")
                     .maximizable(true)
@@ -1359,10 +1342,6 @@ impl ShowCapWindow {
             }
             Self::ScreenshotEditor { path } => {
                 hide_recording_windows(app);
-
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                    .ok();
 
                 let window_label = self.id(app).label();
                 let pending = PendingScreenshotEditorInstances::get(app);
@@ -1584,10 +1563,6 @@ impl ShowCapWindow {
                         warn!("Detected existing camera preview, will reuse it");
                     }
 
-                    #[cfg(target_os = "macos")]
-                    app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                        .ok();
-
                     let title = CapWindowId::Camera.title();
                     let should_protect = should_protect_window(app, &title);
 
@@ -1713,7 +1688,6 @@ impl ShowCapWindow {
                             let window = window.clone();
                             let app = app.clone();
                             move || {
-                                use tauri::ActivationPolicy;
                                 use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                                 use tauri_nspanel::panel_delegate;
                                 use crate::panel_manager::try_to_panel;
@@ -1737,7 +1711,6 @@ impl ShowCapWindow {
                                     Ok(p) => p,
                                     Err(e) => {
                                         tracing::error!("Failed to convert camera to panel: {}", e);
-                                        app.set_activation_policy(ActivationPolicy::Regular).ok();
                                         let _ = panel_tx.send(false);
                                         return;
                                     }
@@ -1762,8 +1735,6 @@ impl ShowCapWindow {
 
                                 panel.order_front_regardless();
                                 panel.show();
-
-                                app.set_activation_policy(ActivationPolicy::Regular).ok();
                                 let _ = panel_tx.send(true);
                             }
                         })
@@ -1914,10 +1885,6 @@ impl ShowCapWindow {
                 let should_protect = should_protect_window(app, &title);
 
                 #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    .ok();
-
-                #[cfg(target_os = "macos")]
                 let window = {
                     self.window_builder(app, "/in-progress-recording")
                         .maximized(false)
@@ -1984,9 +1951,7 @@ impl ShowCapWindow {
                 {
                     app.run_on_main_thread({
                         let window = window.clone();
-                        let app = app.clone();
                         move || {
-                            use tauri::ActivationPolicy;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                             use tauri_nspanel::panel_delegate;
                             use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
@@ -2010,7 +1975,6 @@ impl ShowCapWindow {
                                 Ok(p) => p,
                                 Err(e) => {
                                     tracing::error!("Failed to convert recording controls to panel: {:?}", e);
-                                    app.set_activation_policy(ActivationPolicy::Regular).ok();
                                     return;
                                 }
                             };
@@ -2027,8 +1991,6 @@ impl ShowCapWindow {
 
                             panel.order_front_regardless();
                             panel.show();
-
-                            app.set_activation_policy(ActivationPolicy::Regular).ok();
                         }
                     })
                     .ok();
@@ -2119,6 +2081,11 @@ impl ShowCapWindow {
         #[cfg(target_os = "macos")]
         if let Some(position) = _id.traffic_lights_position() {
             add_traffic_lights(&window, position);
+        }
+
+        #[cfg(target_os = "macos")]
+        if _id.activates_dock() {
+            crate::permissions::sync_macos_dock_visibility(app);
         }
 
         Ok(window)

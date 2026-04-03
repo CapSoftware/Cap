@@ -3897,18 +3897,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         };
                     }
 
-                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
-                        && settings.hide_dock_icon
-                        && app.webview_windows().keys().all(|label| {
-                            CapWindowId::from_str(label)
-                                .map(|id| !id.activates_dock())
-                                .unwrap_or(false)
-                        })
-                    {
-                        #[cfg(target_os = "macos")]
-                        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .ok();
-                    }
+                    #[cfg(target_os = "macos")]
+                    crate::permissions::sync_macos_dock_visibility(app);
                 }
                 #[cfg(target_os = "macos")]
                 WindowEvent::Focused(focused) => {
@@ -3928,8 +3918,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         && let Ok(window_id) = window_id
                         && window_id.activates_dock()
                     {
-                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                            .ok();
+                        crate::permissions::sync_macos_dock_visibility(app);
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
