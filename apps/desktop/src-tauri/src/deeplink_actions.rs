@@ -167,7 +167,7 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
             DeepLinkAction::StartDefaultRecording => {
-                app.emit("request-open-recording-picker", ()).map_err(|e| e.to_string())
+                crate::RequestOpenRecordingPicker { target_mode: None }.emit(app).map_err(|e| e.to_string())
             }
             DeepLinkAction::PauseRecording => {
                 crate::recording::pause_recording(app.clone(), app.state()).await
