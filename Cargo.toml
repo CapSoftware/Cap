@@ -4,6 +4,7 @@ members = [
     "apps/cli",
     "apps/desktop/src-tauri",
     "crates/*",
+    "crates/upload",
     "crates/workspace-hack",
 ]
 
