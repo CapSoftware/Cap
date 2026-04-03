@@ -957,7 +957,7 @@ mod tests {
         for _ in 0..DecoderHealth::MAX_CONSECUTIVE_EMPTY {
             health.record_empty_iteration();
         }
-        assert!(health.needs_recreation(50, 100));
+        assert!(health.needs_recreation(50, 200));
     }
 
     #[test]

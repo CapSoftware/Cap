@@ -15,6 +15,8 @@ pub enum AuthedApiError {
     InvalidAuthentication,
     #[error("User needs to upgrade their account to use this feature!")]
     UpgradeRequired,
+    #[error("App state is still initializing")]
+    AppStateUnavailable,
     #[error("AuthedApiError/AuthStore: {0}")]
     AuthStore(String),
     #[error("AuthedApiError/Request: {0}")]
@@ -58,6 +60,24 @@ fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     req
 }
 
+fn default_server_url() -> String {
+    option_env!("VITE_SERVER_URL")
+        .unwrap_or("https://cap.so")
+        .to_string()
+}
+
+async fn current_server_url<T, R>(manager: &T) -> Result<String, AuthedApiError>
+where
+    T: Manager<R> + ?Sized,
+    R: Runtime,
+{
+    let Some(app_state) = manager.try_state::<ArcLock<crate::App>>() else {
+        return Err(AuthedApiError::AppStateUnavailable);
+    };
+
+    Ok(app_state.read().await.server_url.clone())
+}
+
 async fn do_authed_request(
     client: &reqwest::Client,
     auth: &AuthStore,
@@ -78,6 +98,7 @@ async fn do_authed_request(
     apply_env_headers(req).send().await
 }
 
+#[allow(async_fn_in_trait)]
 pub trait ManagerExt<R: Runtime>: Manager<R> {
     async fn authed_api_request(
         &self,
@@ -108,7 +129,9 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
             return Err(AuthedApiError::InvalidAuthentication);
         };
 
-        let url = self.make_app_url(path.into()).await;
+        let path = path.into();
+        let server_url = current_server_url(self).await?;
+        let url = format!("{}{}", server_url, path);
         let response =
             do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
 
@@ -133,19 +156,29 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     }
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {
-        let app_state = self.state::<ArcLock<crate::App>>();
-        let server_url = &app_state.read().await.server_url;
-        format!("{}{}", server_url, pathname.as_ref())
+        let pathname = pathname.as_ref();
+        match current_server_url(self).await {
+            Ok(server_url) => format!("{}{}", server_url, pathname),
+            Err(err) => {
+                warn!("App state unavailable while building app URL: {err}");
+                format!("{}{}", default_server_url(), pathname)
+            }
+        }
     }
 
     async fn is_server_url_custom(&self) -> bool {
-        let state = self.state::<ArcLock<crate::App>>();
-        let app_state = state.read().await;
+        match current_server_url(self).await {
+            Ok(server_url) => {
+                if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
+                    return server_url != env_url;
+                }
 
-        if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
-            return app_state.server_url != env_url;
+                false
+            }
+            Err(err) => {
+                warn!("App state unavailable while reading server URL settings: {err}");
+                false
+            }
         }
-
-        false
     }
 }

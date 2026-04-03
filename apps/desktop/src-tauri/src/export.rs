@@ -1,5 +1,4 @@
 use crate::editor_window::{OptionalWindowEditorInstance, WindowEditorInstance};
-use crate::recording::should_force_ffmpeg_for_recovered_project;
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{RecordingMeta, XY};
@@ -145,7 +144,8 @@ fn is_frame_decode_error(error: &str) -> bool {
 }
 
 fn should_force_ffmpeg_export(project_path: &Path, settings: &ExportSettings) -> bool {
-    settings.force_ffmpeg_decoder() || should_force_ffmpeg_for_recovered_project(project_path)
+    let _ = project_path;
+    settings.force_ffmpeg_decoder()
 }
 
 #[tauri::command]
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn recovered_projects_force_ffmpeg_for_gif_exports() {
+    fn recovered_projects_do_not_force_ffmpeg_without_explicit_setting() {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path()
@@ -556,7 +556,7 @@ mod tests {
             quality: None,
         });
 
-        assert!(should_force_ffmpeg_export(dir.path(), &gif_settings));
+        assert!(!should_force_ffmpeg_export(dir.path(), &gif_settings));
     }
 }
 

@@ -1,4 +1,8 @@
 import { createWritableMemo } from "@solid-primitives/memo";
+import {
+	getHexColorDigitCount,
+	normalizeOpaqueHexColor,
+} from "~/utils/hex-color";
 import { getColorPreviewBorderColor } from "./color-utils";
 import { TextInput } from "./TextInput";
 
@@ -48,9 +52,8 @@ export function HexColorInput(props: {
 	let colorInput!: HTMLInputElement;
 
 	const commitValue = (raw: string) => {
-		const trimmed = raw.trim();
-		if (/^#[0-9A-F]{6}$/i.test(trimmed)) {
-			const normalized = `#${trimmed.slice(1).toUpperCase()}`;
+		const normalized = normalizeOpaqueHexColor(raw);
+		if (normalized) {
 			props.onChange(normalized);
 			setText(normalized);
 			return true;
@@ -96,9 +99,10 @@ export function HexColorInput(props: {
 				}}
 				onInput={(e) => {
 					setText(e.currentTarget.value);
-					const trimmed = e.currentTarget.value.trim();
-					if (/^#[0-9A-F]{6}$/i.test(trimmed)) {
-						const normalized = `#${trimmed.slice(1).toUpperCase()}`;
+					if (getHexColorDigitCount(e.currentTarget.value) !== 6) return;
+
+					const normalized = normalizeOpaqueHexColor(e.currentTarget.value);
+					if (normalized) {
 						props.onChange(normalized);
 					}
 				}}

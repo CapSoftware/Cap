@@ -104,6 +104,14 @@ pub enum FinishError {
 }
 
 impl MP4Encoder {
+    fn effective_video_pts(&self) -> Option<Duration> {
+        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
+        match (self.last_video_pts, pending_pts) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     pub fn init(
         output: PathBuf,
         video_config: VideoInfo,
@@ -460,11 +468,7 @@ impl MP4Encoder {
 
         let mut deferred_offset: Option<Duration> = None;
 
-        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
-        let effective_last_pts = match (self.last_video_pts, pending_pts) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
+        let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
             && pts_duration <= last_pts
@@ -521,6 +525,7 @@ impl MP4Encoder {
             return Ok(());
         }
 
+        let effective_video_pts = self.effective_video_pts();
         let Some(audio_input) = &mut self.audio_input else {
             return Err(QueueFrameError::NoEncoder);
         };
@@ -539,12 +544,26 @@ impl MP4Encoder {
                 .start_session_at_src_time(cm::Time::zero());
         }
 
-        if let (Some(audio_end_pts), Some(audio_ts), Some(video_pts)) = (
-            self.last_audio_end_pts,
-            self.last_audio_timescale,
-            self.last_video_pts,
-        ) {
-            let audio_secs = audio_end_pts as f64 / audio_ts as f64;
+        let sample_rate = frame.rate().max(1) as i32;
+        let requested_pts = duration_to_timescale_value(
+            timestamp
+                .checked_sub(self.timestamp_offset)
+                .unwrap_or(Duration::ZERO),
+            sample_rate,
+        );
+        let converted_last_end = match (self.last_audio_end_pts, self.last_audio_timescale) {
+            (Some(end), Some(scale)) if scale == sample_rate => Some(end),
+            (Some(end), Some(scale)) => Some(
+                duration_to_timescale_value(timescale_value_to_duration(end, scale), sample_rate)
+                    .max(end.max(0) + 1),
+            ),
+            _ => None,
+        };
+        let mut pts_value = requested_pts.max(converted_last_end.unwrap_or(0));
+
+        if let Some(video_pts) = effective_video_pts {
+            let candidate_end = pts_value.saturating_add(frame.samples() as i64);
+            let audio_secs = candidate_end as f64 / sample_rate as f64;
             let video_secs = video_pts.as_secs_f64();
             if audio_secs > video_secs + MAX_AV_DRIFT_SECS {
                 return Err(QueueFrameError::NotReadyForMore);
@@ -628,19 +647,6 @@ impl MP4Encoder {
 
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueFrameError::Construct)?;
-
-        let sample_rate = frame.rate().max(1) as i32;
-        let mut pts_value = match (self.last_audio_end_pts, self.last_audio_timescale) {
-            (Some(end), Some(scale)) if scale == sample_rate => end,
-            (Some(end), Some(scale)) => {
-                let converted = duration_to_timescale_value(
-                    timescale_value_to_duration(end, scale),
-                    sample_rate,
-                );
-                converted.max(end.max(0) + 1)
-            }
-            _ => 0,
-        };
 
         if let Some(last_end) = self.last_audio_end_pts
             && self.last_audio_timescale == Some(sample_rate)
@@ -1302,6 +1308,17 @@ mod tests {
             time_base: ffmpeg::util::rational::Rational(1, 48000),
             buffer_size: 3840,
             is_wireless_transport: true,
+        }
+    }
+
+    fn wired_audio_config(buffer_size: u32) -> cap_media_info::AudioInfo {
+        cap_media_info::AudioInfo {
+            sample_rate: 48000,
+            channels: 1,
+            sample_format: ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            time_base: ffmpeg::util::rational::Rational(1, 48000),
+            buffer_size,
+            is_wireless_transport: false,
         }
     }
 
@@ -3333,6 +3350,51 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(15)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_wired_mic_timestamp_gap_is_preserved() {
+        let output = test_output_path("wired_mic_timestamp_gap");
+        let video = valid_video_config();
+        let audio = wired_audio_config(1680);
+
+        let mut encoder =
+            MP4Encoder::init_instant_mode(output.clone(), video, Some(audio), None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+        let frame_a = create_test_video_frame(&pool, 0, 33_333);
+        let frame_b = create_test_video_frame(&pool, 33_333, 33_333);
+        let frame_c = create_test_video_frame(&pool, 66_666, 33_333);
+        encoder.queue_video_frame(frame_a, Duration::ZERO).unwrap();
+        encoder
+            .queue_video_frame(frame_b, Duration::from_micros(33_333))
+            .unwrap();
+        encoder
+            .queue_video_frame(frame_c, Duration::from_micros(66_666))
+            .unwrap();
+
+        let audio_frame = create_test_audio_frame(48000, 1680);
+        encoder
+            .queue_audio_frame(&audio_frame, Duration::ZERO)
+            .unwrap();
+        assert_eq!(encoder.last_audio_end_pts, Some(1680));
+
+        let gap_timestamp =
+            Duration::from_nanos((3360u128 * 1_000_000_000u128 / 48_000u128) as u64);
+        encoder
+            .queue_audio_frame(&audio_frame, gap_timestamp)
+            .unwrap();
+
+        assert_eq!(
+            encoder.last_audio_end_pts,
+            Some(5040),
+            "audio timeline should preserve a missing 1680-sample chunk"
+        );
+
+        let result = encoder.finish(Some(Duration::from_micros(120_000)));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
         let _ = std::fs::remove_file(&output);
     }
 

@@ -33,7 +33,7 @@ mod thumbnails;
 mod tray;
 mod update_project_names;
 mod upload;
-mod web_api;
+pub mod web_api;
 mod window_exclusion;
 mod windows;
 
@@ -89,6 +89,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tauri::Listener;
 use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
@@ -155,6 +156,24 @@ impl AppExitState {
 
     pub fn is_exiting(&self) -> bool {
         self.0.load(Ordering::Acquire)
+    }
+}
+
+pub struct MainWindowReadyState(AtomicBool);
+
+impl Default for MainWindowReadyState {
+    fn default() -> Self {
+        Self(AtomicBool::new(false))
+    }
+}
+
+impl MainWindowReadyState {
+    pub fn is_ready(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    pub fn set_ready(&self, value: bool) {
+        self.0.store(value, Ordering::Release);
     }
 }
 
@@ -1112,14 +1131,6 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
         camera_feed.ask(feeds::camera::RemoveInput).await
     })
     .await;
-
-    #[cfg(target_os = "macos")]
-    {
-        app.state::<CameraWindowCloseGate>().set_allow_close(true);
-        if let Some(camera_window) = CapWindowId::Camera.get(app) {
-            let _ = camera_window.close();
-        }
-    }
 
     if let Some(rx) = camera_shutdown {
         let _ = await_exit_step(
@@ -3501,16 +3512,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 });
             }
 
-            tokio::spawn({
-                let app = app.clone();
-                async move {
-                    resume_uploads(app)
-                        .await
-                        .map_err(|err| warn!("Error resuming uploads: {err}"))
-                        .ok();
-                }
-            });
-
             {
                 let (server_url, should_update) = if cfg!(debug_assertions)
                     && let Ok(url) = std::env::var("VITE_SERVER_URL")
@@ -3570,11 +3571,29 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowPositionGuard::default());
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
+                app.manage(MainWindowReadyState::default());
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
                 )));
             }
+
+            app.listen_any("main-window-ready", {
+                let app = app.clone();
+                move |_| {
+                    app.state::<MainWindowReadyState>().set_ready(true);
+                }
+            });
+
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    resume_uploads(app)
+                        .await
+                        .map_err(|err| warn!("Error resuming uploads: {err}"))
+                        .ok();
+                }
+            });
 
             spawn_mic_error_handler(app.clone(), mic_error_rx);
             spawn_device_watchers(app.clone());
@@ -3825,6 +3844,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     reopen_main_window(app);
                                 }
 
+                                #[cfg(target_os = "macos")]
                                 return;
                             }
                             CapWindowId::Upgrade | CapWindowId::ModeSelect => {
@@ -3840,6 +3860,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     }
                                 }
                                 restore_camera_window(app);
+                                #[cfg(target_os = "macos")]
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
@@ -3875,18 +3896,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         };
                     }
 
-                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
-                        && settings.hide_dock_icon
-                        && app.webview_windows().keys().all(|label| {
-                            CapWindowId::from_str(label)
-                                .map(|id| !id.activates_dock())
-                                .unwrap_or(false)
-                        })
-                    {
-                        #[cfg(target_os = "macos")]
-                        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .ok();
-                    }
+                    #[cfg(target_os = "macos")]
+                    crate::permissions::sync_macos_dock_visibility(app);
                 }
                 #[cfg(target_os = "macos")]
                 WindowEvent::Focused(focused) => {
@@ -3906,8 +3917,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         && let Ok(window_id) = window_id
                         && window_id.activates_dock()
                     {
-                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                            .ok();
+                        crate::permissions::sync_macos_dock_visibility(app);
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

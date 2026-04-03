@@ -77,6 +77,12 @@ impl AudioSegmentTrack {
     }
 }
 
+struct TimelineCursor<'a> {
+    segment_end_samples: usize,
+    segment_time: f64,
+    segment: &'a cap_project::TimelineSegment,
+}
+
 impl AudioRenderer {
     pub const SAMPLE_FORMAT: avformat::Sample = AudioData::SAMPLE_FORMAT;
     pub const SAMPLE_RATE: u32 = AudioData::SAMPLE_RATE;
@@ -115,35 +121,6 @@ impl AudioRenderer {
         };
     }
 
-    fn adjust_cursor(&mut self, timeline: &TimelineConfiguration) {
-        let playhead = self.elapsed_samples_to_playhead();
-
-        // ! Basically, to allow for some slop in the float -> usize and back conversions,
-        // this will only seek if there is a significant change in actual vs expected next sample
-        // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
-        // - not sure we offer that much precision in the editor even!
-        let new_cursor = match timeline.get_segment_time(playhead) {
-            Some((segment_time, segment)) => AudioRendererCursor {
-                clip_index: segment.recording_clip,
-                timescale: segment.timescale,
-                samples: self.playhead_to_samples(segment_time),
-            },
-            None => AudioRendererCursor {
-                clip_index: 0,
-                timescale: 1.0,
-                samples: 0,
-            },
-        };
-
-        let cursor_diff = new_cursor.samples as isize - self.cursor.samples as isize;
-        let frame_samples = (AudioData::SAMPLE_RATE as usize) / 30;
-        if new_cursor.clip_index != self.cursor.clip_index
-            || cursor_diff.unsigned_abs() > frame_samples
-        {
-            self.cursor = new_cursor;
-        }
-    }
-
     fn playhead_to_samples(&self, playhead: f64) -> usize {
         (playhead * AudioData::SAMPLE_RATE as f64) as usize
     }
@@ -175,28 +152,135 @@ impl AudioRenderer {
         project: &ProjectConfiguration,
     ) -> Option<(usize, Vec<f32>)> {
         if let Some(timeline) = &project.timeline {
-            self.adjust_cursor(timeline);
+            return self.render_timeline_frame_raw(samples, project, timeline);
         }
-        let channels: usize = 2;
+
+        self.render_linear_frame_raw(samples, project)
+    }
+
+    fn render_timeline_frame_raw(
+        &mut self,
+        samples: usize,
+        project: &ProjectConfiguration,
+        timeline: &TimelineConfiguration,
+    ) -> Option<(usize, Vec<f32>)> {
+        if samples == 0 {
+            return None;
+        }
+
+        let mut ret = vec![0.0; samples * 2];
+        let mut written = 0usize;
+
+        while written < samples {
+            let Some(cursor) = self.timeline_cursor(timeline) else {
+                break;
+            };
+
+            let chunk_samples =
+                (cursor.segment_end_samples - self.elapsed_samples).min(samples - written);
+            if chunk_samples == 0 {
+                break;
+            }
+
+            self.cursor = AudioRendererCursor {
+                clip_index: cursor.segment.recording_clip,
+                timescale: cursor.segment.timescale,
+                samples: self.playhead_to_samples(cursor.segment_time),
+            };
+
+            if cursor.segment.timescale == 1.0 {
+                self.render_current_chunk(project, chunk_samples, written * 2, &mut ret);
+                self.cursor.samples += chunk_samples;
+            }
+
+            self.elapsed_samples += chunk_samples;
+            written += chunk_samples;
+        }
+
+        if written == 0 {
+            None
+        } else {
+            ret.truncate(written * 2);
+            Some((written, ret))
+        }
+    }
+
+    fn render_linear_frame_raw(
+        &mut self,
+        samples: usize,
+        project: &ProjectConfiguration,
+    ) -> Option<(usize, Vec<f32>)> {
+        if samples == 0 {
+            return None;
+        }
 
         if self.cursor.timescale != 1.0 {
             self.elapsed_samples += samples;
             return None;
-        };
+        }
 
-        let tracks = &self.data[self.cursor.clip_index as usize].tracks;
+        let mut ret = vec![0.0; samples * 2];
+        let rendered = self.render_current_chunk(project, samples, 0, &mut ret);
 
-        if tracks.is_empty() {
+        if rendered == 0 {
             self.elapsed_samples += samples;
             return None;
         }
 
-        let start = self.cursor;
+        self.elapsed_samples += rendered;
+        self.cursor.samples += rendered;
+        ret.truncate(rendered * 2);
+
+        Some((rendered, ret))
+    }
+
+    fn timeline_cursor<'a>(
+        &self,
+        timeline: &'a TimelineConfiguration,
+    ) -> Option<TimelineCursor<'a>> {
+        let mut segment_start_samples = 0usize;
+        let mut accumulated_duration = 0.0;
+
+        for segment in &timeline.segments {
+            accumulated_duration += segment.duration();
+            let segment_end_samples = self.playhead_to_samples(accumulated_duration);
+
+            if self.elapsed_samples < segment_end_samples {
+                let local_samples = self.elapsed_samples - segment_start_samples;
+                let local_time = local_samples as f64 / Self::SAMPLE_RATE as f64;
+                return Some(TimelineCursor {
+                    segment_end_samples,
+                    segment_time: segment.start + local_time * segment.timescale,
+                    segment,
+                });
+            }
+
+            segment_start_samples = segment_end_samples;
+        }
+
+        None
+    }
+
+    fn render_current_chunk(
+        &self,
+        project: &ProjectConfiguration,
+        samples: usize,
+        out_offset: usize,
+        out: &mut [f32],
+    ) -> usize {
+        let Some(segment) = self.data.get(self.cursor.clip_index as usize) else {
+            return 0;
+        };
+        let tracks = &segment.tracks;
+
+        if tracks.is_empty() {
+            return 0;
+        }
 
         let offsets = project
             .clips
             .iter()
-            .find(|c| c.index == start.clip_index)
+            .find(|c| c.index == self.cursor.clip_index)
             .map(|c| c.offsets)
             .unwrap_or_default();
 
@@ -208,16 +292,13 @@ impl AudioRenderer {
                 available.max(0) as usize
             })
             .max()
-            .unwrap();
+            .unwrap_or(0);
 
         if self.cursor.samples >= max_samples {
-            self.elapsed_samples += samples;
-            return None;
+            return 0;
         }
 
         let samples = samples.min(max_samples - self.cursor.samples);
-
-        let mut ret = vec![0.0; samples * 2];
 
         let track_datas = tracks
             .iter()
@@ -234,17 +315,7 @@ impl AudioRenderer {
             })
             .collect::<Vec<_>>();
 
-        let actual_sample_count =
-            cap_audio::render_audio(&track_datas, start.samples, samples, 0, &mut ret);
-
-        self.elapsed_samples += actual_sample_count;
-        self.cursor.samples += actual_sample_count;
-
-        if actual_sample_count * channels < ret.len() {
-            ret.resize(actual_sample_count * channels, 0.0);
-        };
-
-        Some((actual_sample_count, ret))
+        cap_audio::render_audio(&track_datas, self.cursor.samples, samples, out_offset, out)
     }
 }
 
@@ -566,5 +637,193 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         if to_copy < buffer.len() {
             buffer[to_copy..].fill(T::EQUILIBRIUM);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::{
+        ClipConfiguration, ProjectConfiguration, TimelineConfiguration, TimelineSegment,
+    };
+    use std::{path::Path, sync::Arc};
+    use tempfile::TempDir;
+
+    fn gain(_: &AudioConfiguration) -> f32 {
+        0.0
+    }
+
+    fn stereo(_: &AudioConfiguration) -> StereoMode {
+        StereoMode::Stereo
+    }
+
+    fn no_offset(_: &ClipOffsets) -> f32 {
+        0.0
+    }
+
+    fn write_step_wav(path: &Path, section_values: &[i16]) {
+        let sample_rate = AudioData::SAMPLE_RATE;
+        let channels = 2u16;
+        let bits_per_sample = 16u16;
+        let section_frames = sample_rate as usize;
+        let total_frames = section_frames * section_values.len();
+        let bytes_per_frame = usize::from(channels) * usize::from(bits_per_sample / 8);
+        let data_size = total_frames * bytes_per_frame;
+        let mut bytes = Vec::with_capacity(44 + data_size);
+
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_size as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * bytes_per_frame as u32).to_le_bytes());
+        bytes.extend_from_slice(&(bytes_per_frame as u16).to_le_bytes());
+        bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(data_size as u32).to_le_bytes());
+
+        for value in section_values {
+            for _ in 0..section_frames {
+                bytes.extend_from_slice(&value.to_le_bytes());
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn mean_abs(samples: &[f32]) -> f32 {
+        samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32
+    }
+
+    fn build_renderer_fixture() -> (TempDir, AudioRenderer, ProjectConfiguration) {
+        let _ = ffmpeg::init();
+
+        let dir = tempfile::tempdir().unwrap();
+        let clip0_path = dir.path().join("clip0.wav");
+        let clip1_path = dir.path().join("clip1.wav");
+
+        write_step_wav(&clip0_path, &[1000, 2000, 3000]);
+        write_step_wav(&clip1_path, &[4000, 5000, 6000]);
+
+        let segments = vec![
+            AudioSegment {
+                tracks: vec![AudioSegmentTrack::new(
+                    Arc::new(AudioData::from_file(&clip0_path).unwrap()),
+                    gain,
+                    stereo,
+                    no_offset,
+                )],
+            },
+            AudioSegment {
+                tracks: vec![AudioSegmentTrack::new(
+                    Arc::new(AudioData::from_file(&clip1_path).unwrap()),
+                    gain,
+                    stereo,
+                    no_offset,
+                )],
+            },
+        ];
+
+        let project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![
+                    TimelineSegment {
+                        recording_clip: 0,
+                        timescale: 1.0,
+                        start: 0.0,
+                        end: 1.0,
+                    },
+                    TimelineSegment {
+                        recording_clip: 0,
+                        timescale: 4.0,
+                        start: 1.0,
+                        end: 2.0,
+                    },
+                    TimelineSegment {
+                        recording_clip: 0,
+                        timescale: 1.0,
+                        start: 2.0,
+                        end: 3.0,
+                    },
+                    TimelineSegment {
+                        recording_clip: 1,
+                        timescale: 1.0,
+                        start: 0.0,
+                        end: 1.0,
+                    },
+                    TimelineSegment {
+                        recording_clip: 1,
+                        timescale: 2.0,
+                        start: 1.0,
+                        end: 2.0,
+                    },
+                    TimelineSegment {
+                        recording_clip: 1,
+                        timescale: 1.0,
+                        start: 2.0,
+                        end: 3.0,
+                    },
+                ],
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+            }),
+            clips: vec![
+                ClipConfiguration {
+                    index: 0,
+                    offsets: Default::default(),
+                },
+                ClipConfiguration {
+                    index: 1,
+                    offsets: Default::default(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        (dir, AudioRenderer::new(segments), project)
+    }
+
+    #[test]
+    fn speed_segment_start_cuts_audio_inside_a_single_request() {
+        let (_dir, mut renderer, project) = build_renderer_fixture();
+        let boundary = 1.0 + 0.25 + 1.0 + 1.0;
+
+        renderer.set_playhead(boundary - 0.01, &project);
+
+        let (rendered, samples) = renderer.render_frame_raw(1920, &project).unwrap();
+        assert_eq!(rendered, 1920);
+
+        let boundary_samples = (0.01 * AudioData::SAMPLE_RATE as f64) as usize;
+        let before = mean_abs(&samples[..boundary_samples * 2]);
+        let after = mean_abs(&samples[boundary_samples * 2..]);
+
+        assert!(before > 0.1);
+        assert!(after < 0.0001);
+    }
+
+    #[test]
+    fn speed_segment_end_resumes_audio_inside_a_single_request() {
+        let (_dir, mut renderer, project) = build_renderer_fixture();
+        let boundary = 1.0 + 0.25 + 1.0 + 1.0 + 0.5;
+
+        renderer.set_playhead(boundary - 0.01, &project);
+
+        let (rendered, samples) = renderer.render_frame_raw(1920, &project).unwrap();
+        assert_eq!(rendered, 1920);
+
+        let boundary_samples = (0.01 * AudioData::SAMPLE_RATE as f64) as usize;
+        let before = mean_abs(&samples[..boundary_samples * 2]);
+        let after = mean_abs(&samples[boundary_samples * 2..]);
+
+        assert!(before < 0.0001);
+        assert!(after > 0.15);
     }
 }
