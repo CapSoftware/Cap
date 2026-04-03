@@ -123,15 +123,14 @@ export function KeyboardTab() {
 	};
 
 	return (
-		<Field name="Keyboard" icon={<IconLucideKeyboard />} badge="Beta">
+		<Field
+			name="Show keyboard"
+			value={
+				<Toggle checked={getSetting("enabled")} onChange={setKeyboardVisible} />
+			}
+			badge="Beta"
+		>
 			<div class="flex flex-col gap-4">
-				<Subfield name="Show Keyboard Presses">
-					<Toggle
-						checked={getSetting("enabled")}
-						onChange={setKeyboardVisible}
-					/>
-				</Subfield>
-
 				<div
 					class={cx(
 						"space-y-4",
