@@ -3515,16 +3515,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 });
             }
 
-            tokio::spawn({
-                let app = app.clone();
-                async move {
-                    resume_uploads(app)
-                        .await
-                        .map_err(|err| warn!("Error resuming uploads: {err}"))
-                        .ok();
-                }
-            });
-
             {
                 let (server_url, should_update) = if cfg!(debug_assertions)
                     && let Ok(url) = std::env::var("VITE_SERVER_URL")
@@ -3595,6 +3585,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let app = app.clone();
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
+                }
+            });
+
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    resume_uploads(app)
+                        .await
+                        .map_err(|err| warn!("Error resuming uploads: {err}"))
+                        .ok();
                 }
             });
 
