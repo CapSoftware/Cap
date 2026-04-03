@@ -5,7 +5,7 @@ export default async function Command() {
     const action = encodeURIComponent(JSON.stringify("stop_recording"));
     await open(`cap://action?value=${action}`);
     await closeMainWindow();
-    await showHUD("Stopped recording in Cap");
+    await showHUD("Stop recording requested in Cap");
   } catch (err) {
     await showHUD("Failed to stop recording");
   }

@@ -50,7 +50,6 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
                     ActionParseFromUrlError::Invalid => {
                         eprintln!("Invalid deep link format \"{}\"", &url)
                     }
-                    // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
                 })
                 .ok()
@@ -165,7 +164,7 @@ impl DeepLinkAction {
                 let _ = crate::set_camera_input(app.clone(), state.clone(), settings.camera_id, None).await;
 
                 let inputs = StartRecordingInputs {
-                    mode: crate::recording::RecordingMode::Screen,
+                    mode: settings.mode.unwrap_or_default(),
                     capture_target: settings.target.unwrap_or_else(|| {
                         ScreenCaptureTarget::Display {
                             id: cap_recording::sources::screen_capture::Display::primary().id(),

@@ -5,7 +5,7 @@ export default async function Command() {
     const action = encodeURIComponent(JSON.stringify("start_default_recording"));
     await open(`cap://action?value=${action}`);
     await closeMainWindow();
-    await showHUD("Starting default recording in Cap");
+    await showHUD("Recording requested in Cap");
   } catch (err) {
     await showHUD("Failed to start recording");
   }
