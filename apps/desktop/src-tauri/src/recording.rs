@@ -2412,10 +2412,6 @@ fn mark_fragmented_recording_for_ffmpeg_export(recording_dir: &Path) -> Result<(
     .map_err(|e| format!("Failed to mark recording for FFmpeg export: {e}"))
 }
 
-pub fn should_force_ffmpeg_for_recovered_project(recording_dir: &Path) -> bool {
-    fragmented_export_ffmpeg_marker_path(recording_dir).exists()
-}
-
 pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
     let incomplete_recording = RecoveryManager::inspect_recording(recording_dir);
 
@@ -2509,10 +2505,10 @@ mod tests {
     fn marks_fragmented_recordings_for_ffmpeg_export() {
         let dir = tempdir().unwrap();
 
-        assert!(!should_force_ffmpeg_for_recovered_project(dir.path()));
+        assert!(!fragmented_export_ffmpeg_marker_path(dir.path()).exists());
 
         mark_fragmented_recording_for_ffmpeg_export(dir.path()).unwrap();
 
-        assert!(should_force_ffmpeg_for_recovered_project(dir.path()));
+        assert!(fragmented_export_ffmpeg_marker_path(dir.path()).exists());
     }
 }
