@@ -585,8 +585,7 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<Field
-						name="Cursor"
-						icon={<IconCapCursor />}
+						name="Show cursor"
 						value={
 							<Toggle
 								checked={!project.cursor.hide}
