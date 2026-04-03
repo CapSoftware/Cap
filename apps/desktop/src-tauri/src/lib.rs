@@ -33,7 +33,7 @@ mod thumbnails;
 mod tray;
 mod update_project_names;
 mod upload;
-mod web_api;
+pub mod web_api;
 mod window_exclusion;
 mod windows;
 
