@@ -98,6 +98,7 @@ async fn do_authed_request(
     apply_env_headers(req).send().await
 }
 
+#[allow(async_fn_in_trait)]
 pub trait ManagerExt<R: Runtime>: Manager<R> {
     async fn authed_api_request(
         &self,
