@@ -1023,6 +1023,51 @@ async fn resize_window(
         .map_err(anyhow::Error::new)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::preferred_alpha_mode;
+    use wgpu::CompositeAlphaMode;
+
+    #[test]
+    fn preferred_alpha_mode_avoids_unsupported_inherit_fallback() {
+        assert_eq!(
+            preferred_alpha_mode(&[CompositeAlphaMode::Opaque]),
+            CompositeAlphaMode::Opaque
+        );
+    }
+
+    #[test]
+    fn preferred_alpha_mode_keeps_transparent_modes_when_supported() {
+        assert_eq!(
+            preferred_alpha_mode(&[
+                CompositeAlphaMode::Opaque,
+                CompositeAlphaMode::PreMultiplied,
+            ]),
+            CompositeAlphaMode::PreMultiplied
+        );
+        assert_eq!(
+            preferred_alpha_mode(&[
+                CompositeAlphaMode::Opaque,
+                CompositeAlphaMode::PostMultiplied,
+            ]),
+            CompositeAlphaMode::PostMultiplied
+        );
+    }
+
+    #[test]
+    fn preferred_alpha_mode_uses_other_supported_fallbacks() {
+        assert_eq!(
+            preferred_alpha_mode(&[CompositeAlphaMode::Auto]),
+            CompositeAlphaMode::Auto
+        );
+        assert_eq!(
+            preferred_alpha_mode(&[CompositeAlphaMode::Inherit]),
+            CompositeAlphaMode::Inherit
+        );
+        assert_eq!(preferred_alpha_mode(&[]), CompositeAlphaMode::Opaque);
+    }
+}
+
 fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32) {
     let pixel_count = (height * width) as usize;
     let buffer: Vec<u8> = color
