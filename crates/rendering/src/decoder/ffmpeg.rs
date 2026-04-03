@@ -513,8 +513,9 @@ impl FfmpegDecoder {
 
                                 if let Some((respond, last_frame)) = last_sent_frame_clone
                                     .filter(|l| {
-                                        requested_frame.saturating_sub(l.number)
-                                            <= MAX_FRAME_FALLBACK_DISTANCE
+                                        l.number <= requested_frame
+                                            && requested_frame.saturating_sub(l.number)
+                                                <= MAX_FRAME_FALLBACK_DISTANCE
                                     })
                                     .and_then(|l| Some((respond.take()?, l)))
                                 {
@@ -823,8 +824,9 @@ impl FfmpegDecoder {
 
                             if let Some((respond, last_frame)) = last_sent_frame_clone
                                 .filter(|l| {
-                                    requested_frame.saturating_sub(l.number)
-                                        <= MAX_FRAME_FALLBACK_DISTANCE
+                                    l.number <= requested_frame
+                                        && requested_frame.saturating_sub(l.number)
+                                            <= MAX_FRAME_FALLBACK_DISTANCE
                                 })
                                 .and_then(|l| Some((respond.take()?, l)))
                             {
