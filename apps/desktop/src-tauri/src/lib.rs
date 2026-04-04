@@ -677,10 +677,21 @@ async fn set_camera_input(
     let skip_camera_window = skip_camera_window.unwrap_or(false);
 
     if id == current_id && camera_in_use {
-        if id.is_some() && !skip_camera_window && CapWindowId::Camera.get(&app_handle).is_none() {
-            let show_result = ShowCapWindow::Camera { centered: false }
-                .show(&app_handle)
-                .await;
+        if id.is_some() && !skip_camera_window {
+            let camera_window_is_visible = CapWindowId::Camera
+                .get(&app_handle)
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+
+            let show_result = if camera_window_is_visible {
+                Ok(())
+            } else {
+                ShowCapWindow::Camera { centered: false }
+                    .show(&app_handle)
+                    .await
+                    .map(|_| ())
+            };
+
             show_result
                 .map_err(|err| error!("Failed to show camera preview window: {err}"))
                 .ok();
