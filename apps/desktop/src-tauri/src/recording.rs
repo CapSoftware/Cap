@@ -1053,27 +1053,36 @@ pub async fn start_recording(
     spawn_actor({
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
+        let project_file_path = project_file_path.clone();
         async move {
             fail!("recording::wait_actor_done");
-            let res = actor_done_fut.await;
-            info!("recording wait actor done: {:?}", &res);
-            match res {
-                Ok(()) => {
+            let disposition = {
+                let res = actor_done_fut.await;
+                info!("recording wait actor done: {:?}", &res);
+                let recording_still_active = matches!(
+                    state_mtx.read().await.recording_state,
+                    RecordingState::Active(_)
+                );
+                classify_actor_done_result(res, recording_still_active)
+            };
+            match disposition {
+                ActorDoneDisposition::UserInitiatedStop => {
                     let _ = finish_upload_tx.send(());
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
-                Err(e) => {
+                ActorDoneDisposition::UnexpectedStop { error }
+                | ActorDoneDisposition::Failed { error } => {
                     let mut state = state_mtx.write().await;
 
                     let _ = RecordingEvent::Failed {
-                        error: e.to_string(),
+                        error: error.clone(),
                     }
                     .emit(&app);
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        e.to_string(),
+                        error.clone(),
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -1083,7 +1092,7 @@ pub async fn start_recording(
 
                     dialog.blocking_show();
 
-                    handle_recording_end(app, Err(e.to_string()), &mut state, project_file_path)
+                    handle_recording_end(app, Err(error), &mut state, project_file_path)
                         .await
                         .ok();
                 }
@@ -1235,6 +1244,31 @@ fn mic_actor_not_running(err: &anyhow::Error) -> bool {
             false
         }
     })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ActorDoneDisposition {
+    UserInitiatedStop,
+    UnexpectedStop { error: String },
+    Failed { error: String },
+}
+
+fn classify_actor_done_result<E>(
+    result: Result<(), E>,
+    recording_still_active: bool,
+) -> ActorDoneDisposition
+where
+    E: ToString,
+{
+    match result {
+        Ok(()) if recording_still_active => ActorDoneDisposition::UnexpectedStop {
+            error: "Recording stopped unexpectedly before it was ended.".to_string(),
+        },
+        Ok(()) => ActorDoneDisposition::UserInitiatedStop,
+        Err(error) => ActorDoneDisposition::Failed {
+            error: error.to_string(),
+        },
+    }
 }
 
 #[tauri::command]
@@ -2510,5 +2544,36 @@ mod tests {
         mark_fragmented_recording_for_ffmpeg_export(dir.path()).unwrap();
 
         assert!(fragmented_export_ffmpeg_marker_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn classifies_unsolicited_pipeline_completion_as_unexpected_stop() {
+        let disposition = classify_actor_done_result(Ok::<(), anyhow::Error>(()), true);
+
+        assert_eq!(
+            disposition,
+            ActorDoneDisposition::UnexpectedStop {
+                error: "Recording stopped unexpectedly before it was ended.".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_pipeline_completion_after_user_stop_as_expected() {
+        let disposition = classify_actor_done_result(Ok::<(), anyhow::Error>(()), false);
+
+        assert_eq!(disposition, ActorDoneDisposition::UserInitiatedStop);
+    }
+
+    #[test]
+    fn classifies_pipeline_failure_as_failure() {
+        let disposition = classify_actor_done_result(Err(anyhow!("feed lost")), true);
+
+        assert_eq!(
+            disposition,
+            ActorDoneDisposition::Failed {
+                error: "feed lost".to_string()
+            }
+        );
     }
 }
