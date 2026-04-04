@@ -1924,15 +1924,15 @@ function StartupOverlay(props: {
 				</div>
 
 				<Button
-					class="mt-14 px-16 py-4 min-h-[3.75rem] min-w-[15rem] text-xl font-medium shadow-[0_0_30px_rgba(0,0,0,0.12)] bg-white border border-white/30 text-gray-12 hover:bg-white/95 hover:border-white/40 flex-col gap-0.5"
+					class="mt-14 px-16 py-4 min-h-[3.75rem] min-w-[15rem] text-xl font-medium shadow-[0_0_30px_rgba(0,0,0,0.12)] bg-white border border-white/30 text-[#161b26] hover:bg-white/95 hover:border-white/40 flex-col gap-0.5"
 					variant="white"
 					size="lg"
 					onClick={handleGetStarted}
 				>
 					<span>Get Started</span>
-					<span class="text-[11px] font-normal text-gray-11 leading-tight inline-flex items-center justify-center gap-1">
+					<span class="text-[11px] font-normal text-[rgba(22,27,38,0.58)] leading-tight inline-flex items-center justify-center gap-1">
 						<span>Click here, or press</span>
-						<kbd class="rounded border border-gray-6 bg-white dark:bg-gray-3 px-1 py-px text-[10px] font-medium text-gray-11 shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+						<kbd class="rounded border border-[rgba(22,27,38,0.14)] bg-[rgba(22,27,38,0.08)] px-1 py-px text-[10px] font-medium text-[#161b26] shadow-[0_1px_0_rgba(255,255,255,0.7)_inset]">
 							Space
 						</kbd>
 					</span>
