@@ -1,0 +1,45 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap-recording",
+  "title": "Cap",
+  "description": "Control Cap screen recording via deep links. Start, stop, pause, resume, and switch input devices without leaving your keyboard.",
+  "icon": "cap-icon.png",
+  "author": "cap-community",
+  "license": "MIT",
+  "categories": ["Productivity", "Media"],
+  "commands": [
+    {
+      "name": "cap-control",
+      "title": "Cap: Recording Controls",
+      "subtitle": "Cap",
+      "description": "Start, stop, pause, resume, or toggle your Cap recording session.",
+      "mode": "view"
+    },
+    {
+      "name": "switch-device",
+      "title": "Cap: Switch Input Device",
+      "subtitle": "Cap",
+      "description": "Switch the active microphone or camera used by Cap.",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.79.0",
+    "@raycast/utils": "^1.17.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
