@@ -14,6 +14,7 @@ pub enum NotificationType {
     ScreenshotCopiedToClipboard,
     ScreenshotSaveFailed,
     ScreenshotCopyFailed,
+    DeepLinkTriggered,
 }
 
 impl NotificationType {
@@ -61,6 +62,11 @@ impl NotificationType {
                 "Copy Failed",
                 "Unable to copy screenshot to clipboard. Please try again",
                 true,
+            ),
+            NotificationType::DeepLinkTriggered => (
+                "Action Triggered",
+                "An action was triggered via a deep link",
+                false,
             ),
         }
     }

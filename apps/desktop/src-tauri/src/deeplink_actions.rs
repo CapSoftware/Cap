@@ -84,19 +84,19 @@ impl TryFrom<&Url> for DeepLinkAction {
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
         #[cfg(target_os = "macos")]
-        if url.scheme() == "file" {
+        if url.scheme().eq_ignore_ascii_case("file") {
             return url
                 .to_file_path()
                 .map(|project_path| Self::OpenEditor { project_path })
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        if url.scheme() == "cap" {
+        if url.scheme().eq_ignore_ascii_case("cap") {
             return match url.host_str() {
-                Some("record") => Ok(Self::StartDefaultRecording),
-                Some("stop") => Ok(Self::StopRecording),
-                Some("pause") => Ok(Self::PauseRecording),
-                Some("resume") => Ok(Self::ResumeRecording),
+                Some(h) if h.eq_ignore_ascii_case("record") => Ok(Self::StartDefaultRecording),
+                Some(h) if h.eq_ignore_ascii_case("stop") => Ok(Self::StopRecording),
+                Some(h) if h.eq_ignore_ascii_case("pause") => Ok(Self::PauseRecording),
+                Some(h) if h.eq_ignore_ascii_case("resume") => Ok(Self::ResumeRecording),
                 _ => Err(ActionParseFromUrlError::Invalid),
             };
         }
@@ -120,6 +120,17 @@ impl TryFrom<&Url> for DeepLinkAction {
 
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        match &self {
+            DeepLinkAction::StartRecording { .. }
+            | DeepLinkAction::StopRecording
+            | DeepLinkAction::StartDefaultRecording
+            | DeepLinkAction::PauseRecording
+            | DeepLinkAction::ResumeRecording => {
+                crate::notifications::NotificationType::DeepLinkTriggered.send(app);
+            }
+            _ => {}
+        }
+
         match self {
             DeepLinkAction::StartRecording {
                 capture_mode,
