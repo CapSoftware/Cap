@@ -25,11 +25,14 @@ export default function (props: RouteSectionProps) {
 			__CAP__?: { initialTargetMode?: unknown };
 		};
 		const hasInitialTargetMode = __CAP__?.initialTargetMode != null;
+		const currentWindow = getCurrentWindow();
 		if (location.pathname === "/") {
 			void emit("main-window-ready");
 		}
-		if (location.pathname === "/" && !hasInitialTargetMode)
-			getCurrentWindow().show();
+		if (location.pathname === "/" && !hasInitialTargetMode) {
+			await currentWindow.show();
+			await currentWindow.setFocus();
+		}
 	});
 
 	onCleanup(() => {
