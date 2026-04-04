@@ -121,6 +121,19 @@ fn macos_activate_permission_request(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
+fn macos_sync_activation_policy(app: &tauri::AppHandle, should_show_dock: bool) {
+    let policy = if should_show_dock {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    };
+
+    if let Err(err) = app.set_activation_policy(policy) {
+        tracing::warn!("Failed to update activation policy: {err}");
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
     let should_hide_dock = GeneralSettingsStore::get(app)
         .ok()
@@ -133,6 +146,8 @@ pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
                 .map(|window_id| window_id.activates_dock())
                 .unwrap_or(false)
         });
+
+    macos_sync_activation_policy(app, should_show_dock);
 
     if let Err(err) = app.set_dock_visibility(should_show_dock) {
         tracing::warn!("Failed to update dock visibility: {err}");
