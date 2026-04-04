@@ -10,7 +10,10 @@ use std::{
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, Mutex, atomic::AtomicU32},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tauri::{
@@ -94,6 +97,10 @@ fn hide_recording_windows(app: &AppHandle) {
             let _ = window.hide();
         }
     }
+}
+
+fn bump_camera_window_session(app: &AppHandle) {
+    app.state::<Arc<AtomicU64>>().fetch_add(1, Ordering::AcqRel);
 }
 
 async fn ensure_camera_input_active(app_state: &mut App) {
@@ -692,6 +699,8 @@ impl ShowCapWindow {
                         .await;
                 }
             }
+
+            bump_camera_window_session(app);
 
             if let Some(window) = self.id(app).get(app) {
                 #[cfg(target_os = "macos")]
