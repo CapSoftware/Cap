@@ -1155,6 +1155,17 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     captions::release_ml_models().await;
 }
 
+#[cfg(target_os = "macos")]
+fn finalize_app_exit(app: &AppHandle, exit_code: i32) -> ! {
+    app.cleanup_before_exit();
+    std::process::exit(exit_code);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
+    app.exit(exit_code);
+}
+
 pub async fn request_app_exit(app: AppHandle) {
     if !app.state::<AppExitState>().begin() {
         return;
@@ -1172,7 +1183,7 @@ pub async fn request_app_exit(app: AppHandle) {
         );
     }
 
-    app.exit(0);
+    finalize_app_exit(&app, 0);
 }
 
 fn find_mic_by_label_or_fuzzy(
