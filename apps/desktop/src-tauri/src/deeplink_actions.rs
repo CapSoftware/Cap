@@ -4,7 +4,7 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
-use tracing::trace;
+use tracing::{trace, warn, error};
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
@@ -47,12 +47,11 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
             DeepLinkAction::try_from(&url)
                 .map_err(|e| match e {
                     ActionParseFromUrlError::ParseFailed(msg) => {
-                        eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
+                        error!("Failed to parse deep link \"{}\": {}", &url, msg)
                     }
                     ActionParseFromUrlError::Invalid => {
-                        eprintln!("Invalid deep link format \"{}\"", &url)
+                        warn!("Invalid deep link format \"{}\"", &url)
                     }
-                    // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
                 })
                 .ok()
@@ -67,7 +66,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {e}");
+                error!("Failed to handle deep link action: {e}");
             }
         }
     });
@@ -83,24 +82,28 @@ impl TryFrom<&Url> for DeepLinkAction {
     type Error = ActionParseFromUrlError;
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
+        let scheme = url.scheme().to_lowercase();
+
         #[cfg(target_os = "macos")]
-        if url.scheme().eq_ignore_ascii_case("file") {
+        if scheme == "file" {
             return url
                 .to_file_path()
                 .map(|project_path| Self::OpenEditor { project_path })
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        if url.scheme().eq_ignore_ascii_case("cap") {
-            if url.path() != "/" {
+        if scheme == "cap" {
+            // Robust path check (handles cap://record and cap://record/)
+            let path = url.path().trim_matches('/');
+            if !path.is_empty() {
                 return Err(ActionParseFromUrlError::Invalid);
             }
 
-            return match url.host_str() {
-                Some(h) if h.eq_ignore_ascii_case("record") => Ok(Self::StartDefaultRecording),
-                Some(h) if h.eq_ignore_ascii_case("stop") => Ok(Self::StopRecording),
-                Some(h) if h.eq_ignore_ascii_case("pause") => Ok(Self::TogglePauseRecording),
-                Some(h) if h.eq_ignore_ascii_case("resume") => Ok(Self::ResumeRecording),
+            return match url.host_str().map(|h| h.to_lowercase().as_str()) {
+                Some("record") => Ok(Self::StartDefaultRecording),
+                Some("stop") => Ok(Self::StopRecording),
+                Some("pause") => Ok(Self::TogglePauseRecording),
+                Some("resume") => Ok(Self::ResumeRecording),
                 _ => Err(ActionParseFromUrlError::Invalid),
             };
         }
@@ -124,6 +127,7 @@ impl TryFrom<&Url> for DeepLinkAction {
 
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
+        // Trigger security/visibility notification for recording actions
         match &self {
             DeepLinkAction::StartRecording { .. }
             | DeepLinkAction::StopRecording
@@ -153,12 +157,12 @@ impl DeepLinkAction {
                         .into_iter()
                         .find(|(s, _)| s.name == name)
                         .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
+                        .ok_or_else(|| format!("No screen with name \"{}\"", &name))?,
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
                         .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                        .ok_or_else(|| format!("No window with name \"{}\"", &name))?,
                 };
 
                 let inputs = StartRecordingInputs {
@@ -182,6 +186,7 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
             DeepLinkAction::StartDefaultRecording => {
+                // Perfect payload emission for frontend deserialization
                 crate::RequestOpenRecordingPicker { target_mode: None }.emit(app).map_err(|e| e.to_string())
             }
             DeepLinkAction::ResumeRecording => {
