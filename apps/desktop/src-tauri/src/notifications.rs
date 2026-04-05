@@ -14,6 +14,7 @@ pub enum NotificationType {
     ScreenshotCopiedToClipboard,
     ScreenshotSaveFailed,
     ScreenshotCopyFailed,
+    DeepLinkTriggered,
 }
 
 impl NotificationType {
@@ -62,6 +63,11 @@ impl NotificationType {
                 "Unable to copy screenshot to clipboard. Please try again",
                 true,
             ),
+            NotificationType::DeepLinkTriggered => (
+                "Action Triggered",
+                "An action was triggered via a deep link",
+                false,
+            ),
         }
     }
 
@@ -84,14 +90,19 @@ impl NotificationType {
     }
 
     pub fn send(self, app: &tauri::AppHandle) {
-        send_notification(app, self);
+        send_notification(app, self, false);
+    }
+
+    pub fn send_always(self, app: &tauri::AppHandle) {
+        send_notification(app, self, true);
     }
 }
 
-pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
-    let enable_notifications = GeneralSettingsStore::get(app)
-        .map(|settings| settings.is_some_and(|s| s.enable_notifications))
-        .unwrap_or(false);
+pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType, always: bool) {
+    let enable_notifications = always
+        || GeneralSettingsStore::get(app)
+            .map(|settings| settings.is_some_and(|s| s.enable_notifications))
+            .unwrap_or(false);
 
     if !enable_notifications {
         return;
