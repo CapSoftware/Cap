@@ -5,6 +5,7 @@ import {
 import { cx } from "cva";
 import {
 	type ComponentProps,
+	batch,
 	createEffect,
 	createMemo,
 	createRoot,
@@ -718,14 +719,16 @@ export function ClipTrack(
 												initialStart,
 											});
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"start",
-												clampedStart,
-											);
-											setPreviewTime(prevDuration());
+											batch(() => {
+												setProject(
+													"timeline",
+													"segments",
+													i(),
+													"start",
+													clampedStart,
+												);
+												setPreviewTime(prevDuration());
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
@@ -822,17 +825,19 @@ export function ClipTrack(
 												seg.start + minRecordedDuration,
 											);
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"end",
-												clampedEnd,
-											);
-											setPreviewTime(
-												prevDuration() +
-													(clampedEnd - seg.start) / seg.timescale,
-											);
+											batch(() => {
+												setProject(
+													"timeline",
+													"segments",
+													i(),
+													"end",
+													clampedEnd,
+												);
+												setPreviewTime(
+													prevDuration() +
+														(clampedEnd - seg.start) / seg.timescale,
+												);
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
