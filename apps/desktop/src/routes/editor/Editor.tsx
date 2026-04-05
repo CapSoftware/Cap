@@ -369,7 +369,6 @@ function Inner() {
 
 	const emitRenderFrame = (time: number) => {
 		if (skipRenderFrameForConfigUpdate) {
-			skipRenderFrameForConfigUpdate = false;
 			return;
 		}
 		if (!editorState.playing) {
