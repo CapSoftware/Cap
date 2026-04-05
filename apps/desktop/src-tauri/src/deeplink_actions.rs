@@ -33,7 +33,6 @@ pub enum DeepLinkAction {
         page: Option<String>,
     },
     StartDefaultRecording,
-    PauseRecording,
     ResumeRecording,
     TogglePauseRecording,
 }
@@ -129,7 +128,6 @@ impl DeepLinkAction {
             DeepLinkAction::StartRecording { .. }
             | DeepLinkAction::StopRecording
             | DeepLinkAction::StartDefaultRecording
-            | DeepLinkAction::PauseRecording
             | DeepLinkAction::ResumeRecording
             | DeepLinkAction::TogglePauseRecording => {
                 crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
@@ -185,9 +183,6 @@ impl DeepLinkAction {
             }
             DeepLinkAction::StartDefaultRecording => {
                 crate::RequestOpenRecordingPicker { target_mode: None }.emit(app).map_err(|e| e.to_string())
-            }
-            DeepLinkAction::PauseRecording => {
-                crate::recording::pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
