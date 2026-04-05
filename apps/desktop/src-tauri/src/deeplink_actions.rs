@@ -35,6 +35,7 @@ pub enum DeepLinkAction {
     StartDefaultRecording,
     PauseRecording,
     ResumeRecording,
+    TogglePauseRecording,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -99,7 +100,7 @@ impl TryFrom<&Url> for DeepLinkAction {
             return match url.host_str() {
                 Some(h) if h.eq_ignore_ascii_case("record") => Ok(Self::StartDefaultRecording),
                 Some(h) if h.eq_ignore_ascii_case("stop") => Ok(Self::StopRecording),
-                Some(h) if h.eq_ignore_ascii_case("pause") => Ok(Self::PauseRecording),
+                Some(h) if h.eq_ignore_ascii_case("pause") => Ok(Self::TogglePauseRecording),
                 Some(h) if h.eq_ignore_ascii_case("resume") => Ok(Self::ResumeRecording),
                 _ => Err(ActionParseFromUrlError::Invalid),
             };
@@ -129,7 +130,8 @@ impl DeepLinkAction {
             | DeepLinkAction::StopRecording
             | DeepLinkAction::StartDefaultRecording
             | DeepLinkAction::PauseRecording
-            | DeepLinkAction::ResumeRecording => {
+            | DeepLinkAction::ResumeRecording
+            | DeepLinkAction::TogglePauseRecording => {
                 crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
             }
             _ => {}
@@ -189,6 +191,9 @@ impl DeepLinkAction {
             }
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
         }
     }
