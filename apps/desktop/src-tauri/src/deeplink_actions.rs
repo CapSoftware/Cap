@@ -92,6 +92,10 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         if url.scheme().eq_ignore_ascii_case("cap") {
+            if url.path() != "/" {
+                return Err(ActionParseFromUrlError::Invalid);
+            }
+
             return match url.host_str() {
                 Some(h) if h.eq_ignore_ascii_case("record") => Ok(Self::StartDefaultRecording),
                 Some(h) if h.eq_ignore_ascii_case("stop") => Ok(Self::StopRecording),
@@ -126,7 +130,7 @@ impl DeepLinkAction {
             | DeepLinkAction::StartDefaultRecording
             | DeepLinkAction::PauseRecording
             | DeepLinkAction::ResumeRecording => {
-                crate::notifications::NotificationType::DeepLinkTriggered.send(app);
+                crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
             }
             _ => {}
         }
