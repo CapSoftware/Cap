@@ -26,6 +26,8 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
     OpenEditor {
         project_path: PathBuf,
     },
