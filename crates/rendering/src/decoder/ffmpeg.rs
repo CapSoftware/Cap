@@ -67,6 +67,9 @@ struct PendingRequest {
     reply: oneshot::Sender<DecodedFrame>,
 }
 
+const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
+const MAX_FRAME_FALLBACK_DISTANCE: u32 = 90;
+
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
 
@@ -295,8 +298,6 @@ impl FfmpegDecoder {
                 let _ = ready_tx.send(Ok(sw_init_result));
 
                 while let Ok(r) = rx.recv() {
-                    const MAX_FRAME_TOLERANCE: u32 = 2;
-
                     let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
                     let mut push_request =
                         |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
@@ -362,7 +363,8 @@ impl FfmpegDecoder {
                                 .range(..=requested_frame)
                                 .next_back()
                                 .filter(|(k, _)| {
-                                    requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                                    requested_frame.saturating_sub(**k)
+                                        <= MAX_FRAME_LOOKBACK_TOLERANCE
                                 })
                                 .map(|(k, _)| *k);
 
@@ -375,7 +377,7 @@ impl FfmpegDecoder {
                                 continue;
                             }
 
-                            if requested_frame <= MAX_FRAME_TOLERANCE
+                            if requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE
                                 && let Some(first_frame) = sw_first_ever_frame.borrow().clone()
                             {
                                 *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
@@ -469,19 +471,6 @@ impl FfmpegDecoder {
                                 *sw_first_ever_frame.borrow_mut() = Some(output);
                             }
 
-                            if let Some(most_recent_prev_frame) =
-                                sw_cache.iter_mut().rev().find(|v| {
-                                    *v.0 <= requested_frame
-                                        && requested_frame.saturating_sub(*v.0)
-                                            <= MAX_FRAME_TOLERANCE
-                                })
-                                && let Some(respond) = respond.take()
-                            {
-                                let output = most_recent_prev_frame.1.produce(&mut sw_converter);
-                                *sw_last_sent_frame.borrow_mut() = Some(output.clone());
-                                (respond)(output);
-                            }
-
                             let exceeds_cache_bounds = current_frame > cache_max;
                             let too_small_for_cache_bounds = current_frame < cache_min;
 
@@ -524,8 +513,9 @@ impl FfmpegDecoder {
 
                                 if let Some((respond, last_frame)) = last_sent_frame_clone
                                     .filter(|l| {
-                                        requested_frame.saturating_sub(l.number)
-                                            <= MAX_FRAME_TOLERANCE
+                                        l.number <= requested_frame
+                                            && requested_frame.saturating_sub(l.number)
+                                                <= MAX_FRAME_FALLBACK_DISTANCE
                                     })
                                     .and_then(|l| Some((respond.take()?, l)))
                                 {
@@ -551,7 +541,8 @@ impl FfmpegDecoder {
                                 .range(..=requested_frame)
                                 .next_back()
                                 .filter(|(k, _)| {
-                                    requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                                    requested_frame.saturating_sub(**k)
+                                        <= MAX_FRAME_FALLBACK_DISTANCE
                                 })
                                 .map(|(_, v)| v);
 
@@ -618,8 +609,6 @@ impl FfmpegDecoder {
             let _ = ready_tx.send(Ok(init_result));
 
             while let Ok(r) = rx.recv() {
-                const MAX_FRAME_TOLERANCE: u32 = 2;
-
                 let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
                 let mut push_request =
                     |requested_time: f32, reply: oneshot::Sender<DecodedFrame>| {
@@ -685,7 +674,7 @@ impl FfmpegDecoder {
                             .range(..=requested_frame)
                             .next_back()
                             .filter(|(k, _)| {
-                                requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                                requested_frame.saturating_sub(**k) <= MAX_FRAME_LOOKBACK_TOLERANCE
                             })
                             .map(|(k, _)| *k);
 
@@ -698,7 +687,7 @@ impl FfmpegDecoder {
                             continue;
                         }
 
-                        if requested_frame <= MAX_FRAME_TOLERANCE
+                        if requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE
                             && let Some(first_frame) = first_ever_frame.borrow().clone()
                         {
                             *last_sent_frame.borrow_mut() = Some(first_frame.clone());
@@ -790,16 +779,6 @@ impl FfmpegDecoder {
                             *first_ever_frame.borrow_mut() = Some(output);
                         }
 
-                        if let Some(most_recent_prev_frame) = cache.iter_mut().rev().find(|v| {
-                            *v.0 <= requested_frame
-                                && requested_frame.saturating_sub(*v.0) <= MAX_FRAME_TOLERANCE
-                        }) && let Some(respond) = respond.take()
-                        {
-                            let output = most_recent_prev_frame.1.produce(&mut converter);
-                            *last_sent_frame.borrow_mut() = Some(output.clone());
-                            (respond)(output);
-                        }
-
                         let exceeds_cache_bounds = current_frame > cache_max;
                         let too_small_for_cache_bounds = current_frame < cache_min;
 
@@ -845,7 +824,9 @@ impl FfmpegDecoder {
 
                             if let Some((respond, last_frame)) = last_sent_frame_clone
                                 .filter(|l| {
-                                    requested_frame.saturating_sub(l.number) <= MAX_FRAME_TOLERANCE
+                                    l.number <= requested_frame
+                                        && requested_frame.saturating_sub(l.number)
+                                            <= MAX_FRAME_FALLBACK_DISTANCE
                                 })
                                 .and_then(|l| Some((respond.take()?, l)))
                             {
@@ -871,7 +852,7 @@ impl FfmpegDecoder {
                             .range(..=requested_frame)
                             .next_back()
                             .filter(|(k, _)| {
-                                requested_frame.saturating_sub(**k) <= MAX_FRAME_TOLERANCE
+                                requested_frame.saturating_sub(**k) <= MAX_FRAME_FALLBACK_DISTANCE
                             })
                             .map(|(_, v)| v);
 

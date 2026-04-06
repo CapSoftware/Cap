@@ -40,6 +40,7 @@ import imageBg from "~/assets/illustrations/image.webp";
 import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
+import { normalizeOpaqueHexColor } from "~/utils/hex-color";
 import type {
 	BackgroundSource,
 	CameraShape,
@@ -584,8 +585,7 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<Field
-						name="Cursor"
-						icon={<IconCapCursor />}
+						name="Show cursor"
 						value={
 							<Toggle
 								checked={!project.cursor.hide}
@@ -2527,19 +2527,6 @@ function CornerStyleSelect(props: {
 	);
 }
 
-const normalizeHexInput = (value: string, fallback: string) => {
-	const trimmed = value.trim();
-	const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
-	const shortMatch = /^#[0-9A-Fa-f]{3}$/.test(withHash);
-	if (shortMatch) {
-		const [, r, g, b] = withHash;
-		return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
-	}
-	const fullMatch = /^#[0-9A-Fa-f]{6}$/.test(withHash);
-	if (fullMatch) return withHash.toLowerCase();
-	return fallback;
-};
-
 function HexColorInput(props: {
 	value: string;
 	onChange: (value: string) => void;
@@ -2585,7 +2572,8 @@ function HexColorInput(props: {
 					setText(e.currentTarget.value);
 				}}
 				onBlur={(e) => {
-					const next = normalizeHexInput(e.currentTarget.value, prevColor);
+					const next =
+						normalizeOpaqueHexColor(e.currentTarget.value) ?? prevColor;
 					setText(next);
 					prevColor = next;
 					props.onChange(next);

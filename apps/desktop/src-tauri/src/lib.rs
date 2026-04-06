@@ -33,7 +33,7 @@ mod thumbnails;
 mod tray;
 mod update_project_names;
 mod upload;
-mod web_api;
+pub mod web_api;
 mod window_exclusion;
 mod windows;
 
@@ -66,7 +66,9 @@ use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
-    ScreenshotEditorInstances, create_screenshot_editor_instance, update_screenshot_config,
+    PendingScreenshotEditorInstances, ScreenshotEditorInstances, WindowScreenshotEditorInstance,
+    create_screenshot_editor_instance, render_screenshot_for_export, render_screenshot_png,
+    update_screenshot_config,
 };
 
 mod gpu_context;
@@ -88,7 +90,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    ipc::Channel, AppHandle, Emitter, Manager, State, Url, Window, WindowEvent,
+    ipc::Channel, AppHandle, Emitter, Listener, Manager, State, Url, Window, WindowEvent,
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -157,6 +159,24 @@ impl AppExitState {
     }
 }
 
+pub struct MainWindowReadyState(AtomicBool);
+
+impl Default for MainWindowReadyState {
+    fn default() -> Self {
+        Self(AtomicBool::new(false))
+    }
+}
+
+impl MainWindowReadyState {
+    pub fn is_ready(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    pub fn set_ready(&self, value: bool) {
+        self.0.store(value, Ordering::Release);
+    }
+}
+
 const APP_EXIT_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 const APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_EXIT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -200,6 +220,22 @@ fn app_is_exiting(app: &AppHandle) -> bool {
         Some(state) => state.is_exiting(),
         None => false,
     }
+}
+
+fn should_show_onboarding(app: &AppHandle) -> bool {
+    let settings = GeneralSettingsStore::get(app).ok().flatten();
+    let startup_completed = settings
+        .as_ref()
+        .map(|s| s.has_completed_startup)
+        .unwrap_or(false);
+    let onboarding_completed = settings
+        .as_ref()
+        .map(|s| s.has_completed_onboarding)
+        .unwrap_or(false);
+
+    !startup_completed
+        || !onboarding_completed
+        || !permissions::do_permissions_check(false).necessary_granted()
 }
 
 fn now_millis() -> u64 {
@@ -638,11 +674,24 @@ async fn set_camera_input(
     let camera_in_use = app.camera_in_use;
     drop(app);
 
+    let skip_camera_window = skip_camera_window.unwrap_or(false);
+
     if id == current_id && camera_in_use {
-        if id.is_some() && !skip_camera_window.unwrap_or(false) {
-            let show_result = ShowCapWindow::Camera { centered: false }
-                .show(&app_handle)
-                .await;
+        if id.is_some() && !skip_camera_window {
+            let camera_window_is_visible = CapWindowId::Camera
+                .get(&app_handle)
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+
+            let show_result = if camera_window_is_visible {
+                Ok(())
+            } else {
+                ShowCapWindow::Camera { centered: false }
+                    .show(&app_handle)
+                    .await
+                    .map(|_| ())
+            };
+
             show_result
                 .map_err(|err| error!("Failed to show camera preview window: {err}"))
                 .ok();
@@ -727,7 +776,7 @@ async fn set_camera_input(
                 return Err(e);
             }
 
-            if !skip_camera_window.unwrap_or(false) {
+            if !skip_camera_window {
                 let show_result = ShowCapWindow::Camera { centered: false }
                     .show(&app_handle)
                     .await;
@@ -1094,14 +1143,6 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     })
     .await;
 
-    #[cfg(target_os = "macos")]
-    {
-        app.state::<CameraWindowCloseGate>().set_allow_close(true);
-        if let Some(camera_window) = CapWindowId::Camera.get(app) {
-            let _ = camera_window.close();
-        }
-    }
-
     if let Some(rx) = camera_shutdown {
         let _ = await_exit_step(
             "camera_preview_shutdown",
@@ -1110,6 +1151,19 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
         )
         .await;
     }
+
+    captions::release_ml_models().await;
+}
+
+#[cfg(target_os = "macos")]
+fn finalize_app_exit(app: &AppHandle, exit_code: i32) -> ! {
+    app.cleanup_before_exit();
+    std::process::exit(exit_code);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
+    app.exit(exit_code);
 }
 
 pub async fn request_app_exit(app: AppHandle) {
@@ -1129,7 +1183,7 @@ pub async fn request_app_exit(app: AppHandle) {
         );
     }
 
-    app.exit(0);
+    finalize_app_exit(&app, 0);
 }
 
 fn find_mic_by_label_or_fuzzy(
@@ -1735,6 +1789,25 @@ async fn copy_image_to_clipboard(
     data: Vec<u8>,
 ) -> Result<(), String> {
     println!("Copying image to clipboard ({} bytes)", data.len());
+
+    let img_data = clipboard_rs::RustImageData::from_bytes(&data)
+        .map_err(|e| format!("Failed to create image data from bytes: {e}"))?;
+    clipboard
+        .write()
+        .await
+        .set_image(img_data)
+        .map_err(|err| format!("Failed to copy image to clipboard: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(clipboard, instance))]
+async fn copy_rendered_screenshot_to_clipboard(
+    clipboard: MutableState<'_, ClipboardContext>,
+    instance: WindowScreenshotEditorInstance,
+) -> Result<(), String> {
+    let data = render_screenshot_png(&instance).await?;
 
     let img_data = clipboard_rs::RustImageData::from_bytes(&data)
         .map_err(|e| format!("Failed to create image data from bytes: {e}"))?;
@@ -2761,11 +2834,15 @@ async fn get_display_frame_for_cropping(
     use cap_rendering::{PixelFormat, cpu_yuv};
     use image::{ImageEncoder, codecs::png::PngEncoder};
     use std::io::Cursor;
+    use std::time::Instant;
+
+    let total_started_at = Instant::now();
 
     let frame_number = editor_instance.state.lock().await.playhead_position;
     let time_secs = frame_number as f64 / fps as f64;
 
     let project = editor_instance.project_config.1.borrow().clone();
+    let lookup_started_at = Instant::now();
 
     let (segment_time, segment) = project
         .get_segment_time(time_secs)
@@ -2782,17 +2859,23 @@ async fn get_display_frame_for_cropping(
         .find(|v| v.index == segment.recording_clip)
         .map(|v| v.offsets)
         .unwrap_or(ClipOffsets::default());
+    let lookup_elapsed_ms = lookup_started_at.elapsed().as_secs_f64() * 1000.0;
 
+    let decode_started_at = Instant::now();
     let segment_frames = segment_medias
         .decoders
-        .get_frames(segment_time as f32, false, clip_offsets)
+        .get_frames(segment_time as f32, false, true, clip_offsets)
         .await
         .ok_or_else(|| "Failed to get frame".to_string())?;
+    let decode_elapsed_ms = decode_started_at.elapsed().as_secs_f64() * 1000.0;
 
-    let screen_frame = segment_frames.screen_frame;
+    let screen_frame = segment_frames
+        .screen_frame
+        .ok_or_else(|| "Failed to get screen frame".to_string())?;
     let width = screen_frame.width();
     let height = screen_frame.height();
 
+    let convert_started_at = Instant::now();
     let rgba_data = match screen_frame.format() {
         PixelFormat::Rgba => screen_frame.data().to_vec(),
         PixelFormat::Nv12 => {
@@ -2828,12 +2911,31 @@ async fn get_display_frame_for_cropping(
             rgba
         }
     };
+    let convert_elapsed_ms = convert_started_at.elapsed().as_secs_f64() * 1000.0;
 
+    let encode_started_at = Instant::now();
     let mut png_data = Cursor::new(Vec::new());
     let encoder = PngEncoder::new(&mut png_data);
     encoder
         .write_image(&rgba_data, width, height, image::ExtendedColorType::Rgba8)
         .map_err(|e| format!("Failed to encode PNG: {e}"))?;
+    let encode_elapsed_ms = encode_started_at.elapsed().as_secs_f64() * 1000.0;
+    let total_elapsed_ms = total_started_at.elapsed().as_secs_f64() * 1000.0;
+
+    debug!(
+        target: "cap_crop_profile",
+        frame_number = frame_number,
+        time_secs = time_secs,
+        segment_time = segment_time,
+        width = width,
+        height = height,
+        lookup_ms = lookup_elapsed_ms,
+        decode_ms = decode_elapsed_ms,
+        convert_ms = convert_elapsed_ms,
+        encode_ms = encode_elapsed_ms,
+        total_ms = total_elapsed_ms,
+        "crop frame profile"
+    );
 
     Ok(png_data.into_inner())
 }
@@ -3151,6 +3253,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
             copy_image_to_clipboard,
+            copy_rendered_screenshot_to_clipboard,
             open_file_path,
             get_video_metadata,
             create_editor_instance,
@@ -3164,6 +3267,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             generate_keyboard_segments,
+            render_screenshot_for_export,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -3212,6 +3316,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
+            captions::download_parakeet_model,
+            captions::check_parakeet_model_exists,
+            captions::delete_parakeet_model,
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
@@ -3444,16 +3551,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 });
             }
 
-            tokio::spawn({
-                let app = app.clone();
-                async move {
-                    resume_uploads(app)
-                        .await
-                        .map_err(|err| warn!("Error resuming uploads: {err}"))
-                        .ok();
-                }
-            });
-
             {
                 let (server_url, should_update) = if cfg!(debug_assertions)
                     && let Ok(url) = std::env::var("VITE_SERVER_URL")
@@ -3513,11 +3610,29 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(CameraWindowPositionGuard::default());
                 app.manage(CameraWindowOperationLock::default());
                 app.manage(AppExitState::default());
+                app.manage(MainWindowReadyState::default());
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
                 )));
             }
+
+            app.listen_any("main-window-ready", {
+                let app = app.clone();
+                move |_| {
+                    app.state::<MainWindowReadyState>().set_ready(true);
+                }
+            });
+
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    resume_uploads(app)
+                        .await
+                        .map_err(|err| warn!("Error resuming uploads: {err}"))
+                        .ok();
+                }
+            });
 
             spawn_mic_error_handler(app.clone(), mic_error_rx);
             spawn_device_watchers(app.clone());
@@ -3532,20 +3647,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    let settings = GeneralSettingsStore::get(&app).ok().flatten();
-                    let startup_completed = settings
-                        .as_ref()
-                        .map(|s| s.has_completed_startup)
-                        .unwrap_or(false);
-                    let onboarding_completed = settings
-                        .as_ref()
-                        .map(|s| s.has_completed_onboarding)
-                        .unwrap_or(false);
-
-                    if !startup_completed
-                        || !onboarding_completed
-                        || !permissions.necessary_granted()
-                    {
+                    if should_show_onboarding(&app) {
                         println!("Showing onboarding");
                         let _ = ShowCapWindow::Onboarding.show(&app).await;
                     } else {
@@ -3731,6 +3833,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 let window_ids = EditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
+                                let label = window.label().to_string();
+                                let pending = editor_window::PendingEditorInstances::get(app);
+                                tokio::spawn(async move {
+                                    pending.cancel_prewarm(&label).await;
+                                });
+
                                 tokio::spawn(EditorInstances::remove(window.clone()));
 
                                 restore_main_windows_if_no_editors(app);
@@ -3739,6 +3847,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 let window_ids =
                                     ScreenshotEditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+
+                                let label = window.label().to_string();
+                                let pending = PendingScreenshotEditorInstances::get(app);
+                                tokio::spawn(async move {
+                                    pending.cancel_prewarm(&label).await;
+                                });
 
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
@@ -3764,6 +3878,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     reopen_main_window(app);
                                 }
 
+                                #[cfg(target_os = "macos")]
                                 return;
                             }
                             CapWindowId::Upgrade | CapWindowId::ModeSelect => {
@@ -3779,6 +3894,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     }
                                 }
                                 restore_camera_window(app);
+                                #[cfg(target_os = "macos")]
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
@@ -3814,18 +3930,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         };
                     }
 
-                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
-                        && settings.hide_dock_icon
-                        && app.webview_windows().keys().all(|label| {
-                            CapWindowId::from_str(label)
-                                .map(|id| !id.activates_dock())
-                                .unwrap_or(false)
-                        })
-                    {
-                        #[cfg(target_os = "macos")]
-                        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .ok();
-                    }
+                    #[cfg(target_os = "macos")]
+                    crate::permissions::sync_macos_dock_visibility(app);
                 }
                 #[cfg(target_os = "macos")]
                 WindowEvent::Focused(focused) => {
@@ -3845,8 +3951,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         && let Ok(window_id) = window_id
                         && window_id.activates_dock()
                     {
-                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                            .ok();
+                        crate::permissions::sync_macos_dock_visibility(app);
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -3896,7 +4001,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .run(move |_handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                if let Some(onboarding) = CapWindowId::Onboarding.get(_handle) {
+                let should_focus_onboarding = should_show_onboarding(_handle);
+
+                if should_focus_onboarding
+                    && let Some(onboarding) = CapWindowId::Onboarding.get(_handle)
+                {
                     onboarding.show().ok();
                     onboarding.set_focus().ok();
                     return;
@@ -3907,7 +4016,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
-                        || label.as_str() == "onboarding"
+                        || (should_focus_onboarding && label.as_str() == "onboarding")
                 });
 
                 if has_window {
@@ -3919,7 +4028,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
-                                || label.as_str() == "onboarding"
+                                || (should_focus_onboarding && label.as_str() == "onboarding")
                         })
                         .map(|(_, window)| window.clone())
                     {
@@ -3982,12 +4091,16 @@ fn restore_main_windows_if_no_editors(app: &AppHandle) {
         )
     });
 
-    if !has_other_editors && CapWindowId::Settings.get(app).is_none() {
-        if let Some(main) = CapWindowId::Main.get(app) {
-            let _ = main.show();
+    if !has_other_editors {
+        if CapWindowId::Settings.get(app).is_none() {
+            if let Some(main) = CapWindowId::Main.get(app) {
+                let _ = main.show();
+            }
+
+            restore_camera_window(app);
         }
 
-        restore_camera_window(app);
+        tokio::spawn(captions::release_ml_models());
     }
 }
 
@@ -4164,7 +4277,7 @@ async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
     frame_cb: Box<dyn FnMut(cap_editor::EditorFrameOutput) + Send>,
-) -> Result<Arc<EditorInstance>, String> {
+) -> Result<(Arc<EditorInstance>, tauri::EventId), String> {
     let app = app.clone();
 
     wait_for_recording_ready(&app, &path).await?;
@@ -4193,7 +4306,7 @@ async fn create_editor_instance_impl(
         .await?
     };
 
-    RenderFrameEvent::listen_any(&app, {
+    let event_id = RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx.send_modify(|v| {
@@ -4206,7 +4319,7 @@ async fn create_editor_instance_impl(
         }
     });
 
-    Ok(instance)
+    Ok((instance, event_id))
 }
 
 async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), String> {

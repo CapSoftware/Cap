@@ -1,3 +1,4 @@
+import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ResilientInputFlags } from "../lib/ffmpeg-video";
@@ -48,6 +49,11 @@ const thumbnailSchema = z.object({
 	quality: z.number().min(1).max(100).optional(),
 });
 
+const convertSchema = z.object({
+	videoUrl: z.string().url(),
+	inputExtension: z.string().optional(),
+});
+
 const processSchema = z.object({
 	videoId: z.string(),
 	userId: z.string(),
@@ -73,6 +79,65 @@ function isBusyError(err: unknown): boolean {
 
 function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("timed out");
+}
+
+async function cleanupTempFiles(
+	files: Array<TempFileHandle | null>,
+): Promise<void> {
+	await Promise.all(
+		files.map(async (tempFile) => {
+			if (!tempFile) return;
+			try {
+				await tempFile.cleanup();
+			} catch {}
+		}),
+	);
+}
+
+async function createVideoDownloadResponse(
+	outputTempFile: TempFileHandle,
+	tempFiles: TempFileHandle[],
+): Promise<Response> {
+	const outputFile = file(outputTempFile.path);
+	const outputSize = await outputFile.size;
+	let cleanedUp = false;
+
+	const cleanup = async () => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+		await cleanupTempFiles(tempFiles);
+	};
+
+	const stream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const reader = outputFile.stream().getReader();
+
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					if (value) controller.enqueue(value);
+				}
+				controller.close();
+			} catch (error) {
+				controller.error(error);
+			} finally {
+				reader.releaseLock();
+				await cleanup();
+			}
+		},
+		async cancel() {
+			await cleanup();
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "video/mp4",
+			"Cache-Control": "no-store",
+			"Content-Length": outputSize.toString(),
+		},
+	});
 }
 
 video.get("/status", (c) => {
@@ -221,6 +286,77 @@ video.post("/thumbnail", async (c) => {
 		return c.json(
 			{
 				error: "Failed to generate thumbnail",
+				code: "FFMPEG_ERROR",
+				details: err instanceof Error ? err.message : String(err),
+			},
+			500,
+		);
+	}
+});
+
+video.post("/convert", async (c) => {
+	const body = await c.req.json();
+	const result = convertSchema.safeParse(body);
+
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	let inputTempFile: TempFileHandle | null = null;
+	let outputTempFile: TempFileHandle | null = null;
+
+	try {
+		inputTempFile = await downloadVideoToTemp(
+			result.data.videoUrl,
+			result.data.inputExtension,
+		);
+
+		const metadata = await probeVideoFile(inputTempFile.path);
+		outputTempFile = await processVideo(inputTempFile.path, metadata, {
+			maxWidth: metadata.width > 0 ? metadata.width : undefined,
+			maxHeight: metadata.height > 0 ? metadata.height : undefined,
+		});
+
+		return await createVideoDownloadResponse(outputTempFile, [
+			inputTempFile,
+			outputTempFile,
+		]);
+	} catch (err) {
+		await cleanupTempFiles([outputTempFile, inputTempFile]);
+		console.error("[video/convert] Error:", err);
+
+		if (isBusyError(err)) {
+			return c.json(
+				{
+					error: "Server is busy",
+					code: "SERVER_BUSY",
+					details: "Too many concurrent requests, please retry later",
+				},
+				503,
+			);
+		}
+
+		if (isTimeoutError(err)) {
+			return c.json(
+				{
+					error: "Request timed out",
+					code: "TIMEOUT",
+					details: err instanceof Error ? err.message : String(err),
+				},
+				504,
+			);
+		}
+
+		return c.json(
+			{
+				error: "Failed to convert video",
 				code: "FFMPEG_ERROR",
 				details: err instanceof Error ? err.message : String(err),
 			},
@@ -612,7 +748,10 @@ async function processVideoAsync(
 			progress: 100,
 			message: "Processing complete",
 		});
-		await sendWebhook(getJob(jobId)!);
+		const completedJob = getJob(jobId);
+		if (completedJob) {
+			await sendWebhook(completedJob);
+		}
 
 		await inputTempFile.cleanup();
 		await outputTempFile.cleanup();
@@ -756,7 +895,10 @@ video.post("/process/:jobId/cancel", async (c) => {
 		message: "Processing cancelled by user",
 	});
 
-	await sendWebhook(getJob(jobId)!);
+	const cancelledJob = getJob(jobId);
+	if (cancelledJob) {
+		await sendWebhook(cancelledJob);
+	}
 
 	return c.json({
 		success: true,

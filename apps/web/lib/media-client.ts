@@ -223,3 +223,22 @@ export async function convertAudioToMp3ViaMediaServer(
 	const arrayBuffer = await response.arrayBuffer();
 	return Buffer.from(arrayBuffer);
 }
+
+export async function fetchConvertedVideoViaMediaServer(
+	videoUrl: string,
+	inputExtension?: string,
+): Promise<Response> {
+	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+	if (!mediaServerUrl) {
+		throw new Error("MEDIA_SERVER_URL is not configured");
+	}
+
+	return await fetchWithRetry(`${mediaServerUrl}/video/convert`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			videoUrl,
+			...(inputExtension ? { inputExtension } : {}),
+		}),
+	});
+}

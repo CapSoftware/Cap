@@ -20,6 +20,8 @@ export function AnnotationLayer(props: {
 	cssWidth: number;
 	cssHeight: number;
 	imageRect: { x: number; y: number; width: number; height: number };
+	isPanning?: boolean;
+	onBackgroundMouseDown?: (e: MouseEvent) => void;
 }) {
 	const {
 		project,
@@ -166,6 +168,7 @@ export function AnnotationLayer(props: {
 		if (tool === "select") {
 			if (e.target === e.currentTarget) {
 				setSelectedAnnotationId(null);
+				props.onBackgroundMouseDown?.(e);
 			}
 			return;
 		}
@@ -541,6 +544,12 @@ export function AnnotationLayer(props: {
 				left: 0,
 				"pointer-events": "all",
 				"z-index": 10,
+				cursor:
+					activeTool() === "select"
+						? props.isPanning
+							? "grabbing"
+							: "grab"
+						: undefined,
 			}}
 			class={activeTool() !== "select" ? "cursor-crosshair" : ""}
 			onMouseDown={handleMouseDown}

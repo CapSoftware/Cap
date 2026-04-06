@@ -86,10 +86,7 @@ export function ScreenshotEditorSkeleton() {
 			<div class="relative">
 				<HeaderSkeleton />
 			</div>
-			<div
-				class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5"
-				data-tauri-drag-region
-			>
+			<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5">
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
 					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0">
 						<PreviewSkeleton />

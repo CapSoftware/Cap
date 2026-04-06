@@ -51,10 +51,30 @@ export function MaskTrack(props: {
 			.map((segment, index) => ({ segment, index }))
 			.filter(({ segment }) => getSegmentTrack(segment) === props.laneIndex),
 	);
+	const laneSegmentPositionByIndex = createMemo(() => {
+		const positions = new Map<number, number>();
+		const segments = laneSegments();
+		for (let i = 0; i < segments.length; i++) {
+			positions.set(segments[i].index, i);
+		}
+		return positions;
+	});
+	const sortedLaneSegments = createMemo(() => {
+		const sorted = laneSegments()
+			.map(({ segment }) => segment)
+			.slice();
+		sorted.sort((a, b) => a.start - b.start);
+		return sorted;
+	});
+	const selectedMaskIndices = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "mask") return null;
+		return new Set(selection.indices);
+	});
 
 	const neighborBounds = (index: number) => {
 		const segments = laneSegments();
-		const laneIndex = segments.findIndex((segment) => segment.index === index);
+		const laneIndex = laneSegmentPositionByIndex().get(index) ?? -1;
 		return {
 			prevEnd: segments[laneIndex - 1]?.segment.end ?? 0,
 			nextStart: segments[laneIndex + 1]?.segment.start ?? totalDuration(),
@@ -63,10 +83,7 @@ export function MaskTrack(props: {
 
 	const findPlacement = (time: number, length: number) => {
 		const gaps: Array<{ start: number; end: number }> = [];
-		const sorted = laneSegments()
-			.map(({ segment }) => segment)
-			.slice()
-			.sort((a, b) => a.start - b.start);
+		const sorted = sortedLaneSegments();
 
 		let cursor = 0;
 		for (const segment of sorted) {
@@ -301,9 +318,9 @@ export function MaskTrack(props: {
 			>
 				{({ segment, index }) => {
 					const isSelected = createMemo(() => {
-						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "mask") return false;
-						return selection.indices.includes(index);
+						const indices = selectedMaskIndices();
+						if (!indices) return false;
+						return indices.has(index);
 					});
 
 					const contentLabel = () =>

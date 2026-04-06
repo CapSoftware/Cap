@@ -331,6 +331,7 @@ impl Mp4ExportSettings {
                     cursor: s.cursor.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
+                    render_display: true,
                 })
                 .collect(),
             fps,

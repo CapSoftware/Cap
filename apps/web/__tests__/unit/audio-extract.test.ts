@@ -90,8 +90,9 @@ describe("audio-extract", () => {
 				mockProcess.emit("error", new Error("spawn failed"));
 			}, 10);
 
-			const result = await resultPromise;
-			expect(result).toBe(false);
+			await expect(resultPromise).rejects.toThrow(
+				"ffmpeg process error: spawn failed",
+			);
 		});
 
 		it("uses correct ffmpeg arguments", async () => {
@@ -104,7 +105,9 @@ describe("audio-extract", () => {
 				mockProcess.emit("close", 1);
 			}, 10);
 
-			await resultPromise;
+			await expect(resultPromise).rejects.toThrow(
+				"ffmpeg could not read video file: no streams detected",
+			);
 
 			const args = spawnArgs[0]?.args ?? [];
 			expect(args).toContain("-i");

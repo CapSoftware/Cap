@@ -7,7 +7,6 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
-	For,
 	on,
 	onMount,
 	Show,
@@ -15,18 +14,24 @@ import {
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
+import Tooltip from "~/components/Tooltip";
 import { defaultCaptionSettings } from "~/store/captions";
 import type { CaptionSettings } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
-import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
+import IconLucideInfo from "~icons/lucide/info";
 import {
+	applyCaptionResultToProject,
 	CAPTION_MODEL_FOLDER,
-	createCaptionTrackSegments,
 	DEFAULT_CAPTION_MODEL,
+	DEFAULT_WHISPER_CAPTION_MODEL,
 	getCaptionGenerationErrorMessage,
+	getModelPath,
+	PARAKEET_DIR_MODELS,
+	resolveCaptionModel,
+	supportsParakeetTranscription,
 	syncCaptionWordsWithText,
 	transcribeEditorCaptions,
 } from "./captions";
@@ -53,6 +58,7 @@ import {
 interface ModelOption {
 	name: string;
 	label: string;
+	modelName: string;
 	size: string;
 	description: string;
 }
@@ -64,13 +70,29 @@ interface LanguageOption {
 
 const MODEL_OPTIONS: ModelOption[] = [
 	{
+		name: "best",
+		label: "Recommended",
+		modelName: "parakeet-tdt-0.6b-v3 int8",
+		size: "~640MB",
+		description: "Best balance for most recordings",
+	},
+	{
+		name: "best-max",
+		label: "High Accuracy",
+		modelName: "parakeet-tdt-0.6b-v3",
+		size: "~2.4GB",
+		description: "Larger download, higher accuracy",
+	},
+	{
 		name: "small",
+		modelName: "whisper.cpp small",
 		label: "Small",
 		size: "466MB",
-		description: "Balanced speed/accuracy",
+		description: "Smallest download",
 	},
 	{
 		name: "medium",
+		modelName: "whisper.cpp medium",
 		label: "Medium",
 		size: "1.5GB",
 		description: "Slower, more accurate",
@@ -167,7 +189,9 @@ export function CaptionsTab() {
 		setProject("captions", "settings", key, value);
 	};
 
-	const [selectedModel, setSelectedModel] = createSignal(DEFAULT_CAPTION_MODEL);
+	const [selectedModel, setSelectedModel] = createSignal(
+		resolveCaptionModel(DEFAULT_CAPTION_MODEL),
+	);
 	const [selectedLanguage, setSelectedLanguage] = createSignal("auto");
 	const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
 
@@ -184,6 +208,16 @@ export function CaptionsTab() {
 	const setIsGenerating = (value: boolean) =>
 		setEditorState("captions", "isGenerating", value);
 	const [hasAudio, setHasAudio] = createSignal(false);
+	const availableModelOptions = createMemo(() =>
+		supportsParakeetTranscription()
+			? MODEL_OPTIONS
+			: MODEL_OPTIONS.filter((model) => !PARAKEET_DIR_MODELS.has(model.name)),
+	);
+	const selectedModelOption = createMemo(
+		() =>
+			availableModelOptions().find((model) => model.name === selectedModel()) ??
+			null,
+	);
 
 	createEffect(
 		on(
@@ -209,7 +243,7 @@ export function CaptionsTab() {
 			}
 
 			const models = await Promise.all(
-				MODEL_OPTIONS.map(async (model) => {
+				availableModelOptions().map(async (model) => {
 					const downloaded = await checkModelExists(model.name);
 					return { name: model.name, downloaded };
 				}),
@@ -220,9 +254,18 @@ export function CaptionsTab() {
 				.map((m) => m.name);
 			setDownloadedModels(downloadedModelNames);
 
-			const savedModel = localStorage.getItem("selectedTranscriptionModel");
-			if (savedModel && MODEL_OPTIONS.some((m) => m.name === savedModel)) {
+			const savedModel = resolveCaptionModel(
+				localStorage.getItem("selectedTranscriptionModel"),
+			);
+			if (
+				savedModel &&
+				availableModelOptions().some((model) => model.name === savedModel)
+			) {
 				setSelectedModel(savedModel);
+			} else {
+				setSelectedModel(
+					availableModelOptions()[0]?.name ?? DEFAULT_WHISPER_CAPTION_MODEL,
+				);
 			}
 
 			const savedLanguage = localStorage.getItem(
@@ -296,6 +339,10 @@ export function CaptionsTab() {
 	);
 
 	const checkModelExists = async (modelName: string) => {
+		if (PARAKEET_DIR_MODELS.has(modelName)) {
+			const modelPath = await getModelPath(modelName);
+			return await commands.checkParakeetModelExists(modelPath);
+		}
 		const appDataDirPath = await appLocalDataDir();
 		const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 		const path = await join(modelsPath, `${modelName}.bin`);
@@ -309,21 +356,31 @@ export function CaptionsTab() {
 			setDownloadProgress(0);
 			setDownloadingModel(modelToDownload);
 
-			const appDataDirPath = await appLocalDataDir();
-			const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
-			const modelPath = await join(modelsPath, `${modelToDownload}.bin`);
-
-			try {
-				await commands.createDir(modelsPath, true);
-			} catch (err) {
-				console.error("Error creating directory:", err);
-			}
-
 			const unlisten = await events.downloadProgress.listen((event) => {
 				setDownloadProgress(event.payload.progress);
 			});
 
-			await commands.downloadWhisperModel(modelToDownload, modelPath);
+			if (PARAKEET_DIR_MODELS.has(modelToDownload)) {
+				const modelDir = await getModelPath(modelToDownload);
+				try {
+					await commands.createDir(modelDir, true);
+				} catch (err) {
+					console.error("Error creating directory:", err);
+				}
+				await commands.downloadParakeetModel(modelDir);
+			} else {
+				const appDataDirPath = await appLocalDataDir();
+				const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
+				const modelPath = await join(modelsPath, `${modelToDownload}.bin`);
+
+				try {
+					await commands.createDir(modelsPath, true);
+				} catch (err) {
+					console.error("Error creating directory:", err);
+				}
+				await commands.downloadWhisperModel(modelToDownload, modelPath);
+			}
+
 			unlisten();
 
 			setDownloadedModels((prev) => [...prev, modelToDownload]);
@@ -353,15 +410,18 @@ export function CaptionsTab() {
 			);
 
 			if (result && result.segments.length > 0) {
-				setProject("captions", "segments", result.segments);
-				updateCaptionSetting("enabled", true);
-
 				setProject(
-					"timeline",
-					"captionSegments",
-					createCaptionTrackSegments(result.segments),
+					produce((p) => {
+						applyCaptionResultToProject(
+							p,
+							result.segments,
+							editorInstance.recordings.segments,
+							editorInstance.recordingDuration,
+						);
+					}),
 				);
 				setEditorState("timeline", "tracks", "caption", true);
+				setEditorState("captions", "isStale", false);
 
 				toast.success("Captions generated successfully!");
 			} else {
@@ -389,51 +449,116 @@ export function CaptionsTab() {
 			<div class="flex flex-col gap-4">
 				<div class="space-y-6 transition-all duration-200">
 					<div class="space-y-4">
-						<div class="space-y-2">
-							<label class="text-xs text-gray-11">Transcription Model</label>
-							<div class="grid grid-cols-2 gap-3">
-								<For each={MODEL_OPTIONS}>
-									{(model) => {
-										const isDownloaded = () =>
-											downloadedModels().includes(model.name);
-										const isSelected = () => selectedModel() === model.name;
+						<Subfield name="Model" class="items-start">
+							<KSelect<string>
+								options={availableModelOptions().map((model) => model.name)}
+								value={selectedModel()}
+								onChange={(value: string | null) => {
+									if (value) setSelectedModel(value);
+								}}
+								itemComponent={(props) => {
+									const model = availableModelOptions().find(
+										(option) => option.name === props.item.rawValue,
+									);
 
-										return (
-											<button
-												class={cx(
-													"flex flex-col text-left p-3 rounded-lg border transition-all relative",
-													isSelected()
-														? "border-blue-8 bg-blue-3/40"
-														: "border-gray-3 hover:border-gray-5 bg-gray-2",
-												)}
-												onClick={() => {
-													setSelectedModel(model.name);
-												}}
-											>
-												<div class="flex items-center justify-between w-full mb-1">
-													<span class="font-medium text-sm text-gray-12">
-														{model.label}
-													</span>
-													<Show when={isDownloaded()}>
-														<div class="text-green-9" title="Downloaded">
-															<IconLucideCheck class="size-4" />
+									return (
+										<MenuItem<typeof KSelect.Item>
+											as={KSelect.Item}
+											item={props.item}
+										>
+											<div class="flex w-full items-center gap-3">
+												<div class="min-w-0 flex-1">
+													<div class="flex items-center gap-1.5 text-gray-12">
+														<KSelect.ItemLabel class="truncate font-medium">
+															{model?.label ?? props.item.rawValue}
+														</KSelect.ItemLabel>
+														<Show when={model}>
+															<Tooltip openDelay={0} content={model?.modelName}>
+																<button
+																	type="button"
+																	class="flex shrink-0 text-gray-9 transition-colors hover:text-gray-12"
+																	onPointerDown={(event) =>
+																		event.stopPropagation()
+																	}
+																	onClick={(event) => event.stopPropagation()}
+																>
+																	<IconLucideInfo class="size-3.5" />
+																</button>
+															</Tooltip>
+														</Show>
+													</div>
+													<Show when={model}>
+														<div class="truncate text-xs text-gray-11">
+															{model?.description}
 														</div>
 													</Show>
 												</div>
-												<span class="text-xs text-gray-11 mb-2">
-													{model.description}
-												</span>
-												<div class="flex items-center justify-between mt-auto">
-													<span class="text-[10px] px-1.5 py-0.5 bg-gray-3 rounded text-gray-11">
-														{model.size}
+												<Show when={model}>
+													<span class="shrink-0 text-[10px] text-gray-10">
+														{model?.size}
 													</span>
-												</div>
-											</button>
-										);
-									}}
-								</For>
-							</div>
-						</div>
+												</Show>
+											</div>
+										</MenuItem>
+									);
+								}}
+							>
+								<KSelect.Trigger class="flex min-w-0 flex-row items-center gap-2 rounded-lg border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9">
+									<div class="min-w-0 flex-1 text-left">
+										<div class="flex items-center gap-1.5">
+											<span class="truncate font-medium">
+												{selectedModelOption()?.label || "Select a model"}
+											</span>
+											<Show when={selectedModelOption()}>
+												<Tooltip
+													openDelay={0}
+													content={selectedModelOption()?.modelName}
+												>
+													<button
+														type="button"
+														class="flex shrink-0 text-gray-9 transition-colors hover:text-gray-12"
+														onPointerDown={(event) => event.stopPropagation()}
+														onClick={(event) => event.stopPropagation()}
+													>
+														<IconLucideInfo class="size-3.5" />
+													</button>
+												</Tooltip>
+											</Show>
+										</div>
+										<Show when={selectedModelOption()}>
+											<div class="truncate text-xs text-gray-11">
+												{selectedModelOption()?.description}
+											</div>
+										</Show>
+									</div>
+									<Show when={selectedModelOption()}>
+										<span class="shrink-0 text-[10px] text-gray-10">
+											{selectedModelOption()?.size}
+										</span>
+									</Show>
+									<KSelect.Icon>
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+									</KSelect.Icon>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={topLeftAnimateClasses}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Subfield>
+
+						<Show when={!supportsParakeetTranscription()}>
+							<p class="text-xs text-gray-10">
+								Parakeet caption models are unavailable on Intel Macs. Whisper
+								models remain available.
+							</p>
+						</Show>
 
 						<Subfield name="Language">
 							<KSelect<string>
@@ -503,7 +628,7 @@ export function CaptionsTab() {
 														<IconLucideDownload class="size-4" />
 														Download{" "}
 														{
-															MODEL_OPTIONS.find(
+															availableModelOptions().find(
 																(m) => m.name === selectedModel(),
 															)?.label
 														}{" "}

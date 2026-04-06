@@ -7,6 +7,7 @@ import { cx } from "cva";
 import {
 	batch,
 	createEffect,
+	createMemo,
 	createRoot,
 	createSignal,
 	For,
@@ -26,8 +27,9 @@ import { defaultCaptionSettings } from "~/store/captions";
 import { defaultKeyboardSettings } from "~/store/keyboard";
 import { commands } from "~/utils/tauri";
 import {
-	createCaptionTrackSegments,
+	applyCaptionResultToProject,
 	getCaptionGenerationErrorMessage,
+	getSelectedTranscriptionSettings,
 	transcribeEditorCaptions,
 } from "../captions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
@@ -160,7 +162,7 @@ export function Timeline(props: {
 	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
 	const captionTrackVisible = () => trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
-	const trackOptions = () =>
+	const trackOptions = createMemo(() =>
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
@@ -178,26 +180,33 @@ export function Timeline(props: {
 			available: definition.type === "scene" ? sceneAvailable() : true,
 			supportsMultiple:
 				definition.type === "mask" || definition.type === "text",
-		}));
+		})),
+	);
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
-	const textTrackRows = () =>
+	const textTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
 			project.timeline?.textSegments ?? [],
 			trackState().text,
-		);
-	const maskTrackRows = () =>
+		),
+	);
+	const maskTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
 			project.timeline?.maskSegments ?? [],
 			trackState().mask,
-		);
-	const visibleTrackCount = () =>
-		2 +
-		(captionTrackVisible() ? 1 : 0) +
-		(keyboardTrackVisible() ? 1 : 0) +
-		textTrackRows().length +
-		maskTrackRows().length +
-		(sceneTrackVisible() ? 1 : 0);
-	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
+		),
+	);
+	const visibleTrackCount = createMemo(
+		() =>
+			2 +
+			(captionTrackVisible() ? 1 : 0) +
+			(keyboardTrackVisible() ? 1 : 0) +
+			textTrackRows().length +
+			maskTrackRows().length +
+			(sceneTrackVisible() ? 1 : 0),
+	);
+	const trackHeight = createMemo(() =>
+		visibleTrackCount() > 2 ? "3rem" : "3.25rem",
+	);
 
 	createEffect(() => {
 		const visibleTracks = visibleTrackCount();
@@ -347,6 +356,67 @@ export function Timeline(props: {
 				}),
 			);
 			setEditorState("timeline", "tracks", type, nextTrackCount);
+		});
+
+		resumeHistory();
+	}
+
+	function handleDeleteSingleTrack(type: "caption" | "keyboard") {
+		const resumeHistory = projectHistory.pause();
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
+				setEditorState("timeline", "selection", null);
+			}
+
+			if (type === "caption") {
+				setProject(
+					produce((project) => {
+						if (project.captions) {
+							project.captions.segments = [];
+							project.captions.settings = {
+								...defaultCaptionSettings,
+								...project.captions.settings,
+								enabled: false,
+							};
+						}
+						project.timeline ??= {
+							segments: [{ start: 0, end: duration(), timescale: 1 }],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+							captionSegments: [],
+							keyboardSegments: [],
+						};
+						project.timeline.captionSegments = [];
+					}),
+				);
+				setEditorState("timeline", "tracks", "caption", false);
+			} else {
+				setProject(
+					produce((project) => {
+						if (project.keyboard) {
+							project.keyboard.settings = {
+								...defaultKeyboardSettings,
+								...project.keyboard.settings,
+								enabled: false,
+							};
+						}
+						project.timeline ??= {
+							segments: [{ start: 0, end: duration(), timescale: 1 }],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+							captionSegments: [],
+							keyboardSegments: [],
+						};
+						project.timeline.keyboardSegments = [];
+					}),
+				);
+				setEditorState("timeline", "tracks", "keyboard", false);
+			}
 		});
 
 		resumeHistory();
@@ -615,7 +685,12 @@ export function Timeline(props: {
 		setEditorState("captions", "isGenerating", true);
 
 		try {
-			const result = await transcribeEditorCaptions(editorInstance.path);
+			const { model, language } = getSelectedTranscriptionSettings();
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				model,
+				language,
+			);
 
 			if (result.segments.length < 1) {
 				toast.error(
@@ -625,39 +700,18 @@ export function Timeline(props: {
 			}
 
 			setProject(
-				produce((currentProject) => {
-					currentProject.captions ??= {
-						segments: [],
-						settings: { ...defaultCaptionSettings, enabled: true },
-					};
-					currentProject.captions.segments = result.segments;
-					currentProject.captions.settings = {
-						...defaultCaptionSettings,
-						...currentProject.captions.settings,
-						enabled: true,
-					};
-					currentProject.timeline ??= {
-						segments: [
-							{
-								start: 0,
-								end: duration(),
-								timescale: 1,
-							},
-						],
-						zoomSegments: [],
-						sceneSegments: [],
-						maskSegments: [],
-						textSegments: [],
-						captionSegments: [],
-						keyboardSegments: [],
-					};
-					currentProject.timeline.captionSegments = createCaptionTrackSegments(
+				produce((p) => {
+					applyCaptionResultToProject(
+						p,
 						result.segments,
+						editorInstance.recordings.segments,
+						duration(),
 					);
 				}),
 			);
 
 			setEditorState("timeline", "tracks", "caption", true);
+			setEditorState("captions", "isStale", false);
 			toast.success("Captions generated successfully!");
 		} catch (error) {
 			console.error("Error generating captions:", error);
@@ -861,7 +915,10 @@ export function Timeline(props: {
 								/>
 							</TrackRow>
 							<Show when={captionTrackVisible()}>
-								<TrackRow icon={trackIcons.caption}>
+								<TrackRow
+									icon={trackIcons.caption}
+									onDelete={() => handleDeleteSingleTrack("caption")}
+								>
 									<CaptionsTrack
 										onDragStateChanged={(v) => {
 											captionSegmentDragState = v;
@@ -873,7 +930,10 @@ export function Timeline(props: {
 								</TrackRow>
 							</Show>
 							<Show when={keyboardTrackVisible()}>
-								<TrackRow icon={trackIcons.keyboard}>
+								<TrackRow
+									icon={trackIcons.keyboard}
+									onDelete={() => handleDeleteSingleTrack("keyboard")}
+								>
 									<KeyboardTrack
 										onDragStateChanged={(v) => {
 											keyboardSegmentDragState = v;

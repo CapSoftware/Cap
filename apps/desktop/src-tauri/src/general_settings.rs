@@ -268,7 +268,12 @@ impl GeneralSettingsStore {
         let mut settings = Self::get(app)?.unwrap_or_default();
         update(&mut settings);
         store.set("general_settings", json!(settings));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+
+        #[cfg(target_os = "macos")]
+        crate::permissions::sync_macos_dock_visibility(app);
+
+        Ok(())
     }
 
     fn save(&self, app: &AppHandle) -> Result<(), String> {
@@ -296,6 +301,9 @@ pub fn init(app: &AppHandle) {
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);
     }
+
+    #[cfg(target_os = "macos")]
+    crate::permissions::sync_macos_dock_visibility(app);
 
     println!("GeneralSettingsState managed");
 }

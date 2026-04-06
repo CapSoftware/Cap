@@ -1,4 +1,3 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { createSignal } from "solid-js";
@@ -9,7 +8,17 @@ import { type Annotation, useScreenshotEditorContext } from "./context";
 
 export function useScreenshotExport() {
 	const editorCtx = useScreenshotEditorContext();
-	const { latestFrame, annotations, dialog, setDialog, project } = editorCtx;
+	const {
+		latestFrame,
+		annotations,
+		dialog,
+		setDialog,
+		project,
+		previewCanvas,
+		previewMaskCanvas,
+		configRevision,
+		originalImageSize,
+	} = editorCtx;
 	const [isExporting, setIsExporting] = createSignal(false);
 
 	const drawAnnotations = (
@@ -180,6 +189,74 @@ export function useScreenshotExport() {
 		ctx.filter = "none";
 	};
 
+	const scaleAnnotations = (
+		annotations: Annotation[],
+		scaleX: number,
+		scaleY: number,
+	) => {
+		const scalar = (scaleX + scaleY) / 2;
+
+		return annotations.map((ann) => ({
+			...ann,
+			x: ann.x * scaleX,
+			y: ann.y * scaleY,
+			width: ann.width * scaleX,
+			height: ann.height * scaleY,
+			strokeWidth: ann.strokeWidth * scalar,
+			maskLevel: ann.maskLevel == null ? ann.maskLevel : ann.maskLevel * scalar,
+		}));
+	};
+
+	const canUsePreviewFrameForExport = (
+		frame: ReturnType<typeof latestFrame>,
+	) => {
+		if (!frame?.bitmap) return false;
+
+		if (project.aspectRatio === null) {
+			return true;
+		}
+
+		const crop = project.background.crop;
+		const imageSize = originalImageSize();
+		const sourceWidth = crop?.size.x ?? imageSize?.width ?? frame.width;
+		const sourceHeight = crop?.size.y ?? imageSize?.height ?? frame.height;
+
+		return frame.width >= sourceWidth && frame.height >= sourceHeight;
+	};
+
+	const waitForSyncedPreview = async () => {
+		const targetRevision = configRevision();
+		const initialFrame = latestFrame();
+
+		if (initialFrame?.revision === targetRevision) {
+			return initialFrame;
+		}
+
+		const deadline = Date.now() + 1500;
+
+		return await new Promise<NonNullable<ReturnType<typeof latestFrame>>>(
+			(resolve, reject) => {
+				const poll = () => {
+					const frame = latestFrame();
+
+					if (frame?.revision === targetRevision) {
+						resolve(frame);
+						return;
+					}
+
+					if (Date.now() >= deadline) {
+						reject(new Error("Preview is still updating. Try again."));
+						return;
+					}
+
+					window.setTimeout(poll, 16);
+				};
+
+				poll();
+			},
+		);
+	};
+
 	const exportImage = async (destination: "file" | "clipboard") => {
 		setIsExporting(true);
 		try {
@@ -187,118 +264,144 @@ export function useScreenshotExport() {
 			const ctx = canvas.getContext("2d");
 			if (!ctx) throw new Error("Could not get canvas context");
 
-			const frame = latestFrame();
-			if (frame?.bitmap) {
-				canvas.width = frame.width;
-				canvas.height = frame.height;
-				ctx.drawImage(frame.bitmap, 0, 0);
-			} else {
-				const img = new Image();
-				img.crossOrigin = "anonymous";
-				img.src = convertFileSrc(editorCtx.path);
-				await new Promise((resolve, reject) => {
-					img.onload = resolve;
-					img.onerror = reject;
-				});
-				canvas.width = img.width;
-				canvas.height = img.height;
-				ctx.drawImage(img, 0, 0);
-			}
-
-			const sourceCanvas = document.createElement("canvas");
-			sourceCanvas.width = canvas.width;
-			sourceCanvas.height = canvas.height;
-			const sourceCtx = sourceCanvas.getContext("2d");
-			if (!sourceCtx) throw new Error("Could not get source canvas context");
-			sourceCtx.drawImage(canvas, 0, 0);
-
-			const crop = project.background.crop;
-			const imageRect = (() => {
-				if (crop) {
-					const cropX = Math.max(0, Math.round(crop.position.x));
-					const cropY = Math.max(0, Math.round(crop.position.y));
-					const cropWidth = Math.max(
-						0,
-						Math.min(Math.round(crop.size.x), canvas.width - cropX),
-					);
-					const cropHeight = Math.max(
-						0,
-						Math.min(Math.round(crop.size.y), canvas.height - cropY),
-					);
-					if (cropWidth > 0 && cropHeight > 0) {
-						return {
-							x: cropX,
-							y: cropY,
-							width: cropWidth,
-							height: cropHeight,
-						};
-					}
+			const frame = await waitForSyncedPreview();
+			const renderedBitmap = await (async () => {
+				if (canUsePreviewFrameForExport(frame) && frame.bitmap) {
+					return frame.bitmap;
 				}
-				return {
+
+				const renderedBytes = await commands.renderScreenshotForExport();
+				const renderedBlob = new Blob([new Uint8Array(renderedBytes)], {
+					type: "image/png",
+				});
+				return await createImageBitmap(renderedBlob);
+			})();
+			const shouldCloseRenderedBitmap = renderedBitmap !== frame?.bitmap;
+			try {
+				canvas.width = renderedBitmap.width;
+				canvas.height = renderedBitmap.height;
+				const scaleX = frame ? canvas.width / frame.width : 1;
+				const scaleY = frame ? canvas.height / frame.height : 1;
+				const scaledAnnotations = scaleAnnotations(annotations, scaleX, scaleY);
+				const livePreviewCanvas = previewCanvas();
+				const livePreviewMaskCanvas = previewMaskCanvas();
+				const canReusePreviewCanvases =
+					canUsePreviewFrameForExport(frame) &&
+					!!livePreviewCanvas &&
+					!!livePreviewMaskCanvas &&
+					livePreviewCanvas.width === canvas.width &&
+					livePreviewCanvas.height === canvas.height &&
+					livePreviewMaskCanvas.width === canvas.width &&
+					livePreviewMaskCanvas.height === canvas.height;
+
+				if (
+					canReusePreviewCanvases &&
+					livePreviewCanvas &&
+					livePreviewMaskCanvas
+				) {
+					ctx.drawImage(livePreviewCanvas, 0, 0);
+					ctx.drawImage(livePreviewMaskCanvas, 0, 0);
+				} else {
+					ctx.drawImage(renderedBitmap, 0, 0);
+
+					const sourceCanvas = document.createElement("canvas");
+					sourceCanvas.width = canvas.width;
+					sourceCanvas.height = canvas.height;
+					const sourceCtx = sourceCanvas.getContext("2d");
+					if (!sourceCtx)
+						throw new Error("Could not get source canvas context");
+					sourceCtx.drawImage(canvas, 0, 0);
+
+					applyMaskAnnotations(ctx, sourceCanvas, scaledAnnotations, {
+						x: 0,
+						y: 0,
+						width: canvas.width,
+						height: canvas.height,
+					});
+				}
+
+				const imageRect = {
 					x: 0,
 					y: 0,
 					width: canvas.width,
 					height: canvas.height,
 				};
-			})();
 
-			applyMaskAnnotations(ctx, sourceCanvas, annotations, imageRect);
-			drawAnnotations(ctx, annotations);
+				drawAnnotations(ctx, scaledAnnotations);
 
-			let minX = imageRect.x;
-			let minY = imageRect.y;
-			let maxX = imageRect.x + imageRect.width;
-			let maxY = imageRect.y + imageRect.height;
+				let minX = imageRect.x;
+				let minY = imageRect.y;
+				let maxX = imageRect.x + imageRect.width;
+				let maxY = imageRect.y + imageRect.height;
 
-			for (const ann of annotations) {
-				if (ann.type === "mask") continue;
-				const left = Math.min(ann.x, ann.x + ann.width);
-				const right = Math.max(ann.x, ann.x + ann.width);
-				const top = Math.min(ann.y, ann.y + ann.height);
-				const bottom = Math.max(ann.y, ann.y + ann.height);
-				minX = Math.min(minX, left);
-				maxX = Math.max(maxX, right);
-				minY = Math.min(minY, top);
-				maxY = Math.max(maxY, bottom);
-			}
+				for (const ann of scaledAnnotations) {
+					if (ann.type === "mask") continue;
+					const left = Math.min(ann.x, ann.x + ann.width);
+					const right = Math.max(ann.x, ann.x + ann.width);
+					const top = Math.min(ann.y, ann.y + ann.height);
+					const bottom = Math.max(ann.y, ann.y + ann.height);
+					minX = Math.min(minX, left);
+					maxX = Math.max(maxX, right);
+					minY = Math.min(minY, top);
+					maxY = Math.max(maxY, bottom);
+				}
 
-			const exportWidth = Math.max(1, Math.round(maxX - minX));
-			const exportHeight = Math.max(1, Math.round(maxY - minY));
-			const outputCanvas = document.createElement("canvas");
-			outputCanvas.width = exportWidth;
-			outputCanvas.height = exportHeight;
-			const outputCtx = outputCanvas.getContext("2d");
-			if (!outputCtx) throw new Error("Could not get output canvas context");
-			outputCtx.fillStyle = "white";
-			outputCtx.fillRect(0, 0, exportWidth, exportHeight);
-			outputCtx.drawImage(canvas, -minX, -minY);
+				const exportWidth = Math.max(1, Math.round(maxX - minX));
+				const exportHeight = Math.max(1, Math.round(maxY - minY));
+				const outputCanvas = document.createElement("canvas");
+				outputCanvas.width = exportWidth;
+				outputCanvas.height = exportHeight;
+				const outputCtx = outputCanvas.getContext("2d");
+				if (!outputCtx) throw new Error("Could not get output canvas context");
+				outputCtx.fillStyle = "white";
+				outputCtx.fillRect(0, 0, exportWidth, exportHeight);
+				outputCtx.drawImage(canvas, -minX, -minY);
 
-			const blob = await new Promise<Blob | null>((resolve) =>
-				outputCanvas.toBlob(resolve, "image/png"),
-			);
-			if (!blob) throw new Error("Failed to create blob");
+				const blob = await new Promise<Blob | null>((resolve) =>
+					outputCanvas.toBlob(resolve, "image/png"),
+				);
+				if (!blob) throw new Error("Failed to create blob");
 
-			const buffer = await blob.arrayBuffer();
-			const uint8Array = new Uint8Array(buffer);
+				if (destination === "file") {
+					const buffer = await blob.arrayBuffer();
+					const uint8Array = new Uint8Array(buffer);
+					const savePath = await save({
+						filters: [{ name: "PNG Image", extensions: ["png"] }],
+						defaultPath: `${editorCtx.prettyName}.png`,
+					});
+					if (savePath) {
+						await writeFile(savePath, uint8Array);
+						toast.success("Screenshot saved!");
+						setDialog({ ...dialog(), open: false });
+					}
+				} else {
+					const clipboardItem =
+						typeof ClipboardItem !== "undefined"
+							? new ClipboardItem({ "image/png": blob })
+							: null;
 
-			if (destination === "file") {
-				const savePath = await save({
-					filters: [{ name: "PNG Image", extensions: ["png"] }],
-					defaultPath: `${editorCtx.prettyName}.png`,
-				});
-				if (savePath) {
-					await writeFile(savePath, uint8Array);
-					toast.success("Screenshot saved!");
+					try {
+						if (!clipboardItem || !navigator.clipboard?.write) {
+							throw new Error("ClipboardItem unavailable");
+						}
+						await navigator.clipboard.write([clipboardItem]);
+					} catch {
+						const buffer = await blob.arrayBuffer();
+						const uint8Array = new Uint8Array(buffer);
+						await commands.copyImageToClipboard(Array.from(uint8Array));
+					}
+					toast.success("Screenshot copied to clipboard!");
 					setDialog({ ...dialog(), open: false });
 				}
-			} else {
-				await commands.copyImageToClipboard(Array.from(uint8Array));
-				toast.success("Screenshot copied to clipboard!");
-				setDialog({ ...dialog(), open: false });
+			} finally {
+				if (shouldCloseRenderedBitmap) {
+					renderedBitmap.close();
+				}
 			}
 		} catch (err) {
 			console.error(err);
-			toast.error("Failed to export");
+			const message = err instanceof Error ? err.message : String(err);
+			toast.error(message || "Failed to export");
 		} finally {
 			setIsExporting(false);
 		}

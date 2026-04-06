@@ -67,6 +67,20 @@ fn clamp_size(size: f32) -> f32 {
     size.clamp(MIN_CAMERA_SIZE, MAX_CAMERA_SIZE)
 }
 
+fn preferred_alpha_mode(alpha_modes: &[CompositeAlphaMode]) -> CompositeAlphaMode {
+    [
+        CompositeAlphaMode::PreMultiplied,
+        CompositeAlphaMode::PostMultiplied,
+        CompositeAlphaMode::Opaque,
+        CompositeAlphaMode::Auto,
+        CompositeAlphaMode::Inherit,
+    ]
+    .into_iter()
+    .find(|mode| alpha_modes.contains(mode))
+    .or_else(|| alpha_modes.first().copied())
+    .unwrap_or(CompositeAlphaMode::Opaque)
+}
+
 pub struct CameraPreviewManager {
     store: Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String>,
     preview: Option<InitializedCameraPreview>,
@@ -483,19 +497,7 @@ impl InitializedCameraPreview {
         });
 
         let surface_capabilities = surface.get_capabilities(&adapter);
-        let alpha_mode = if surface_capabilities
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PreMultiplied)
-        {
-            CompositeAlphaMode::PreMultiplied
-        } else if surface_capabilities
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PostMultiplied)
-        {
-            CompositeAlphaMode::PostMultiplied
-        } else {
-            CompositeAlphaMode::Inherit
-        };
+        let alpha_mode = preferred_alpha_mode(&surface_capabilities.alpha_modes);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1019,6 +1021,51 @@ async fn resize_window(
     rx.await
         .context("Failed to receive window resize result")?
         .map_err(anyhow::Error::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preferred_alpha_mode;
+    use wgpu::CompositeAlphaMode;
+
+    #[test]
+    fn preferred_alpha_mode_avoids_unsupported_inherit_fallback() {
+        assert_eq!(
+            preferred_alpha_mode(&[CompositeAlphaMode::Opaque]),
+            CompositeAlphaMode::Opaque
+        );
+    }
+
+    #[test]
+    fn preferred_alpha_mode_keeps_transparent_modes_when_supported() {
+        assert_eq!(
+            preferred_alpha_mode(&[
+                CompositeAlphaMode::Opaque,
+                CompositeAlphaMode::PreMultiplied,
+            ]),
+            CompositeAlphaMode::PreMultiplied
+        );
+        assert_eq!(
+            preferred_alpha_mode(&[
+                CompositeAlphaMode::Opaque,
+                CompositeAlphaMode::PostMultiplied,
+            ]),
+            CompositeAlphaMode::PostMultiplied
+        );
+    }
+
+    #[test]
+    fn preferred_alpha_mode_uses_other_supported_fallbacks() {
+        assert_eq!(
+            preferred_alpha_mode(&[CompositeAlphaMode::Auto]),
+            CompositeAlphaMode::Auto
+        );
+        assert_eq!(
+            preferred_alpha_mode(&[CompositeAlphaMode::Inherit]),
+            CompositeAlphaMode::Inherit
+        );
+        assert_eq!(preferred_alpha_mode(&[]), CompositeAlphaMode::Opaque);
+    }
 }
 
 fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32) {

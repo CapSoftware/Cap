@@ -1,10 +1,21 @@
+use cap_enc_ffmpeg::{
+    remux::{concatenate_m4s_segments_with_init, probe_video_can_decode, probe_video_seek_points},
+    segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig},
+};
+use cap_media_info::VideoInfo;
 use cap_project::{
     Cursors, MultipleSegment, MultipleSegments, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
 };
 use cap_recording::recovery::{RecoveryError, RecoveryManager};
+use ffmpeg::{Rational, codec as avcodec, format as avformat, media, rescale};
 use relative_path::RelativePathBuf;
-use std::path::{Path, PathBuf};
+use std::{
+    fs::{self, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tempfile::TempDir;
 
 mod test_utils {
@@ -22,6 +33,7 @@ mod test_utils {
                 .with_test_writer()
                 .try_init()
                 .ok();
+            ffmpeg::init().expect("failed to initialize ffmpeg");
         });
     }
 }
@@ -145,6 +157,265 @@ fn create_minimal_mp4_data() -> Vec<u8> {
 
 fn create_corrupt_data() -> Vec<u8> {
     vec![0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let destination = dst.join(entry.file_name());
+
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry_path, &destination)?;
+        } else {
+            fs::copy(&entry_path, &destination)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn performance_fixture_path() -> PathBuf {
+    if let Ok(path) = std::env::var("CAP_PERFORMANCE_FIXTURES_DIR") {
+        return PathBuf::from(path).join("reference-recording.cap");
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../cap-performance-fixtures/reference-recording.cap")
+}
+
+fn decoded_frame_timestamp(
+    frame: &ffmpeg::frame::Video,
+    input_time_base: Rational,
+    previous: Duration,
+    fallback_step: Duration,
+) -> Duration {
+    let candidate = frame
+        .pts()
+        .map(|pts| {
+            let timestamp_us = rescale::Rescale::rescale(&pts, input_time_base, (1, 1_000_000));
+            Duration::from_micros(timestamp_us.max(0) as u64)
+        })
+        .unwrap_or_else(|| previous + fallback_step);
+
+    if candidate > previous || (candidate.is_zero() && previous.is_zero()) {
+        candidate
+    } else {
+        previous + fallback_step
+    }
+}
+
+fn list_m4s_segments(dir: &Path) -> Vec<PathBuf> {
+    let mut segments: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("m4s"))
+        })
+        .collect();
+    segments.sort();
+    segments
+}
+
+fn create_fragmented_display_from_mp4(
+    source: &Path,
+    fragment_dir: &Path,
+    max_duration: Duration,
+) -> Vec<PathBuf> {
+    fs::create_dir_all(fragment_dir).unwrap();
+
+    let mut input = avformat::input(source).unwrap();
+    let input_stream = input.streams().best(media::Type::Video).unwrap();
+    let input_stream_index = input_stream.index();
+    let input_time_base = input_stream.time_base();
+    let input_frame_rate = input_stream.rate();
+
+    let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters()).unwrap();
+    let mut decoder = decoder_ctx.decoder().video().unwrap();
+    decoder.set_packet_time_base(input_time_base);
+
+    let frame_rate = if input_frame_rate.0 > 0 && input_frame_rate.1 > 0 {
+        input_frame_rate
+    } else {
+        Rational(30, 1)
+    };
+
+    let fallback_step = Duration::from_secs_f64(frame_rate.1 as f64 / frame_rate.0 as f64);
+
+    let mut encoder = SegmentedVideoEncoder::init(
+        fragment_dir.to_path_buf(),
+        VideoInfo {
+            pixel_format: decoder.format(),
+            width: decoder.width(),
+            height: decoder.height(),
+            time_base: Rational(1, 1_000_000),
+            frame_rate,
+        },
+        SegmentedVideoEncoderConfig {
+            segment_duration: Duration::from_secs(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let mut decoded_frame = ffmpeg::frame::Video::empty();
+    let mut last_timestamp = Duration::ZERO;
+    let mut reached_duration_limit = false;
+
+    for (stream, packet) in input.packets() {
+        if stream.index() != input_stream_index {
+            continue;
+        }
+
+        decoder.send_packet(&packet).unwrap();
+
+        loop {
+            match decoder.receive_frame(&mut decoded_frame) {
+                Ok(()) => {
+                    let timestamp = decoded_frame_timestamp(
+                        &decoded_frame,
+                        input_time_base,
+                        last_timestamp,
+                        fallback_step,
+                    );
+
+                    if timestamp > max_duration {
+                        reached_duration_limit = true;
+                        break;
+                    }
+
+                    encoder
+                        .queue_frame(decoded_frame.clone(), timestamp)
+                        .unwrap();
+                    last_timestamp = timestamp;
+                }
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(ffmpeg::Error::Eof) => break,
+                Err(error) => panic!("failed to decode fixture frame: {error}"),
+            }
+        }
+
+        if reached_duration_limit {
+            break;
+        }
+    }
+
+    if !reached_duration_limit {
+        decoder.send_eof().unwrap();
+
+        loop {
+            match decoder.receive_frame(&mut decoded_frame) {
+                Ok(()) => {
+                    let timestamp = decoded_frame_timestamp(
+                        &decoded_frame,
+                        input_time_base,
+                        last_timestamp,
+                        fallback_step,
+                    );
+
+                    if timestamp > max_duration {
+                        break;
+                    }
+
+                    encoder
+                        .queue_frame(decoded_frame.clone(), timestamp)
+                        .unwrap();
+                    last_timestamp = timestamp;
+                }
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
+                Err(ffmpeg::Error::Eof) => break,
+                Err(error) => panic!("failed to flush fixture decoder: {error}"),
+            }
+        }
+    }
+
+    encoder.finish_with_timestamp(last_timestamp).unwrap();
+
+    list_m4s_segments(fragment_dir)
+}
+
+fn set_fixture_status(project_path: &Path, status: StudioRecordingStatus) -> bool {
+    let mut meta = RecordingMeta::load_for_project(project_path).unwrap();
+    let studio_meta = meta.studio_meta().unwrap().clone();
+
+    meta.inner = match studio_meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::SingleSegment { segment }))
+        }
+        StudioRecordingMeta::MultipleSegments { mut inner, .. } => {
+            inner.status = Some(status);
+            RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments { inner }))
+        }
+    };
+
+    meta.save_for_project().unwrap();
+    matches!(
+        meta.studio_meta(),
+        Some(StudioRecordingMeta::MultipleSegments { .. })
+    )
+}
+
+fn locate_top_level_box(path: &Path, target: &[u8; 4]) -> std::io::Result<Option<(u64, u64)>> {
+    let mut file = fs::File::open(path)?;
+    let file_size = file.metadata()?.len();
+    let mut offset = 0u64;
+
+    while offset + 8 <= file_size {
+        file.seek(SeekFrom::Start(offset))?;
+
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)?;
+
+        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
+        let kind = [header[4], header[5], header[6], header[7]];
+
+        let (box_size, header_size) = if size32 == 1 {
+            let mut large = [0u8; 8];
+            file.read_exact(&mut large)?;
+            (u64::from_be_bytes(large), 16u64)
+        } else {
+            (size32, 8u64)
+        };
+
+        if box_size < header_size {
+            break;
+        }
+
+        if &kind == target {
+            return Ok(Some((offset + header_size, box_size - header_size)));
+        }
+
+        if box_size == 0 {
+            break;
+        }
+
+        offset = offset.saturating_add(box_size);
+    }
+
+    Ok(None)
+}
+
+fn corrupt_video_sample_data(path: &Path) {
+    let (mdat_offset, mdat_len) = locate_top_level_box(path, b"mdat")
+        .unwrap()
+        .expect("expected mdat box in fixture video");
+
+    let corrupt_offset = mdat_offset + (mdat_len / 10);
+    let available = mdat_len.saturating_sub(mdat_len / 10);
+    let corrupt_len = available.clamp(512 * 1024, 8 * 1024 * 1024).min(available);
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    file.seek(SeekFrom::Start(corrupt_offset)).unwrap();
+    file.write_all(&vec![0u8; corrupt_len as usize]).unwrap();
+    file.flush().unwrap();
 }
 
 #[test]
@@ -805,6 +1076,79 @@ fn test_status_transition_logic() {
         }),
         "Failed with 'No recoverable segments found' should not be checked"
     );
+}
+
+#[test]
+#[ignore = "requires local cap-performance-fixtures checkout"]
+fn fixture_corruption_is_rejected_or_normalized_during_recovery() {
+    test_utils::init_tracing();
+
+    let fixture = performance_fixture_path();
+    assert!(fixture.exists(), "fixture missing at {}", fixture.display());
+
+    let recording = TestRecording::new().unwrap();
+    copy_dir_recursive(&fixture, recording.path()).unwrap();
+    assert!(
+        set_fixture_status(recording.path(), StudioRecordingStatus::NeedsRemux),
+        "fixture must use multi-segment recording metadata"
+    );
+
+    let segment_dir = recording.path().join("content/segments/segment-0");
+    let display_path = segment_dir.join("display.mp4");
+    let display_dir = segment_dir.join("display");
+    let display_fragments =
+        create_fragmented_display_from_mp4(&display_path, &display_dir, Duration::from_secs(5));
+    assert!(
+        display_fragments.len() >= 3,
+        "fragmented fixture should produce multiple m4s segments"
+    );
+    fs::remove_file(&display_path).unwrap();
+
+    let corrupt_fragment_index = (display_fragments.len() / 2).max(1);
+    for fragment in display_fragments.iter().skip(corrupt_fragment_index) {
+        corrupt_video_sample_data(fragment);
+    }
+
+    let init_path = display_dir.join("init.mp4");
+    let pre_recovery_output = segment_dir.join("pre-recovery-display.mp4");
+    concatenate_m4s_segments_with_init(&init_path, &display_fragments, &pre_recovery_output)
+        .unwrap();
+
+    assert!(
+        probe_video_can_decode(&pre_recovery_output).unwrap_or(false),
+        "corrupted fragment remux should still have at least one decodable frame"
+    );
+    assert!(
+        probe_video_seek_points(&pre_recovery_output, 8).is_err(),
+        "corrupted fragment remux should fail seek validation before recovery"
+    );
+    fs::remove_file(&pre_recovery_output).unwrap();
+
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let recovered_segment = incomplete
+        .recoverable_segments
+        .iter()
+        .find(|segment| segment.index == 0)
+        .unwrap();
+    assert!(
+        recovered_segment.display_init_segment.is_some(),
+        "fixture should recover through the fragmented display path"
+    );
+    assert!(
+        recovered_segment.display_fragments.len() >= 3,
+        "fixture should expose multiple display fragments to recovery"
+    );
+
+    match RecoveryManager::recover(&incomplete) {
+        Ok(_) => {
+            assert!(
+                probe_video_seek_points(&display_path, 8).is_ok(),
+                "recovered fixture should pass seek validation if recovery succeeds"
+            );
+        }
+        Err(RecoveryError::UnplayableVideo(_)) => {}
+        Err(other) => panic!("unexpected recovery error: {other}"),
+    }
 }
 
 #[test]

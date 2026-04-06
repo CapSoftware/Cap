@@ -19,6 +19,10 @@ import {
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import {
+	isPermissionGranted as isPermitted,
+	requestAndVerifyPermission,
+} from "~/utils/os-permissions";
+import {
 	commands,
 	type OSPermission,
 	type OSPermissionStatus,
@@ -107,10 +111,6 @@ const modes: ModeDetail[] = [
 		],
 	},
 ];
-
-function isPermitted(status?: OSPermissionStatus): boolean {
-	return status === "granted" || status === "notNeeded";
-}
 
 type SetupPermission = {
 	name: string;
@@ -365,7 +365,7 @@ export default function OnboardingPage() {
 			await generalSettingsStore.set({ hasCompletedOnboarding: true });
 		}
 		await commands.showWindow({ Main: { init_target_mode: null } });
-		getCurrentWindow().close();
+		await getCurrentWindow().close();
 	};
 
 	const handleStartupDone = async () => {
@@ -484,7 +484,10 @@ export default function OnboardingPage() {
 					}
 				`}
 				</style>
-				<div class="flex flex-col flex-1 min-h-0 overflow-hidden relative">
+				<div
+					data-tauri-drag-region="none"
+					class="flex flex-col flex-1 min-h-0 overflow-hidden relative"
+				>
 					<OnboardingAmbientBackdrop />
 					<div class="relative flex-1 min-h-0 z-10">
 						<Show when={isMacOS()}>
@@ -567,11 +570,15 @@ function StepNavigation(props: {
 	onSkip?: () => void;
 }) {
 	return (
-		<div class="flex flex-col items-center gap-2 px-8 pb-5 pt-2 shrink-0 relative z-40">
+		<div
+			data-tauri-drag-region="none"
+			class="flex flex-col items-center gap-2 px-8 pb-5 pt-2 shrink-0 relative z-40"
+		>
 			<div class="flex items-center justify-between w-full">
 				<div class="flex-1">
 					<Show when={props.showBack}>
 						<button
+							data-tauri-drag-region="none"
 							type="button"
 							onClick={props.onBack}
 							class="flex items-center gap-1.5 text-[13px] text-gray-10 hover:text-gray-12 transition-colors duration-200"
@@ -600,6 +607,7 @@ function StepNavigation(props: {
 				<div class="flex-1 flex justify-end">
 					<div class="flex flex-col items-center gap-1.5">
 						<Button
+							data-tauri-drag-region="none"
 							onClick={props.onNext}
 							variant="primary"
 							size="md"
@@ -616,6 +624,7 @@ function StepNavigation(props: {
 						</Button>
 						<Show when={props.showSkipOnboarding}>
 							<button
+								data-tauri-drag-region="none"
 								type="button"
 								onClick={() => props.onSkip?.()}
 								class="text-[11px] text-gray-9 hover:text-gray-11 transition-colors duration-200 py-0.5"
@@ -649,7 +658,9 @@ function StepPanel(props: {
 						? "translateX(-40px)"
 						: "translateX(40px)",
 				opacity: props.active ? 1 : 0,
+				visibility: props.active ? "visible" : "hidden",
 				"pointer-events": props.active ? "auto" : "none",
+				"z-index": props.active ? 1 : 0,
 				transition:
 					"transform 400ms cubic-bezier(0.4, 0, 0.2, 1), opacity 300ms ease",
 			}}
@@ -1913,15 +1924,15 @@ function StartupOverlay(props: {
 				</div>
 
 				<Button
-					class="mt-14 px-16 py-4 min-h-[3.75rem] min-w-[15rem] text-xl font-medium shadow-[0_0_30px_rgba(0,0,0,0.12)] bg-white border border-white/30 text-gray-12 hover:bg-white/95 hover:border-white/40 flex-col gap-0.5"
+					class="mt-14 px-16 py-4 min-h-[3.75rem] min-w-[15rem] text-xl font-medium shadow-[0_0_30px_rgba(0,0,0,0.12)] bg-white border border-white/30 text-[#161b26] hover:bg-white/95 hover:border-white/40 flex-col gap-0.5"
 					variant="white"
 					size="lg"
 					onClick={handleGetStarted}
 				>
 					<span>Get Started</span>
-					<span class="text-[11px] font-normal text-gray-11 leading-tight inline-flex items-center justify-center gap-1">
+					<span class="text-[11px] font-normal text-[rgba(22,27,38,0.58)] leading-tight inline-flex items-center justify-center gap-1">
 						<span>Click here, or press</span>
-						<kbd class="rounded border border-gray-6 bg-white dark:bg-gray-3 px-1 py-px text-[10px] font-medium text-gray-11 shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+						<kbd class="rounded border border-[rgba(22,27,38,0.14)] bg-[rgba(22,27,38,0.08)] px-1 py-px text-[10px] font-medium text-[#161b26] shadow-[0_1px_0_rgba(255,255,255,0.7)_inset]">
 							Space
 						</kbd>
 					</span>
@@ -1980,16 +1991,17 @@ function PermissionsStep(props: {
 		);
 	});
 
-	const maybePromptRestartForScreenRecording = async () => {
-		const shouldRestart = await ask(
-			"After adding Cap in System Settings, you'll need to restart the app for the permission to take effect.",
-			{
-				title: "Restart Required",
-				kind: "info",
-				okLabel: "Restart, I've granted permission",
-				cancelLabel: "No, I still need to add it",
-			},
-		);
+	const maybePromptRestartForPermission = async (permission: OSPermission) => {
+		const message =
+			permission === "accessibility"
+				? "After enabling Accessibility for Cap in System Settings, macOS may keep showing it as denied until you restart the app."
+				: "After adding Cap in System Settings, you'll need to restart the app for the permission to take effect.";
+		const shouldRestart = await ask(message, {
+			title: "Restart Required",
+			kind: "info",
+			okLabel: "Restart, I've granted permission",
+			cancelLabel: "No, I still need to add it",
+		});
 		if (shouldRestart) {
 			await relaunch();
 		}
@@ -2001,19 +2013,19 @@ function PermissionsStep(props: {
 		if (requestingPermission()) return;
 		setRequestingPermission(true);
 		try {
-			await commands.requestPermission(permission);
+			const status = check()?.[permission] as OSPermissionStatus | undefined;
 			setInitialCheck(false);
-			const result = await commands.doPermissionsCheck(false);
-			setCheck(result as unknown as Record<string, OSPermissionStatus>);
-			const notYetPermitted =
-				(permission === "screenRecording" &&
-					!isPermitted(result.screenRecording)) ||
-				(permission === "accessibility" && !isPermitted(result.accessibility));
-			if (notYetPermitted) {
-				await commands.openPermissionSettings(permission);
-				if (permission === "screenRecording") {
-					await maybePromptRestartForScreenRecording();
-				}
+			const result = await requestAndVerifyPermission(
+				commands,
+				permission,
+				status,
+			);
+			setCheck(result.check as unknown as Record<string, OSPermissionStatus>);
+			if (
+				result.openedSettings &&
+				(permission === "screenRecording" || permission === "accessibility")
+			) {
+				await maybePromptRestartForPermission(permission);
 			}
 		} catch (err) {
 			console.error(`Error requesting permission: ${err}`);
@@ -2028,8 +2040,8 @@ function PermissionsStep(props: {
 		setRequestingPermission(true);
 		try {
 			await commands.openPermissionSettings(permission);
-			if (permission === "screenRecording") {
-				await maybePromptRestartForScreenRecording();
+			if (permission === "screenRecording" || permission === "accessibility") {
+				await maybePromptRestartForPermission(permission);
 			}
 			setInitialCheck(false);
 			fetchPermissions();
@@ -2041,7 +2053,10 @@ function PermissionsStep(props: {
 	};
 
 	return (
-		<div class="flex flex-col items-center justify-center min-h-full px-12 gap-6">
+		<div
+			data-tauri-drag-region="none"
+			class="flex flex-col items-center justify-center min-h-full px-12 gap-6"
+		>
 			<div
 				class={cx(
 					"flex flex-col items-center gap-3 text-center max-w-[440px] transition-all duration-500",
@@ -2105,6 +2120,7 @@ function PermissionsStep(props: {
 										}
 									>
 										<Button
+											data-tauri-drag-region="none"
 											size="sm"
 											variant="gray"
 											class="shrink-0"

@@ -251,6 +251,90 @@ describe("POST /video/thumbnail", () => {
 	});
 });
 
+describe("POST /video/convert", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	test("returns 400 for missing videoUrl", async () => {
+		const response = await app.fetch(
+			new Request("http://localhost/video/convert", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns mp4 when conversion succeeds", async () => {
+		const fixturePath = new URL(
+			"../fixtures/test-with-audio.mp4",
+			import.meta.url,
+		).pathname;
+		const fixtureBytes = await Bun.file(fixturePath).bytes();
+		const mockMetadata = {
+			duration: 10.5,
+			width: 1280,
+			height: 720,
+			fps: 30,
+			videoCodec: "h264",
+			audioCodec: "aac",
+			audioChannels: 2,
+			sampleRate: 48000,
+			bitrate: 5000000,
+			fileSize: fixtureBytes.length,
+		};
+
+		mock.module("../../lib/ffprobe", () => ({
+			probeVideo: ffprobe.probeVideo,
+			probeVideoFile: async () => mockMetadata,
+			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+		}));
+
+		mock.module("../../lib/ffmpeg-video", () => ({
+			downloadVideoToTemp: async () => ({
+				path: fixturePath,
+				cleanup: async () => {},
+			}),
+			processVideo: async () => ({
+				path: fixturePath,
+				cleanup: async () => {},
+			}),
+			generateThumbnail: ffmpegVideo.generateThumbnail,
+			repairContainer: ffmpegVideo.repairContainer,
+			uploadToS3: ffmpegVideo.uploadToS3,
+			uploadFileToS3: ffmpegVideo.uploadFileToS3,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			new Request("http://localhost/video/convert", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoUrl: "https://example.com/video.m3u8",
+					inputExtension: ".m3u8",
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toBe("video/mp4");
+		expect(response.headers.get("Content-Length")).toBe(
+			fixtureBytes.length.toString(),
+		);
+
+		const buffer = await response.arrayBuffer();
+		expect(new Uint8Array(buffer)).toEqual(fixtureBytes);
+	});
+});
+
 describe("POST /video/process", () => {
 	beforeEach(() => {
 		mock.restore();
@@ -428,7 +512,11 @@ describe("GET /video/process/:jobId/status", () => {
 			updateJob: () => null,
 			deleteJob: () => {},
 			sendWebhook: async () => {},
-			getJobProgress: (job: any) => ({
+			getJobProgress: (job: {
+				phase: string;
+				progress: number;
+				message?: string;
+			}) => ({
 				phase: job.phase,
 				progress: job.progress,
 				message: job.message,

@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.4.82"
+version = "0.4.83"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -24,7 +24,6 @@ tauri = { workspace = true, features = [
     "protocol-asset",
     "tray-icon",
     "image-png",
-    "devtools",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2.2.0"
@@ -136,6 +135,9 @@ swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }
 
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+parakeet-rs = "0.3.4"
+
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
@@ -148,3 +150,6 @@ winreg = "0.55"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }

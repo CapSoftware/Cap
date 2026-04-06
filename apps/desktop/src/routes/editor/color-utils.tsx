@@ -1,5 +1,8 @@
 import { createWritableMemo } from "@solid-primitives/memo";
+import { getHexColorDigitCount, hexToRgb } from "~/utils/hex-color";
 import { TextInput } from "./TextInput";
+
+export { hexToRgb } from "~/utils/hex-color";
 
 export function getColorPreviewBorderColor(color: string) {
 	return `color-mix(in srgb, ${color} 82%, black)`;
@@ -10,26 +13,6 @@ export function rgbToHex(rgb: [number, number, number]) {
 		.map((c) => c.toString(16).padStart(2, "0"))
 		.join("")
 		.toUpperCase()}`;
-}
-
-export function hexToRgb(hex: string): [number, number, number, number] | null {
-	const match = hex.match(
-		/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})?$/i,
-	);
-	if (!match) return null;
-
-	const [, r, g, b, a] = match;
-	const rgb = [
-		Number.parseInt(r, 16),
-		Number.parseInt(g, 16),
-		Number.parseInt(b, 16),
-	] as const;
-
-	if (a) {
-		return [...rgb, Number.parseInt(a, 16)];
-	}
-
-	return [...rgb, 255];
 }
 
 export function RgbInput(props: {
@@ -96,6 +79,9 @@ export function RgbInput(props: {
 				}}
 				onInput={(e) => {
 					setText(e.currentTarget.value);
+
+					const digitCount = getHexColorDigitCount(e.currentTarget.value);
+					if (digitCount !== 6 && digitCount !== 8) return;
 
 					const value = hexToRgb(e.currentTarget.value.trim());
 					if (!value) return;

@@ -112,6 +112,17 @@ const createRecordingDownloadName = (
 	return `cap-recording-${timestamp}.${extension}`;
 };
 
+const triggerBrowserDownload = (url: string, fileName: string) => {
+	const anchor = document.createElement("a");
+	anchor.href = url;
+	anchor.download = fileName;
+	document.body.appendChild(anchor);
+	anchor.click();
+	document.body.removeChild(anchor);
+};
+
+const recoveredToastId = (id: string) => `recovered-${id}`;
+
 export const useWebRecorder = ({
 	organisationId,
 	selectedMicId,
@@ -285,6 +296,7 @@ export const useWebRecorder = ({
 	}, []);
 
 	const dismissRecoveredDownload = useCallback((id: string) => {
+		toast.dismiss(recoveredToastId(id));
 		const url = recoveredDownloadUrlsRef.current.get(id);
 		if (url) {
 			URL.revokeObjectURL(url);
@@ -344,11 +356,26 @@ export const useWebRecorder = ({
 				});
 
 				setRecoveredDownloads(nextDownloads);
-				toast.info(
-					nextDownloads.length === 1
-						? "Recovered an unfinished local recording."
-						: `Recovered ${nextDownloads.length} unfinished local recordings.`,
-				);
+				for (const download of nextDownloads) {
+					toast.info("Recovered an unfinished recording", {
+						id: recoveredToastId(download.id),
+						duration: Infinity,
+						description: new Date(download.createdAt).toLocaleString(),
+						action: {
+							label: "Download",
+							onClick: () => {
+								triggerBrowserDownload(download.url, download.fileName);
+								setTimeout(() => dismissRecoveredDownload(download.id), 500);
+							},
+						},
+						cancel: {
+							label: "Dismiss",
+							onClick: () => {
+								dismissRecoveredDownload(download.id);
+							},
+						},
+					});
+				}
 			})
 			.catch((error) => {
 				console.error("Failed to recover orphaned recording spools", error);
@@ -357,7 +384,7 @@ export const useWebRecorder = ({
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [dismissRecoveredDownload]);
 
 	const disposeRecordingSpool = useCallback(async () => {
 		const spool = recordingSpoolRef.current;

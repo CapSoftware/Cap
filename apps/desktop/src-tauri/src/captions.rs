@@ -6,11 +6,13 @@ use ffmpeg::{
     software::resampling,
 };
 use futures::StreamExt;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
@@ -23,6 +25,15 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 pub use cap_project::{CaptionSegment, CaptionSettings, CaptionWord};
 
 use crate::{general_settings::GeneralSettingsStore, http_client};
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const PARAKEET_UNSUPPORTED_MESSAGE: &str = "Parakeet transcription is not available on Intel macOS";
+
+#[derive(Debug, Serialize, Deserialize, Type, Clone)]
+pub enum TranscriptionEngine {
+    Whisper,
+    Parakeet,
+}
 
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub struct CaptionData {
@@ -43,7 +54,134 @@ lazy_static::lazy_static! {
     static ref WHISPER_CONTEXT: Arc<Mutex<Option<Arc<WhisperContext>>>> = Arc::new(Mutex::new(None));
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+lazy_static::lazy_static! {
+    static ref PARAKEET_CONTEXT: Mutex<Option<CachedParakeetContext>> = Mutex::new(None);
+}
+
 const WHISPER_SAMPLE_RATE: u32 = 16000;
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+struct CachedParakeetContext {
+    model_dir: String,
+    model: Arc<std::sync::Mutex<ParakeetTDT>>,
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn parakeet_model_dir_matches(cached_model_dir: &str, model_dir: &Path) -> bool {
+    cached_model_dir == model_dir.to_string_lossy()
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+async fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
+    let mut ctx = PARAKEET_CONTEXT.lock().await;
+    if ctx
+        .as_ref()
+        .is_some_and(|cached| parakeet_model_dir_matches(&cached.model_dir, model_dir))
+    {
+        tracing::info!(
+            "Invalidating cached Parakeet context for {}",
+            model_dir.display()
+        );
+        *ctx = None;
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+async fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
+
+pub async fn release_ml_models() {
+    {
+        let mut ctx = WHISPER_CONTEXT.lock().await;
+        if ctx.is_some() {
+            tracing::info!("Releasing Whisper context to free memory");
+            *ctx = None;
+        }
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    {
+        let mut ctx = PARAKEET_CONTEXT.lock().await;
+        if ctx.is_some() {
+            tracing::info!("Releasing Parakeet context to free memory");
+            *ctx = None;
+        }
+    }
+}
+
+fn normalize_relative_components(path: &Path) -> Result<PathBuf, String> {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err("Path is outside the app data directory".to_string());
+            }
+            Component::RootDir => {
+                return Err("Path is outside the app data directory".to_string());
+            }
+            Component::Prefix(_) => {
+                return Err("Path is outside the app data directory".to_string());
+            }
+        }
+    }
+
+    Ok(normalized)
+}
+
+fn resolve_path_with_base(base_dir: &Path, path: &str) -> Result<PathBuf, String> {
+    if !base_dir.exists() {
+        std::fs::create_dir_all(base_dir)
+            .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+    }
+
+    let canonical_base = base_dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?;
+    let requested = PathBuf::from(path);
+    let candidate = if requested.is_absolute() {
+        requested
+    } else {
+        canonical_base.join(normalize_relative_components(&requested)?)
+    };
+
+    let mut suffix = Vec::new();
+    let mut current = candidate.as_path();
+
+    while !current.exists() {
+        let file_name = current
+            .file_name()
+            .ok_or_else(|| "Path is outside the app data directory".to_string())?;
+        suffix.push(file_name.to_os_string());
+        current = current
+            .parent()
+            .ok_or_else(|| "Path is outside the app data directory".to_string())?;
+    }
+
+    let mut resolved = current
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path: {e}"))?;
+
+    if !resolved.starts_with(&canonical_base) {
+        return Err("Path is outside the app data directory".to_string());
+    }
+
+    for component in suffix.into_iter().rev() {
+        resolved.push(component);
+    }
+
+    Ok(resolved)
+}
+
+fn validate_model_path(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| "Failed to get app local data directory".to_string())?;
+
+    resolve_path_with_base(&app_data_dir, path)
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -809,6 +947,110 @@ fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
     }
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn process_with_parakeet(
+    audio_path: &std::path::Path,
+    model_dir: &str,
+) -> Result<CaptionData, String> {
+    tracing::info!("Processing audio file: {audio_path:?}");
+    tracing::info!("Model directory: {model_dir}");
+
+    let model_arc = {
+        let mut guard = PARAKEET_CONTEXT.blocking_lock();
+
+        let should_reload = guard
+            .as_ref()
+            .is_none_or(|cached| cached.model_dir != model_dir);
+
+        if should_reload {
+            tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+            let model =
+                ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
+            let model_arc = Arc::new(std::sync::Mutex::new(model));
+            *guard = Some(CachedParakeetContext {
+                model_dir: model_dir.to_string(),
+                model: Arc::clone(&model_arc),
+            });
+            tracing::info!("Parakeet TDT model loaded successfully");
+            model_arc
+        } else {
+            tracing::info!("Reusing cached Parakeet TDT model");
+            Arc::clone(&guard.as_ref().unwrap().model)
+        }
+    };
+
+    let result = {
+        let mut parakeet = model_arc
+            .lock()
+            .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
+        parakeet
+            .transcribe_file(audio_path, Some(TimestampMode::Words))
+            .map_err(|e| format!("Parakeet transcription failed: {e}"))?
+    };
+
+    tracing::info!("Transcription text: {}", result.text);
+    tracing::info!("Got {} timed tokens", result.tokens.len());
+
+    let words: Vec<CaptionWord> = result
+        .tokens
+        .iter()
+        .filter(|t| !t.text.trim().is_empty())
+        .map(|t| CaptionWord {
+            text: t.text.trim().to_string(),
+            start: t.start,
+            end: t.end,
+        })
+        .collect();
+
+    if words.is_empty() {
+        tracing::warn!("Parakeet produced no words");
+        return Err("No speech detected in the audio".to_string());
+    }
+
+    const MAX_WORDS_PER_SEGMENT: usize = 6;
+
+    let mut segments = Vec::new();
+    let word_chunks: Vec<&[CaptionWord]> = words.chunks(MAX_WORDS_PER_SEGMENT).collect();
+
+    for (chunk_idx, chunk) in word_chunks.iter().enumerate() {
+        let segment_text = chunk
+            .iter()
+            .map(|w| w.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let segment_start = chunk.first().map(|w| w.start).unwrap_or(0.0);
+        let segment_end = chunk.last().map(|w| w.end).unwrap_or(0.0);
+
+        segments.push(CaptionSegment {
+            id: format!("segment-{chunk_idx}"),
+            start: segment_start,
+            end: segment_end,
+            text: segment_text,
+            words: chunk.to_vec(),
+        });
+    }
+
+    tracing::info!("Total segments: {}", segments.len());
+    tracing::info!(
+        "Total words: {}",
+        segments.iter().map(|s| s.words.len()).sum::<usize>()
+    );
+
+    Ok(CaptionData {
+        segments,
+        settings: Some(cap_project::CaptionSettings::default()),
+    })
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn process_with_parakeet(
+    _audio_path: &std::path::Path,
+    _model_dir: &str,
+) -> Result<CaptionData, String> {
+    Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -817,21 +1059,26 @@ pub async fn transcribe_audio(
     video_path: String,
     model_path: String,
     language: String,
+    engine: TranscriptionEngine,
 ) -> Result<CaptionData, String> {
     log::info!("=== TRANSCRIBE AUDIO COMMAND START ===");
     log::info!("Video path: {}", video_path);
     log::info!("Model path: {}", model_path);
     log::info!("Language: {}", language);
 
+    let validated_model_path = validate_model_path(&app, &model_path)?;
+
     if !std::path::Path::new(&video_path).exists() {
         log::error!("Video file not found at path: {video_path}");
         return Err(format!("Video file not found at path: {video_path}"));
     }
 
-    if !std::path::Path::new(&model_path).exists() {
+    if !validated_model_path.exists() {
         log::error!("Model file not found at path: {model_path}");
         return Err(format!("Model file not found at path: {model_path}"));
     }
+
+    let model_path = validated_model_path.to_string_lossy().to_string();
 
     let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {e}"))?;
     let audio_path = temp_dir.path().join("audio.wav");
@@ -859,31 +1106,42 @@ pub async fn transcribe_audio(
         );
     }
 
-    let context = match get_whisper_context(&model_path).await {
-        Ok(ctx) => {
-            log::info!("Whisper context ready");
-            ctx
+    let transcription_result = match engine {
+        TranscriptionEngine::Parakeet => {
+            log::info!("Using Parakeet TDT engine");
+            let model_dir = model_path.clone();
+            tokio::task::spawn_blocking(move || process_with_parakeet(&audio_path, &model_dir))
+                .await
+                .map_err(|e| format!("Parakeet task panicked: {e}"))?
         }
-        Err(e) => {
-            log::error!("Failed to initialize Whisper context: {e}");
-            return Err(format!("Failed to initialize transcription model: {e}"));
+        TranscriptionEngine::Whisper => {
+            let context = match get_whisper_context(&model_path).await {
+                Ok(ctx) => {
+                    log::info!("Whisper context ready");
+                    ctx
+                }
+                Err(e) => {
+                    log::error!("Failed to initialize Whisper context: {e}");
+                    return Err(format!("Failed to initialize transcription model: {e}"));
+                }
+            };
+
+            let transcription_hints = GeneralSettingsStore::get(&app)
+                .ok()
+                .flatten()
+                .map(|settings| settings.transcription_hints)
+                .unwrap_or_default();
+
+            log::info!("Starting Whisper transcription in blocking task...");
+            tokio::task::spawn_blocking(move || {
+                process_with_whisper(&audio_path, context, &language, &transcription_hints)
+            })
+            .await
+            .map_err(|e| format!("Whisper task panicked: {e}"))?
         }
     };
 
-    let transcription_hints = GeneralSettingsStore::get(&app)
-        .ok()
-        .flatten()
-        .map(|settings| settings.transcription_hints)
-        .unwrap_or_default();
-
-    log::info!("Starting Whisper transcription in blocking task...");
-    let whisper_result = tokio::task::spawn_blocking(move || {
-        process_with_whisper(&audio_path, context, &language, &transcription_hints)
-    })
-    .await
-    .map_err(|e| format!("Whisper task panicked: {e}"))?;
-
-    match whisper_result {
+    match transcription_result {
         Ok(captions) => {
             log::info!("=== TRANSCRIBE AUDIO RESULT ===");
             log::info!(
@@ -1371,6 +1629,8 @@ pub async fn download_whisper_model(
     model_name: String,
     output_path: String,
 ) -> Result<(), String> {
+    let validated_path = validate_model_path(&app, &output_path)?;
+
     let model_url = match model_name.as_str() {
         "tiny" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         "base" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
@@ -1397,11 +1657,11 @@ pub async fn download_whisper_model(
 
     let total_size = response.content_length().unwrap_or(0);
 
-    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+    if let Some(parent) = validated_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create parent directories: {e}"))?;
     }
-    let mut file = tokio::fs::File::create(&output_path)
+    let mut file = tokio::fs::File::create(&validated_path)
         .await
         .map_err(|e| format!("Failed to create file: {e}"))?;
 
@@ -1440,22 +1700,268 @@ pub async fn download_whisper_model(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
-pub async fn check_model_exists(model_path: String) -> Result<bool, String> {
-    Ok(std::path::Path::new(&model_path).exists())
+#[instrument(skip(app))]
+pub async fn check_model_exists(app: AppHandle, model_path: String) -> Result<bool, String> {
+    let validated_path = validate_model_path(&app, &model_path)?;
+    Ok(validated_path.exists())
 }
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
-pub async fn delete_whisper_model(model_path: String) -> Result<(), String> {
-    if !std::path::Path::new(&model_path).exists() {
+#[instrument(skip(app))]
+pub async fn delete_whisper_model(app: AppHandle, model_path: String) -> Result<(), String> {
+    let validated_path = validate_model_path(&app, &model_path)?;
+
+    if !validated_path.exists() {
         return Err(format!("Model file not found: {model_path}"));
     }
 
-    tokio::fs::remove_file(&model_path)
+    tokio::fs::remove_file(&validated_path)
         .await
         .map_err(|e| format!("Failed to delete model file: {e}"))?;
+
+    Ok(())
+}
+
+const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &str)] = &[
+    (
+        "encoder-model.int8.onnx",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/encoder-model.int8.onnx",
+    ),
+    (
+        "decoder_joint-model.int8.onnx",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/decoder_joint-model.int8.onnx",
+    ),
+    (
+        "vocab.txt",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/vocab.txt",
+    ),
+];
+
+const PARAKEET_TDT_FULL_MODEL_FILES: &[(&str, &str)] = &[
+    (
+        "encoder-model.onnx",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/encoder-model.onnx",
+    ),
+    (
+        "encoder-model.onnx.data",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/encoder-model.onnx.data",
+    ),
+    (
+        "decoder_joint-model.onnx",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/decoder_joint-model.onnx",
+    ),
+    (
+        "vocab.txt",
+        "https://huggingface.co/altunenes/parakeet-rs/resolve/main/tdt/vocab.txt",
+    ),
+];
+
+const PARAKEET_MODEL_CLEANUP_FILES: &[&str] = &[
+    "encoder-model.onnx",
+    "encoder-model.onnx.data",
+    "decoder_joint-model.onnx",
+    "encoder-model.int8.onnx",
+    "decoder_joint-model.int8.onnx",
+    "nemo128.onnx",
+    "vocab.txt",
+];
+
+fn parakeet_model_files_for_dir(
+    output_dir: &std::path::Path,
+) -> &'static [(&'static str, &'static str)] {
+    let dir_name = output_dir.file_name().and_then(|name| name.to_str());
+
+    match dir_name {
+        Some("parakeet-best-max") => PARAKEET_TDT_FULL_MODEL_FILES,
+        _ => PARAKEET_TDT_INT8_MODEL_FILES,
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Result<(), String> {
+    let validated_dir = validate_model_path(&app, &output_dir)?;
+
+    std::fs::create_dir_all(&validated_dir)
+        .map_err(|e| format!("Failed to create model directory: {e}"))?;
+
+    let staging_dir = validated_dir.with_file_name(format!(
+        "{}.downloading",
+        validated_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model")
+    ));
+    if staging_dir.exists() {
+        std::fs::remove_dir_all(&staging_dir)
+            .map_err(|e| format!("Failed to clean staging directory: {e}"))?;
+    }
+    std::fs::create_dir_all(&staging_dir)
+        .map_err(|e| format!("Failed to create staging directory: {e}"))?;
+
+    let http_client = app.state::<http_client::HttpClient>();
+    let model_files = parakeet_model_files_for_dir(&validated_dir);
+
+    let mut total_size: u64 = 0;
+    let mut file_sizes: Vec<u64> = Vec::new();
+
+    for (filename, url) in model_files {
+        let resp = http_client
+            .head(*url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to get size for {filename}: {e}"))?;
+        let size = resp.content_length().unwrap_or(0);
+        file_sizes.push(size);
+        total_size += size;
+    }
+
+    let mut downloaded_total: u64 = 0;
+
+    let download_result: Result<(), String> = async {
+        for (idx, (filename, url)) in model_files.iter().enumerate() {
+            tracing::info!("Downloading {filename} from {url}");
+
+            let response = http_client
+                .get(*url)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to download {filename}: {e}"))?;
+
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Failed to download {filename}: HTTP {}",
+                    response.status()
+                ));
+            }
+
+            let file_path = staging_dir.join(filename);
+            let mut file = tokio::fs::File::create(&file_path)
+                .await
+                .map_err(|e| format!("Failed to create {filename}: {e}"))?;
+
+            let mut stream = response.bytes_stream();
+            while let Some(chunk_result) = stream.next().await {
+                let chunk =
+                    chunk_result.map_err(|e| format!("Download error for {filename}: {e}"))?;
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| format!("Write error for {filename}: {e}"))?;
+
+                downloaded_total += chunk.len() as u64;
+
+                let progress = if total_size > 0 {
+                    (downloaded_total as f64 / total_size as f64) * 100.0
+                } else {
+                    ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
+                };
+
+                DownloadProgress {
+                    progress,
+                    message: format!("Downloading {filename}: {progress:.1}%"),
+                }
+                .emit(&app)
+                .ok();
+            }
+
+            file.flush()
+                .await
+                .map_err(|e| format!("Failed to flush {filename}: {e}"))?;
+
+            tracing::info!("Finished downloading {filename}");
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = &download_result {
+        tracing::warn!("Download failed, cleaning up staging directory: {e}");
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err(e.clone());
+    }
+
+    invalidate_parakeet_cache_for_dir(&validated_dir).await;
+
+    for filename in PARAKEET_MODEL_CLEANUP_FILES {
+        let file_path = validated_dir.join(filename);
+        if file_path.exists() {
+            let _ = std::fs::remove_file(&file_path);
+        }
+    }
+
+    for (filename, _) in model_files {
+        let src = staging_dir.join(filename);
+        let dst = validated_dir.join(filename);
+        std::fs::rename(&src, &dst)
+            .map_err(|e| format!("Failed to move {filename} to final location: {e}"))?;
+    }
+
+    let _ = std::fs::remove_dir_all(&staging_dir);
+
+    Ok(())
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(_app))]
+pub async fn download_parakeet_model(_app: AppHandle, _output_dir: String) -> Result<(), String> {
+    Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+pub async fn check_parakeet_model_exists(
+    app: AppHandle,
+    model_dir: String,
+) -> Result<bool, String> {
+    let validated_dir = validate_model_path(&app, &model_dir)?;
+
+    if !validated_dir.is_dir() {
+        return Ok(false);
+    }
+
+    let has_vocab = validated_dir.join("vocab.txt").exists();
+    let has_full_model = validated_dir.join("encoder-model.onnx").exists()
+        && validated_dir.join("encoder-model.onnx.data").exists()
+        && validated_dir.join("decoder_joint-model.onnx").exists();
+    let has_int8_model = validated_dir.join("encoder-model.int8.onnx").exists()
+        && validated_dir.join("decoder_joint-model.int8.onnx").exists();
+
+    Ok(has_vocab && (has_full_model || has_int8_model))
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(_app))]
+pub async fn check_parakeet_model_exists(
+    _app: AppHandle,
+    _model_dir: String,
+) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+pub async fn delete_parakeet_model(app: AppHandle, model_dir: String) -> Result<(), String> {
+    let validated_dir = validate_model_path(&app, &model_dir)?;
+
+    if !validated_dir.exists() {
+        return Err(format!("Model directory not found: {model_dir}"));
+    }
+
+    invalidate_parakeet_cache_for_dir(&validated_dir).await;
+
+    tokio::fs::remove_dir_all(&validated_dir)
+        .await
+        .map_err(|e| format!("Failed to delete model directory: {e}"))?;
 
     Ok(())
 }
@@ -1556,4 +2062,67 @@ fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
         dest[i] = (dest[i] + source[i]) * 0.5;
     }
     length
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_path_with_base;
+    use tempfile::tempdir;
+
+    #[test]
+    fn resolve_path_with_base_rejects_parent_dir_escape() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("app-data");
+        std::fs::create_dir_all(base.join("models")).unwrap();
+
+        let escaped = base.join("..").join("outside.bin");
+
+        let result = resolve_path_with_base(&base, escaped.to_string_lossy().as_ref());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_path_with_base_allows_nested_model_path() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("app-data");
+        std::fs::create_dir_all(base.join("models")).unwrap();
+
+        let target = base.join("models").join("nested").join("model.bin");
+        let expected = base
+            .canonicalize()
+            .unwrap()
+            .join("models")
+            .join("nested")
+            .join("model.bin");
+
+        let resolved = resolve_path_with_base(&base, target.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(resolved, expected);
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    mod parakeet {
+        use super::super::parakeet_model_dir_matches;
+        use tempfile::tempdir;
+
+        #[test]
+        fn parakeet_model_dir_match_uses_full_directory_path() {
+            let dir = tempdir().unwrap();
+            let model_dir = dir.path().join("models").join("parakeet-best");
+
+            assert!(parakeet_model_dir_matches(
+                model_dir.to_string_lossy().as_ref(),
+                &model_dir
+            ));
+            assert!(!parakeet_model_dir_matches(
+                dir.path()
+                    .join("models")
+                    .join("parakeet-best-max")
+                    .to_string_lossy()
+                    .as_ref(),
+                &model_dir
+            ));
+        }
+    }
 }

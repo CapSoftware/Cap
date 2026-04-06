@@ -335,58 +335,114 @@ impl RecordingSegmentDecoders {
         &self,
         segment_time: f32,
         needs_camera: bool,
+        needs_display: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let camera_request_time = segment_time + offsets.camera;
-        let (screen, camera) = tokio::join!(
-            self.screen.get_frame(segment_time),
-            OptionFuture::from(
+
+        if needs_display {
+            let (screen, camera) = tokio::join!(
+                self.screen.get_frame(segment_time),
+                OptionFuture::from(
+                    needs_camera
+                        .then(|| self
+                            .camera
+                            .as_ref()
+                            .map(|d| d.get_frame(camera_request_time)))
+                        .flatten()
+                )
+            );
+
+            let camera_frame = camera.flatten();
+
+            Some(DecodedSegmentFrames {
+                screen_frame: Some(screen?),
+                camera_frame,
+                segment_time,
+                recording_time: segment_time + self.segment_offset as f32,
+            })
+        } else {
+            let camera_frame = OptionFuture::from(
                 needs_camera
-                    .then(|| self
-                        .camera
-                        .as_ref()
-                        .map(|d| d.get_frame(camera_request_time)))
-                    .flatten()
+                    .then(|| {
+                        self.camera
+                            .as_ref()
+                            .map(|d| d.get_frame(camera_request_time))
+                    })
+                    .flatten(),
             )
-        );
+            .await
+            .flatten();
 
-        let camera_frame = camera.flatten();
+            tracing::debug!(
+                segment_time,
+                "get_frames: skipping display decoding (needs_display=false)"
+            );
 
-        Some(DecodedSegmentFrames {
-            screen_frame: screen?,
-            camera_frame,
-            segment_time,
-            recording_time: segment_time + self.segment_offset as f32,
-        })
+            Some(DecodedSegmentFrames {
+                screen_frame: None,
+                camera_frame,
+                segment_time,
+                recording_time: segment_time + self.segment_offset as f32,
+            })
+        }
     }
 
     pub async fn get_frames_initial(
         &self,
         segment_time: f32,
         needs_camera: bool,
+        needs_display: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let camera_request_time = segment_time + offsets.camera;
-        let (screen, camera) = tokio::join!(
-            self.screen.get_frame_initial(segment_time),
-            OptionFuture::from(
+
+        if needs_display {
+            let (screen, camera) = tokio::join!(
+                self.screen.get_frame_initial(segment_time),
+                OptionFuture::from(
+                    needs_camera
+                        .then(|| self
+                            .camera
+                            .as_ref()
+                            .map(|d| d.get_frame_initial(camera_request_time)))
+                        .flatten()
+                )
+            );
+
+            let camera_frame = camera.flatten();
+
+            Some(DecodedSegmentFrames {
+                screen_frame: Some(screen?),
+                camera_frame,
+                segment_time,
+                recording_time: segment_time + self.segment_offset as f32,
+            })
+        } else {
+            let camera_frame = OptionFuture::from(
                 needs_camera
-                    .then(|| self
-                        .camera
-                        .as_ref()
-                        .map(|d| d.get_frame_initial(camera_request_time)))
-                    .flatten()
+                    .then(|| {
+                        self.camera
+                            .as_ref()
+                            .map(|d| d.get_frame_initial(camera_request_time))
+                    })
+                    .flatten(),
             )
-        );
+            .await
+            .flatten();
 
-        let camera_frame = camera.flatten();
+            tracing::debug!(
+                segment_time,
+                "get_frames_initial: skipping display decoding (needs_display=false)"
+            );
 
-        Some(DecodedSegmentFrames {
-            screen_frame: screen?,
-            camera_frame,
-            segment_time,
-            recording_time: segment_time + self.segment_offset as f32,
-        })
+            Some(DecodedSegmentFrames {
+                screen_frame: None,
+                camera_frame,
+                segment_time,
+                recording_time: segment_time + self.segment_offset as f32,
+            })
+        }
     }
 
     pub fn screen_video_dimensions(&self) -> (u32, u32) {
@@ -431,6 +487,7 @@ pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
+    pub render_display: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -559,9 +616,11 @@ pub async fn render_video_to_channel(
                         &render_segment.decoders,
                         segment_time,
                         needs_camera,
+                        render_segment.render_display,
                         clip_config.map(|v| v.offsets).unwrap_or_default(),
                         current_frame_number,
                         is_initial_frame,
+                        fps,
                     )
                     .await
                 }
@@ -570,9 +629,11 @@ pub async fn render_video_to_channel(
                     &render_segment.decoders,
                     segment_time,
                     needs_camera,
+                    render_segment.render_display,
                     clip_config.map(|v| v.offsets).unwrap_or_default(),
                     current_frame_number,
                     is_initial_frame,
+                    fps,
                 )
                 .await
             };
@@ -615,9 +676,11 @@ pub async fn render_video_to_channel(
                         &next_render_segment.decoders,
                         next_seg_time,
                         needs_camera,
+                        next_render_segment.render_display,
                         next_clip_config.map(|v| v.offsets).unwrap_or_default(),
                         next_frame_number,
                         next_is_initial,
+                        fps,
                     ))
                 } else {
                     None
@@ -632,6 +695,7 @@ pub async fn render_video_to_channel(
                         segment_frames,
                         uniforms,
                         &render_segment.cursor,
+                        render_segment.render_display,
                         &mut layers,
                     ),
                     prefetch
@@ -649,6 +713,7 @@ pub async fn render_video_to_channel(
                         segment_frames,
                         uniforms,
                         &render_segment.cursor,
+                        render_segment.render_display,
                         &mut layers,
                     )
                     .await
@@ -692,6 +757,21 @@ pub async fn render_video_to_channel(
             }
         } else {
             consecutive_failures += 1;
+
+            if last_successful_frame.is_none()
+                && consecutive_failures >= MAX_INITIAL_CONSECUTIVE_FAILURES
+            {
+                tracing::error!(
+                    frame_number = current_frame_number,
+                    consecutive_failures = consecutive_failures,
+                    max_retries = DECODE_MAX_RETRIES_INITIAL,
+                    "No initial frame could be decoded - aborting export"
+                );
+                return Err(RenderingError::FrameDecodeFailed {
+                    frame_number: current_frame_number,
+                    consecutive_failures,
+                });
+            }
 
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                 tracing::error!(
@@ -903,9 +983,11 @@ pub async fn render_video_to_channel_nv12(
                         &render_segment.decoders,
                         segment_time,
                         needs_camera,
+                        render_segment.render_display,
                         clip_config.map(|v| v.offsets).unwrap_or_default(),
                         current_frame_number,
                         is_initial_frame,
+                        fps,
                     )
                     .await
                 }
@@ -914,9 +996,11 @@ pub async fn render_video_to_channel_nv12(
                     &render_segment.decoders,
                     segment_time,
                     needs_camera,
+                    render_segment.render_display,
                     clip_config.map(|v| v.offsets).unwrap_or_default(),
                     current_frame_number,
                     is_initial_frame,
+                    fps,
                 )
                 .await
             };
@@ -960,9 +1044,11 @@ pub async fn render_video_to_channel_nv12(
                         &next_render_segment.decoders,
                         next_seg_time,
                         needs_camera,
+                        next_render_segment.render_display,
                         next_clip_config.map(|v| v.offsets).unwrap_or_default(),
                         next_frame_number,
                         next_is_initial,
+                        fps,
                     ))
                 } else {
                     None
@@ -986,6 +1072,7 @@ pub async fn render_video_to_channel_nv12(
                                 segment_frames,
                                 uniforms,
                                 &render_segment.cursor,
+                                render_segment.render_display,
                                 &mut layers,
                             )
                             .await;
@@ -1014,6 +1101,7 @@ pub async fn render_video_to_channel_nv12(
                             segment_frames,
                             uniforms,
                             &render_segment.cursor,
+                            render_segment.render_display,
                             &mut layers,
                         ),
                         prefetch
@@ -1033,6 +1121,7 @@ pub async fn render_video_to_channel_nv12(
                         segment_frames,
                         uniforms,
                         &render_segment.cursor,
+                        render_segment.render_display,
                         &mut layers,
                     )
                     .await;
@@ -1048,6 +1137,7 @@ pub async fn render_video_to_channel_nv12(
                         segment_frames,
                         uniforms,
                         &render_segment.cursor,
+                        render_segment.render_display,
                         &mut layers,
                     )
                     .await;
@@ -1141,6 +1231,21 @@ pub async fn render_video_to_channel_nv12(
         } else {
             consecutive_failures += 1;
 
+            if last_successful_frame.is_none()
+                && consecutive_failures >= MAX_INITIAL_CONSECUTIVE_FAILURES
+            {
+                tracing::error!(
+                    frame_number = current_frame_number,
+                    consecutive_failures = consecutive_failures,
+                    max_retries = DECODE_MAX_RETRIES_INITIAL,
+                    "No initial frame could be decoded - aborting export"
+                );
+                return Err(RenderingError::FrameDecodeFailed {
+                    frame_number: current_frame_number,
+                    consecutive_failures,
+                });
+            }
+
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                 tracing::error!(
                     frame_number = current_frame_number,
@@ -1213,14 +1318,69 @@ pub async fn render_video_to_channel_nv12(
 
 const DECODE_MAX_RETRIES_INITIAL: u32 = 5;
 const DECODE_MAX_RETRIES_STEADY: u32 = 2;
+const MAX_INITIAL_CONSECUTIVE_FAILURES: u32 = 8;
+const INITIAL_FRAME_BACKTRACK_FRAMES: [u32; 12] = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 
+fn initial_decode_recovery_times(segment_time: f32, fps: u32) -> Vec<f32> {
+    if segment_time <= 0.0 || fps == 0 {
+        return Vec::new();
+    }
+
+    INITIAL_FRAME_BACKTRACK_FRAMES
+        .into_iter()
+        .filter_map(|frames| {
+            let candidate = segment_time - frames as f32 / fps as f32;
+            (candidate >= 0.0).then_some(candidate)
+        })
+        .collect()
+}
+
+async fn recover_initial_frames_with_backtrack(
+    decoders: &RecordingSegmentDecoders,
+    segment_time: f64,
+    needs_camera: bool,
+    needs_display: bool,
+    offsets: cap_project::ClipOffsets,
+    current_frame_number: u32,
+    fps: u32,
+) -> Option<DecodedSegmentFrames> {
+    for recovery_time in initial_decode_recovery_times(segment_time as f32, fps) {
+        let Some(_) = decoders
+            .get_frames(recovery_time, needs_camera, needs_display, offsets)
+            .await
+        else {
+            continue;
+        };
+
+        tracing::warn!(
+            frame_number = current_frame_number,
+            segment_time = segment_time,
+            recovery_time = recovery_time,
+            backtrack_ms = ((segment_time as f32 - recovery_time) * 1000.0).round(),
+            "Recovered initial frame by backtracking decode"
+        );
+
+        if let Some(recovered) = decoders
+            .get_frames(segment_time as f32, needs_camera, needs_display, offsets)
+            .await
+        {
+            return Some(recovered);
+        }
+    }
+
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn decode_segment_frames_with_retry(
     decoders: &RecordingSegmentDecoders,
     segment_time: f64,
     needs_camera: bool,
+    needs_display: bool,
     offsets: cap_project::ClipOffsets,
     current_frame_number: u32,
     is_initial_frame: bool,
+    fps: u32,
 ) -> Option<DecodedSegmentFrames> {
     let mut result = None;
     let mut retry_count = 0u32;
@@ -1242,11 +1402,11 @@ async fn decode_segment_frames_with_retry(
 
         result = if is_initial_frame {
             decoders
-                .get_frames_initial(segment_time as f32, needs_camera, offsets)
+                .get_frames_initial(segment_time as f32, needs_camera, needs_display, offsets)
                 .await
         } else {
             decoders
-                .get_frames(segment_time as f32, needs_camera, offsets)
+                .get_frames(segment_time as f32, needs_camera, needs_display, offsets)
                 .await
         };
 
@@ -1262,6 +1422,19 @@ async fn decode_segment_frames_with_retry(
                 );
             }
         }
+    }
+
+    if result.is_none() && is_initial_frame {
+        return recover_initial_frames_with_backtrack(
+            decoders,
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            current_frame_number,
+            fps,
+        )
+        .await;
     }
 
     result
@@ -1781,6 +1954,35 @@ impl MotionBlurDescriptor {
 }
 
 impl ProjectUniforms {
+    fn auto_padding_factor(project: &ProjectConfiguration) -> f64 {
+        project.background.padding / 100.0 * SCREEN_MAX_PADDING
+    }
+
+    fn round_base_dimension(value: f64) -> u32 {
+        (((value.ceil() as u32) + 1) & !1).max(2)
+    }
+
+    fn fixed_aspect_base_size(crop: &Crop, target_aspect: f64, padding_factor: f64) -> (u32, u32) {
+        let crop_aspect = crop.aspect_ratio() as f64;
+        let padding = f64::from(u32::max(crop.size.x, crop.size.y)) * padding_factor * 2.0;
+
+        if crop_aspect > target_aspect {
+            let width = crop.size.x as f64 + padding;
+            let height = width / target_aspect;
+            (
+                Self::round_base_dimension(width),
+                Self::round_base_dimension(height),
+            )
+        } else {
+            let height = crop.size.y as f64 + padding;
+            let width = height * target_aspect;
+            (
+                Self::round_base_dimension(width),
+                Self::round_base_dimension(height),
+            )
+        }
+    }
+
     pub fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
         project.background.crop.as_ref().cloned().unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
@@ -1796,59 +1998,34 @@ impl ProjectUniforms {
         let crop = Self::get_crop(options, project);
 
         let basis = u32::max(crop.size.x, crop.size.y);
-        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+        let padding_factor = Self::auto_padding_factor(project);
 
         basis as f64 * padding_factor
     }
 
     pub fn get_base_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
-        let crop_aspect = crop.aspect_ratio();
+        let padding_factor = Self::auto_padding_factor(project);
 
         match &project.aspect_ratio {
             None => {
-                let padding_basis = u32::max(crop.size.x, crop.size.y) as f64;
-                let padding =
-                    padding_basis * project.background.padding / 100.0 * SCREEN_MAX_PADDING * 2.0;
-                let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
-                let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
+                let scale = 1.0 + padding_factor * 2.0;
+                let width = ((crop.size.x as f64 * scale) as u32 + 1) & !1;
+                let height = ((crop.size.y as f64 * scale) as u32 + 1) & !1;
                 (width, height)
             }
-            Some(AspectRatio::Square) => {
-                let size = if crop_aspect > 1.0 {
-                    crop.size.y
-                } else {
-                    crop.size.x
-                };
-                (size, size)
-            }
+            Some(AspectRatio::Square) => Self::fixed_aspect_base_size(&crop, 1.0, padding_factor),
             Some(AspectRatio::Wide) => {
-                if crop_aspect > 16.0 / 9.0 {
-                    (((crop.size.y as f32 * 16.0 / 9.0) as u32), crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 9.0 / 16.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 16.0 / 9.0, padding_factor)
             }
             Some(AspectRatio::Vertical) => {
-                if crop_aspect > 9.0 / 16.0 {
-                    ((crop.size.y as f32 * 9.0 / 16.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 16.0 / 9.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 9.0 / 16.0, padding_factor)
             }
             Some(AspectRatio::Classic) => {
-                if crop_aspect > 4.0 / 3.0 {
-                    ((crop.size.y as f32 * 4.0 / 3.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 3.0 / 4.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 4.0 / 3.0, padding_factor)
             }
             Some(AspectRatio::Tall) => {
-                if crop_aspect > 3.0 / 4.0 {
-                    ((crop.size.y as f32 * 3.0 / 4.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 4.0 / 3.0) as u32))
-                }
+                Self::fixed_aspect_base_size(&crop, 3.0 / 4.0, padding_factor)
             }
         }
     }
@@ -1876,10 +2053,23 @@ impl ProjectUniforms {
     ) -> Coord<FrameSpace> {
         let output_size = Self::get_output_size(options, project, resolution_base);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
+        let crop = Self::get_crop(options, project);
+
+        if project.aspect_ratio.is_none() {
+            let (base_w, base_h) = Self::get_base_size(options, project);
+            let output_scale = f64::min(
+                output_size.x / f64::max(base_w as f64, 1.0),
+                output_size.y / f64::max(base_h as f64, 1.0),
+            );
+            let padding_factor = Self::auto_padding_factor(project);
+
+            return Coord::new(XY::new(
+                crop.size.x as f64 * padding_factor * output_scale,
+                crop.size.y as f64 * padding_factor * output_scale,
+            ));
+        }
 
         let output_aspect = output_size.x / output_size.y;
-
-        let crop = Self::get_crop(options, project);
 
         let crop_start =
             Coord::<RawDisplaySpace>::new(XY::new(crop.position.x as f64, crop.position.y as f64));
@@ -1902,12 +2092,19 @@ impl ProjectUniforms {
                 output_size.x / f64::max(base_w as f64, 1.0),
                 output_size.y / f64::max(base_h as f64, 1.0),
             );
-            base_padding * output_scale
+            let max_padding = f64::max(
+                f64::min((output_size.x - 1.0) / 2.0, (output_size.y - 1.0) / 2.0),
+                0.0,
+            );
+            (base_padding * output_scale).min(max_padding)
         };
 
         let is_height_constrained = cropped_aspect <= output_aspect;
 
-        let available_size = output_size - 2.0 * padding;
+        let available_size = XY::new(
+            (output_size.x - 2.0 * padding).max(1.0),
+            (output_size.y - 2.0 * padding).max(1.0),
+        );
 
         let target_size = if is_height_constrained {
             XY::new(available_size.y * cropped_aspect, available_size.y)
@@ -2748,9 +2945,88 @@ impl ProjectUniforms {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render_options(screen_width: u32, screen_height: u32) -> RenderOptions {
+        RenderOptions {
+            screen_size: XY::new(screen_width, screen_height),
+            camera_size: None,
+        }
+    }
+
+    #[test]
+    fn auto_aspect_ratio_preserves_source_ratio_with_padding() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 50.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+
+        assert_eq!((width, height), (2688, 1512));
+        assert_eq!(width * 1080, height * 1920);
+    }
+
+    #[test]
+    fn auto_aspect_ratio_preserves_crop_ratio_with_padding() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 25.0;
+        project.background.crop = Some(Crop {
+            position: XY::new(100, 50),
+            size: XY::new(1000, 500),
+        });
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let offset = ProjectUniforms::display_offset(&options, &project, XY::new(width, height));
+
+        assert_eq!((width, height), (1200, 600));
+        assert_eq!(offset.coord, XY::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn fixed_aspect_ratio_clamps_padding_to_keep_display_visible() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Vertical),
+            ..ProjectConfiguration::default()
+        };
+        project.background.padding = 100.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let offset = ProjectUniforms::display_offset(&options, &project, XY::new(width, height));
+        let size = ProjectUniforms::display_size(&options, &project, XY::new(width, height));
+
+        assert!(offset.x >= 0.0);
+        assert!(offset.y >= 0.0);
+        assert!(size.x >= 1.0);
+        assert!(size.y >= 1.0);
+        assert!(offset.x + size.x <= width as f64 + f64::EPSILON);
+        assert!(offset.y + size.y <= height as f64 + f64::EPSILON);
+    }
+
+    #[test]
+    fn fixed_aspect_ratio_preserves_source_resolution_with_padding() {
+        let options = render_options(1920, 1080);
+        let mut project = ProjectConfiguration {
+            aspect_ratio: Some(AspectRatio::Square),
+            ..ProjectConfiguration::default()
+        };
+        project.background.padding = 20.0;
+
+        let (width, height) = ProjectUniforms::get_base_size(&options, &project);
+        let size = ProjectUniforms::display_size(&options, &project, XY::new(width, height));
+
+        assert_eq!((width, height), (2228, 2228));
+        assert!((size.x - 1920.0).abs() <= 1.0);
+        assert!((size.y - 1080.0).abs() <= 1.0);
+    }
+}
+
 #[derive(Clone)]
 pub struct DecodedSegmentFrames {
-    pub screen_frame: DecodedFrame,
+    pub screen_frame: Option<DecodedFrame>,
     pub camera_frame: Option<DecodedFrame>,
     pub segment_time: f32,
     pub recording_time: f32,
@@ -2784,6 +3060,7 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<Option<RenderedFrame>, RenderingError> {
         let mut last_error = None;
@@ -2819,6 +3096,7 @@ impl<'a> FrameRenderer<'a> {
                 segment_frames.clone(),
                 uniforms.clone(),
                 cursor,
+                render_display,
                 layers,
                 session,
             )
@@ -2854,10 +3132,11 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
         if let Some(frame) = self
-            .render(segment_frames, uniforms, cursor, layers)
+            .render(segment_frames, uniforms, cursor, render_display, layers)
             .await?
         {
             return Ok(frame);
@@ -2880,10 +3159,11 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<frame_pipeline::Nv12RenderedFrame, RenderingError> {
         if let Some(frame) = self
-            .render_nv12(segment_frames, uniforms, cursor, layers)
+            .render_nv12(segment_frames, uniforms, cursor, render_display, layers)
             .await?
         {
             return Ok(frame);
@@ -2910,15 +3190,16 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
         if self.constants.is_software_adapter {
             return self
-                .render_nv12_software_path(segment_frames, uniforms, cursor, layers)
+                .render_nv12_software_path(segment_frames, uniforms, cursor, render_display, layers)
                 .await;
         }
 
-        self.render_nv12_gpu_path(segment_frames, uniforms, cursor, layers)
+        self.render_nv12_gpu_path(segment_frames, uniforms, cursor, render_display, layers)
             .await
     }
 
@@ -2927,10 +3208,17 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
         let rgba_frame = self
-            .render(segment_frames, uniforms.clone(), cursor, layers)
+            .render(
+                segment_frames,
+                uniforms.clone(),
+                cursor,
+                render_display,
+                layers,
+            )
             .await?;
 
         let Some(rgba_frame) = rgba_frame else {
@@ -3016,6 +3304,7 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<Option<frame_pipeline::Nv12RenderedFrame>, RenderingError> {
         let mut last_error = None;
@@ -3064,6 +3353,7 @@ impl<'a> FrameRenderer<'a> {
                     &segment_frames,
                     cursor,
                     &mut encoder,
+                    render_display,
                 )
                 .await
             {
@@ -3077,6 +3367,7 @@ impl<'a> FrameRenderer<'a> {
                 &mut encoder,
                 session,
                 &uniforms,
+                render_display,
             );
 
             match finish_encoder_nv12_pooled(
@@ -3189,6 +3480,7 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         segment_frames: &DecodedSegmentFrames,
         cursor: &CursorEvents,
+        render_display: bool,
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
@@ -3202,13 +3494,15 @@ impl RendererLayers {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
 
-        self.display.prepare(
-            &constants.device,
-            &constants.queue,
-            segment_frames,
-            constants.options.screen_size,
-            uniforms.display,
-        );
+        if render_display {
+            self.display.prepare(
+                &constants.device,
+                &constants.queue,
+                segment_frames,
+                constants.options.screen_size,
+                uniforms.display,
+            );
+        }
 
         self.cursor.prepare(
             segment_frames,
@@ -3275,6 +3569,7 @@ impl RendererLayers {
         segment_frames: &DecodedSegmentFrames,
         cursor: &CursorEvents,
         encoder: &mut wgpu::CommandEncoder,
+        render_display: bool,
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
@@ -3288,14 +3583,16 @@ impl RendererLayers {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
 
-        self.display.prepare_with_encoder(
-            &constants.device,
-            &constants.queue,
-            segment_frames,
-            constants.options.screen_size,
-            uniforms.display,
-            encoder,
-        );
+        if render_display {
+            self.display.prepare_with_encoder(
+                &constants.device,
+                &constants.queue,
+                segment_frames,
+                constants.options.screen_size,
+                uniforms.display,
+                encoder,
+            );
+        }
 
         self.cursor.prepare(
             segment_frames,
@@ -3364,6 +3661,7 @@ impl RendererLayers {
         encoder: &mut wgpu::CommandEncoder,
         session: &mut RenderSession,
         uniforms: &ProjectUniforms,
+        render_display: bool,
     ) {
         macro_rules! render_pass {
             ($view:expr, $load:expr) => {
@@ -3384,7 +3682,9 @@ impl RendererLayers {
             };
         }
 
-        self.display.copy_to_texture(encoder);
+        if render_display {
+            self.display.copy_to_texture(encoder);
+        }
         self.camera.copy_to_texture(encoder);
         self.camera_only.copy_to_texture(encoder);
 
@@ -3404,14 +3704,19 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        let should_render = uniforms.scene.should_render_screen();
+        let should_render_screen = render_display && uniforms.scene.should_render_screen();
+        let should_render_cursor = if render_display {
+            uniforms.scene.should_render_screen()
+        } else {
+            true
+        };
 
-        if should_render {
+        if should_render_screen {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
-        if should_render {
+        if should_render_cursor {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
@@ -3458,6 +3763,7 @@ async fn produce_frame(
     segment_frames: DecodedSegmentFrames,
     uniforms: ProjectUniforms,
     cursor: &CursorEvents,
+    render_display: bool,
     layers: &mut RendererLayers,
     session: &mut RenderSession,
 ) -> Result<Option<RenderedFrame>, RenderingError> {
@@ -3468,7 +3774,14 @@ async fn produce_frame(
     );
 
     layers
-        .prepare_with_encoder(constants, &uniforms, &segment_frames, cursor, &mut encoder)
+        .prepare_with_encoder(
+            constants,
+            &uniforms,
+            &segment_frames,
+            cursor,
+            &mut encoder,
+            render_display,
+        )
         .await?;
 
     layers.render(
@@ -3477,6 +3790,7 @@ async fn produce_frame(
         &mut encoder,
         session,
         &uniforms,
+        render_display,
     );
 
     finish_encoder(
@@ -3641,5 +3955,29 @@ mod project_uniforms_tests {
         let delta = focus.coord.x - current.position.coord.x;
         assert!(delta < 0.2, "focus moved too far ahead: {delta}");
         assert!(delta > -0.25, "focus lagged too far behind: {delta}");
+    }
+}
+
+#[cfg(test)]
+mod initial_decode_recovery_tests {
+    use super::initial_decode_recovery_times;
+
+    #[test]
+    fn initial_decode_recovery_times_backtrack_in_descending_order() {
+        let times = initial_decode_recovery_times(5.0, 20);
+
+        assert!(!times.is_empty());
+
+        for window in times.windows(2) {
+            assert!(window[0] > window[1]);
+        }
+    }
+
+    #[test]
+    fn initial_decode_recovery_times_stop_at_zero() {
+        let times = initial_decode_recovery_times(0.15, 30);
+
+        assert!(times.iter().all(|time| *time >= 0.0));
+        assert!(times.last().copied().unwrap_or_default() >= 0.0);
     }
 }

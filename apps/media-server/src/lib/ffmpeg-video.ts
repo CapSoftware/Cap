@@ -1,7 +1,15 @@
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { file, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { registerSubprocess, terminateProcess } from "./subprocess";
-import { createTempFile, type TempFileHandle } from "./temp-files";
+import {
+	createTempFile,
+	ensureTempDir,
+	getTempDir,
+	type TempFileHandle,
+} from "./temp-files";
 
 const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
@@ -64,6 +72,260 @@ export function normalizeVideoInputExtension(
 	return normalized.startsWith(".")
 		? (normalized as `.${string}`)
 		: (`.${normalized}` as `.${string}`);
+}
+
+function isHlsUrl(url: string): boolean {
+	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".m3u8");
+}
+
+function isMpdUrl(url: string): boolean {
+	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".mpd");
+}
+
+function isStreamingUrl(url: string): boolean {
+	return isHlsUrl(url) || isMpdUrl(url);
+}
+
+function withQuery(url: string, query: string): string {
+	if (!query || url.includes("?")) {
+		return url;
+	}
+
+	return `${url}${query}`;
+}
+
+function resolveResourceUrl(
+	resource: string,
+	baseUrl: string,
+	query: string,
+): string {
+	if (resource.startsWith("http://") || resource.startsWith("https://")) {
+		return withQuery(resource, query);
+	}
+
+	return withQuery(new URL(resource, baseUrl).toString(), query);
+}
+
+async function materializeHlsPlaylist(
+	playlistUrl: string,
+	dirPath: string,
+	cache: Map<string, string>,
+): Promise<string> {
+	const cached = cache.get(playlistUrl);
+	if (cached) {
+		return cached;
+	}
+
+	const response = await fetch(playlistUrl, {
+		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+	});
+
+	if (!response.ok) {
+		throw new Error(
+			`Failed to fetch HLS playlist: ${response.status} ${response.statusText}`,
+		);
+	}
+
+	const content = await response.text();
+	const parsedUrl = new URL(playlistUrl);
+	const baseUrl = new URL(".", parsedUrl).toString();
+	const query = parsedUrl.search;
+	const filePath = join(dirPath, `${randomUUID()}.m3u8`);
+
+	cache.set(playlistUrl, filePath);
+
+	const lines = await Promise.all(
+		content.split("\n").map(async (line) => {
+			const trimmed = line.trim();
+
+			if (!trimmed) {
+				return line;
+			}
+
+			if (!trimmed.startsWith("#")) {
+				const resolved = resolveResourceUrl(trimmed, baseUrl, query);
+
+				if (isHlsUrl(resolved)) {
+					return await materializeHlsPlaylist(resolved, dirPath, cache);
+				}
+
+				return resolved;
+			}
+
+			if (!line.includes('URI="')) {
+				return line;
+			}
+
+			const matches = [...line.matchAll(/URI="([^"]+)"/g)];
+			let rewritten = line;
+
+			for (const match of matches) {
+				const original = match[1];
+				if (!original) {
+					continue;
+				}
+
+				const resolved = resolveResourceUrl(original, baseUrl, query);
+				const replacement = isHlsUrl(resolved)
+					? await materializeHlsPlaylist(resolved, dirPath, cache)
+					: resolved;
+
+				rewritten = rewritten.replace(
+					`URI="${original}"`,
+					`URI="${replacement}"`,
+				);
+			}
+
+			return rewritten;
+		}),
+	);
+
+	await writeFile(filePath, lines.join("\n"));
+	return filePath;
+}
+
+async function materializeMpdManifest(
+	manifestUrl: string,
+	dirPath: string,
+): Promise<string> {
+	const response = await fetch(manifestUrl, {
+		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+	});
+
+	if (!response.ok) {
+		throw new Error(
+			`Failed to fetch DASH manifest: ${response.status} ${response.statusText}`,
+		);
+	}
+
+	const content = await response.text();
+	const parsedUrl = new URL(manifestUrl);
+	const baseUrl = new URL(".", parsedUrl).toString();
+	const query = parsedUrl.search;
+	const filePath = join(dirPath, `${randomUUID()}.mpd`);
+
+	const rewritten = content.replace(
+		/(initialization|media)="([^"]+)"/g,
+		(_, attribute: string, resource: string) => {
+			const resolved = resolveResourceUrl(resource, baseUrl, query);
+			return `${attribute}="${resolved}"`;
+		},
+	);
+
+	await writeFile(filePath, rewritten);
+	return filePath;
+}
+
+async function materializeStreamingInput(
+	videoUrl: string,
+	dirPath: string,
+): Promise<string> {
+	if (isHlsUrl(videoUrl)) {
+		return await materializeHlsPlaylist(videoUrl, dirPath, new Map());
+	}
+
+	if (isMpdUrl(videoUrl)) {
+		return await materializeMpdManifest(videoUrl, dirPath);
+	}
+
+	return videoUrl;
+}
+
+async function downloadStreamingVideoToTemp(
+	videoUrl: string,
+	abortSignal?: AbortSignal,
+): Promise<TempFileHandle> {
+	await ensureTempDir();
+	const manifestDir = await mkdtemp(join(getTempDir(), "stream-"));
+	const tempFile = await createTempFile(".mkv");
+
+	const cleanup = async () => {
+		await tempFile.cleanup();
+		await rm(manifestDir, { force: true, recursive: true }).catch(() => {});
+	};
+
+	try {
+		const inputPath = await materializeStreamingInput(videoUrl, manifestDir);
+		const ffmpegArgs = [
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-protocol_whitelist",
+			"file,http,https,tcp,tls,crypto,data",
+			"-i",
+			inputPath,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-y",
+			tempFile.path,
+		];
+
+		console.log(
+			`[downloadStreamingVideoToTemp] Running: ${ffmpegArgs.join(" ")}`,
+		);
+
+		const proc = registerSubprocess(
+			spawn({
+				cmd: ffmpegArgs,
+				stdout: "pipe",
+				stderr: "pipe",
+			}),
+		);
+
+		let abortCleanup: (() => void) | undefined;
+		if (abortSignal) {
+			abortCleanup = () => {
+				void terminateProcess(proc);
+			};
+			abortSignal.addEventListener("abort", abortCleanup, { once: true });
+		}
+
+		try {
+			await withTimeout(
+				(async () => {
+					drainStream(proc.stdout as ReadableStream<Uint8Array>);
+
+					const stderrText = await readStreamWithLimit(
+						proc.stderr as ReadableStream<Uint8Array>,
+						MAX_STDERR_BYTES,
+					);
+
+					const exitCode = await proc.exited;
+
+					if (exitCode !== 0) {
+						console.error(
+							`[downloadStreamingVideoToTemp] FFmpeg stderr:\n${stderrText}`,
+						);
+						throw new Error(
+							`Streaming download failed with exit code ${exitCode}`,
+						);
+					}
+
+					const outputFile = file(tempFile.path);
+					if (outputFile.size === 0) {
+						throw new Error("Streaming download produced empty file");
+					}
+				})(),
+				DOWNLOAD_TIMEOUT_MS,
+				() => terminateProcess(proc),
+			);
+		} finally {
+			if (abortCleanup) {
+				abortSignal?.removeEventListener("abort", abortCleanup);
+			}
+			await terminateProcess(proc);
+		}
+
+		return {
+			path: tempFile.path,
+			cleanup,
+		};
+	} catch (err) {
+		await cleanup();
+		throw err;
+	}
 }
 
 export async function withTimeout<T>(
@@ -180,6 +442,10 @@ export async function downloadVideoToTemp(
 	inputExtension?: string,
 	abortSignal?: AbortSignal,
 ): Promise<TempFileHandle> {
+	if (isStreamingUrl(videoUrl)) {
+		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
+	}
+
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
 	);

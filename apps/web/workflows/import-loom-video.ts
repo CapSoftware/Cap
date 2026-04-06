@@ -25,10 +25,6 @@ function isStreamingUrl(url: string): boolean {
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
-function isMpdUrl(url: string): boolean {
-	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".mpd");
-}
-
 async function fetchLoomCdnUrl(
 	videoId: string,
 	endpoint: string,
@@ -92,253 +88,7 @@ async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
 	);
 }
 
-function parseMpdVideoSegments(
-	mpdXml: string,
-	baseUrl: string,
-	queryParams: string,
-): { initUrl: string; mediaUrls: string[] } | null {
-	const adaptationSets = [
-		...mpdXml.matchAll(/<AdaptationSet([^>]*)>([\s\S]*?)<\/AdaptationSet>/g),
-	];
-
-	for (const asMatch of adaptationSets) {
-		const attrs = asMatch[1] ?? "";
-		const content = asMatch[2] ?? "";
-		const contentType = attrs.match(/contentType="([^"]+)"/)?.[1];
-
-		if (contentType !== "video") continue;
-
-		const representations = [
-			...content.matchAll(
-				/<Representation([^>]*)>([\s\S]*?)<\/Representation>/g,
-			),
-		];
-		let bestBandwidth = 0;
-		let bestRepContent = "";
-
-		for (const repMatch of representations) {
-			const repAttrs = repMatch[1] ?? "";
-			const repContent = repMatch[2] ?? "";
-			const bandwidth = parseInt(
-				repAttrs.match(/bandwidth="(\d+)"/)?.[1] ?? "0",
-				10,
-			);
-			if (bandwidth > bestBandwidth) {
-				bestBandwidth = bandwidth;
-				bestRepContent = repContent;
-			}
-		}
-
-		if (!bestRepContent) continue;
-
-		const templateMatch = bestRepContent.match(
-			/<SegmentTemplate([^>]*)>([\s\S]*?)<\/SegmentTemplate>/,
-		);
-		if (!templateMatch) continue;
-
-		const templateAttrs = templateMatch[1] ?? "";
-		const templateContent = templateMatch[2] ?? "";
-
-		const initFilename = templateAttrs.match(/initialization="([^"]+)"/)?.[1];
-		const mediaTemplate = templateAttrs.match(/media="([^"]+)"/)?.[1];
-		const startNumber = parseInt(
-			templateAttrs.match(/startNumber="(\d+)"/)?.[1] ?? "0",
-			10,
-		);
-
-		if (!initFilename || !mediaTemplate) continue;
-
-		const sElements = [...templateContent.matchAll(/<S\s([^/]*?)\/>/g)];
-		let segmentCount = 0;
-
-		for (const sEl of sElements) {
-			const r = parseInt(sEl[1]?.match(/r="(\d+)"/)?.[1] ?? "0", 10);
-			segmentCount += 1 + r;
-		}
-
-		const initUrl = `${baseUrl}${initFilename}${queryParams}`;
-		const mediaUrls: string[] = [];
-		for (let i = startNumber; i < startNumber + segmentCount; i++) {
-			const filename = mediaTemplate.replace("$Number$", String(i));
-			mediaUrls.push(`${baseUrl}${filename}${queryParams}`);
-		}
-
-		return { initUrl, mediaUrls };
-	}
-
-	return null;
-}
-
-function parseHlsMediaPlaylist(
-	content: string,
-	baseUrl: string,
-	queryParams: string,
-): string[] {
-	return content
-		.split("\n")
-		.map((l) => l.trim())
-		.filter((l) => l && !l.startsWith("#"))
-		.map((l) => (l.startsWith("http") ? l : `${baseUrl}${l}${queryParams}`));
-}
-
-async function downloadSegmentsToBuffer(urls: string[]): Promise<Buffer> {
-	const chunks: Buffer[] = [];
-	for (const url of urls) {
-		const response = await fetch(url);
-		if (!response.ok) continue;
-		chunks.push(Buffer.from(await response.arrayBuffer()));
-	}
-	return Buffer.concat(chunks);
-}
-
-async function tryMp4Candidates(
-	resourceBaseUrl: string,
-	queryParams: string,
-	loomVideoId: string,
-): Promise<Buffer | null> {
-	const mp4Candidates = [
-		`${resourceBaseUrl}${loomVideoId}.mp4${queryParams}`,
-		`${resourceBaseUrl}output.mp4${queryParams}`,
-	];
-
-	for (const mp4Url of mp4Candidates) {
-		try {
-			const headRes = await fetch(mp4Url, { method: "HEAD" });
-			if (!headRes.ok) continue;
-
-			const response = await fetch(mp4Url);
-			if (!response.ok) continue;
-
-			const buffer = Buffer.from(await response.arrayBuffer());
-			if (buffer.length >= MINIMUM_VIDEO_SIZE) return buffer;
-		} catch {}
-	}
-
-	return null;
-}
-
-async function downloadFromStreamingUrl(
-	streamingUrl: string,
-	loomVideoId: string,
-): Promise<Buffer> {
-	const parsedUrl = new URL(streamingUrl);
-	const queryParams = parsedUrl.search;
-	const pathUpToSlash = parsedUrl.pathname.substring(
-		0,
-		parsedUrl.pathname.lastIndexOf("/") + 1,
-	);
-	const streamingBaseUrl = `${parsedUrl.origin}${pathUpToSlash}`;
-
-	let resourceBaseUrl = streamingBaseUrl;
-	if (pathUpToSlash.endsWith("/hls/")) {
-		resourceBaseUrl = `${parsedUrl.origin}${pathUpToSlash.slice(0, -4)}`;
-	}
-
-	const mp4Buffer = await tryMp4Candidates(
-		resourceBaseUrl,
-		queryParams,
-		loomVideoId,
-	);
-	if (mp4Buffer) return mp4Buffer;
-
-	if (isMpdUrl(streamingUrl)) {
-		const mpdResponse = await fetch(streamingUrl);
-		if (!mpdResponse.ok) {
-			throw new FatalError("Failed to fetch video manifest from Loom");
-		}
-
-		const mpdXml = await mpdResponse.text();
-		const segments = parseMpdVideoSegments(
-			mpdXml,
-			streamingBaseUrl,
-			queryParams,
-		);
-
-		if (!segments || segments.mediaUrls.length === 0) {
-			throw new FatalError("Could not parse video segments from Loom manifest");
-		}
-
-		return await downloadSegmentsToBuffer([
-			segments.initUrl,
-			...segments.mediaUrls,
-		]);
-	}
-
-	const masterResponse = await fetch(streamingUrl);
-	if (!masterResponse.ok) {
-		throw new FatalError("Failed to fetch HLS playlist from Loom");
-	}
-
-	const masterContent = await masterResponse.text();
-	const masterLines = masterContent.split("\n").map((l) => l.trim());
-
-	const isMediaPlaylist = masterLines.some(
-		(l) => l.startsWith("#EXTINF:") || l.startsWith("#EXT-X-TARGETDURATION:"),
-	);
-
-	let segmentUrls: string[];
-
-	if (isMediaPlaylist) {
-		segmentUrls = parseHlsMediaPlaylist(
-			masterContent,
-			streamingBaseUrl,
-			queryParams,
-		);
-	} else {
-		let bestBandwidth = 0;
-		let bestVariantUrl: string | null = null;
-
-		for (let i = 0; i < masterLines.length; i++) {
-			const line = masterLines[i];
-			if (line?.startsWith("#EXT-X-STREAM-INF:")) {
-				const bwMatch = line.match(/BANDWIDTH=(\d+)/);
-				const bandwidth = parseInt(bwMatch?.[1] ?? "0", 10);
-				const nextLine = masterLines[i + 1]?.trim();
-				if (
-					nextLine &&
-					!nextLine.startsWith("#") &&
-					bandwidth > bestBandwidth
-				) {
-					bestBandwidth = bandwidth;
-					bestVariantUrl = nextLine.startsWith("http")
-						? nextLine
-						: `${streamingBaseUrl}${nextLine}${queryParams}`;
-				}
-			}
-		}
-
-		if (!bestVariantUrl) {
-			throw new FatalError("No video variants found in HLS playlist");
-		}
-
-		const variantResponse = await fetch(bestVariantUrl);
-		if (!variantResponse.ok) {
-			throw new FatalError("Failed to fetch HLS variant playlist from Loom");
-		}
-
-		const variantContent = await variantResponse.text();
-		segmentUrls = parseHlsMediaPlaylist(
-			variantContent,
-			streamingBaseUrl,
-			queryParams,
-		);
-	}
-
-	if (segmentUrls.length === 0) {
-		throw new FatalError("No video segments found in HLS playlist");
-	}
-
-	return await downloadSegmentsToBuffer(segmentUrls);
-}
-
-async function downloadVideoContent(
-	downloadUrl: string,
-	loomVideoId: string,
-): Promise<Buffer> {
-	if (isStreamingUrl(downloadUrl)) {
-		return await downloadFromStreamingUrl(downloadUrl, loomVideoId);
-	}
-
+async function downloadVideoContent(downloadUrl: string): Promise<Buffer> {
 	const loomResponse = await fetch(downloadUrl);
 	if (!loomResponse.ok) {
 		throw new FatalError(
@@ -370,14 +120,19 @@ interface VideoProcessingResult {
 	};
 }
 
+interface LoomProcessingInput {
+	sourceVideoUrl?: string;
+	inputExtension?: string;
+}
+
 export async function importLoomVideoWorkflow(
 	payload: ImportLoomPayload,
 ): Promise<VideoProcessingResult> {
 	"use workflow";
 
-	await downloadLoomToS3(payload);
+	const processingInput = await downloadLoomToS3(payload);
 
-	const result = await processVideoOnMediaServer(payload);
+	const result = await processVideoOnMediaServer(payload, processingInput);
 
 	await saveMetadataAndComplete(payload.videoId, result.metadata);
 
@@ -388,7 +143,27 @@ export async function importLoomVideoWorkflow(
 	};
 }
 
-async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
+function getInputExtension(url: string): string | undefined {
+	const pathname = new URL(url).pathname.toLowerCase();
+
+	if (pathname.endsWith(".m3u8")) {
+		return ".m3u8";
+	}
+
+	if (pathname.endsWith(".mpd")) {
+		return ".mpd";
+	}
+
+	if (pathname.endsWith(".mp4")) {
+		return ".mp4";
+	}
+
+	return undefined;
+}
+
+async function downloadLoomToS3(
+	payload: ImportLoomPayload,
+): Promise<LoomProcessingInput> {
 	"use step";
 
 	const { videoId, loomVideoId, rawFileKey, bucketId } = payload;
@@ -406,6 +181,23 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 
 	const freshDownloadUrl = await fetchFreshLoomDownloadUrl(loomVideoId);
 
+	if (isStreamingUrl(freshDownloadUrl)) {
+		await db()
+			.update(videoUploads)
+			.set({
+				phase: "processing",
+				processingProgress: 0,
+				processingMessage: "Starting video processing...",
+				updatedAt: new Date(),
+			})
+			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+		return {
+			sourceVideoUrl: freshDownloadUrl,
+			inputExtension: getInputExtension(freshDownloadUrl),
+		};
+	}
+
 	const bucketIdOption = Option.fromNullable(bucketId).pipe(
 		Option.map((id) => S3Bucket.S3BucketId.make(id)),
 	);
@@ -417,7 +209,7 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 		});
 	}).pipe(runPromise);
 
-	const videoBuffer = await downloadVideoContent(freshDownloadUrl, loomVideoId);
+	const videoBuffer = await downloadVideoContent(freshDownloadUrl);
 
 	if (videoBuffer.length < MINIMUM_VIDEO_SIZE) {
 		throw new FatalError(
@@ -449,6 +241,8 @@ async function downloadLoomToS3(payload: ImportLoomPayload): Promise<void> {
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+	return {};
 }
 
 interface MediaServerProcessResult {
@@ -476,6 +270,7 @@ async function startMediaServerProcessJob(
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
 		webhookUrl: string;
+		inputExtension?: string;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
@@ -517,6 +312,7 @@ async function startMediaServerProcessJob(
 
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
+	processingInput: LoomProcessingInput,
 ): Promise<MediaServerProcessResult> {
 	"use step";
 
@@ -559,14 +355,16 @@ async function processVideoOnMediaServer(
 		}).pipe(runPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const sourceVideoUrl = processingInput.sourceVideoUrl ?? rawVideoUrl;
 
 	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
 		userId,
-		videoUrl: rawVideoUrl,
+		videoUrl: sourceVideoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		webhookUrl,
+		inputExtension: processingInput.inputExtension,
 	});
 
 	return await pollForCompletion(mediaServerUrl, jobId);

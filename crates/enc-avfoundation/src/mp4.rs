@@ -34,6 +34,8 @@ pub struct MP4Encoder {
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
     is_writing: bool,
+    session_started: bool,
+    is_finishing: bool,
     is_paused: bool,
     writer_failed: bool,
     video_frames_appended: usize,
@@ -79,6 +81,8 @@ pub enum QueueFrameError {
     Failed,
     #[error("WriterFailed/{0}")]
     WriterFailed(arc::R<ns::Error>),
+    #[error("Finished")]
+    Finished,
     #[error("Construct/{0}")]
     Construct(cidre::os::Error),
     #[error("NotReadyForMore")]
@@ -100,6 +104,14 @@ pub enum FinishError {
 }
 
 impl MP4Encoder {
+    fn effective_video_pts(&self) -> Option<Duration> {
+        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
+        match (self.last_video_pts, pending_pts) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     pub fn init(
         output: PathBuf,
         video_config: VideoInfo,
@@ -365,6 +377,8 @@ impl MP4Encoder {
             pause_timestamp: None,
             timestamp_offset: Duration::ZERO,
             is_writing: false,
+            session_started: false,
+            is_finishing: false,
             is_paused: false,
             writer_failed: false,
             video_frames_appended: 0,
@@ -384,6 +398,10 @@ impl MP4Encoder {
     ) -> Result<(), QueueFrameError> {
         if self.writer_failed {
             return Err(QueueFrameError::Failed);
+        }
+
+        if self.is_finishing {
+            return Err(QueueFrameError::Finished);
         }
 
         if self.is_paused {
@@ -415,7 +433,8 @@ impl MP4Encoder {
             }
         }
 
-        if !self.is_writing {
+        if !self.session_started {
+            self.session_started = true;
             self.is_writing = true;
             self.asset_writer
                 .start_session_at_src_time(cm::Time::zero());
@@ -449,11 +468,7 @@ impl MP4Encoder {
 
         let mut deferred_offset: Option<Duration> = None;
 
-        let pending_pts = self.pending_video_frame.as_ref().map(|p| p.pts);
-        let effective_last_pts = match (self.last_video_pts, pending_pts) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
+        let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
             && pts_duration <= last_pts
@@ -502,10 +517,15 @@ impl MP4Encoder {
             return Err(QueueFrameError::Failed);
         }
 
+        if self.is_finishing {
+            return Err(QueueFrameError::Finished);
+        }
+
         if self.is_paused {
             return Ok(());
         }
 
+        let effective_video_pts = self.effective_video_pts();
         let Some(audio_input) = &mut self.audio_input else {
             return Err(QueueFrameError::NoEncoder);
         };
@@ -517,18 +537,33 @@ impl MP4Encoder {
             self.pause_timestamp = None;
         }
 
-        if !self.is_writing {
+        if !self.session_started {
+            self.session_started = true;
             self.is_writing = true;
             self.asset_writer
                 .start_session_at_src_time(cm::Time::zero());
         }
 
-        if let (Some(audio_end_pts), Some(audio_ts), Some(video_pts)) = (
-            self.last_audio_end_pts,
-            self.last_audio_timescale,
-            self.last_video_pts,
-        ) {
-            let audio_secs = audio_end_pts as f64 / audio_ts as f64;
+        let sample_rate = frame.rate().max(1) as i32;
+        let requested_pts = duration_to_timescale_value(
+            timestamp
+                .checked_sub(self.timestamp_offset)
+                .unwrap_or(Duration::ZERO),
+            sample_rate,
+        );
+        let converted_last_end = match (self.last_audio_end_pts, self.last_audio_timescale) {
+            (Some(end), Some(scale)) if scale == sample_rate => Some(end),
+            (Some(end), Some(scale)) => Some(
+                duration_to_timescale_value(timescale_value_to_duration(end, scale), sample_rate)
+                    .max(end.max(0) + 1),
+            ),
+            _ => None,
+        };
+        let mut pts_value = requested_pts.max(converted_last_end.unwrap_or(0));
+
+        if let Some(video_pts) = effective_video_pts {
+            let candidate_end = pts_value.saturating_add(frame.samples() as i64);
+            let audio_secs = candidate_end as f64 / sample_rate as f64;
             let video_secs = video_pts.as_secs_f64();
             if audio_secs > video_secs + MAX_AV_DRIFT_SECS {
                 return Err(QueueFrameError::NotReadyForMore);
@@ -612,19 +647,6 @@ impl MP4Encoder {
 
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueFrameError::Construct)?;
-
-        let sample_rate = frame.rate().max(1) as i32;
-        let mut pts_value = match (self.last_audio_end_pts, self.last_audio_timescale) {
-            (Some(end), Some(scale)) if scale == sample_rate => end,
-            (Some(end), Some(scale)) => {
-                let converted = duration_to_timescale_value(
-                    timescale_value_to_duration(end, scale),
-                    sample_rate,
-                );
-                converted.max(end.max(0) + 1)
-            }
-            _ => 0,
-        };
 
         if let Some(last_end) = self.last_audio_end_pts
             && self.last_audio_timescale == Some(sample_rate)
@@ -805,7 +827,7 @@ impl MP4Encoder {
         &mut self,
         timestamp: Option<Duration>,
     ) -> Result<arc::R<av::AssetWriter>, FinishError> {
-        if !self.is_writing {
+        if !self.session_started || self.is_finishing {
             return Err(FinishError::NotWriting);
         }
 
@@ -830,6 +852,7 @@ impl MP4Encoder {
 
         let end_timestamp = finish_timestamp.unwrap_or(last_frame_ts);
 
+        self.is_finishing = true;
         self.is_writing = false;
 
         let mut end_session_time = end_timestamp.saturating_sub(self.timestamp_offset);
@@ -1249,6 +1272,12 @@ mod tests {
                     let _ = std::fs::remove_file(&output);
                     return Err(format!("Failed after {appended} frames at pts={pts_us}us"));
                 }
+                Err(QueueFrameError::Finished) => {
+                    let _ = std::fs::remove_file(&output);
+                    return Err(format!(
+                        "Finished after {appended} frames at pts={pts_us}us"
+                    ));
+                }
                 Err(err) => {
                     let _ = std::fs::remove_file(&output);
                     return Err(format!(
@@ -1279,6 +1308,17 @@ mod tests {
             time_base: ffmpeg::util::rational::Rational(1, 48000),
             buffer_size: 3840,
             is_wireless_transport: true,
+        }
+    }
+
+    fn wired_audio_config(buffer_size: u32) -> cap_media_info::AudioInfo {
+        cap_media_info::AudioInfo {
+            sample_rate: 48000,
+            channels: 1,
+            sample_format: ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            time_base: ffmpeg::util::rational::Rational(1, 48000),
+            buffer_size,
+            is_wireless_transport: false,
         }
     }
 
@@ -1371,6 +1411,10 @@ mod tests {
                                     errors.push(format!("Failed at ts={:?}", ts));
                                     break;
                                 }
+                                Err(QueueFrameError::Finished) => {
+                                    errors.push(format!("Finished at ts={:?}", ts));
+                                    break;
+                                }
                                 Err(e) => {
                                     dropped += 1;
                                     let _ = e;
@@ -1441,6 +1485,10 @@ mod tests {
                                 }
                                 Err(QueueFrameError::Failed) => {
                                     errors.push(format!("Audio Failed at frame {i}"));
+                                    break;
+                                }
+                                Err(QueueFrameError::Finished) => {
+                                    errors.push(format!("Audio Finished at frame {i}"));
                                     break;
                                 }
                                 Err(e) => {
@@ -2018,6 +2066,13 @@ mod tests {
                             writer_status_name(&asset_writer)
                         ));
                     }
+                    Err(QueueFrameError::Finished) => {
+                        return Err(format!(
+                            "Finished after {appended} frames at pts={pts_us}us \
+                             (writer status: {})",
+                            writer_status_name(&asset_writer)
+                        ));
+                    }
                     Err(e) => {
                         return Err(format!("Error after {appended} frames: {e}"));
                     }
@@ -2309,6 +2364,15 @@ mod tests {
                             appended,
                             format!(
                                 "Failed at pts={pts_us}us after {appended} frames (status: {})",
+                                writer_status_name(asset_writer)
+                            ),
+                        ));
+                    }
+                    Err(QueueFrameError::Finished) => {
+                        return Err((
+                            appended,
+                            format!(
+                                "Finished at pts={pts_us}us after {appended} frames (status: {})",
                                 writer_status_name(asset_writer)
                             ),
                         ));
@@ -2805,6 +2869,10 @@ mod tests {
                     post_jump_errors.push(format!("Failed at frame {i}"));
                     break;
                 }
+                Err(QueueFrameError::Finished) => {
+                    post_jump_errors.push(format!("Finished at frame {i}"));
+                    break;
+                }
                 Err(QueueFrameError::NotReadyForMore) => {}
                 Err(e) => {
                     post_jump_errors.push(format!("Error at frame {i}: {e}"));
@@ -3239,6 +3307,10 @@ mod tests {
                         errors.push(format!("Failed at sandwich frame {frame_idx}"));
                         break;
                     }
+                    Err(QueueFrameError::Finished) => {
+                        errors.push(format!("Finished at sandwich frame {frame_idx}"));
+                        break;
+                    }
                     Err(_) => {}
                 }
             }
@@ -3254,6 +3326,10 @@ mod tests {
                 }
                 Err(QueueFrameError::Failed) => {
                     errors.push(format!("Failed at frame {frame_idx}"));
+                    break;
+                }
+                Err(QueueFrameError::Finished) => {
+                    errors.push(format!("Finished at frame {frame_idx}"));
                     break;
                 }
                 Err(_) => {}
@@ -3274,6 +3350,51 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(15)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_wired_mic_timestamp_gap_is_preserved() {
+        let output = test_output_path("wired_mic_timestamp_gap");
+        let video = valid_video_config();
+        let audio = wired_audio_config(1680);
+
+        let mut encoder =
+            MP4Encoder::init_instant_mode(output.clone(), video, Some(audio), None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+        let frame_a = create_test_video_frame(&pool, 0, 33_333);
+        let frame_b = create_test_video_frame(&pool, 33_333, 33_333);
+        let frame_c = create_test_video_frame(&pool, 66_666, 33_333);
+        encoder.queue_video_frame(frame_a, Duration::ZERO).unwrap();
+        encoder
+            .queue_video_frame(frame_b, Duration::from_micros(33_333))
+            .unwrap();
+        encoder
+            .queue_video_frame(frame_c, Duration::from_micros(66_666))
+            .unwrap();
+
+        let audio_frame = create_test_audio_frame(48000, 1680);
+        encoder
+            .queue_audio_frame(&audio_frame, Duration::ZERO)
+            .unwrap();
+        assert_eq!(encoder.last_audio_end_pts, Some(1680));
+
+        let gap_timestamp =
+            Duration::from_nanos((3360u128 * 1_000_000_000u128 / 48_000u128) as u64);
+        encoder
+            .queue_audio_frame(&audio_frame, gap_timestamp)
+            .unwrap();
+
+        assert_eq!(
+            encoder.last_audio_end_pts,
+            Some(5040),
+            "audio timeline should preserve a missing 1680-sample chunk"
+        );
+
+        let result = encoder.finish(Some(Duration::from_micros(120_000)));
+        assert!(result.is_ok(), "Finish failed: {result:?}");
+
         let _ = std::fs::remove_file(&output);
     }
 
@@ -3400,7 +3521,9 @@ mod tests {
             assert!(
                 !matches!(
                     result,
-                    Err(QueueFrameError::WriterFailed(_)) | Err(QueueFrameError::Failed)
+                    Err(QueueFrameError::WriterFailed(_))
+                        | Err(QueueFrameError::Failed)
+                        | Err(QueueFrameError::Finished)
                 ),
                 "Should not fail during normal encoding at frame {i}: {result:?}"
             );
@@ -3418,6 +3541,39 @@ mod tests {
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(2)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn late_frames_after_finish_are_rejected() {
+        let output = test_output_path("late_frames_after_finish");
+        let video = valid_video_config();
+        let audio = wireless_audio_config();
+
+        let mut encoder =
+            MP4Encoder::init_instant_mode(output.clone(), video, Some(audio), None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+        let frame = create_test_video_frame(&pool, 0, 33_333);
+        encoder.queue_video_frame(frame, Duration::ZERO).unwrap();
+
+        let finish_result = encoder.finish(Some(Duration::from_secs(1)));
+        assert!(finish_result.is_ok(), "Finish failed: {finish_result:?}");
+
+        let late_audio = create_test_audio_frame(48000, 3840);
+        let late_audio_result = encoder.queue_audio_frame(&late_audio, Duration::from_millis(80));
+        assert!(
+            matches!(late_audio_result, Err(QueueFrameError::Finished)),
+            "Late audio frame should be rejected after finish, got: {late_audio_result:?}"
+        );
+
+        let late_video = create_test_video_frame(&pool, 80_000, 33_333);
+        let late_video_result = encoder.queue_video_frame(late_video, Duration::from_millis(80));
+        assert!(
+            matches!(late_video_result, Err(QueueFrameError::Finished)),
+            "Late video frame should be rejected after finish, got: {late_video_result:?}"
+        );
+
         let _ = std::fs::remove_file(&output);
     }
 }
