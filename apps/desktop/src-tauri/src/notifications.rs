@@ -90,15 +90,23 @@ impl NotificationType {
     }
 
     pub fn send(self, app: &tauri::AppHandle) {
-        send_notification(app, self, false);
+        send_notification(app, self);
     }
 
     pub fn send_always(self, app: &tauri::AppHandle) {
-        send_notification(app, self, true);
+        send_notification_always(app, self);
     }
 }
 
-pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType, always: bool) {
+pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
+    _send_notification(app, notification_type, false);
+}
+
+pub fn send_notification_always(app: &tauri::AppHandle, notification_type: NotificationType) {
+    _send_notification(app, notification_type, true);
+}
+
+fn _send_notification(app: &tauri::AppHandle, notification_type: NotificationType, always: bool) {
     let enable_notifications = always
         || GeneralSettingsStore::get(app)
             .map(|settings| settings.is_some_and(|s| s.enable_notifications))
@@ -123,6 +131,7 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
             | NotificationType::ScreenshotCopiedToClipboard
             | NotificationType::ScreenshotSaveFailed
             | NotificationType::ScreenshotCopyFailed
+            | NotificationType::DeepLinkTriggered
     );
 
     if !skip_sound {

@@ -4,7 +4,7 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
-use tracing::{trace, warn, error};
+use tracing::{warn, error};
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
@@ -96,18 +96,22 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         if scheme == "cap" {
+            let host = url.host_str().unwrap_or_default();
             let path = url.path().trim_matches('/');
-            if !path.is_empty() {
-                return Err(ActionParseFromUrlError::Invalid);
-            }
 
-            return match url.host_str() {
-                Some(host) if host.eq_ignore_ascii_case("record") => Ok(Self::StartDefaultRecording),
-                Some(host) if host.eq_ignore_ascii_case("stop") => Ok(Self::StopRecording),
-                Some(host) if host.eq_ignore_ascii_case("pause") => Ok(Self::TogglePauseRecording),
-                Some(host) if host.eq_ignore_ascii_case("resume") => Ok(Self::ResumeRecording),
-                _ => Err(ActionParseFromUrlError::Invalid),
+            let action = if host.eq_ignore_ascii_case("record") || path.eq_ignore_ascii_case("record") {
+                Some(Self::StartDefaultRecording)
+            } else if host.eq_ignore_ascii_case("stop") || path.eq_ignore_ascii_case("stop") {
+                Some(Self::StopRecording)
+            } else if host.eq_ignore_ascii_case("pause") || path.eq_ignore_ascii_case("pause") {
+                Some(Self::TogglePauseRecording)
+            } else if host.eq_ignore_ascii_case("resume") || path.eq_ignore_ascii_case("resume") {
+                Some(Self::ResumeRecording)
+            } else {
+                None
             };
+
+            return action.ok_or(ActionParseFromUrlError::Invalid);
         }
 
         match url.domain() {
