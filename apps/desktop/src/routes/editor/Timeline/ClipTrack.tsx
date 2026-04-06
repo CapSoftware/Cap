@@ -5,6 +5,7 @@ import {
 import { cx } from "cva";
 import {
 	batch,
+	type ComponentProps,
 	createEffect,
 	createMemo,
 	createRoot,
@@ -15,7 +16,6 @@ import {
 	onMount,
 	Show,
 	Switch,
-	type ComponentProps,
 } from "solid-js";
 import { produce } from "solid-js/store";
 
