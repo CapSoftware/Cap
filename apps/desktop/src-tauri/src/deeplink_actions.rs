@@ -30,6 +30,12 @@ pub enum DeepLinkAction {
     TogglePauseRecording,
     StopRecording,
     TakeScreenshot,
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
+    SwitchCamera {
+        camera: Option<DeviceOrModelID>,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -58,6 +64,16 @@ impl TryFrom<&Url> for DeepLinkAction {
             Some("toggle-pause") => Ok(Self::TogglePauseRecording),
             Some("stop") => Ok(Self::StopRecording),
             Some("screenshot") => Ok(Self::TakeScreenshot),
+            Some("mic") => {
+                let params = url.query_pairs().collect::<std::collections::HashMap<_, _>>();
+                let mic_label = params.get("name").map(|v| v.to_string());
+                Ok(Self::SwitchMicrophone { mic_label })
+            }
+            Some("camera") => {
+                let params = url.query_pairs().collect::<std::collections::HashMap<_, _>>();
+                let camera = params.get("id").map(|v| DeviceOrModelID::Device(v.to_string()));
+                Ok(Self::SwitchCamera { camera })
+            }
             _ => {
                 if url.domain() == Some("action") {
                     let params = url.query_pairs().collect::<std::collections::HashMap<_, _>>();
@@ -114,6 +130,20 @@ impl DeepLinkAction {
                     }
                     Err(e) => Err(format!("Failed to take screenshot: {e}")),
                 }
+            }
+            Self::SwitchMicrophone { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state.clone(), mic_label)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Self::SwitchCamera { camera } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_camera_input(app.clone(), state.clone(), camera, None)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(())
             }
             Self::StartRecording {
                 capture_mode,

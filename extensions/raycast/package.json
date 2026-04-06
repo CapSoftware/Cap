@@ -1,0 +1,81 @@
+{
+  "name": "cap-screen-recorder",
+  "title": "Cap",
+  "description": "Control Cap Screen Recorder via Raycast",
+  "icon": "icon.png",
+  "author": "denaev-dev",
+  "categories": [
+    "Productivity",
+    "Video"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "start",
+      "title": "Start Recording",
+      "description": "Start recording the screen with Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop",
+      "title": "Stop Recording",
+      "description": "Stop the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "toggle-pause",
+      "title": "Toggle Pause",
+      "description": "Pause or resume the current Cap recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "screenshot",
+      "title": "Take Screenshot",
+      "description": "Take a screenshot with Cap",
+      "mode": "no-view"
+    },
+    {
+      "name": "switch-mic",
+      "title": "Switch Microphone",
+      "description": "Switch the active microphone for Cap",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "name",
+          "placeholder": "Microphone Name",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "switch-camera",
+      "title": "Switch Camera",
+      "description": "Switch the active camera for Cap",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "id",
+          "placeholder": "Camera Device ID",
+          "type": "text",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.93.1"
+  },
+  "devDependencies": {
+    "@raycast/utils": "^1.18.1",
+    "@types/node": "20.8.10",
+    "@types/react": "18.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "dev": "ray dev",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
