@@ -93,17 +93,16 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         if scheme == "cap" {
-            // Robust path check (handles cap://record and cap://record/)
             let path = url.path().trim_matches('/');
             if !path.is_empty() {
                 return Err(ActionParseFromUrlError::Invalid);
             }
 
-            return match url.host_str().map(|h| h.to_lowercase()) {
-                Some(host) if host == "record" => Ok(Self::StartDefaultRecording),
-                Some(host) if host == "stop" => Ok(Self::StopRecording),
-                Some(host) if host == "pause" => Ok(Self::TogglePauseRecording),
-                Some(host) if host == "resume" => Ok(Self::ResumeRecording),
+            return match url.host_str() {
+                Some(host) if host.eq_ignore_ascii_case("record") => Ok(Self::StartDefaultRecording),
+                Some(host) if host.eq_ignore_ascii_case("stop") => Ok(Self::StopRecording),
+                Some(host) if host.eq_ignore_ascii_case("pause") => Ok(Self::TogglePauseRecording),
+                Some(host) if host.eq_ignore_ascii_case("resume") => Ok(Self::ResumeRecording),
                 _ => Err(ActionParseFromUrlError::Invalid),
             };
         }
@@ -127,17 +126,13 @@ impl TryFrom<&Url> for DeepLinkAction {
 
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
-        // Handle security/visibility notification for deep link actions
         match &self {
-            // Force notification for actions that START recording (Critical for security)
-            DeepLinkAction::StartRecording { .. } | DeepLinkAction::StartDefaultRecording => {
-                crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
-            }
-            // Other actions respect user's notification preference
-            DeepLinkAction::StopRecording
+            DeepLinkAction::StartRecording { .. }
+            | DeepLinkAction::StartDefaultRecording
+            | DeepLinkAction::StopRecording
             | DeepLinkAction::ResumeRecording
             | DeepLinkAction::TogglePauseRecording => {
-                crate::notifications::NotificationType::DeepLinkTriggered.send(app);
+                crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
             }
             _ => {}
         }
@@ -189,7 +184,6 @@ impl DeepLinkAction {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await
             }
             DeepLinkAction::StartDefaultRecording => {
-                // Perfect payload emission for frontend deserialization
                 crate::RequestOpenRecordingPicker { target_mode: None }.emit(app).map_err(|e| e.to_string())
             }
             DeepLinkAction::ResumeRecording => {
