@@ -4,7 +4,6 @@ import {
 } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
-	type ComponentProps,
 	batch,
 	createEffect,
 	createMemo,
@@ -16,6 +15,7 @@ import {
 	onMount,
 	Show,
 	Switch,
+	type ComponentProps,
 } from "solid-js";
 import { produce } from "solid-js/store";
 
