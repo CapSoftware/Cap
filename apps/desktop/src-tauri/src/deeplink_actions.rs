@@ -38,21 +38,24 @@ pub enum DeepLinkAction {
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
-    trace!("Handling deep actions for: {:?}", &urls);
-
     let actions: Vec<_> = urls
         .into_iter()
         .filter(|url| !url.as_str().is_empty())
         .filter_map(|url| {
             DeepLinkAction::try_from(&url)
-                .map_err(|e| match e {
-                    ActionParseFromUrlError::ParseFailed(msg) => {
-                        error!("Failed to parse deep link \"{}\": {}", &url, msg)
+                .map_err(|e| {
+                    let mut safe_url = url.clone();
+                    safe_url.set_query(None);
+                    safe_url.set_fragment(None);
+                    match e {
+                        ActionParseFromUrlError::ParseFailed(msg) => {
+                            error!("Failed to parse deep link \"{}\": {}", safe_url, msg)
+                        }
+                        ActionParseFromUrlError::Invalid => {
+                            warn!("Invalid deep link format \"{}\"", safe_url)
+                        }
+                        ActionParseFromUrlError::NotAction => {}
                     }
-                    ActionParseFromUrlError::Invalid => {
-                        warn!("Invalid deep link format \"{}\"", &url)
-                    }
-                    ActionParseFromUrlError::NotAction => {}
                 })
                 .ok()
         })
