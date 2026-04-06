@@ -35,6 +35,7 @@ pub enum DeepLinkAction {
     StartDefaultRecording,
     ResumeRecording,
     TogglePauseRecording,
+    PauseRecording,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -198,6 +199,12 @@ impl DeepLinkAction {
             }
             DeepLinkAction::TogglePauseRecording => {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+        }
+    }
+}
+ding => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
             }
         }
     }
