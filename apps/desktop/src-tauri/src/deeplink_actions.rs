@@ -105,9 +105,11 @@ impl TryFrom<&Url> for DeepLinkAction {
             } else if host.eq_ignore_ascii_case("stop") || path.eq_ignore_ascii_case("stop") {
                 Some(Self::StopRecording)
             } else if host.eq_ignore_ascii_case("pause") || path.eq_ignore_ascii_case("pause") {
-                Some(Self::TogglePauseRecording)
+                Some(Self::PauseRecording)
             } else if host.eq_ignore_ascii_case("resume") || path.eq_ignore_ascii_case("resume") {
                 Some(Self::ResumeRecording)
+            } else if host.eq_ignore_ascii_case("toggle-pause") || path.eq_ignore_ascii_case("toggle-pause") {
+                Some(Self::TogglePauseRecording)
             } else {
                 None
             };
@@ -139,6 +141,7 @@ impl DeepLinkAction {
             | DeepLinkAction::StartDefaultRecording
             | DeepLinkAction::StopRecording
             | DeepLinkAction::ResumeRecording
+            | DeepLinkAction::PauseRecording
             | DeepLinkAction::TogglePauseRecording => {
                 crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
             }
@@ -197,14 +200,11 @@ impl DeepLinkAction {
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
             }
+            DeepLinkAction::PauseRecording => {
+                crate::recording::pause_recording(app.clone(), app.state()).await
+            }
             DeepLinkAction::TogglePauseRecording => {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
-            }
-        }
-    }
-}
-ding => {
-                crate::recording::pause_recording(app.clone(), app.state()).await
             }
         }
     }
