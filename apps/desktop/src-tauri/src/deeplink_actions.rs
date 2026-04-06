@@ -99,11 +99,11 @@ impl TryFrom<&Url> for DeepLinkAction {
                 return Err(ActionParseFromUrlError::Invalid);
             }
 
-            return match url.host_str().map(|h| h.to_lowercase().as_str()) {
-                Some("record") => Ok(Self::StartDefaultRecording),
-                Some("stop") => Ok(Self::StopRecording),
-                Some("pause") => Ok(Self::TogglePauseRecording),
-                Some("resume") => Ok(Self::ResumeRecording),
+            return match url.host_str().map(|h| h.to_lowercase()) {
+                Some(host) if host == "record" => Ok(Self::StartDefaultRecording),
+                Some(host) if host == "stop" => Ok(Self::StopRecording),
+                Some(host) if host == "pause" => Ok(Self::TogglePauseRecording),
+                Some(host) if host == "resume" => Ok(Self::ResumeRecording),
                 _ => Err(ActionParseFromUrlError::Invalid),
             };
         }
@@ -127,14 +127,17 @@ impl TryFrom<&Url> for DeepLinkAction {
 
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
-        // Trigger security/visibility notification for recording actions
+        // Handle security/visibility notification for deep link actions
         match &self {
-            DeepLinkAction::StartRecording { .. }
-            | DeepLinkAction::StopRecording
-            | DeepLinkAction::StartDefaultRecording
+            // Force notification for actions that START recording (Critical for security)
+            DeepLinkAction::StartRecording { .. } | DeepLinkAction::StartDefaultRecording => {
+                crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
+            }
+            // Other actions respect user's notification preference
+            DeepLinkAction::StopRecording
             | DeepLinkAction::ResumeRecording
             | DeepLinkAction::TogglePauseRecording => {
-                crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
+                crate::notifications::NotificationType::DeepLinkTriggered.send(app);
             }
             _ => {}
         }
