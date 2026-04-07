@@ -66,7 +66,7 @@ use crate::{
     presets::PresetsStore,
     thumbnails::*,
     upload::{
-        InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
+        InstantMultipartUpload, SegmentUploader, build_video_meta, compress_image, upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
@@ -82,7 +82,7 @@ pub struct InProgressRecordingCommon {
 pub enum InProgressRecording {
     Instant {
         handle: instant_recording::ActorHandle,
-        progressive_upload: InstantMultipartUpload,
+        segment_upload: SegmentUploader,
         video_upload_info: VideoUploadInfo,
         common: InProgressRecordingCommon,
         camera_feed: Option<Arc<CameraFeedLock>>,
@@ -196,13 +196,13 @@ impl InProgressRecording {
         Ok(match self {
             Self::Instant {
                 handle,
-                progressive_upload,
+                segment_upload,
                 video_upload_info,
                 common,
                 ..
             } => CompletedRecording::Instant {
                 recording: handle.stop().await?,
-                progressive_upload,
+                segment_upload,
                 video_upload_info,
                 target_name: common.target_name,
             },
@@ -246,7 +246,7 @@ pub enum CompletedRecording {
     Instant {
         recording: instant_recording::CompletedRecording,
         target_name: String,
-        progressive_upload: InstantMultipartUpload,
+        segment_upload: SegmentUploader,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
@@ -639,13 +639,14 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    let s3_config = match create_or_get_video(
+                    let s3_config = match crate::upload::create_or_get_video_with_mode(
                         &app,
                         false,
                         None,
                         Some(project_name.clone()),
                         None,
                         inputs.organization_id.clone(),
+                        "desktopSegments",
                     )
                     .await
                     {
@@ -965,17 +966,33 @@ pub async fn start_recording(
                                     e
                                 })?;
 
-                            let progressive_upload = InstantMultipartUpload::spawn(
-                                app_handle.clone(),
-                                recording_dir.join("content/output.mp4"),
-                                video_upload_info.clone(),
-                                recording_dir.clone(),
-                                Some(finish_upload_rx.clone()),
-                            );
+                            let segment_rx = handle.take_segment_rx();
+
+                            let segment_upload = if let Some(rx) = segment_rx {
+                                SegmentUploader::spawn(
+                                    app_handle.clone(),
+                                    video_upload_info.id.clone(),
+                                    rx,
+                                    Some(finish_upload_rx.clone()),
+                                    recording_dir.clone(),
+                                    video_upload_info.clone(),
+                                )
+                            } else {
+                                let progressive_upload = InstantMultipartUpload::spawn(
+                                    app_handle.clone(),
+                                    recording_dir.join("content/output.mp4"),
+                                    video_upload_info.clone(),
+                                    recording_dir.clone(),
+                                    Some(finish_upload_rx.clone()),
+                                );
+                                SegmentUploader {
+                                    handle: progressive_upload.handle,
+                                }
+                            };
 
                             Ok(InProgressRecording::Instant {
                                 handle,
-                                progressive_upload,
+                                segment_upload,
                                 video_upload_info,
                                 common: common.clone(),
                                 camera_feed: camera_feed.clone(),
@@ -1115,6 +1132,9 @@ pub async fn start_recording(
                         }
                         cap_recording::PipelineHealthEvent::SourceRestarting => {
                             Some("Capture source restarting".to_string())
+                        }
+                        cap_recording::PipelineHealthEvent::AudioDegradedToVideoOnly { reason } => {
+                            Some(format!("Audio lost: {reason}"))
                         }
                         cap_recording::PipelineHealthEvent::SourceRestarted => None,
                     };
@@ -1327,14 +1347,14 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         let video_id = match &recording {
             InProgressRecording::Instant {
                 video_upload_info,
-                progressive_upload,
+                segment_upload,
                 ..
             } => {
                 debug!(
                     "User deleted recording. Aborting multipart upload for {:?}",
                     video_upload_info.id
                 );
-                progressive_upload.handle.abort();
+                segment_upload.handle.abort();
 
                 Some(video_upload_info.id.clone())
             }
@@ -1566,13 +1586,13 @@ async fn handle_recording_end(
 
     if recording.is_err()
         && let Some(InProgressRecording::Instant {
-            progressive_upload,
+            segment_upload,
             video_upload_info,
             ..
         }) = cleared
     {
-        info!("Aborting progressive upload due to recording failure");
-        progressive_upload.handle.abort();
+        info!("Aborting segment upload due to recording failure");
+        segment_upload.handle.abort();
         crate::upload::emit_upload_complete(&handle, &video_upload_info.id);
     }
 
@@ -1777,10 +1797,25 @@ async fn handle_recording_finish(
         }
         CompletedRecording::Instant {
             recording,
-            progressive_upload,
+            segment_upload,
             video_upload_info,
             ..
         } => {
+            if !recording.health.is_uploadable()
+                && let cap_recording::RecordingHealth::Damaged { ref reason } = recording.health
+            {
+                error!(
+                    reason,
+                    "Instant recording is damaged and cannot be uploaded"
+                );
+                RecordingEvent::Failed {
+                    error: format!("Recording output is damaged: {reason}"),
+                }
+                .emit(app)
+                .ok();
+                return Ok(());
+            }
+
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
@@ -1798,20 +1833,18 @@ async fn handle_recording_finish(
                 let recording_dir = recording_dir.clone();
 
                 async move {
-                    let video_upload_succeeded = match progressive_upload
+                    let video_upload_succeeded = match segment_upload
                         .handle
                         .await
                         .map_err(|e| e.to_string())
                         .and_then(|r| r.map_err(|v| v.to_string()))
                     {
                         Ok(()) => {
-                            info!(
-                                "Not attempting instant recording upload as progressive upload succeeded"
-                            );
+                            info!("Segment upload succeeded");
                             true
                         }
                         Err(e) => {
-                            error!("Progressive upload failed: {}", e);
+                            error!("Segment upload failed: {}", e);
                             false
                         }
                     };

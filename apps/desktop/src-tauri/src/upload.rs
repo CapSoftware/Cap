@@ -230,12 +230,34 @@ pub async fn create_or_get_video(
     meta: Option<S3VideoMeta>,
     organization_id: Option<String>,
 ) -> Result<S3UploadMeta, AuthedApiError> {
+    create_or_get_video_with_mode(
+        app,
+        is_screenshot,
+        video_id,
+        name,
+        meta,
+        organization_id,
+        "desktopMP4",
+    )
+    .await
+}
+
+#[instrument(skip(app))]
+pub async fn create_or_get_video_with_mode(
+    app: &AppHandle,
+    is_screenshot: bool,
+    video_id: Option<String>,
+    name: Option<String>,
+    meta: Option<S3VideoMeta>,
+    organization_id: Option<String>,
+    recording_mode: &str,
+) -> Result<S3UploadMeta, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
-        format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
+        format!("/api/desktop/video/create?recordingMode={recording_mode}&videoId={id}")
     } else if is_screenshot {
-        "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
+        format!("/api/desktop/video/create?recordingMode={recording_mode}&isScreenshot=true")
     } else {
-        "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
+        format!("/api/desktop/video/create?recordingMode={recording_mode}")
     };
 
     if let Some(name) = name {
@@ -548,6 +570,636 @@ impl InstantMultipartUpload {
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
         Ok(metadata)
+    }
+}
+
+pub struct SegmentUploader {
+    pub handle: tokio::task::JoinHandle<Result<(), AuthedApiError>>,
+}
+
+struct SegmentUploadState {
+    uploaded_video_segments: std::collections::HashMap<u32, f64>,
+    uploaded_audio_segments: std::collections::HashMap<u32, f64>,
+    video_init_uploaded: bool,
+    audio_init_uploaded: bool,
+    failed_segments: Vec<FailedSegmentInfo>,
+    total_bytes_uploaded: u64,
+}
+
+#[derive(Clone)]
+struct FailedSegmentInfo {
+    subpath: String,
+    file_path: PathBuf,
+    is_init: bool,
+    media_type: cap_enc_ffmpeg::segmented_stream::SegmentMediaType,
+    index: u32,
+    duration: f64,
+    expected_size: u64,
+}
+
+impl SegmentUploadState {
+    fn new() -> Self {
+        Self {
+            uploaded_video_segments: std::collections::HashMap::new(),
+            uploaded_audio_segments: std::collections::HashMap::new(),
+            video_init_uploaded: false,
+            audio_init_uploaded: false,
+            failed_segments: Vec::new(),
+            total_bytes_uploaded: 0,
+        }
+    }
+
+    fn to_manifest(&self) -> SegmentUploadManifest {
+        let mut video_segments: Vec<SegmentManifestEntry> = self
+            .uploaded_video_segments
+            .iter()
+            .map(|(&index, &duration)| SegmentManifestEntry { index, duration })
+            .collect();
+        video_segments.sort_by_key(|s| s.index);
+        let mut audio_segments: Vec<SegmentManifestEntry> = self
+            .uploaded_audio_segments
+            .iter()
+            .map(|(&index, &duration)| SegmentManifestEntry { index, duration })
+            .collect();
+        audio_segments.sort_by_key(|s| s.index);
+
+        SegmentUploadManifest {
+            version: 2,
+            video_init_uploaded: self.video_init_uploaded,
+            audio_init_uploaded: self.audio_init_uploaded,
+            video_segments,
+            audio_segments,
+            is_complete: false,
+        }
+    }
+
+    fn to_complete_manifest(&self) -> SegmentUploadManifest {
+        let mut manifest = self.to_manifest();
+        manifest.is_complete = true;
+        manifest
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct SegmentManifestEntry {
+    index: u32,
+    duration: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct SegmentUploadManifest {
+    version: u32,
+    video_init_uploaded: bool,
+    audio_init_uploaded: bool,
+    video_segments: Vec<SegmentManifestEntry>,
+    audio_segments: Vec<SegmentManifestEntry>,
+    is_complete: bool,
+}
+
+impl SegmentUploader {
+    pub fn spawn(
+        app: AppHandle,
+        video_id: String,
+        segment_rx: std::sync::mpsc::Receiver<
+            cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
+        >,
+        recording_done: Option<flume::Receiver<()>>,
+        recording_dir: PathBuf,
+        pre_created_video: VideoUploadInfo,
+    ) -> Self {
+        Self {
+            handle: spawn_actor(async move {
+                let start = Instant::now();
+                let result = Self::run(
+                    app.clone(),
+                    video_id.clone(),
+                    segment_rx,
+                    recording_done,
+                    recording_dir.clone(),
+                    pre_created_video,
+                )
+                .await;
+
+                async_capture_event(
+                    &app,
+                    match &result {
+                        Ok(total_bytes) => PostHogEvent::MultipartUploadComplete {
+                            duration: start.elapsed(),
+                            length: start.elapsed(),
+                            size: total_bytes / (1024 * 1024),
+                        },
+                        Err(err) => PostHogEvent::MultipartUploadFailed {
+                            duration: start.elapsed(),
+                            error: err.to_string(),
+                        },
+                    },
+                );
+
+                result.map(|_| ())
+            }),
+        }
+    }
+
+    async fn upload_segment_file(
+        app: &AppHandle,
+        video_id: &str,
+        subpath: &str,
+        file_path: &Path,
+        expected_size: u64,
+    ) -> Result<u64, AuthedApiError> {
+        const MAX_RETRIES: u32 = 3;
+        const FILE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+        const DATA_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+        let start = Instant::now();
+        let actual_path = loop {
+            if file_path.exists() {
+                break file_path.to_path_buf();
+            }
+            if start.elapsed() > FILE_WAIT_TIMEOUT {
+                return Err(format!(
+                    "segment_upload/timeout/{subpath}: file not found after {:?} ({})",
+                    FILE_WAIT_TIMEOUT,
+                    file_path.display()
+                )
+                .into());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+
+        let start = Instant::now();
+        let file_data = loop {
+            let data = tokio::fs::read(&actual_path).await.map_err(|e| {
+                format!(
+                    "segment_upload/read/{subpath}: {e} ({})",
+                    actual_path.display()
+                )
+            })?;
+
+            let size_ok = expected_size == 0 || data.len() as u64 >= expected_size;
+            if !data.is_empty() && size_ok {
+                break data;
+            }
+
+            if start.elapsed() > DATA_WAIT_TIMEOUT {
+                if data.is_empty() {
+                    warn!(
+                        subpath,
+                        path = %actual_path.display(),
+                        "Segment file still empty after {:?}, skipping upload",
+                        DATA_WAIT_TIMEOUT
+                    );
+                    return Ok(0);
+                }
+                break data;
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
+
+        let file_size = file_data.len();
+        let file_bytes = Bytes::from(file_data);
+
+        for attempt in 0..MAX_RETRIES {
+            let presigned_url = api::upload_signed(
+                app,
+                api::PresignedS3PutRequest {
+                    video_id: video_id.to_string(),
+                    subpath: subpath.to_string(),
+                    method: api::PresignedS3PutRequestMethod::Put,
+                    meta: None,
+                },
+            )
+            .await?;
+
+            let client = app
+                .state::<RetryableHttpClient>()
+                .as_ref()
+                .map_err(|err| format!("segment_upload/client: {err:?}"))?
+                .clone();
+
+            let send_result = client
+                .put(&presigned_url)
+                .header("Content-Length", file_size)
+                .timeout(Duration::from_secs(5 * 60))
+                .body(file_bytes.clone())
+                .send()
+                .await;
+
+            match send_result {
+                Ok(resp) if resp.status().is_success() => {
+                    return Ok(file_size as u64);
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(
+                            attempt = attempt + 1,
+                            subpath,
+                            status = %status,
+                            "Segment upload failed, retrying"
+                        );
+                        tokio::time::sleep(Duration::from_millis(500 * (1 << attempt) as u64))
+                            .await;
+                        continue;
+                    }
+                    return Err(format!("segment_upload/{subpath}/error: {status} {body}").into());
+                }
+                Err(err) if is_reqwest_network_error(&err) => {
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(
+                            attempt = attempt + 1,
+                            subpath,
+                            error = %err,
+                            "Segment upload network error, retrying"
+                        );
+                        if !wait_for_network_recovery(app, video_id).await {
+                            return Err(
+                                format!("segment_upload/{subpath}/network_timeout: {err}").into()
+                            );
+                        }
+                        continue;
+                    }
+                    return Err(format!("segment_upload/{subpath}/network_error: {err}").into());
+                }
+                Err(err) => {
+                    return Err(format!("segment_upload/{subpath}/error: {err}").into());
+                }
+            }
+        }
+
+        Err(format!("segment_upload/{subpath}/exhausted_retries").into())
+    }
+
+    async fn upload_manifest(
+        app: &AppHandle,
+        video_id: &str,
+        manifest: &SegmentUploadManifest,
+    ) -> Result<(), AuthedApiError> {
+        let json = serde_json::to_string_pretty(manifest)
+            .map_err(|e| format!("segment_upload/manifest/serialize: {e}"))?;
+
+        let presigned_url = api::upload_signed(
+            app,
+            api::PresignedS3PutRequest {
+                video_id: video_id.to_string(),
+                subpath: "segments/manifest.json".to_string(),
+                method: api::PresignedS3PutRequestMethod::Put,
+                meta: None,
+            },
+        )
+        .await?;
+
+        let client = app
+            .state::<RetryableHttpClient>()
+            .as_ref()
+            .map_err(|err| format!("segment_upload/manifest/client: {err:?}"))?
+            .clone();
+
+        let resp = client
+            .put(&presigned_url)
+            .header("Content-Length", json.len())
+            .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(60))
+            .body(json)
+            .send()
+            .await
+            .map_err(|err| format!("segment_upload/manifest/error: {err}"))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("segment_upload/manifest/error: {body}").into());
+        }
+
+        Ok(())
+    }
+
+    async fn run(
+        app: AppHandle,
+        video_id: String,
+        segment_rx: std::sync::mpsc::Receiver<
+            cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
+        >,
+        recording_done: Option<flume::Receiver<()>>,
+        recording_dir: PathBuf,
+        pre_created_video: VideoUploadInfo,
+    ) -> Result<u64, AuthedApiError> {
+        use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
+
+        info!("Starting segment uploader for {video_id}");
+
+        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+            format!("Error reading project meta from {recording_dir:?} for segment upload: {err}")
+        })?;
+        project_meta.upload = Some(UploadMeta::SegmentUpload {
+            video_id: video_id.clone(),
+            pre_created_video: pre_created_video.clone(),
+            recording_dir: recording_dir.clone(),
+        });
+        project_meta
+            .save_for_project()
+            .map_err(|e| error!("Failed to save recording meta: {e}"))
+            .ok();
+
+        let state = Arc::new(Mutex::new(SegmentUploadState::new()));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
+        let consecutive_failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut in_flight = futures::stream::FuturesUnordered::<
+            tokio::task::JoinHandle<Result<(), AuthedApiError>>,
+        >::new();
+
+        let (async_segment_tx, mut async_segment_rx) = tokio::sync::mpsc::unbounded_channel::<
+            cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
+        >();
+
+        let bridge_handle = {
+            let async_segment_tx = async_segment_tx;
+            let recording_done = recording_done.clone();
+            std::thread::Builder::new()
+                .name("segment-rx-bridge".to_string())
+                .spawn(move || {
+                    loop {
+                        match segment_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                            Ok(event) => {
+                                if async_segment_tx.send(event).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                if let Some(ref done_rx) = recording_done
+                                    && done_rx.try_recv().is_ok()
+                                {
+                                    while let Ok(event) = segment_rx.try_recv() {
+                                        if async_segment_tx.send(event).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                while let Ok(event) = segment_rx.try_recv() {
+                                    if async_segment_tx.send(event).is_err() {
+                                        return;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                })
+                .map_err(|e| format!("Failed to spawn bridge thread: {e}"))?
+        };
+
+        use futures::StreamExt as _;
+
+        const CONSECUTIVE_FAILURE_LIMIT: u32 = 5;
+
+        loop {
+            tokio::select! {
+                biased;
+                Some(join_result) = in_flight.next(), if !in_flight.is_empty() => {
+                    if let Ok(Err(e)) = join_result {
+                        warn!("Segment upload task error: {e}");
+                    }
+                }
+                maybe_event = async_segment_rx.recv() => {
+                    let Some(event) = maybe_event else {
+                        break;
+                    };
+
+                    let subpath = match (event.is_init, event.media_type) {
+                        (true, SegmentMediaType::Video) => "segments/video/init.mp4".to_string(),
+                        (true, SegmentMediaType::Audio) => "segments/audio/init.mp4".to_string(),
+                        (false, SegmentMediaType::Video) => {
+                            format!("segments/video/segment_{:03}.m4s", event.index)
+                        }
+                        (false, SegmentMediaType::Audio) => {
+                            format!("segments/audio/segment_{:03}.m4s", event.index)
+                        }
+                    };
+
+                    let app_clone = app.clone();
+                    let video_id_clone = video_id.clone();
+                    let state_clone = state.clone();
+                    let failures_clone = consecutive_failures.clone();
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .map_err(|e| format!("segment_upload/semaphore: {e}"))?;
+
+                    let file_path = event.path.clone();
+                    let is_init = event.is_init;
+                    let media_type = event.media_type;
+                    let index = event.index;
+                    let duration = event.duration;
+                    let expected_size = event.file_size;
+                    let subpath_for_fail = subpath.clone();
+
+                    let handle = tokio::spawn(async move {
+                        let _permit = permit;
+
+                        let result =
+                            Self::upload_segment_file(&app_clone, &video_id_clone, &subpath, &file_path, expected_size)
+                                .await;
+
+                        match result {
+                            Err(e) => {
+                                let prev = failures_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                warn!(
+                                    subpath,
+                                    error = %e,
+                                    consecutive_failures = prev + 1,
+                                    "Failed to upload segment, queued for retry"
+                                );
+                                let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                s.failed_segments.push(FailedSegmentInfo {
+                                    subpath: subpath_for_fail,
+                                    file_path,
+                                    is_init,
+                                    media_type,
+                                    index,
+                                    duration,
+                                    expected_size,
+                                });
+                                return Ok(());
+                            }
+                            Ok(bytes) => {
+                                failures_clone.store(0, std::sync::atomic::Ordering::Relaxed);
+                                let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                s.total_bytes_uploaded += bytes;
+                                if is_init {
+                                    match media_type {
+                                        SegmentMediaType::Video => s.video_init_uploaded = true,
+                                        SegmentMediaType::Audio => s.audio_init_uploaded = true,
+                                    }
+                                } else {
+                                    match media_type {
+                                        SegmentMediaType::Video => {
+                                            s.uploaded_video_segments.insert(index, duration);
+                                        }
+                                        SegmentMediaType::Audio => {
+                                            s.uploaded_audio_segments.insert(index, duration);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let manifest = state_clone
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .to_manifest();
+                        if let Err(e) = Self::upload_manifest(&app_clone, &video_id_clone, &manifest).await
+                        {
+                            warn!("Failed to upload manifest after segment: {e}");
+                        }
+
+                        info!(subpath, "Segment uploaded successfully");
+
+                        Ok(())
+                    });
+
+                    in_flight.push(handle);
+
+                    if consecutive_failures.load(std::sync::atomic::Ordering::Relaxed) >= CONSECUTIVE_FAILURE_LIMIT {
+                        warn!("Consecutive upload failures reached threshold, attempting network recovery");
+                        if !wait_for_network_recovery(&app, &video_id).await {
+                            warn!("Network recovery failed during segment upload");
+                        }
+                        consecutive_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        while let Some(join_result) = in_flight.next().await {
+            if let Ok(Err(e)) = join_result {
+                warn!("Segment upload task error: {e}");
+            }
+        }
+
+        let _ = bridge_handle.join();
+
+        let failed = {
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
+            s.failed_segments.clone()
+        };
+
+        if !failed.is_empty() {
+            info!(
+                count = failed.len(),
+                "Retrying failed segment uploads before completing"
+            );
+            for seg in failed {
+                match Self::upload_segment_file(
+                    &app,
+                    &video_id,
+                    &seg.subpath,
+                    &seg.file_path,
+                    seg.expected_size,
+                )
+                .await
+                {
+                    Ok(bytes) => {
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                        s.total_bytes_uploaded += bytes;
+                        if seg.is_init {
+                            match seg.media_type {
+                                SegmentMediaType::Video => s.video_init_uploaded = true,
+                                SegmentMediaType::Audio => s.audio_init_uploaded = true,
+                            }
+                        } else {
+                            match seg.media_type {
+                                SegmentMediaType::Video => {
+                                    s.uploaded_video_segments.insert(seg.index, seg.duration);
+                                }
+                                SegmentMediaType::Audio => {
+                                    s.uploaded_audio_segments.insert(seg.index, seg.duration);
+                                }
+                            }
+                        }
+                        s.failed_segments.retain(|f| f.subpath != seg.subpath);
+                        info!(subpath = seg.subpath, "Failed segment retry succeeded");
+                    }
+                    Err(e) => {
+                        warn!(
+                            subpath = seg.subpath,
+                            error = %e,
+                            "Failed segment retry also failed, segment will be missing"
+                        );
+                    }
+                }
+            }
+        }
+
+        let final_manifest = state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .to_complete_manifest();
+        Self::upload_manifest(&app, &video_id, &final_manifest).await?;
+
+        {
+            let mut signal_ok = false;
+            for attempt in 0..3u32 {
+                match api::signal_recording_complete(&app, &video_id).await {
+                    Ok(()) => {
+                        signal_ok = true;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            attempt = attempt + 1,
+                            "Failed to signal recording complete: {e}"
+                        );
+                        if attempt < 2 {
+                            tokio::time::sleep(Duration::from_millis(1000 * (1 << attempt) as u64))
+                                .await;
+                        }
+                    }
+                }
+            }
+            if !signal_ok {
+                error!("All attempts to signal recording complete failed for {video_id}");
+
+                if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                    meta.upload = Some(UploadMeta::SegmentUpload {
+                        video_id: video_id.clone(),
+                        pre_created_video: pre_created_video.clone(),
+                        recording_dir: recording_dir.clone(),
+                    });
+                    meta.save_for_project().ok();
+                }
+
+                return Err(format!(
+                    "Failed to signal recording complete for {video_id} after 3 attempts"
+                )
+                .into());
+            }
+        }
+
+        emit_upload_complete(&app, &video_id);
+
+        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+            format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
+        })?;
+        project_meta.upload = Some(UploadMeta::Complete);
+        project_meta
+            .save_for_project()
+            .map_err(|err| format!("Error saving project meta for {recording_dir:?}: {err}"))?;
+
+        let _ = app.clipboard().write_text(pre_created_video.link.clone());
+
+        let total_bytes = state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .total_bytes_uploaded;
+
+        info!(total_bytes, "Segment upload complete for {video_id}");
+
+        Ok(total_bytes)
     }
 }
 
