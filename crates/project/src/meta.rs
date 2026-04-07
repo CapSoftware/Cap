@@ -104,6 +104,11 @@ pub enum UploadMeta {
         file_path: PathBuf,
         screenshot_path: PathBuf,
     },
+    SegmentUpload {
+        video_id: String,
+        pre_created_video: VideoUploadInfo,
+        recording_dir: PathBuf,
+    },
     Failed {
         error: String,
     },

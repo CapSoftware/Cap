@@ -6,6 +6,7 @@ pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
 mod output_pipeline;
+pub mod output_validation;
 pub mod recovery;
 mod resolution_limits;
 pub mod screenshot;
@@ -131,4 +132,22 @@ pub enum RecordingError {
 
     #[error("IO/{0}")]
     Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum RecordingHealth {
+    Healthy,
+    Repaired { original_issue: String },
+    Degraded { issues: Vec<String> },
+    Damaged { reason: String },
+}
+
+impl RecordingHealth {
+    pub fn is_uploadable(&self) -> bool {
+        matches!(
+            self,
+            Self::Healthy | Self::Repaired { .. } | Self::Degraded { .. }
+        )
+    }
 }

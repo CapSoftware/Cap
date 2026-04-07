@@ -8,6 +8,7 @@ use std::{
 use base64::prelude::*;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 
+use crate::exit_shutdown::{abort_join_handles, read_target_under_cursor};
 use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
@@ -172,32 +173,39 @@ pub async fn open_target_select_overlays(
 
         async move {
             loop {
-                {
-                    let display = focused_target
-                        .as_ref()
-                        .map(|v| v.display())
-                        .unwrap_or_else(scap_targets::Display::get_containing_cursor);
-                    let window = focused_target
-                        .as_ref()
-                        .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
-                        .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor);
+                let Some((display, window)) = read_target_under_cursor(
+                    || crate::app_is_exiting(&app),
+                    || {
+                        focused_target
+                            .as_ref()
+                            .map(|v| v.display())
+                            .unwrap_or_else(scap_targets::Display::get_containing_cursor)
+                    },
+                    || {
+                        focused_target
+                            .as_ref()
+                            .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
+                            .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor)
+                    },
+                ) else {
+                    break;
+                };
 
-                    let _ = TargetUnderCursor {
-                        display_id: display.map(|d| d.id()),
-                        window: window.and_then(|w| {
-                            if should_skip_window(&w, &window_exclusions) {
-                                return None;
-                            }
+                let _ = TargetUnderCursor {
+                    display_id: display.map(|d| d.id()),
+                    window: window.and_then(|w| {
+                        if should_skip_window(&w, &window_exclusions) {
+                            return None;
+                        }
 
-                            Some(WindowUnderCursor {
-                                id: w.id(),
-                                bounds: w.display_relative_logical_bounds()?,
-                                app_name: w.owner_name()?,
-                            })
-                        }),
-                    }
-                    .emit(&app);
+                        Some(WindowUnderCursor {
+                            id: w.id(),
+                            bounds: w.display_relative_logical_bounds()?,
+                            app_name: w.owner_name()?,
+                        })
+                    }),
                 }
+                .emit(&app);
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -409,6 +417,19 @@ pub struct WindowFocusManager {
 }
 
 impl WindowFocusManager {
+    fn abort_all_tasks(&self) {
+        let tasks = {
+            let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
+            tasks.drain().map(|(_, task)| task).collect::<Vec<_>>()
+        };
+        let task = self
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        abort_join_handles(tasks, task);
+    }
+
     pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
         let display_id = id.clone();
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
@@ -419,6 +440,10 @@ impl WindowFocusManager {
                 let mut main_window_was_seen = false;
 
                 loop {
+                    if crate::app_is_exiting(app) {
+                        break;
+                    }
+
                     let cap_main = CapWindowId::Main.get(app);
                     let cap_settings = CapWindowId::Settings.get(app);
 
@@ -487,5 +512,14 @@ impl WindowFocusManager {
         drop(tasks);
 
         self.finish(id, global_shortcut);
+    }
+
+    pub fn shutdown(&self, app: &AppHandle) {
+        self.abort_all_tasks();
+
+        app.global_shortcut()
+            .unregister("Escape")
+            .map_err(|err| error!("Error unregistering global keyboard shortcut for Escape: {err}"))
+            .ok();
     }
 }

@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
-    DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+    DiskSpaceCallback, SegmentCompletedEvent, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use std::{
@@ -152,6 +152,7 @@ pub struct MacOSFragmentedM4SMuxer {
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 pub struct MacOSFragmentedM4SMuxerConfig {
@@ -160,6 +161,7 @@ pub struct MacOSFragmentedM4SMuxerConfig {
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 impl Default for MacOSFragmentedM4SMuxerConfig {
@@ -170,6 +172,7 @@ impl Default for MacOSFragmentedM4SMuxerConfig {
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            segment_tx: None,
         }
     }
 }
@@ -209,6 +212,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            segment_tx: config.segment_tx,
         })
     }
 
@@ -259,6 +263,9 @@ impl MacOSFragmentedM4SMuxer {
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
+        }
+        if let Some(tx) = &self.segment_tx {
+            encoder.set_segment_callback(tx.clone());
         }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
@@ -606,6 +613,7 @@ pub struct MacOSFragmentedM4SCameraMuxer {
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 pub struct MacOSFragmentedM4SCameraMuxerConfig {
@@ -614,6 +622,7 @@ pub struct MacOSFragmentedM4SCameraMuxerConfig {
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 impl Default for MacOSFragmentedM4SCameraMuxerConfig {
@@ -624,6 +633,7 @@ impl Default for MacOSFragmentedM4SCameraMuxerConfig {
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            segment_tx: None,
         }
     }
 }
@@ -664,6 +674,7 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            segment_tx: config.segment_tx,
         })
     }
 
@@ -714,6 +725,9 @@ impl MacOSFragmentedM4SCameraMuxer {
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
+        }
+        if let Some(tx) = &self.segment_tx {
+            encoder.set_segment_callback(tx.clone());
         }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();

@@ -1,6 +1,6 @@
 use crate::{
     feeds::microphone::{self, MicrophoneFeedLock},
-    output_pipeline::{AudioFrame, AudioSource},
+    output_pipeline::{AudioFrame, AudioSource, PipelineHealthEvent, emit_health},
 };
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::SampleFormat;
@@ -10,11 +10,12 @@ use std::{
     borrow::Cow,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 const MICROPHONE_TARGET_CHANNELS: u16 = 1;
@@ -22,10 +23,13 @@ const MICROPHONE_TARGET_CHANNELS: u16 = 1;
 const SILENCE_TIMEOUT_WIRED: Duration = Duration::from_millis(100);
 const SILENCE_TIMEOUT_WIRELESS: Duration = Duration::from_millis(200);
 const SILENCE_CHUNK_DURATION: Duration = Duration::from_millis(20);
+const MIC_RECONNECT_AFTER: Duration = Duration::from_secs(2);
+const MIC_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 pub struct Microphone {
     info: AudioInfo,
     _lock: Arc<MicrophoneFeedLock>,
+    cancel: CancellationToken,
 }
 
 #[derive(Debug, Error)]
@@ -116,17 +120,20 @@ impl AudioSource for Microphone {
     fn setup(
         feed_lock: Self::Config,
         mut audio_tx: mpsc::Sender<AudioFrame>,
-        _: &mut crate::SetupCtx,
+        ctx: &mut crate::SetupCtx,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static
     where
         Self: Sized,
     {
+        let health_tx = ctx.health_tx().clone();
         async move {
             let source_info = feed_lock.audio_info();
             let audio_info = source_info.with_max_channels(MICROPHONE_TARGET_CHANNELS);
             let source_channels = source_info.channels;
             let target_channels = audio_info.channels;
             let is_wireless = source_info.is_wireless_transport;
+            let device_name = feed_lock.device_name().to_string();
+            let cancel = CancellationToken::new();
             let (tx, rx) = flume::bounded(128);
 
             let send_timeout = if is_wireless {
@@ -163,18 +170,41 @@ impl AudioSource for Microphone {
                 let frame_counter = mic_frame_counter.clone();
                 let drop_counter = mic_drop_counter.clone();
                 let silence_counter = mic_silence_counter.clone();
+                let feed_lock = feed_lock.clone();
+                let device_name = device_name.clone();
+                let health_tx = health_tx.clone();
+                let cancel = cancel.clone();
                 async move {
                     let mut resampler: Option<MicResampler> = None;
                     let mut silence_mode = false;
+                    let mut silence_start: Option<Instant> = None;
+                    let reconnect_in_flight = Arc::new(AtomicBool::new(false));
+                    let mut reconnect_attempts: u32 = 0;
+                    let mut next_reconnect_after = MIC_RECONNECT_AFTER;
                     let mut last_timestamp: Option<cap_timestamp::Timestamp> = None;
                     let mut last_frame_duration = SILENCE_CHUNK_DURATION;
 
                     loop {
-                        match tokio::time::timeout(silence_timeout, rx.recv_async()).await {
+                        let recv_result = tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => break,
+                            r = tokio::time::timeout(silence_timeout, rx.recv_async()) => r,
+                        };
+                        match recv_result {
                             Ok(Ok(frame)) => {
                                 if silence_mode {
-                                    info!("Microphone data resumed after silence period");
+                                    let stall_ms =
+                                        silence_start.map(|s| s.elapsed().as_millis()).unwrap_or(0);
+                                    info!(
+                                        stall_ms,
+                                        reconnect_attempts, "Microphone data resumed after silence"
+                                    );
                                     silence_mode = false;
+                                    silence_start = None;
+                                    reconnect_in_flight.store(false, Ordering::Relaxed);
+                                    reconnect_attempts = 0;
+                                    next_reconnect_after = MIC_RECONNECT_AFTER;
+                                    emit_health(&health_tx, PipelineHealthEvent::SourceRestarted);
                                 }
 
                                 let format_changed = frame.sample_rate != original_rate
@@ -270,13 +300,60 @@ impl AudioSource for Microphone {
                                 break;
                             }
                             Err(_) => {
+                                let stall_started = *silence_start.get_or_insert_with(Instant::now);
+                                let stall_duration = stall_started.elapsed();
+
                                 if !silence_mode {
                                     warn!(
-                                        is_wireless = is_wireless,
+                                        is_wireless,
                                         timeout_ms = silence_timeout.as_millis(),
                                         "Microphone data timeout, generating silence"
                                     );
                                     silence_mode = true;
+                                }
+
+                                if !reconnect_in_flight.load(Ordering::Relaxed)
+                                    && stall_duration >= next_reconnect_after
+                                {
+                                    reconnect_attempts += 1;
+                                    warn!(
+                                        attempt = reconnect_attempts,
+                                        backoff_secs = next_reconnect_after.as_secs(),
+                                        stall_secs = stall_duration.as_secs(),
+                                        "Microphone stalled, attempting reconnect"
+                                    );
+                                    emit_health(&health_tx, PipelineHealthEvent::SourceRestarting);
+                                    reconnect_in_flight.store(true, Ordering::Relaxed);
+
+                                    let feed = feed_lock.clone();
+                                    let name = device_name.clone();
+                                    let in_flight = reconnect_in_flight.clone();
+                                    tokio::spawn(async move {
+                                        let ready = match feed
+                                            .ask(microphone::SetInput { label: name })
+                                            .await
+                                        {
+                                            Ok(r) => r,
+                                            Err(e) => {
+                                                warn!("Microphone reconnect failed: {e}");
+                                                in_flight.store(false, Ordering::Relaxed);
+                                                return;
+                                            }
+                                        };
+                                        match ready.await {
+                                            Ok(_) => {
+                                                info!("Microphone reconnect stream ready")
+                                            }
+                                            Err(e) => {
+                                                warn!("Microphone reconnect stream failed: {e}");
+                                                in_flight.store(false, Ordering::Relaxed);
+                                            }
+                                        }
+                                    });
+
+                                    next_reconnect_after =
+                                        (next_reconnect_after * 2).min(MIC_RECONNECT_BACKOFF_MAX);
+                                    silence_start = Some(Instant::now());
                                 }
 
                                 let timestamp = match last_timestamp {
@@ -310,13 +387,21 @@ impl AudioSource for Microphone {
             });
 
             tokio::spawn({
-                let frame_counter = mic_frame_counter;
-                let drop_counter = mic_drop_counter;
-                let silence_counter = mic_silence_counter;
+                let cancel = cancel.clone();
                 async move {
+                    let frame_counter = mic_frame_counter;
+                    let drop_counter = mic_drop_counter;
+                    let silence_counter = mic_silence_counter;
                     let mut last_log = Instant::now();
+                    let mut prev_captured: u64 = 0;
+                    let mut prev_dropped: u64 = 0;
+                    let mut stale_count: u32 = 0;
                     loop {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+                        }
                         let captured = frame_counter.load(Ordering::Relaxed);
                         let dropped = drop_counter.load(Ordering::Relaxed);
                         let silence = silence_counter.load(Ordering::Relaxed);
@@ -330,18 +415,40 @@ impl AudioSource for Microphone {
                             } else {
                                 0.0
                             };
-                            warn!(
-                                captured = captured,
-                                dropped = dropped,
-                                silence_frames = silence,
-                                drop_pct = format!("{:.1}%", drop_pct),
-                                is_wireless = is_wireless,
-                                send_timeout_ms = send_timeout.as_millis(),
-                                "Microphone audio stats"
-                            );
+
+                            let data_changed = captured != prev_captured || dropped != prev_dropped;
+                            prev_captured = captured;
+                            prev_dropped = dropped;
+
+                            if !data_changed {
+                                stale_count = stale_count.saturating_add(1);
+                            } else {
+                                stale_count = 0;
+                            }
+
+                            if stale_count <= 2 {
+                                warn!(
+                                    captured,
+                                    dropped,
+                                    silence_frames = silence,
+                                    drop_pct = format!("{:.1}%", drop_pct),
+                                    is_wireless,
+                                    "Microphone audio stats"
+                                );
+                            } else if stale_count.is_multiple_of(12) {
+                                warn!(
+                                    captured,
+                                    dropped,
+                                    silence_frames = silence,
+                                    drop_pct = format!("{:.1}%", drop_pct),
+                                    is_wireless,
+                                    stale_intervals = stale_count,
+                                    "Microphone audio stats (stalled)"
+                                );
+                            }
                             last_log = Instant::now();
                         } else if captured > 0 {
-                            debug!(captured = captured, "Microphone audio frames forwarded");
+                            debug!(captured, "Microphone audio frames forwarded");
                         }
                     }
                 }
@@ -350,12 +457,18 @@ impl AudioSource for Microphone {
             Ok(Self {
                 info: audio_info,
                 _lock: feed_lock,
+                cancel,
             })
         }
     }
 
     fn audio_info(&self) -> AudioInfo {
         self.info
+    }
+
+    fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.cancel.cancel();
+        async { Ok(()) }
     }
 }
 

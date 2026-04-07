@@ -37,6 +37,19 @@ import { cleanupStaleTempFiles } from "../lib/temp-files";
 
 const video = new Hono();
 
+function validateMediaServerSecret(c: {
+	req: { header: (name: string) => string | undefined };
+}): boolean {
+	const secret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+	if (!secret) {
+		console.warn(
+			"[media-server] MEDIA_SERVER_WEBHOOK_SECRET is not set — rejecting request. Set this env var to enable authenticated access.",
+		);
+		return false;
+	}
+	return c.req.header("x-media-server-secret") === secret;
+}
+
 const probeSchema = z.object({
 	videoUrl: z.string().url(),
 });
@@ -61,6 +74,7 @@ const processSchema = z.object({
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
+	webhookSecret: z.string().optional(),
 	inputExtension: z.string().optional(),
 	maxWidth: z.number().max(4096).optional(),
 	maxHeight: z.number().max(4096).optional(),
@@ -366,6 +380,10 @@ video.post("/convert", async (c) => {
 });
 
 video.post("/process", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = processSchema.safeParse(body);
 
@@ -417,10 +435,11 @@ video.post("/process", async (c) => {
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		webhookUrl,
+		webhookSecret,
 	} = result.data;
 
 	const jobId = generateJobId();
-	const job = createJob(jobId, videoId, userId, webhookUrl);
+	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
 
 	processVideoAsync(
 		job.jobId,
@@ -860,6 +879,9 @@ video.get("/process/:jobId/status", async (c) => {
 });
 
 video.post("/process/:jobId/cancel", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
 	const jobId = c.req.param("jobId");
 	const job = getJob(jobId);
 
@@ -907,6 +929,9 @@ video.post("/process/:jobId/cancel", async (c) => {
 });
 
 video.post("/cleanup", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
 	const cleaned = await cleanupStaleTempFiles();
 	return c.json({
 		success: true,
@@ -915,6 +940,9 @@ video.post("/cleanup", async (c) => {
 });
 
 video.post("/force-cleanup", (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
 	const cleaned = forceCleanupActiveJobs();
 	return c.json({
 		success: true,
@@ -922,5 +950,414 @@ video.post("/force-cleanup", (c) => {
 		message: `Force-cleaned ${cleaned} active jobs`,
 	});
 });
+
+const muxSegmentsSchema = z.object({
+	videoId: z.string(),
+	userId: z.string(),
+	outputPresignedUrl: z.string().url(),
+	thumbnailPresignedUrl: z.string().url().optional(),
+	webhookUrl: z.string().url().optional(),
+	webhookSecret: z.string().optional(),
+	videoInitUrl: z.string().url(),
+	videoSegmentUrls: z.array(z.string().url()),
+	audioInitUrl: z.string().url().optional(),
+	audioSegmentUrls: z.array(z.string().url()).optional(),
+});
+
+video.post("/mux-segments", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
+	const body = muxSegmentsSchema.safeParse(await c.req.json());
+	if (!body.success) {
+		return c.json(
+			{ error: "Invalid request", details: body.error.issues },
+			400,
+		);
+	}
+
+	const {
+		videoId,
+		userId,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		webhookUrl,
+		webhookSecret,
+	} = body.data;
+	const jobId = generateJobId();
+
+	if (!canAcceptNewVideoProcess()) {
+		return c.json(
+			{
+				error: "SERVER_BUSY",
+				message: "Server is at capacity",
+			},
+			503,
+		);
+	}
+
+	createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+
+	const {
+		videoInitUrl,
+		videoSegmentUrls: videoSegUrls,
+		audioInitUrl,
+		audioSegmentUrls: audioSegUrls,
+	} = body.data;
+
+	muxSegmentsAsync(
+		jobId,
+		videoId,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		videoInitUrl,
+		videoSegUrls,
+		audioInitUrl ?? null,
+		audioSegUrls ?? null,
+	).catch((err) => {
+		console.error(`[mux-segments] Async mux error for job ${jobId}:`, err);
+		const currentJob = getJob(jobId);
+		if (
+			currentJob &&
+			currentJob.phase !== "error" &&
+			currentJob.phase !== "complete"
+		) {
+			updateJob(jobId, {
+				phase: "error",
+				error: err instanceof Error ? err.message : String(err),
+			});
+			sendWebhook(getJob(jobId)!);
+		}
+	});
+
+	return c.json({
+		jobId,
+		status: "queued",
+		videoId,
+	});
+});
+
+const FFMPEG_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function runFfmpeg(args: string[]): Promise<void> {
+	const proc = Bun.spawn(["ffmpeg", ...args], {
+		stdout: "ignore",
+		stderr: "pipe",
+	});
+	const stderrPromise = new Response(proc.stderr).text();
+	const timeout = setTimeout(() => {
+		proc.kill();
+	}, FFMPEG_TIMEOUT_MS);
+	try {
+		const exitCode = await proc.exited;
+		const stderrText = await stderrPromise;
+		if (exitCode !== 0) {
+			throw new Error(
+				`FFmpeg exited with code ${exitCode}: ${stderrText.slice(-500)}`,
+			);
+		}
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function streamConcatFiles(
+	inputPaths: string[],
+	outputPath: string,
+): Promise<void> {
+	const { createReadStream, createWriteStream } = await import("node:fs");
+	const { pipeline } = await import("node:stream/promises");
+	const outStream = createWriteStream(outputPath);
+	try {
+		for (const filePath of inputPaths) {
+			await pipeline(createReadStream(filePath), outStream, { end: false });
+		}
+		outStream.end();
+		await new Promise<void>((resolve, reject) => {
+			outStream.on("finish", resolve);
+			outStream.on("error", reject);
+		});
+	} catch (err) {
+		outStream.destroy();
+		throw err;
+	}
+}
+
+function redactPresignedUrl(url: string): string {
+	try {
+		const parsed = new URL(url);
+		return `${parsed.origin}${parsed.pathname}`;
+	} catch {
+		return url.split("?")[0] ?? url;
+	}
+}
+
+async function downloadUrlToFile(url: string, destPath: string): Promise<void> {
+	const resp = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+	if (!resp.ok) {
+		throw new Error(
+			`Download failed (${resp.status}): ${redactPresignedUrl(url)}`,
+		);
+	}
+	const data = Buffer.from(await resp.arrayBuffer());
+	const { writeFile } = await import("node:fs/promises");
+	await writeFile(destPath, data);
+}
+
+async function downloadSegmentsBatchTracked(
+	urls: string[],
+	dir: string,
+	jobId: string,
+	progressBase: number,
+	progressRange: number,
+): Promise<number> {
+	const { join } = await import("node:path");
+	let completed = 0;
+	let failed = 0;
+	const total = urls.length;
+	const pending = [...urls.entries()];
+	const CONCURRENCY = 10;
+
+	async function worker() {
+		while (pending.length > 0) {
+			const entry = pending.shift();
+			if (!entry) break;
+			const [i, url] = entry;
+			try {
+				await downloadUrlToFile(
+					url,
+					join(dir, `segment_${String(i + 1).padStart(3, "0")}.m4s`),
+				);
+			} catch (err) {
+				failed++;
+				console.error(
+					`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
+					err instanceof Error ? err.message : err,
+				);
+			}
+			completed++;
+			if (total > 0) {
+				updateJob(jobId, {
+					phase: "downloading",
+					progress:
+						progressBase + Math.round((completed / total) * progressRange),
+				});
+			}
+		}
+	}
+
+	await Promise.all(
+		Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
+	);
+	return failed;
+}
+
+async function muxSegmentsAsync(
+	jobId: string,
+	videoId: string,
+	outputPresignedUrl: string,
+	thumbnailPresignedUrl: string | undefined,
+	videoInitUrl: string,
+	videoSegmentUrls: string[],
+	audioInitUrl: string | null,
+	audioSegmentUrls: string[] | null,
+): Promise<void> {
+	const { ensureTempDir } = await import("../lib/temp-files");
+	const { mkdir, readdir } = await import("node:fs/promises");
+	const { join } = await import("node:path");
+
+	const workDir = join(
+		(await import("node:os")).tmpdir(),
+		"cap-media-server",
+		`mux-${jobId}`,
+	);
+
+	try {
+		await ensureTempDir();
+		updateJob(jobId, { phase: "downloading", progress: 0 });
+		sendWebhook(getJob(jobId)!);
+
+		await mkdir(workDir, { recursive: true });
+		const videoDir = join(workDir, "video");
+		const audioDir = join(workDir, "audio");
+		await mkdir(videoDir, { recursive: true });
+		await mkdir(audioDir, { recursive: true });
+
+		await downloadUrlToFile(videoInitUrl, join(videoDir, "init.mp4"));
+		updateJob(jobId, { phase: "downloading", progress: 5 });
+		sendWebhook(getJob(jobId)!);
+
+		const videoFailed = await downloadSegmentsBatchTracked(
+			videoSegmentUrls,
+			videoDir,
+			jobId,
+			5,
+			45,
+		);
+
+		if (videoFailed > 0) {
+			const failRatio = videoFailed / videoSegmentUrls.length;
+			if (failRatio >= 0.5) {
+				throw new Error(
+					`Too many video segments failed: ${videoFailed}/${videoSegmentUrls.length} (${Math.round(failRatio * 100)}%)`,
+				);
+			}
+			console.warn(
+				`[mux-segments] ${videoFailed}/${videoSegmentUrls.length} video segments failed to download for ${videoId}`,
+			);
+		}
+
+		let hasAudio =
+			audioInitUrl !== null &&
+			audioSegmentUrls !== null &&
+			audioSegmentUrls.length > 0;
+		if (hasAudio) {
+			await downloadUrlToFile(audioInitUrl!, join(audioDir, "init.mp4"));
+			const audioFailed = await downloadSegmentsBatchTracked(
+				audioSegmentUrls!,
+				audioDir,
+				jobId,
+				50,
+				10,
+			);
+			if (audioFailed > 0) {
+				const audioFailRatio = audioFailed / audioSegmentUrls!.length;
+				if (audioFailRatio >= 0.5) {
+					console.warn(
+						`[mux-segments] ${audioFailed}/${audioSegmentUrls!.length} audio segments failed for ${videoId} (${Math.round(audioFailRatio * 100)}%), proceeding without audio`,
+					);
+					hasAudio = false;
+				} else {
+					console.warn(
+						`[mux-segments] ${audioFailed}/${audioSegmentUrls!.length} audio segments failed to download for ${videoId}`,
+					);
+				}
+			}
+		}
+
+		updateJob(jobId, { phase: "processing", progress: 60 });
+		sendWebhook(getJob(jobId)!);
+
+		const combinedVideoPath = join(workDir, "combined_video.mp4");
+		const videoInitPath = join(videoDir, "init.mp4");
+		const videoSegmentFiles = (await readdir(videoDir))
+			.filter((f) => f.endsWith(".m4s"))
+			.sort()
+			.map((f) => join(videoDir, f));
+
+		await streamConcatFiles(
+			[videoInitPath, ...videoSegmentFiles],
+			combinedVideoPath,
+		);
+
+		const videoOnlyPath = join(workDir, "video_only.mp4");
+		await runFfmpeg([
+			"-y",
+			"-i",
+			combinedVideoPath,
+			"-c",
+			"copy",
+			videoOnlyPath,
+		]);
+
+		let resultPath: string;
+
+		if (hasAudio) {
+			const combinedAudioPath = join(workDir, "combined_audio.mp4");
+			const audioInitPath = join(audioDir, "init.mp4");
+			const audioSegmentFiles = (await readdir(audioDir))
+				.filter((f) => f.endsWith(".m4s"))
+				.sort()
+				.map((f) => join(audioDir, f));
+
+			await streamConcatFiles(
+				[audioInitPath, ...audioSegmentFiles],
+				combinedAudioPath,
+			);
+
+			resultPath = join(workDir, "result.mp4");
+			await runFfmpeg([
+				"-y",
+				"-i",
+				videoOnlyPath,
+				"-i",
+				combinedAudioPath,
+				"-c",
+				"copy",
+				"-movflags",
+				"+faststart",
+				resultPath,
+			]);
+		} else {
+			resultPath = join(workDir, "result.mp4");
+			await runFfmpeg([
+				"-y",
+				"-i",
+				videoOnlyPath,
+				"-c",
+				"copy",
+				"-movflags",
+				"+faststart",
+				resultPath,
+			]);
+		}
+
+		updateJob(jobId, { phase: "uploading", progress: 80 });
+		sendWebhook(getJob(jobId)!);
+
+		await uploadFileToS3(resultPath, outputPresignedUrl, "video/mp4");
+
+		let metadata: VideoMetadata | undefined;
+		try {
+			const probeResult = await probeVideoFile(resultPath);
+			metadata = {
+				width: probeResult.width,
+				height: probeResult.height,
+				duration: probeResult.duration,
+				fps: probeResult.fps,
+			};
+		} catch {}
+
+		if (thumbnailPresignedUrl) {
+			updateJob(jobId, {
+				phase: "generating_thumbnail",
+				progress: 90,
+				message: "Generating thumbnail...",
+			});
+			sendWebhook(getJob(jobId)!);
+
+			try {
+				const duration = metadata?.duration ?? 0;
+				const thumbnailData = await generateThumbnail(resultPath, duration);
+				await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
+			} catch (thumbErr) {
+				console.warn(
+					`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+					thumbErr,
+				);
+			}
+		}
+
+		updateJob(jobId, {
+			phase: "complete",
+			progress: 100,
+			metadata,
+		});
+		sendWebhook(getJob(jobId)!);
+
+		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+	} catch (error: unknown) {
+		console.error(`Mux-segments job ${jobId} failed:`, error);
+		updateJob(jobId, {
+			phase: "error",
+			error: error instanceof Error ? error.message : "Unknown error",
+		});
+		sendWebhook(getJob(jobId)!);
+	} finally {
+		const { rm } = await import("node:fs/promises");
+		await rm(workDir, { recursive: true, force: true }).catch(() => {});
+	}
+}
 
 export default video;

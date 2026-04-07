@@ -94,6 +94,12 @@ unnecessary_lazy_evaluations = "deny"
 needless_range_loop = "deny"
 manual_clamp = "deny"
 
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+debug = 0
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "unwind"

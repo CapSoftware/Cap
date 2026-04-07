@@ -10,6 +10,9 @@ mod mux;
 pub use mux::*;
 
 pub mod remux;
+pub mod dash_audio {
+    pub use crate::mux::dash_audio::*;
+}
 pub mod segmented_audio {
     pub use crate::mux::segmented_audio::*;
 }

@@ -53,6 +53,7 @@ export interface Job {
 	outputTempFile?: TempFileHandle;
 	process?: Subprocess;
 	webhookUrl?: string;
+	webhookSecret?: string;
 	abortController?: AbortController;
 }
 
@@ -181,6 +182,7 @@ export function createJob(
 	videoId: string,
 	userId: string,
 	webhookUrl?: string,
+	webhookSecret?: string,
 ): Job {
 	const now = Date.now();
 	const job: Job = {
@@ -192,6 +194,7 @@ export function createJob(
 		createdAt: now,
 		updatedAt: now,
 		webhookUrl,
+		webhookSecret,
 	};
 	jobs.set(jobId, job);
 	return job;
@@ -331,13 +334,25 @@ export async function sendWebhook(job: Job): Promise<void> {
 	if (!job.webhookUrl) return;
 
 	const payload = getJobProgress(job);
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (job.webhookSecret) {
+		headers["x-media-server-secret"] = job.webhookSecret;
+	}
 
 	try {
-		await fetch(job.webhookUrl, {
+		const resp = await fetch(job.webhookUrl, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(payload),
+			signal: AbortSignal.timeout(15_000),
 		});
+		if (!resp.ok) {
+			console.error(
+				`[job-manager] Webhook returned ${resp.status} for job ${job.jobId}`,
+			);
+		}
 	} catch (err) {
 		console.error(
 			`[job-manager] Failed to send webhook for job ${job.jobId}:`,

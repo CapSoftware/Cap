@@ -10,7 +10,7 @@
 		"test:watch": "bun test --watch"
 	},
 	"dependencies": {
-		"hono": "^4.7.1",
+		"hono": "^4.12.12",
 		"zod": "^3.24.2"
 	},
 	"devDependencies": {

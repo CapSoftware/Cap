@@ -665,6 +665,118 @@ pub fn remux_file(input_path: &Path, output_path: &Path) -> Result<(), RemuxErro
     remux_to_regular_mp4(input_path, output_path)
 }
 
+pub fn merge_video_audio(
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> Result<(), RemuxError> {
+    suppress_ffmpeg_logs();
+    let result = merge_video_audio_inner(video_path, audio_path, output_path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn merge_video_audio_inner(
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> Result<(), RemuxError> {
+    let mut video_ctx = avformat::input(video_path)?;
+    let mut audio_ctx = avformat::input(audio_path)?;
+    let mut octx = avformat::output(output_path)?;
+
+    let mut video_stream_map: Vec<Option<usize>> = Vec::new();
+    let mut audio_stream_map: Vec<Option<usize>> = Vec::new();
+    let mut out_idx = 0usize;
+
+    for stream in video_ctx.streams() {
+        if stream.parameters().medium() == ffmpeg::media::Type::Video {
+            video_stream_map.push(Some(out_idx));
+            out_idx += 1;
+            let mut out_stream = octx.add_stream(None)?;
+            out_stream.set_parameters(stream.parameters());
+            unsafe {
+                (*out_stream.as_mut_ptr()).time_base = (*stream.as_ptr()).time_base;
+            }
+        } else {
+            video_stream_map.push(None);
+        }
+    }
+
+    for stream in audio_ctx.streams() {
+        if stream.parameters().medium() == ffmpeg::media::Type::Audio {
+            audio_stream_map.push(Some(out_idx));
+            out_idx += 1;
+            let mut out_stream = octx.add_stream(None)?;
+            out_stream.set_parameters(stream.parameters());
+            unsafe {
+                (*out_stream.as_mut_ptr()).time_base = (*stream.as_ptr()).time_base;
+            }
+        } else {
+            audio_stream_map.push(None);
+        }
+    }
+
+    octx.write_header()?;
+
+    let mut last_dts: Vec<i64> = vec![i64::MIN; out_idx];
+
+    for (stream, packet) in video_ctx.packets() {
+        if let Some(Some(oidx)) = video_stream_map.get(stream.index()) {
+            let oidx = *oidx;
+            let mut packet = packet;
+            packet.rescale_ts(stream.time_base(), octx.stream(oidx).unwrap().time_base());
+
+            let dts = packet.dts().unwrap_or(0);
+            if last_dts[oidx] != i64::MIN && dts <= last_dts[oidx] {
+                let fixed = last_dts[oidx] + 1;
+                unsafe {
+                    (*packet.as_mut_ptr()).dts = fixed;
+                    if let Some(pts) = packet.pts()
+                        && pts <= fixed
+                    {
+                        (*packet.as_mut_ptr()).pts = fixed;
+                    }
+                }
+            }
+            last_dts[oidx] = packet.dts().unwrap_or(0);
+
+            packet.set_stream(oidx);
+            packet.set_position(-1);
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    for (stream, packet) in audio_ctx.packets() {
+        if let Some(Some(oidx)) = audio_stream_map.get(stream.index()) {
+            let oidx = *oidx;
+            let mut packet = packet;
+            packet.rescale_ts(stream.time_base(), octx.stream(oidx).unwrap().time_base());
+
+            let dts = packet.dts().unwrap_or(0);
+            if last_dts[oidx] != i64::MIN && dts <= last_dts[oidx] {
+                let fixed = last_dts[oidx] + 1;
+                unsafe {
+                    (*packet.as_mut_ptr()).dts = fixed;
+                    if let Some(pts) = packet.pts()
+                        && pts <= fixed
+                    {
+                        (*packet.as_mut_ptr()).pts = fixed;
+                    }
+                }
+            }
+            last_dts[oidx] = packet.dts().unwrap_or(0);
+
+            packet.set_stream(oidx);
+            packet.set_position(-1);
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    octx.write_trailer()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_seek_probe_positions;

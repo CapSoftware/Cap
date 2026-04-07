@@ -136,13 +136,21 @@ async function startMediaServerProcessJob(
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
 		webhookUrl: string;
+		webhookSecret?: string;
 		inputExtension: string;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+		};
+		if (body.webhookSecret) {
+			headers["x-media-server-secret"] = body.webhookSecret;
+		}
+
 		const response = await fetch(`${mediaServerUrl}/video/process`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(body),
 		});
 
@@ -239,6 +247,7 @@ async function processVideoOnMediaServer(
 		.pipe(runPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
@@ -247,6 +256,7 @@ async function processVideoOnMediaServer(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		webhookUrl,
+		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),
 	});
 

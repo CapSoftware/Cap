@@ -1,7 +1,7 @@
 use crate::{
     output_pipeline::{
-        AudioFrame, AudioMuxer, BlockingThreadFinish, Muxer, TaskPool, VideoFrame, VideoMuxer,
-        wait_for_blocking_thread_finish,
+        AudioFrame, AudioMuxer, BlockingThreadFinish, HealthSender, Muxer, PipelineHealthEvent,
+        TaskPool, VideoFrame, VideoMuxer, emit_health, wait_for_blocking_thread_finish,
     },
     sources::screen_capture,
 };
@@ -135,16 +135,20 @@ struct FrameDropTracker {
     total_drops: u64,
     total_frames: u64,
     last_check: std::time::Instant,
+    health_tx: Option<HealthSender>,
+    health_emitted: bool,
 }
 
 impl FrameDropTracker {
-    fn new() -> Self {
+    fn new(health_tx: Option<HealthSender>) -> Self {
         Self {
             drops_in_window: 0,
             frames_in_window: 0,
             total_drops: 0,
             total_frames: 0,
             last_check: std::time::Instant::now(),
+            health_tx,
+            health_emitted: false,
         }
     }
 
@@ -174,6 +178,17 @@ impl FrameDropTracker {
                         total_drops = self.total_drops,
                         "MP4 muxer frame drop rate exceeds 5% threshold"
                     );
+                    if !self.health_emitted {
+                        if let Some(tx) = &self.health_tx {
+                            emit_health(
+                                tx,
+                                PipelineHealthEvent::FrameDropRateHigh {
+                                    rate_pct: drop_rate,
+                                },
+                            );
+                        }
+                        self.health_emitted = true;
+                    }
                 } else if self.drops_in_window > 0 {
                     debug!(
                         frames = self.frames_in_window,
@@ -588,7 +603,7 @@ impl Muxer for AVFoundationMp4Muxer {
                 instant_mode: is_instant,
             }),
             pause_flag,
-            frame_drops: FrameDropTracker::new(),
+            frame_drops: FrameDropTracker::new(None),
             channel_pressure,
             audio_channel_pressure,
             was_paused: false,
@@ -607,6 +622,10 @@ impl Muxer for AVFoundationMp4Muxer {
                 trace!("MP4 encoder audio channel already closed during stop: {e}");
             }
         }
+    }
+
+    fn set_health_sender(&mut self, tx: HealthSender) {
+        self.frame_drops.health_tx = Some(tx);
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -1003,7 +1022,7 @@ impl Muxer for AVFoundationCameraMuxer {
                 encoder_handle: Some(encoder_handle),
             }),
             pause_flag,
-            frame_drops: FrameDropTracker::new(),
+            frame_drops: FrameDropTracker::new(None),
             was_paused: false,
             fatal_error,
         })

@@ -86,7 +86,11 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					}),
 				),
 			),
-		listObjects: (config: { prefix?: string; maxKeys?: number }) =>
+		listObjects: (config: {
+			prefix?: string;
+			maxKeys?: number;
+			continuationToken?: string;
+		}) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
 					Effect.map((client) =>
@@ -95,6 +99,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 								Bucket: provider.bucket,
 								Prefix: config?.prefix,
 								MaxKeys: config?.maxKeys,
+								ContinuationToken: config?.continuationToken,
 							}),
 						),
 					),
