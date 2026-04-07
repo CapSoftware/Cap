@@ -13,7 +13,10 @@ use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
     ops::Deref,
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc, Weak,
+        mpsc::{self, SyncSender},
+    },
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -34,6 +37,7 @@ pub struct MicrophoneSamples {
 #[derive(Actor)]
 pub struct MicrophoneFeed {
     input_id_counter: u32,
+    lock_generation: u64,
     state: State,
     senders: Vec<flume::Sender<MicrophoneSamples>>,
     error_sender: flume::Sender<StreamError>,
@@ -41,11 +45,30 @@ pub struct MicrophoneFeed {
 
 enum State {
     Open(OpenState),
-    Locked { inner: AttachedState },
+    Locked {
+        inner: AttachedState,
+        token: Weak<()>,
+    },
 }
 
 impl State {
     fn try_as_open(&mut self) -> Result<&mut OpenState, FeedLockedError> {
+        let is_stale = matches!(self, Self::Locked { token, .. } if token.strong_count() == 0);
+
+        if is_stale {
+            warn!("Detected stale microphone feed lock, auto-recovering");
+            replace_with_or_abort(self, |state| {
+                if let Self::Locked { inner, .. } = state {
+                    Self::Open(OpenState {
+                        connecting: None,
+                        attached: Some(inner),
+                    })
+                } else {
+                    state
+                }
+            });
+        }
+
         if let Self::Open(open_state) = self {
             Ok(open_state)
         } else {
@@ -93,6 +116,7 @@ impl MicrophoneFeed {
     pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
         Self {
             input_id_counter: 0,
+            lock_generation: 0,
             state: State::Open(OpenState {
                 connecting: None,
                 attached: None,
@@ -400,6 +424,7 @@ pub struct MicrophoneFeedLock {
     buffer_size_frames: Option<u32>,
     drop_tx: Option<oneshot::Sender<()>>,
     device_name: String,
+    _token: Arc<()>,
 }
 
 impl MicrophoneFeedLock {
@@ -470,7 +495,9 @@ struct InputConnectFailed {
     id: u32,
 }
 
-struct Unlock;
+struct Unlock {
+    generation: u64,
+}
 
 #[derive(Clone, Copy)]
 enum StreamLogAction {
@@ -612,7 +639,7 @@ impl Message<SetInput> for MicrophoneFeed {
 
                 Ok(ready_for_return)
             }
-            State::Locked { inner } => {
+            State::Locked { inner, .. } => {
                 if inner.label != msg.label {
                     return Err(SetInputError::Locked(FeedLockedError));
                 }
@@ -759,14 +786,22 @@ impl Message<Lock> for MicrophoneFeed {
         let buffer_size_frames = attached.buffer_size_frames;
         let device_name = attached.label.clone();
 
-        self.state = State::Locked { inner: attached };
+        self.lock_generation += 1;
+        let generation = self.lock_generation;
+        let token = Arc::new(());
+        let token_weak = Arc::downgrade(&token);
+
+        self.state = State::Locked {
+            inner: attached,
+            token: token_weak,
+        };
 
         let (drop_tx, drop_rx) = oneshot::channel();
 
         let actor_ref = ctx.actor_ref();
         tokio::spawn(async move {
             let _ = drop_rx.await;
-            let _ = actor_ref.tell(Unlock).await;
+            let _ = actor_ref.tell(Unlock { generation }).await;
         });
 
         let latency_info = estimate_input_latency(
@@ -784,6 +819,7 @@ impl Message<Lock> for MicrophoneFeed {
             buffer_size_frames,
             drop_tx: Some(drop_tx),
             device_name,
+            _token: token,
         })
     }
 }
@@ -836,7 +872,7 @@ impl Message<LockedInputReconnected> for MicrophoneFeed {
         msg: LockedInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner } = &mut self.state
+        if let State::Locked { inner, .. } = &mut self.state
             && inner.label == msg.label
         {
             inner.id = msg.id;
@@ -850,11 +886,19 @@ impl Message<LockedInputReconnected> for MicrophoneFeed {
 impl Message<Unlock> for MicrophoneFeed {
     type Reply = ();
 
-    async fn handle(&mut self, _: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        trace!("MicrophoneFeed.Unlock");
+    async fn handle(&mut self, msg: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        trace!("MicrophoneFeed.Unlock(gen={})", msg.generation);
+
+        if msg.generation != self.lock_generation {
+            trace!(
+                "Ignoring stale microphone unlock (msg gen {} != current {})",
+                msg.generation, self.lock_generation
+            );
+            return;
+        }
 
         replace_with_or_abort(&mut self.state, |state| {
-            if let State::Locked { inner } = state {
+            if let State::Locked { inner, .. } = state {
                 State::Open(OpenState {
                     connecting: None,
                     attached: Some(inner),

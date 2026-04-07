@@ -1,8 +1,6 @@
 use crate::{
     SharedPauseState,
-    feeds::microphone::MicrophoneFeedLock,
     output_pipeline::*,
-    sources,
     sources::screen_capture::{self, CropBounds, ScreenCaptureFormat, ScreenCaptureTarget},
 };
 
@@ -13,8 +11,9 @@ use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxe
 use anyhow::anyhow;
 #[cfg(windows)]
 use cap_enc_ffmpeg::h264::H264Preset;
+use cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent;
 use cap_timestamp::Timestamps;
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,14 +61,12 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
     where
         Self: Sized;
 
-    async fn make_instant_mode_pipeline(
+    async fn make_instant_segmented_video_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
-        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
-        mic_feed: Option<Arc<MicrophoneFeedLock>>,
-        output_path: PathBuf,
-        output_resolution: (u32, u32),
+        segments_dir: PathBuf,
+        output_size: (u32, u32),
         start_time: Timestamps,
-        #[cfg(windows)] encoder_preferences: EncoderPreferences,
+        segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
@@ -114,30 +111,20 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         }
     }
 
-    async fn make_instant_mode_pipeline(
+    async fn make_instant_segmented_video_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
-        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
-        mic_feed: Option<Arc<MicrophoneFeedLock>>,
-        output_path: PathBuf,
-        output_resolution: (u32, u32),
+        segments_dir: PathBuf,
+        output_size: (u32, u32),
         start_time: Timestamps,
+        segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
-        let mut output = OutputPipeline::builder(output_path.clone())
+        OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
-            .with_timestamps(start_time);
-
-        if let Some(system_audio) = system_audio {
-            output = output.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
-        }
-
-        if let Some(mic_feed) = mic_feed {
-            output = output.with_audio_source::<sources::Microphone>(mic_feed);
-        }
-
-        output
-            .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
-                output_height: Some(output_resolution.1),
-                instant_mode: true,
+            .with_timestamps(start_time)
+            .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                output_size: Some(output_size),
+                segment_tx,
+                ..Default::default()
             })
             .await
     }
@@ -193,42 +180,28 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         }
     }
 
-    async fn make_instant_mode_pipeline(
+    async fn make_instant_segmented_video_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
-        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
-        mic_feed: Option<Arc<MicrophoneFeedLock>>,
-        output_path: PathBuf,
-        output_resolution: (u32, u32),
+        segments_dir: PathBuf,
+        output_size: (u32, u32),
         start_time: Timestamps,
-        encoder_preferences: EncoderPreferences,
+        segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
-        let d3d_device = screen_capture.d3d_device.clone();
-        let mut output_builder = OutputPipeline::builder(output_path.clone())
+        if segment_tx.is_some() {
+            tracing::info!(
+                "Segment upload channel not yet supported on Windows, using fragmented muxer fallback"
+            );
+        }
+        drop(segment_tx);
+        OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
-            .with_timestamps(start_time);
-
-        if let Some(mic_feed) = mic_feed {
-            output_builder = output_builder.with_audio_source::<sources::Microphone>(mic_feed);
-        }
-
-        if let Some(system_audio) = system_audio {
-            output_builder =
-                output_builder.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
-        }
-
-        output_builder
-            .build::<WindowsMuxer>(WindowsMuxerConfig {
-                pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                bitrate_multiplier: 0.055f32,
-                frame_rate: 30u32,
-                d3d_device,
-                output_size: Some(windows::Graphics::SizeInt32 {
-                    Width: output_resolution.0 as i32,
-                    Height: output_resolution.1 as i32,
-                }),
-                encoder_preferences,
-                fragmented: false,
-                frag_duration_us: 2_000_000,
+            .with_timestamps(start_time)
+            .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
+                segment_duration: std::time::Duration::from_secs(3),
+                preset: H264Preset::Ultrafast,
+                output_size: Some(output_size),
+                shared_pause_state: None,
+                disk_space_callback: None,
             })
             .await
     }

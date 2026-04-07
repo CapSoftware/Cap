@@ -73,6 +73,7 @@ pub(crate) fn spawn_blocking_thread_timeout_cleanup(
 pub enum PipelineHealthEvent {
     FrameDropRateHigh { rate_pct: f64 },
     AudioGapDetected { gap_ms: u64 },
+    AudioDegradedToVideoOnly { reason: String },
     SourceRestarting,
     SourceRestarted,
 }
@@ -122,21 +123,8 @@ pub(crate) fn combine_finish_errors(
     anyhow!("{primary:#}; {secondary:#}")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MuxStreamKind {
-    Video,
-    Audio,
-}
-
-fn mux_send_error(kind: MuxStreamKind, frame_count: u64, error: anyhow::Error) -> anyhow::Error {
-    match kind {
-        MuxStreamKind::Video => {
-            anyhow!("Video muxer stopped accepting frames at frame {frame_count}: {error}")
-        }
-        MuxStreamKind::Audio => {
-            anyhow!("Audio muxer stopped accepting frames at frame {frame_count}: {error}")
-        }
-    }
+fn video_mux_send_error(frame_count: u64, error: anyhow::Error) -> anyhow::Error {
+    anyhow!("Video muxer stopped accepting frames at frame {frame_count}: {error}")
 }
 
 struct AudioTimestampGenerator {
@@ -956,6 +944,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             None,
             &path,
             shared_pause,
+            true,
         )
         .await?;
 
@@ -1025,6 +1014,7 @@ impl OutputPipelineBuilder<NoVideo> {
             Some(first_tx),
             &path,
             shared_pause,
+            false,
         )
         .await?;
 
@@ -1087,6 +1077,7 @@ async fn finish_build(
     first_tx: Option<oneshot::Sender<Timestamp>>,
     path: &Path,
     shared_pause: SharedWallClockPause,
+    has_video: bool,
 ) -> anyhow::Result<()> {
     if let Some(audio) = audio {
         audio.configure(
@@ -1096,6 +1087,7 @@ async fn finish_build(
             timestamps,
             first_tx,
             shared_pause,
+            has_video,
         );
     }
 
@@ -1167,19 +1159,19 @@ async fn setup_muxer<TMuxer: Muxer>(
     pause_flag: &Arc<AtomicBool>,
     setup_ctx: &mut SetupCtx,
 ) -> Result<Arc<Mutex<TMuxer>>, anyhow::Error> {
-    let muxer = Arc::new(Mutex::new(
-        TMuxer::setup(
-            muxer_config,
-            path.to_path_buf(),
-            video_info,
-            audio_info,
-            pause_flag.clone(),
-            &mut setup_ctx.tasks,
-        )
-        .await?,
-    ));
+    let mut muxer = TMuxer::setup(
+        muxer_config,
+        path.to_path_buf(),
+        video_info,
+        audio_info,
+        pause_flag.clone(),
+        &mut setup_ctx.tasks,
+    )
+    .await?;
 
-    Ok(muxer)
+    muxer.set_health_sender(setup_ctx.health_tx().clone());
+
+    Ok(Arc::new(Mutex::new(muxer)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1277,7 +1269,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
 
                     if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
-                        return Err(mux_send_error(MuxStreamKind::Video, frame_count, e));
+                        return Err(video_mux_send_error(frame_count, e));
                     }
                 }
 
@@ -1395,6 +1387,7 @@ struct PreparedAudioSources {
 }
 
 impl PreparedAudioSources {
+    #[allow(clippy::too_many_arguments)]
     pub fn configure<TMutex: AudioMuxer>(
         mut self,
         setup_ctx: &mut SetupCtx,
@@ -1403,6 +1396,7 @@ impl PreparedAudioSources {
         _timestamps: Timestamps,
         mut first_tx: Option<oneshot::Sender<Timestamp>>,
         shared_pause: SharedWallClockPause,
+        has_video: bool,
     ) {
         let sample_rate = self.audio_info.sample_rate;
         let audio_info = self.audio_info;
@@ -1470,10 +1464,23 @@ impl PreparedAudioSources {
                                         .await
                                         .send_audio_frame(silence_frame, sample_based_before)
                                     {
-                                        return Err(mux_send_error(
-                                            MuxStreamKind::Audio,
-                                            frame_count,
-                                            e,
+                                        if has_video {
+                                            warn!(
+                                                frame_count,
+                                                "Audio muxer rejected silence frame, \
+                                                 degrading to video-only: {e}"
+                                            );
+                                            emit_health(
+                                                &health_tx,
+                                                PipelineHealthEvent::AudioDegradedToVideoOnly {
+                                                    reason: format!("Silence frame rejected at frame {frame_count}: {e}"),
+                                                },
+                                            );
+                                            break;
+                                        }
+                                        return Err(anyhow!(
+                                            "Audio muxer stopped accepting frames \
+                                             at frame {frame_count}: {e}"
                                         ));
                                     }
                                 }
@@ -1501,7 +1508,24 @@ impl PreparedAudioSources {
                             }
 
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
-                                return Err(mux_send_error(MuxStreamKind::Audio, frame_count, e));
+                                if has_video {
+                                    warn!(
+                                        frame_count,
+                                        "Audio muxer rejected frame, \
+                                         degrading to video-only: {e}"
+                                    );
+                                    emit_health(
+                                        &health_tx,
+                                        PipelineHealthEvent::AudioDegradedToVideoOnly {
+                                            reason: format!("Frame rejected at frame {frame_count}: {e}"),
+                                        },
+                                    );
+                                    break;
+                                }
+                                return Err(anyhow!(
+                                    "Audio muxer stopped accepting frames \
+                                     at frame {frame_count}: {e}"
+                                ));
                             }
                         }
                         Ok::<(), anyhow::Error>(())
@@ -1530,10 +1554,16 @@ impl PreparedAudioSources {
                     let _ = (source.stop_fn)(source.inner.as_mut()).await;
                 }
 
-                muxer.lock().await.stop();
+                if !has_video {
+                    muxer.lock().await.stop();
+                }
 
                 if let Some(Err(e)) = res {
-                    return Err(e);
+                    if has_video {
+                        error!("Audio stream ended with error (video continues): {e:#}");
+                    } else {
+                        return Err(e);
+                    }
                 }
 
                 Ok(())
@@ -1884,6 +1914,8 @@ pub trait Muxer: Send + 'static {
     fn stop(&mut self) {}
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>>;
+
+    fn set_health_sender(&mut self, _tx: HealthSender) {}
 }
 
 pub trait AudioMuxer: Muxer {
@@ -2442,11 +2474,14 @@ mod tests {
         #[derive(Clone, Copy)]
         struct FailingVideoMuxerConfig {
             fail_after_frame: u64,
+            fail_audio_after_frame: u64,
         }
 
         struct FailingVideoMuxer {
             fail_after_frame: u64,
-            sent_frames: u64,
+            fail_audio_after_frame: u64,
+            sent_video_frames: u64,
+            sent_audio_frames: u64,
         }
 
         impl Muxer for FailingVideoMuxer {
@@ -2465,7 +2500,9 @@ mod tests {
             {
                 Ok(Self {
                     fail_after_frame: config.fail_after_frame,
-                    sent_frames: 0,
+                    fail_audio_after_frame: config.fail_audio_after_frame,
+                    sent_video_frames: 0,
+                    sent_audio_frames: 0,
                 })
             }
 
@@ -2480,6 +2517,10 @@ mod tests {
                 _frame: AudioFrame,
                 _timestamp: Duration,
             ) -> anyhow::Result<()> {
+                self.sent_audio_frames += 1;
+                if self.sent_audio_frames >= self.fail_audio_after_frame {
+                    return Err(anyhow!("audio mux send failed"));
+                }
                 Ok(())
             }
         }
@@ -2492,8 +2533,8 @@ mod tests {
                 _frame: Self::VideoFrame,
                 _timestamp: Duration,
             ) -> anyhow::Result<()> {
-                self.sent_frames += 1;
-                if self.sent_frames >= self.fail_after_frame {
+                self.sent_video_frames += 1;
+                if self.sent_video_frames >= self.fail_after_frame {
                     return Err(anyhow!("video mux send failed"));
                 }
                 Ok(())
@@ -2574,6 +2615,7 @@ mod tests {
                 .with_timestamps(timestamps)
                 .build::<FailingVideoMuxer>(FailingVideoMuxerConfig {
                     fail_after_frame: 1,
+                    fail_audio_after_frame: u64::MAX,
                 })
                 .await
                 .expect("pipeline should build");
@@ -2614,7 +2656,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn pipeline_done_future_surfaces_audio_mux_send_failure() {
+        async fn audio_only_pipeline_surfaces_audio_mux_failure() {
             let temp_dir = tempfile::tempdir().expect("temp dir should be created");
             let timestamps = Timestamps::now();
             let (mut audio_tx, audio_rx) = mpsc::channel(4);
@@ -2641,28 +2683,60 @@ mod tests {
 
             let done_error = done_fut
                 .await
-                .expect_err("done future should fail when mux-audio rejects a frame");
-            assert!(
-                done_error.to_string().contains("Task mux-audio failed"),
-                "done future should surface the mux-audio task failure"
-            );
+                .expect_err("audio-only pipeline should fail when muxer rejects frame");
             assert!(
                 done_error
                     .to_string()
-                    .contains("Audio muxer stopped accepting frames at frame 1"),
-                "done future should retain the send-failure context"
+                    .contains("Audio muxer stopped accepting frames"),
+                "error should contain audio failure reason"
             );
+        }
 
-            let stop_error = match pipeline.stop().await {
-                Ok(_) => panic!("stop should fail when mux-audio rejects a frame"),
-                Err(error) => error,
-            };
-            assert!(
-                stop_error
-                    .to_string()
-                    .contains("Audio muxer stopped accepting frames at frame 1"),
-                "stop should propagate the mux-audio send failure"
-            );
+        #[tokio::test]
+        async fn combined_pipeline_survives_audio_mux_failure() {
+            let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+            let timestamps = Timestamps::now();
+            let (video_tx, video_rx) = flume::bounded(4);
+            let (mut audio_tx, audio_rx) = mpsc::channel(4);
+
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("combined.mp4"))
+                .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                    test_video_info(),
+                    video_rx,
+                ))
+                .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                    test_audio_info(),
+                    audio_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<FailingVideoMuxer>(FailingVideoMuxerConfig {
+                    fail_after_frame: u64::MAX,
+                    fail_audio_after_frame: 1,
+                })
+                .await
+                .expect("pipeline should build");
+
+            video_tx
+                .send_async(TestVideoFrame {
+                    timestamp: Timestamp::Instant(timestamps.instant() + Duration::from_millis(33)),
+                })
+                .await
+                .expect("video frame should send");
+
+            audio_tx
+                .try_send(AudioFrame::new(
+                    test_audio_info().empty_frame(960),
+                    Timestamp::Instant(timestamps.instant() + Duration::from_millis(20)),
+                ))
+                .expect("audio frame should send");
+
+            drop(video_tx);
+            drop(audio_tx);
+
+            pipeline
+                .stop()
+                .await
+                .expect("combined pipeline should succeed despite audio muxer failure");
         }
     }
 
