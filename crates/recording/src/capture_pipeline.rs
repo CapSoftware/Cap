@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(windows)]
+use std::sync::Arc;
 
 #[cfg(windows)]
 #[derive(Clone, Debug)]
