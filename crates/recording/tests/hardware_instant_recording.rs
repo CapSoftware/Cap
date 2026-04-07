@@ -1,4 +1,7 @@
-use cap_enc_ffmpeg::remux::probe_media_valid;
+use cap_enc_ffmpeg::remux::{
+    concatenate_m4s_segments_with_init, get_media_duration, merge_video_audio,
+    probe_m4s_can_decode_with_init, probe_media_valid, probe_video_can_decode,
+};
 use cap_recording::{
     SendableShareableContent, feeds::microphone::MicrophoneFeed, instant_recording,
     sources::screen_capture::ScreenCaptureTarget,
@@ -78,7 +81,7 @@ async fn instant_record_with_real_mic_and_screen() {
     let temp = TempDir::new().unwrap();
     let recording_dir = temp.path().join("test_recording.cap");
 
-    let recording_seconds = 3;
+    let recording_seconds = 15;
     eprintln!("Starting {recording_seconds}s instant recording...");
 
     let mut builder = instant_recording::Actor::builder(
@@ -223,7 +226,7 @@ async fn instant_record_with_real_mic_and_screen() {
         "init.mp4 should exist in segments dir after stop"
     );
 
-    let segment_files: Vec<_> = std::fs::read_dir(&segments_dir)
+    let mut segment_files: Vec<_> = std::fs::read_dir(&segments_dir)
         .expect("should read segments dir")
         .filter_map(|e| {
             let path = e.ok()?.path();
@@ -234,18 +237,19 @@ async fn instant_record_with_real_mic_and_screen() {
             }
         })
         .collect();
+    segment_files.sort();
     assert!(
         !segment_files.is_empty(),
         "at least one .m4s segment should exist after recording"
     );
-    eprintln!("  Segment files on disk: {}", segment_files.len());
+    eprintln!("  Video segment files on disk: {}", segment_files.len());
 
     let total_segment_size: u64 = segment_files
         .iter()
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
-    eprintln!("  Total segment size: {} bytes", total_segment_size);
+    eprintln!("  Total video segment size: {} bytes", total_segment_size);
     assert!(
         total_segment_size > 1000,
         "segments should have substantial data, got {total_segment_size} bytes"
@@ -256,15 +260,154 @@ async fn instant_record_with_real_mic_and_screen() {
         "init.mp4 should have a valid container"
     );
 
+    eprintln!("\n--- Segment decode verification ---");
+    let first_decode = probe_m4s_can_decode_with_init(&init_path, &segment_files[0]);
+    assert!(
+        first_decode.as_ref().copied().unwrap_or(false),
+        "First video segment should be decodable with init: {first_decode:?}"
+    );
+    eprintln!("  First segment decodable: OK");
+
+    let last_segment = segment_files.last().unwrap();
+    if last_segment != &segment_files[0] {
+        let last_decode = probe_m4s_can_decode_with_init(&init_path, last_segment);
+        assert!(
+            last_decode.as_ref().copied().unwrap_or(false),
+            "Last video segment should be decodable with init: {last_decode:?}"
+        );
+        eprintln!("  Last segment decodable: OK");
+    }
+
+    eprintln!("\n--- Full video assembly & playback verification ---");
+    let assembled_video = content_dir.join("test_assembled_video.mp4");
+    concatenate_m4s_segments_with_init(&init_path, &segment_files, &assembled_video)
+        .expect("Video segment concatenation should succeed");
+    assert!(assembled_video.exists(), "Assembled video MP4 should exist");
+    let video_size = std::fs::metadata(&assembled_video).unwrap().len();
+    eprintln!("  Assembled video size: {} bytes", video_size);
+    assert!(
+        video_size > 1000,
+        "Assembled video should have substantial data"
+    );
+
+    assert!(
+        probe_media_valid(&assembled_video),
+        "Assembled video should be a valid container"
+    );
+    assert!(
+        probe_video_can_decode(&assembled_video).unwrap_or(false),
+        "Assembled video should be decodable"
+    );
+    eprintln!("  Assembled video: valid container, decodable");
+
+    let video_duration = get_media_duration(&assembled_video);
+    assert!(
+        video_duration.is_some(),
+        "Should be able to read assembled video duration"
+    );
+    let video_dur_secs = video_duration.unwrap().as_secs_f64();
+    eprintln!("  Video duration: {video_dur_secs:.2}s (expected ~{recording_seconds}s)");
+    assert!(
+        video_dur_secs > (recording_seconds as f64) * 0.5,
+        "Video duration ({video_dur_secs:.2}s) should be at least 50% of recording time ({recording_seconds}s)"
+    );
+    assert!(
+        video_dur_secs < (recording_seconds as f64) * 2.0,
+        "Video duration ({video_dur_secs:.2}s) should be less than 2x recording time ({recording_seconds}s)"
+    );
+
+    let input_ctx =
+        ffmpeg::format::input(&assembled_video).expect("Should open assembled video for probing");
+    let has_video = input_ctx
+        .streams()
+        .any(|s| s.parameters().medium() == ffmpeg::media::Type::Video);
+    assert!(has_video, "Assembled video must contain a video stream");
+
+    if has_mic {
+        eprintln!("\n--- Audio assembly & A/V sync verification ---");
+        let audio_dir = content_dir.join("audio");
+        let audio_init = audio_dir.join("init.mp4");
+        assert!(
+            audio_init.exists(),
+            "Audio init.mp4 should exist when mic is connected"
+        );
+
+        let mut audio_segments: Vec<_> = std::fs::read_dir(&audio_dir)
+            .expect("should read audio dir")
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                if path.extension().is_some_and(|ext| ext == "m4s") {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        audio_segments.sort();
+        eprintln!("  Audio segment files: {}", audio_segments.len());
+
+        let assembled_audio = content_dir.join("test_assembled_audio.m4a");
+        concatenate_m4s_segments_with_init(&audio_init, &audio_segments, &assembled_audio)
+            .expect("Audio segment concatenation should succeed");
+        assert!(
+            probe_media_valid(&assembled_audio),
+            "Assembled audio should be a valid container"
+        );
+
+        let audio_duration = get_media_duration(&assembled_audio);
+        assert!(
+            audio_duration.is_some(),
+            "Should be able to read assembled audio duration"
+        );
+        let audio_dur_secs = audio_duration.unwrap().as_secs_f64();
+        eprintln!("  Audio duration: {audio_dur_secs:.2}s (expected ~{recording_seconds}s)");
+        assert!(
+            audio_dur_secs > (recording_seconds as f64) * 0.5,
+            "Audio duration ({audio_dur_secs:.2}s) should be at least 50% of recording time"
+        );
+
+        let av_drift = (video_dur_secs - audio_dur_secs).abs();
+        eprintln!("  A/V duration drift: {av_drift:.3}s");
+        assert!(
+            av_drift < 1.0,
+            "A/V drift ({av_drift:.3}s) should be less than 1 second"
+        );
+
+        let merged_output = content_dir.join("test_merged_av.mp4");
+        merge_video_audio(&assembled_video, &assembled_audio, &merged_output)
+            .expect("Video + audio merge should succeed");
+        assert!(
+            probe_media_valid(&merged_output),
+            "Merged A/V file should be a valid container"
+        );
+        assert!(
+            probe_video_can_decode(&merged_output).unwrap_or(false),
+            "Merged A/V file should be decodable"
+        );
+
+        let merged_ctx =
+            ffmpeg::format::input(&merged_output).expect("Should open merged file for probing");
+        let has_merged_video = merged_ctx
+            .streams()
+            .any(|s| s.parameters().medium() == ffmpeg::media::Type::Video);
+        let has_merged_audio = merged_ctx
+            .streams()
+            .any(|s| s.parameters().medium() == ffmpeg::media::Type::Audio);
+        assert!(has_merged_video, "Merged file must have video stream");
+        assert!(has_merged_audio, "Merged file must have audio stream");
+        eprintln!("  Merged A/V: valid, decodable, both streams present");
+        eprintln!("  A/V sync: PASS (drift {av_drift:.3}s < 1.0s)");
+    }
+
     match &completed.health {
         cap_recording::RecordingHealth::Healthy => {
-            eprintln!("Recording health: HEALTHY");
+            eprintln!("\nRecording health: HEALTHY");
         }
         cap_recording::RecordingHealth::Repaired { original_issue } => {
-            eprintln!("Recording health: REPAIRED (was: {original_issue})");
+            eprintln!("\nRecording health: REPAIRED (was: {original_issue})");
         }
         cap_recording::RecordingHealth::Degraded { issues } => {
-            eprintln!("Recording health: DEGRADED - {issues:?}");
+            eprintln!("\nRecording health: DEGRADED - {issues:?}");
         }
         cap_recording::RecordingHealth::Damaged { reason } => {
             panic!("Recording health is DAMAGED: {reason}");
@@ -282,7 +425,8 @@ async fn instant_record_with_real_mic_and_screen() {
             .map(|(name, _, _)| name)
             .unwrap_or_else(|| "none".to_string())
     );
-    eprintln!("  Video segments: {}", complete_segments.len());
+    eprintln!("  Video duration: {video_dur_secs:.2}s");
+    eprintln!("  Video segments: {}", segment_files.len());
     eprintln!("  Total segment size: {} bytes", total_segment_size);
     eprintln!("  Health: {:?}", completed.health);
 }
