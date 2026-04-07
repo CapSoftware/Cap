@@ -272,7 +272,11 @@ export function createCameraMutation() {
 							? e.message
 							: String(e);
 
-				if (message.includes("DeviceNotFound")) {
+				if (
+					message.includes("DeviceNotFound") ||
+					message.includes("CameraTimeout") ||
+					message.includes("Failed to initialize camera")
+				) {
 					setOptions("cameraID", null);
 					console.warn("Selected camera is unavailable.");
 					return;
