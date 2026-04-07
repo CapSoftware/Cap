@@ -1,9 +1,12 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import type { Video } from "@cap/web-domain";
+import { S3Buckets } from "@cap/web-backend";
+import type { S3Bucket, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { type NextRequest, NextResponse } from "next/server";
+import { runPromise } from "@/lib/server";
 
 interface ProgressWebhookPayload {
 	jobId: string;
@@ -64,11 +67,9 @@ function mapPhaseToDbPhase(
 export async function POST(request: NextRequest) {
 	try {
 		const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
-		if (webhookSecret) {
-			const authHeader = request.headers.get("x-media-server-secret");
-			if (authHeader !== webhookSecret) {
-				return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-			}
+		const authHeader = request.headers.get("x-media-server-secret");
+		if (!webhookSecret || authHeader !== webhookSecret) {
+			return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 		}
 
 		const payload: ProgressWebhookPayload = await request.json();
@@ -82,7 +83,6 @@ export async function POST(request: NextRequest) {
 		if (dbPhase === "complete") {
 			if (payload.metadata) {
 				const duration = getValidDuration(payload.metadata.duration);
-
 				await db()
 					.update(videos)
 					.set({
@@ -91,6 +91,68 @@ export async function POST(request: NextRequest) {
 						...(duration === undefined ? {} : { duration }),
 					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
+			}
+
+			const [currentVideo] = await db()
+				.select({
+					source: videos.source,
+					ownerId: videos.ownerId,
+					bucket: videos.bucket,
+				})
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+
+			if (currentVideo?.source?.type === "desktopSegments") {
+				await db()
+					.update(videos)
+					.set({ source: { type: "desktopMP4" as const } })
+					.where(eq(videos.id, payload.videoId as Video.VideoId));
+
+				const videoId = payload.videoId;
+				const ownerId = currentVideo.ownerId;
+
+				if (ownerId) {
+					const segmentsPrefix = `${ownerId}/${videoId}/segments/`;
+					Effect.gen(function* () {
+						const bucketId = Option.fromNullable(
+							currentVideo.bucket,
+						) as Option.Option<S3Bucket.S3BucketId>;
+						const [bucket] = yield* S3Buckets.getBucketAccess(bucketId);
+						let totalDeleted = 0;
+						let continuationToken: string | undefined;
+
+						do {
+							const listed = yield* bucket.listObjects({
+								prefix: segmentsPrefix,
+								continuationToken,
+							});
+							if (listed.Contents && listed.Contents.length > 0) {
+								yield* bucket.deleteObjects(
+									listed.Contents.map((c: { Key?: string }) => ({
+										Key: c.Key,
+									})),
+								);
+								totalDeleted += listed.Contents.length;
+							}
+							continuationToken = listed.IsTruncated
+								? listed.NextContinuationToken
+								: undefined;
+						} while (continuationToken);
+
+						if (totalDeleted > 0) {
+							console.log(
+								`[media-server-webhook] Cleaned up ${totalDeleted} segment objects for ${videoId}`,
+							);
+						}
+					})
+						.pipe(runPromise)
+						.catch((err) => {
+							console.warn(
+								`[media-server-webhook] Failed to clean up segments for ${videoId}:`,
+								err,
+							);
+						});
+				}
 			}
 
 			await db()
