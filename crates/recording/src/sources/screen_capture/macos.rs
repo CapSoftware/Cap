@@ -729,11 +729,21 @@ impl output_pipeline::VideoSource for VideoSource {
                 "Capturer stopping after creating {} video frames",
                 self.video_frame_counter.load(atomic::Ordering::Relaxed)
             );
-            self.capturer.stop().await?;
+
+            let stop_result =
+                tokio::time::timeout(std::time::Duration::from_secs(5), self.capturer.stop()).await;
 
             self.cancel_token.cancel();
 
-            Ok(())
+            match stop_result {
+                Ok(result) => result,
+                Err(_) => {
+                    error!("Screen capturer stop timed out after 5s");
+                    Err(anyhow::anyhow!(
+                        "Screen capturer stop timed out after 5s — native resources may not be fully released"
+                    ))
+                }
+            }
         }
         .boxed()
     }
