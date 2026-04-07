@@ -217,10 +217,16 @@ impl Muxer for MacOSFragmentedM4SMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.state
-            && let Err(e) = state.video_tx.send(None)
-        {
-            trace!("M4S encoder channel already closed during stop: {e}");
+        if let Some(state) = &self.state {
+            match state.video_tx.try_send(None) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    warn!("M4S encoder channel full during stop, encoder thread may be slow");
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    trace!("M4S encoder channel already closed during stop");
+                }
+            }
         }
     }
 
@@ -679,10 +685,16 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.state
-            && let Err(e) = state.video_tx.send(None)
-        {
-            trace!("M4S camera encoder channel already closed during stop: {e}");
+        if let Some(state) = &self.state {
+            match state.video_tx.try_send(None) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    warn!("M4S camera encoder channel full during stop");
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    trace!("M4S camera encoder channel already closed during stop");
+                }
+            }
         }
     }
 
