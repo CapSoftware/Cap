@@ -40,12 +40,13 @@ import {
 } from "lucide-react";
 import {
 	MediaActionTypes,
+	MediaContext,
 	MediaProvider,
+	type MediaState,
 	timeUtils,
 	useMediaDispatch,
 	useMediaFullscreenRef,
 	useMediaRef,
-	useMediaSelector,
 } from "media-chrome/react/media-store";
 import * as React from "react";
 import { forwardRef, useEffect } from "react";
@@ -76,6 +77,73 @@ const SEEK_TOOLTIP_Y = "--seek-tooltip-y";
 
 const SPRITE_CONTAINER_WIDTH = 224;
 const SPRITE_CONTAINER_HEIGHT = 128;
+
+const DEFAULT_SEEKABLE: [number, number] = [0, 0];
+const DEFAULT_BUFFERED: (readonly [number, number])[] = [];
+const DEFAULT_CUES: readonly unknown[] = [];
+const DEFAULT_SUBTITLES_LIST: readonly unknown[] = [];
+const DEFAULT_SUBTITLES_SHOWING: readonly unknown[] = [];
+const DEFAULT_RENDITION_LIST: readonly unknown[] = [];
+
+type S = Partial<MediaState>;
+const selectPaused = (s: S) => s.mediaPaused ?? true;
+const selectFullscreen = (s: S) => s.mediaIsFullscreen ?? false;
+const selectLoading = (s: S) => s.mediaLoading ?? false;
+const selectHasPlayed = (s: S) => s.mediaHasPlayed ?? false;
+const selectError = (s: S) => s.mediaError;
+const selectVolume = (s: S) => s.mediaVolume ?? 1;
+const selectMuted = (s: S) => s.mediaMuted ?? false;
+const selectVolumeLevel = (s: S) => s.mediaVolumeLevel ?? "high";
+const selectCurrentTime = (s: S) => s.mediaCurrentTime ?? 0;
+const selectDuration = (s: S) => s.mediaDuration ?? 0;
+const selectSeekable = (s: S) => s.mediaSeekable ?? DEFAULT_SEEKABLE;
+const selectBuffered = (s: S) => s.mediaBuffered ?? DEFAULT_BUFFERED;
+const selectEnded = (s: S) => s.mediaEnded ?? false;
+const selectChaptersCues = (s: S) => s.mediaChaptersCues ?? DEFAULT_CUES;
+const selectPreviewTime = (s: S) => s.mediaPreviewTime;
+const selectPreviewImage = (s: S) => s.mediaPreviewImage;
+const selectPreviewCoords = (s: S) => s.mediaPreviewCoords;
+const selectPlaybackRate = (s: S) => s.mediaPlaybackRate ?? 1;
+const selectPip = (s: S) => s.mediaIsPip ?? false;
+const selectSubtitlesList = (s: S) =>
+	s.mediaSubtitlesList ?? DEFAULT_SUBTITLES_LIST;
+const selectSubtitlesShowing = (s: S) =>
+	s.mediaSubtitlesShowing ?? DEFAULT_SUBTITLES_SHOWING;
+const selectRenditionList = (s: S) =>
+	s.mediaRenditionList ?? DEFAULT_RENDITION_LIST;
+const selectRenditionSelected = (s: S) => s.mediaRenditionSelected;
+
+const EMPTY_MEDIA_STATE = Object.freeze({}) as Partial<MediaState>;
+
+const serverSnapshotCache = new Map<
+	(state: Partial<MediaState>) => unknown,
+	unknown
+>();
+
+function useMediaSelector<T>(selector: (state: Partial<MediaState>) => T): T {
+	const store = React.useContext(MediaContext);
+
+	const subscribe = React.useCallback(
+		(cb: () => void) => {
+			if (!store?.subscribe) return () => {};
+			return store.subscribe(cb);
+		},
+		[store],
+	);
+
+	const getSnapshot = React.useCallback(
+		() => selector(store?.getState?.() ?? EMPTY_MEDIA_STATE),
+		[store, selector],
+	);
+
+	if (!serverSnapshotCache.has(selector)) {
+		serverSnapshotCache.set(selector, selector(EMPTY_MEDIA_STATE));
+	}
+	const cached = serverSnapshotCache.get(selector) as T;
+	const getServerSnapshot = React.useCallback(() => cached, [cached]);
+
+	return React.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
 
 type Direction = "ltr" | "rtl";
 
@@ -287,10 +355,8 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const lastMouseMoveRef = React.useRef<number>(Date.now());
 	const volumeIndicatorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
-	const mediaPaused = useMediaSelector((state) => state.mediaPaused ?? true);
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const mediaPaused = useMediaSelector(selectPaused);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 
 	const [mounted, setMounted] = React.useState(false);
 	React.useLayoutEffect(() => setMounted(true), []);
@@ -901,9 +967,7 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
 	// Call the callback whenever controlsVisible changes
 	useEffect(() => {
@@ -946,9 +1010,9 @@ function MediaPlayerLoading(props: MediaPlayerLoadingProps) {
 		...loadingProps
 	} = props;
 
-	const isLoading = useMediaSelector((state) => state.mediaLoading ?? false);
-	const isPaused = useMediaSelector((state) => state.mediaPaused ?? true);
-	const hasPlayed = useMediaSelector((state) => state.mediaHasPlayed ?? false);
+	const isLoading = useMediaSelector(selectLoading);
+	const isPaused = useMediaSelector(selectPaused);
+	const hasPlayed = useMediaSelector(selectHasPlayed);
 
 	const shouldShowLoading = isLoading && !isPaused;
 	const shouldUseDelay = hasPlayed && shouldShowLoading;
@@ -1027,10 +1091,8 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
 	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerError");
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
-	const mediaError = useMediaSelector((state) => state.mediaError);
+	const isFullscreen = useMediaSelector(selectFullscreen);
+	const mediaError = useMediaSelector(selectError);
 
 	const error = errorProp ?? mediaError;
 
@@ -1183,11 +1245,9 @@ interface MediaPlayerVolumeIndicatorProps extends React.ComponentProps<"div"> {
 function MediaPlayerVolumeIndicator(props: MediaPlayerVolumeIndicatorProps) {
 	const { asChild, className, ...indicatorProps } = props;
 
-	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
-	const mediaVolumeLevel = useMediaSelector(
-		(state) => state.mediaVolumeLevel ?? "high",
-	);
+	const mediaVolume = useMediaSelector(selectVolume);
+	const mediaMuted = useMediaSelector(selectMuted);
+	const mediaVolumeLevel = useMediaSelector(selectVolumeLevel);
 	const volumeIndicatorVisible = useStoreSelector(
 		(state) => state.volumeIndicatorVisible,
 	);
@@ -1255,9 +1315,7 @@ interface MediaPlayerControlsOverlayProps extends React.ComponentProps<"div"> {
 function MediaPlayerControlsOverlay(props: MediaPlayerControlsOverlayProps) {
 	const { asChild, className, ...overlayProps } = props;
 
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
 
 	const OverlayPrimitive = asChild ? Slot : "div";
@@ -1283,7 +1341,7 @@ function MediaPlayerPlay(props: MediaPlayerPlayProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerPlay");
 	const dispatch = useMediaDispatch();
-	const mediaPaused = useMediaSelector((state) => state.mediaPaused ?? true);
+	const mediaPaused = useMediaSelector(selectPaused);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -1348,9 +1406,7 @@ function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerSeekBackward");
 	const dispatch = useMediaDispatch();
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -1409,12 +1465,8 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerSeekForward");
 	const dispatch = useMediaDispatch();
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
-	const [, seekableEnd] = useMediaSelector(
-		(state) => state.mediaSeekable ?? [0, 0],
-	);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
+	const [, seekableEnd] = useMediaSelector(selectSeekable);
 	const isDisabled = disabled || context.disabled;
 
 	const onSeekForward = React.useCallback(
@@ -1498,26 +1550,16 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const context = useMediaPlayerContext(SEEK_NAME);
 	const store = useStoreContext(SEEK_NAME);
 	const dispatch = useMediaDispatch();
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
-	const mediaDuration = useMediaSelector((state) => state.mediaDuration ?? 0);
-	const [seekableStart = 0, seekableEnd = 0] = useMediaSelector(
-		(state) => state.mediaSeekable ?? [0, 0],
-	);
-	const mediaBuffered = useMediaSelector((state) => state.mediaBuffered ?? []);
-	const mediaEnded = useMediaSelector((state) => state.mediaEnded ?? false);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
+	const mediaDuration = useMediaSelector(selectDuration);
+	const [seekableStart = 0, seekableEnd = 0] = useMediaSelector(selectSeekable);
+	const mediaBuffered = useMediaSelector(selectBuffered);
+	const mediaEnded = useMediaSelector(selectEnded);
 
-	const chapterCues = useMediaSelector(
-		(state) => state.mediaChaptersCues ?? [],
-	);
-	const mediaPreviewTime = useMediaSelector((state) => state.mediaPreviewTime);
-	const mediaPreviewImage = useMediaSelector(
-		(state) => state.mediaPreviewImage,
-	);
-	const mediaPreviewCoords = useMediaSelector(
-		(state) => state.mediaPreviewCoords,
-	);
+	const chapterCues = useMediaSelector(selectChaptersCues);
+	const mediaPreviewTime = useMediaSelector(selectPreviewTime);
+	const mediaPreviewImage = useMediaSelector(selectPreviewImage);
+	const mediaPreviewCoords = useMediaSelector(selectPreviewCoords);
 
 	const seekRef = React.useRef<HTMLDivElement>(null);
 	const tooltipRef = React.useRef<HTMLDivElement>(null);
@@ -1551,13 +1593,17 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const timeCache = React.useRef<Map<number, string>>(new Map());
 	const resolvedDuration = React.useMemo(() => {
-		const candidates = [
-			mediaDuration,
-			seekableEnd,
-			fallbackDuration ?? 0,
-		].filter((duration) => Number.isFinite(duration) && duration > 0);
-
-		return candidates.length > 0 ? Math.max(...candidates) : 0;
+		const mediaValues = [mediaDuration, seekableEnd].filter(
+			(d) => Number.isFinite(d) && d > 0,
+		);
+		if (mediaValues.length > 0) return Math.max(...mediaValues);
+		if (
+			fallbackDuration != null &&
+			Number.isFinite(fallbackDuration) &&
+			fallbackDuration > 0
+		)
+			return fallbackDuration;
+		return 0;
 	}, [fallbackDuration, mediaDuration, seekableEnd]);
 	const lastKnownDurationRef = React.useRef(resolvedDuration);
 
@@ -2286,11 +2332,9 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 	const context = useMediaPlayerContext(VOLUME_NAME);
 	const store = useStoreContext(VOLUME_NAME);
 	const dispatch = useMediaDispatch();
-	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
-	const mediaMuted = useMediaSelector((state) => state.mediaMuted ?? false);
-	const mediaVolumeLevel = useMediaSelector(
-		(state) => state.mediaVolumeLevel ?? "high",
-	);
+	const mediaVolume = useMediaSelector(selectVolume);
+	const mediaMuted = useMediaSelector(selectMuted);
+	const mediaVolumeLevel = useMediaSelector(selectVolumeLevel);
 
 	const sliderId = React.useId();
 	const volumeTriggerId = React.useId();
@@ -2445,21 +2489,21 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
 	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerTime");
-	const mediaCurrentTime = useMediaSelector(
-		(state) => state.mediaCurrentTime ?? 0,
-	);
-	const mediaDuration = useMediaSelector((state) => state.mediaDuration ?? 0);
-	const [, seekableEnd = 0] = useMediaSelector(
-		(state) => state.mediaSeekable ?? [0, 0],
-	);
+	const mediaCurrentTime = useMediaSelector(selectCurrentTime);
+	const mediaDuration = useMediaSelector(selectDuration);
+	const [, seekableEnd = 0] = useMediaSelector(selectSeekable);
 	const resolvedDuration = React.useMemo(() => {
-		const candidates = [
-			mediaDuration,
-			seekableEnd,
-			fallbackDuration ?? 0,
-		].filter((duration) => Number.isFinite(duration) && duration > 0);
-
-		return candidates.length > 0 ? Math.max(...candidates) : 0;
+		const mediaValues = [mediaDuration, seekableEnd].filter(
+			(d) => Number.isFinite(d) && d > 0,
+		);
+		if (mediaValues.length > 0) return Math.max(...mediaValues);
+		if (
+			fallbackDuration != null &&
+			Number.isFinite(fallbackDuration) &&
+			fallbackDuration > 0
+		)
+			return fallbackDuration;
+		return 0;
 	}, [fallbackDuration, mediaDuration, seekableEnd]);
 	const lastKnownDurationRef = React.useRef(resolvedDuration);
 
@@ -2564,9 +2608,7 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
 	const context = useMediaPlayerContext(PLAYBACK_SPEED_NAME);
 	const store = useStoreContext(PLAYBACK_SPEED_NAME);
 	const dispatch = useMediaDispatch();
-	const mediaPlaybackRate = useMediaSelector(
-		(state) => state.mediaPlaybackRate ?? 1,
-	);
+	const mediaPlaybackRate = useMediaSelector(selectPlaybackRate);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -2716,9 +2758,7 @@ function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerFullscreen");
 	const dispatch = useMediaDispatch();
-	const isFullscreen = useMediaSelector(
-		(state) => state.mediaIsFullscreen ?? false,
-	);
+	const isFullscreen = useMediaSelector(selectFullscreen);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -2768,9 +2808,7 @@ function MediaPlayerPiP(props: MediaPlayerPiPProps) {
 
 	const context = useMediaPlayerContext("MediaPlayerPiP");
 	const dispatch = useMediaDispatch();
-	const isPictureInPicture = useMediaSelector(
-		(state) => state.mediaIsPip ?? false,
-	);
+	const isPictureInPicture = useMediaSelector(selectPip);
 
 	const isDisabled = disabled || context.disabled;
 
@@ -2971,7 +3009,7 @@ function EnhancedAudioSync({
 	enhancedAudioEnabled,
 	enhancedAudioMuted,
 }: EnhancedAudioSyncProps) {
-	const mediaVolume = useMediaSelector((state) => state.mediaVolume ?? 1);
+	const mediaVolume = useMediaSelector(selectVolume);
 	const wasEnhancedRef = React.useRef(false);
 
 	const syncEnhancedAudio = React.useCallback(() => {
@@ -3166,21 +3204,11 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 	const store = useStoreContext(SETTINGS_NAME);
 	const dispatch = useMediaDispatch();
 
-	const mediaPlaybackRate = useMediaSelector(
-		(state) => state.mediaPlaybackRate ?? 1,
-	);
-	const mediaSubtitlesList = useMediaSelector(
-		(state) => state.mediaSubtitlesList ?? [],
-	);
-	const mediaSubtitlesShowing = useMediaSelector(
-		(state) => state.mediaSubtitlesShowing ?? [],
-	);
-	const mediaRenditionList = useMediaSelector(
-		(state) => state.mediaRenditionList ?? [],
-	);
-	const selectedRenditionId = useMediaSelector(
-		(state) => state.mediaRenditionSelected,
-	);
+	const mediaPlaybackRate = useMediaSelector(selectPlaybackRate);
+	const mediaSubtitlesList = useMediaSelector(selectSubtitlesList);
+	const mediaSubtitlesShowing = useMediaSelector(selectSubtitlesShowing);
+	const mediaRenditionList = useMediaSelector(selectRenditionList);
+	const selectedRenditionId = useMediaSelector(selectRenditionSelected);
 
 	const isDisabled = disabled || context.disabled;
 	const isSubtitlesActive = mediaSubtitlesShowing.length > 0;
