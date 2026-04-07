@@ -1889,11 +1889,14 @@ async fn handle_recording_finish(
 
                     let _ = screenshot_task.await;
 
-                    if let Ok(bytes) = compress_image(display_screenshot).await.map_err(|err| {
-                        error!(
-                            "Error compressing thumbnail for instant mode progressive upload: {err}"
-                        )
-                    }) {
+                    if upload_succeeded
+                        && let Ok(bytes) =
+                            compress_image(display_screenshot).await.map_err(|err| {
+                                error!(
+                                    "Error compressing thumbnail for instant mode progressive upload: {err}"
+                                )
+                            })
+                    {
                         let res = crate::upload::singlepart_uploader(
                             app.clone(),
                             crate::api::PresignedS3PutRequest {

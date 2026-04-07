@@ -1719,11 +1719,24 @@ impl OutputPipeline {
             }
         }
 
-        let first_timestamp = tokio::time::timeout(Duration::from_secs(1), self.first_timestamp_rx)
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-            .unwrap_or_else(|| Timestamp::Instant(Instant::now()));
+        let first_timestamp = match tokio::time::timeout(
+            Duration::from_secs(1),
+            self.first_timestamp_rx,
+        )
+        .await
+        {
+            Ok(Ok(ts)) => ts,
+            Ok(Err(_)) => {
+                warn!(
+                    "first_timestamp channel was dropped without sending a value, defaulting to now"
+                );
+                Timestamp::Instant(Instant::now())
+            }
+            Err(_) => {
+                warn!("first_timestamp receive timed out after 1s, defaulting to now");
+                Timestamp::Instant(Instant::now())
+            }
+        };
 
         Ok(FinishedOutputPipeline {
             path: self.path,

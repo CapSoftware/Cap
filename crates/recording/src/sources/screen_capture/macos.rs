@@ -730,10 +730,10 @@ impl output_pipeline::VideoSource for VideoSource {
                 self.video_frame_counter.load(atomic::Ordering::Relaxed)
             );
 
+            self.cancel_token.cancel();
+
             let stop_result =
                 tokio::time::timeout(std::time::Duration::from_secs(5), self.capturer.stop()).await;
-
-            self.cancel_token.cancel();
 
             match stop_result {
                 Ok(result) => result,

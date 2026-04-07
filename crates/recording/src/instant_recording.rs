@@ -173,13 +173,19 @@ impl Message<Stop> for Actor {
 
         let has_init = segments_dir.join("init.mp4").exists();
         let has_segments = has_init
-            && std::fs::read_dir(&segments_dir)
-                .map(|entries| {
-                    entries
-                        .filter_map(Result::ok)
-                        .any(|e| e.path().extension().is_some_and(|ext| ext == "m4s"))
-                })
-                .unwrap_or(false);
+            && match std::fs::read_dir(&segments_dir) {
+                Ok(entries) => entries
+                    .filter_map(Result::ok)
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "m4s")),
+                Err(e) => {
+                    warn!(
+                        path = %segments_dir.display(),
+                        error = %e,
+                        "Failed to read segments directory, treating as no segments"
+                    );
+                    false
+                }
+            };
 
         let health = if has_segments {
             crate::RecordingHealth::Healthy
