@@ -1193,9 +1193,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
             stop_token.cancelled().await;
 
-            if let Err(e) = video_source.stop().await {
-                error!("Video source stop failed: {e:#}");
-            };
+            match tokio::time::timeout(Duration::from_secs(5), video_source.stop()).await {
+                Ok(Err(e)) => {
+                    error!("Video source stop failed: {e:#}");
+                }
+                Err(_) => {
+                    error!("Video source stop timed out after 5s, proceeding with shutdown");
+                }
+                Ok(Ok(())) => {}
+            }
 
             Ok(())
         }
