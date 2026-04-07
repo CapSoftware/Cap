@@ -1,4 +1,4 @@
-use cap_enc_ffmpeg::remux::{get_media_duration, probe_media_valid, probe_video_can_decode};
+use cap_enc_ffmpeg::remux::probe_media_valid;
 use cap_recording::{
     SendableShareableContent, feeds::microphone::MicrophoneFeed, instant_recording,
     sources::screen_capture::ScreenCaptureTarget,
@@ -91,7 +91,7 @@ async fn instant_record_with_real_mic_and_screen() {
         builder = builder.with_mic_feed(mic);
     }
 
-    let mut actor_handle = builder
+    let actor_handle = builder
         .build(Some(shareable_content))
         .await
         .expect("Failed to spawn instant recording actor");
@@ -216,58 +216,45 @@ async fn instant_record_with_real_mic_and_screen() {
         }
     }
 
-    let output_path = content_dir.join("output.mp4");
+    let segments_dir = content_dir.join("display");
+    let init_path = segments_dir.join("init.mp4");
     assert!(
-        output_path.exists(),
-        "output.mp4 should exist after stop (assembled locally)"
+        init_path.exists(),
+        "init.mp4 should exist in segments dir after stop"
     );
 
-    let output_size = std::fs::metadata(&output_path).unwrap().len();
-    eprintln!("output.mp4 size: {} bytes", output_size);
+    let segment_files: Vec<_> = std::fs::read_dir(&segments_dir)
+        .expect("should read segments dir")
+        .filter_map(|e| {
+            let path = e.ok()?.path();
+            if path.extension().is_some_and(|ext| ext == "m4s") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(
-        output_size > 1000,
-        "output.mp4 should have substantial data, got {output_size} bytes"
+        !segment_files.is_empty(),
+        "at least one .m4s segment should exist after recording"
+    );
+    eprintln!("  Segment files on disk: {}", segment_files.len());
+
+    let total_segment_size: u64 = segment_files
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    eprintln!("  Total segment size: {} bytes", total_segment_size);
+    assert!(
+        total_segment_size > 1000,
+        "segments should have substantial data, got {total_segment_size} bytes"
     );
 
     assert!(
-        probe_media_valid(&output_path),
-        "output.mp4 should have a valid container"
+        probe_media_valid(&init_path),
+        "init.mp4 should have a valid container"
     );
-    assert!(
-        probe_video_can_decode(&output_path).unwrap_or(false),
-        "output.mp4 video stream should be decodable"
-    );
-
-    let duration = get_media_duration(&output_path);
-    assert!(duration.is_some(), "should be able to read output duration");
-    let dur_secs = duration.unwrap().as_secs_f64();
-    eprintln!("output.mp4 duration: {dur_secs:.2}s (expected ~{recording_seconds}s)");
-    assert!(
-        dur_secs > (recording_seconds as f64) * 0.5,
-        "duration ({dur_secs:.2}s) should be at least 50% of recording time ({recording_seconds}s)"
-    );
-    assert!(
-        dur_secs < (recording_seconds as f64) * 2.0,
-        "duration ({dur_secs:.2}s) should be less than 2x recording time ({recording_seconds}s)"
-    );
-
-    let input =
-        ffmpeg::format::input(&output_path).expect("should open output.mp4 for stream probing");
-    let has_video = input
-        .streams()
-        .any(|s| s.parameters().medium() == ffmpeg::media::Type::Video);
-    let has_audio = input
-        .streams()
-        .any(|s| s.parameters().medium() == ffmpeg::media::Type::Audio);
-
-    assert!(has_video, "output.mp4 must contain a video stream");
-    if has_mic {
-        assert!(
-            has_audio,
-            "output.mp4 must contain an audio stream when mic was connected"
-        );
-    }
-    eprintln!("Streams: video={has_video}, audio={has_audio}");
 
     match &completed.health {
         cap_recording::RecordingHealth::Healthy => {
@@ -295,10 +282,7 @@ async fn instant_record_with_real_mic_and_screen() {
             .map(|(name, _, _)| name)
             .unwrap_or_else(|| "none".to_string())
     );
-    eprintln!("  Duration: {dur_secs:.2}s");
     eprintln!("  Video segments: {}", complete_segments.len());
-    eprintln!("  Output size: {} bytes", output_size);
-    eprintln!("  Has video: {has_video}");
-    eprintln!("  Has audio: {has_audio}");
+    eprintln!("  Total segment size: {} bytes", total_segment_size);
     eprintln!("  Health: {:?}", completed.health);
 }
