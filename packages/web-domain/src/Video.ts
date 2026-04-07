@@ -20,7 +20,13 @@ export class Video extends Schema.Class<Video>("Video")({
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
-		type: Schema.Literal("MediaConvert", "local", "desktopMP4", "webMP4"),
+		type: Schema.Literal(
+			"MediaConvert",
+			"local",
+			"desktopMP4",
+			"desktopSegments",
+			"webMP4",
+		),
 	}),
 	metadata: Schema.OptionFromNullOr(
 		Schema.Record({ key: Schema.String, value: Schema.Any }),
@@ -52,6 +58,9 @@ export class Video extends Schema.Class<Video>("Video")({
 				ownerId: self.ownerId,
 				subpath: "combined-source/stream.m3u8",
 			});
+
+		if (self.source.type === "desktopSegments")
+			return new SegmentsSource({ videoId: self.id, ownerId: self.ownerId });
 
 		if (self.source.type === "desktopMP4" || self.source.type === "webMP4")
 			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
@@ -133,6 +142,59 @@ export class M3U8Source extends Schema.TaggedClass<M3U8Source>()("M3U8Source", {
 	getPlaylistFileKey() {
 		return `${this.ownerId}/${this.videoId}/${this.subpath}`;
 	}
+}
+
+export class SegmentsSource extends Schema.TaggedClass<SegmentsSource>()(
+	"SegmentsSource",
+	{
+		videoId: Schema.String,
+		ownerId: Schema.String,
+	},
+) {
+	getManifestKey() {
+		return `${this.ownerId}/${this.videoId}/segments/manifest.json`;
+	}
+
+	getVideoInitKey() {
+		return `${this.ownerId}/${this.videoId}/segments/video/init.mp4`;
+	}
+
+	getAudioInitKey() {
+		return `${this.ownerId}/${this.videoId}/segments/audio/init.mp4`;
+	}
+
+	getVideoSegmentKey(index: number) {
+		return `${this.ownerId}/${this.videoId}/segments/video/segment_${String(index).padStart(3, "0")}.m4s`;
+	}
+
+	getAudioSegmentKey(index: number) {
+		return `${this.ownerId}/${this.videoId}/segments/audio/segment_${String(index).padStart(3, "0")}.m4s`;
+	}
+}
+
+export const SegmentManifestEntry = Schema.Union(
+	Schema.Number,
+	Schema.Struct({
+		index: Schema.Number,
+		duration: Schema.Number,
+	}),
+);
+
+export const SegmentManifest = Schema.Struct({
+	version: Schema.Number,
+	video_init_uploaded: Schema.Boolean,
+	audio_init_uploaded: Schema.Boolean,
+	video_segments: Schema.Array(SegmentManifestEntry),
+	audio_segments: Schema.Array(SegmentManifestEntry),
+	is_complete: Schema.Boolean,
+});
+
+export type SegmentManifestType = Schema.Schema.Type<typeof SegmentManifest>;
+
+export function normalizeSegmentEntry(
+	entry: Schema.Schema.Type<typeof SegmentManifestEntry>,
+): { index: number; duration: number } {
+	return typeof entry === "number" ? { index: entry, duration: 3.0 } : entry;
 }
 
 /*
