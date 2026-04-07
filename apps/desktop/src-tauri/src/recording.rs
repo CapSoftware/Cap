@@ -79,6 +79,11 @@ pub struct InProgressRecordingCommon {
     pub recording_dir: PathBuf,
 }
 
+pub struct StopFailureContext {
+    pub segment_upload: SegmentUploader,
+    pub video_upload_info: VideoUploadInfo,
+}
+
 pub enum InProgressRecording {
     Instant {
         handle: instant_recording::ActorHandle,
@@ -192,25 +197,39 @@ impl InProgressRecording {
         }
     }
 
-    pub async fn stop(self) -> anyhow::Result<CompletedRecording> {
-        Ok(match self {
+    pub async fn stop(
+        self,
+    ) -> Result<CompletedRecording, (anyhow::Error, Option<StopFailureContext>)> {
+        match self {
             Self::Instant {
                 handle,
                 segment_upload,
                 video_upload_info,
                 common,
                 ..
-            } => CompletedRecording::Instant {
-                recording: handle.stop().await?,
-                segment_upload,
-                video_upload_info,
-                target_name: common.target_name,
+            } => match handle.stop().await {
+                Ok(recording) => Ok(CompletedRecording::Instant {
+                    recording,
+                    segment_upload,
+                    video_upload_info,
+                    target_name: common.target_name,
+                }),
+                Err(e) => Err((
+                    e,
+                    Some(StopFailureContext {
+                        segment_upload,
+                        video_upload_info,
+                    }),
+                )),
             },
-            Self::Studio { handle, common, .. } => CompletedRecording::Studio {
-                recording: handle.stop().await?,
-                target_name: common.target_name,
+            Self::Studio { handle, common, .. } => match handle.stop().await {
+                Ok(recording) => Ok(CompletedRecording::Studio {
+                    recording,
+                    target_name: common.target_name,
+                }),
+                Err(e) => Err((e, None)),
             },
-        })
+        }
     }
 
     pub fn done_fut(&self) -> cap_recording::DoneFut {
@@ -1300,10 +1319,21 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         return Err("Recording not in progress".to_string())?;
     };
 
-    let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
-    let recording_dir = completed_recording.project_path().clone();
+    let recording_dir = current_recording.recording_dir().clone();
 
-    handle_recording_end(app, Ok(completed_recording), &mut state, recording_dir).await?;
+    let recording_outcome = match current_recording.stop().await {
+        Ok(completed) => Ok(completed),
+        Err((e, ctx)) => {
+            error!("Recording stop failed: {e:#}");
+            if let Some(ctx) = ctx {
+                ctx.segment_upload.handle.abort();
+                crate::upload::emit_upload_complete(&app, &ctx.video_upload_info.id);
+            }
+            Err(e.to_string())
+        }
+    };
+
+    handle_recording_end(app, recording_outcome, &mut state, recording_dir).await?;
 
     Ok(())
 }
