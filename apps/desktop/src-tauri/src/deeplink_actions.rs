@@ -136,19 +136,17 @@ impl TryFrom<&Url> for DeepLinkAction {
 
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
-        match &self {
+        let should_notify = match &self {
             DeepLinkAction::StartRecording { .. }
             | DeepLinkAction::StartDefaultRecording
             | DeepLinkAction::StopRecording
             | DeepLinkAction::ResumeRecording
             | DeepLinkAction::PauseRecording
-            | DeepLinkAction::TogglePauseRecording => {
-                crate::notifications::NotificationType::DeepLinkTriggered.send_always(app);
-            }
-            _ => {}
-        }
+            | DeepLinkAction::TogglePauseRecording => true,
+            _ => false,
+        };
 
-        match self {
+        let result = match self {
             DeepLinkAction::StartRecording {
                 capture_mode,
                 camera,
@@ -206,6 +204,12 @@ impl DeepLinkAction {
             DeepLinkAction::TogglePauseRecording => {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
+        };
+
+        if result.is_ok() && should_notify {
+            crate::notifications::NotificationType::DeepLinkTriggered.send(app);
         }
+
+        result
     }
 }

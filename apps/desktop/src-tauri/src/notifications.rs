@@ -92,25 +92,16 @@ impl NotificationType {
     pub fn send(self, app: &tauri::AppHandle) {
         send_notification(app, self);
     }
-
-    pub fn send_always(self, app: &tauri::AppHandle) {
-        send_notification_always(app, self);
-    }
 }
 
 pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
-    _send_notification(app, notification_type, false);
+    send_notification_inner(app, notification_type);
 }
 
-pub fn send_notification_always(app: &tauri::AppHandle, notification_type: NotificationType) {
-    _send_notification(app, notification_type, true);
-}
-
-fn _send_notification(app: &tauri::AppHandle, notification_type: NotificationType, always: bool) {
-    let enable_notifications = always
-        || GeneralSettingsStore::get(app)
-            .map(|settings| settings.is_some_and(|s| s.enable_notifications))
-            .unwrap_or(false);
+fn send_notification_inner(app: &tauri::AppHandle, notification_type: NotificationType) {
+    let enable_notifications = GeneralSettingsStore::get(app)
+        .map(|settings| settings.is_some_and(|s| s.enable_notifications))
+        .unwrap_or(false);
 
     if !enable_notifications {
         return;
