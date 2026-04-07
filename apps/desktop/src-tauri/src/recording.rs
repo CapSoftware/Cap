@@ -5,8 +5,8 @@ use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
     CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
     Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta,
-    ZoomMode, ZoomSegment, cursor::CursorEvents,
+    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, ZoomMode,
+    ZoomSegment, cursor::CursorEvents,
 };
 #[cfg(target_os = "macos")]
 use cap_recording::SendableShareableContent;
@@ -60,14 +60,12 @@ use crate::{
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
-    create_screenshot,
+    create_screenshot, create_screenshot_source_from_segments,
     general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     thumbnails::*,
-    upload::{
-        InstantMultipartUpload, SegmentUploader, build_video_meta, compress_image, upload_video,
-    },
+    upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
 };
@@ -1847,14 +1845,27 @@ async fn handle_recording_finish(
             }
 
             let app = app.clone();
-            let output_path = recording_dir.join("content/output.mp4");
+            let segments_dir = recording_dir.join("content/display");
 
             let display_screenshot = screenshots_dir.join("display.jpg");
-            let screenshot_task = tokio::spawn(create_screenshot(
-                output_path.clone(),
-                display_screenshot.clone(),
-                None,
-            ));
+            let screenshot_task = tokio::spawn({
+                let segments_dir = segments_dir.clone();
+                let display_screenshot = display_screenshot.clone();
+                async move {
+                    let screenshot_source: Result<PathBuf, String> =
+                        create_screenshot_source_from_segments(&segments_dir).await;
+                    match screenshot_source {
+                        Ok(temp_path) => {
+                            let result =
+                                create_screenshot(temp_path.clone(), display_screenshot, None)
+                                    .await;
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            result
+                        }
+                        Err(e) => Err(format!("Failed to create screenshot source: {e}")),
+                    }
+                }
+            });
 
             let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 
@@ -1863,108 +1874,56 @@ async fn handle_recording_finish(
                 let recording_dir = recording_dir.clone();
 
                 async move {
-                    let video_upload_succeeded = match segment_upload
+                    let upload_succeeded = segment_upload
                         .handle
                         .await
                         .map_err(|e| e.to_string())
                         .and_then(|r| r.map_err(|v| v.to_string()))
-                    {
-                        Ok(()) => {
-                            info!("Segment upload succeeded");
-                            true
-                        }
-                        Err(e) => {
-                            error!("Segment upload failed: {}", e);
-                            false
-                        }
-                    };
+                        .is_ok();
+
+                    if upload_succeeded {
+                        info!("Segment upload succeeded");
+                    } else {
+                        crate::upload::emit_upload_complete(&app, &video_upload_info.id);
+                    }
 
                     let _ = screenshot_task.await;
 
-                    if video_upload_succeeded {
-                        if let Ok(bytes) =
-                            compress_image(display_screenshot).await
-                            .map_err(|err|
-                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
-                            ) {
-                                let res = crate::upload::singlepart_uploader(
-                                    app.clone(),
-                                    crate::api::PresignedS3PutRequest {
-                                        video_id: video_upload_info.id.clone(),
-                                        subpath: "screenshot/screen-capture.jpg".to_string(),
-                                        method: PresignedS3PutRequestMethod::Put,
-                                        meta: None,
-                                    },
-                                    bytes.len() as u64,
-                                    stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
-                                )
-                                .await;
-                                if let Err(err) = res {
-	                                error!("Error updating thumbnail for instant mode progressive upload: {err}");
-	                                return;
-                                }
-
-                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
-	                                	error!("Failed to remove recording files after upload: {err:?}");
-	                                }
-
-                            }
-                    } else {
-                        let meta = match build_video_meta(&output_path) {
-                            Ok(m) => Some(m),
-                            Err(err) => {
-                                error!("Error getting video metadata: {err}");
-                                warn!(
-                                    "Attempting to repair corrupt recording before fallback upload"
-                                );
-                                match crate::upload::try_repair_corrupt_mp4(&output_path) {
-                                    Ok(()) => {
-                                        info!("Repair succeeded, retrying metadata extraction");
-                                        build_video_meta(&output_path)
-                                            .map_err(|e| {
-                                                error!("Still unreadable after repair: {e}")
-                                            })
-                                            .ok()
-                                    }
-                                    Err(e) => {
-                                        error!("Repair failed: {e}");
-                                        None
-                                    }
-                                }
-                            }
-                        };
-
-                        if let Some(meta) = meta {
-                            upload_video(
-                                &app,
-                                video_upload_info.id.clone(),
-                                output_path,
-                                display_screenshot.clone(),
-                                meta,
-                                None,
-                            )
-                            .await
-                            .map(|_| {
-                                info!("Final video upload with screenshot completed successfully")
-                            })
-                            .map_err(|error| {
-                                error!("Error in upload_video: {error}");
-
-                                if let Ok(mut meta) =
-                                    RecordingMeta::load_for_project(&recording_dir)
-                                {
-                                    meta.upload = Some(UploadMeta::Failed {
-                                        error: error.to_string(),
-                                    });
-                                    meta.save_for_project()
-                                        .map_err(|e| format!("Failed to save recording meta: {e}"))
-                                        .ok();
-                                }
-                            })
-                            .ok();
-                        } else {
-                            crate::upload::emit_upload_complete(&app, &video_upload_info.id);
+                    if let Ok(bytes) = compress_image(display_screenshot).await.map_err(|err| {
+                        error!(
+                            "Error compressing thumbnail for instant mode progressive upload: {err}"
+                        )
+                    }) {
+                        let res = crate::upload::singlepart_uploader(
+                            app.clone(),
+                            crate::api::PresignedS3PutRequest {
+                                video_id: video_upload_info.id.clone(),
+                                subpath: "screenshot/screen-capture.jpg".to_string(),
+                                method: PresignedS3PutRequestMethod::Put,
+                                meta: None,
+                            },
+                            bytes.len() as u64,
+                            stream::once(async move {
+                                Ok::<_, std::io::Error>(bytes::Bytes::from(bytes))
+                            }),
+                        )
+                        .await;
+                        if let Err(err) = res {
+                            error!(
+                                "Error updating thumbnail for instant mode progressive upload: {err}"
+                            );
                         }
+                    }
+
+                    if upload_succeeded
+                        && GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default()
+                            .delete_instant_recordings_after_upload
+                        && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await
+                    {
+                        error!("Failed to remove recording files after upload: {err:?}");
                     }
                 }
             });
