@@ -33,7 +33,11 @@ app.get(
 		"query",
 		z.object({
 			recordingMode: z
-				.union([z.literal("hls"), z.literal("desktopMP4")])
+				.union([
+					z.literal("hls"),
+					z.literal("desktopMP4"),
+					z.literal("desktopSegments"),
+				])
 				.optional(),
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
@@ -178,7 +182,9 @@ app.get(
 							? { type: "local" as const }
 							: recordingMode === "desktopMP4"
 								? { type: "desktopMP4" as const }
-								: undefined,
+								: recordingMode === "desktopSegments"
+									? { type: "desktopSegments" as const }
+									: undefined,
 					isScreenshot,
 					bucket: customBucket?.id,
 					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
