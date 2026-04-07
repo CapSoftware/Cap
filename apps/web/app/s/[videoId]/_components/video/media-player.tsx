@@ -80,10 +80,23 @@ const SPRITE_CONTAINER_HEIGHT = 128;
 
 const DEFAULT_SEEKABLE: [number, number] = [0, 0];
 const DEFAULT_BUFFERED: (readonly [number, number])[] = [];
-const DEFAULT_CUES: readonly unknown[] = [];
-const DEFAULT_SUBTITLES_LIST: readonly unknown[] = [];
-const DEFAULT_SUBTITLES_SHOWING: readonly unknown[] = [];
-const DEFAULT_RENDITION_LIST: readonly unknown[] = [];
+type ChapterCue = Pick<VTTCue, "text" | "startTime" | "endTime">;
+type SubtitleTrack = Pick<TextTrack, "kind" | "label" | "language">;
+type RenditionInfo = {
+	src?: string;
+	id?: string;
+	width?: number;
+	height?: number;
+	bitrate?: number;
+	frameRate?: number;
+	codec?: string;
+	readonly selected?: boolean;
+};
+
+const DEFAULT_CUES: readonly ChapterCue[] = [];
+const DEFAULT_SUBTITLES_LIST: readonly SubtitleTrack[] = [];
+const DEFAULT_SUBTITLES_SHOWING: readonly SubtitleTrack[] = [];
+const DEFAULT_RENDITION_LIST: readonly RenditionInfo[] = [];
 
 type S = Partial<MediaState>;
 const selectPaused = (s: S) => s.mediaPaused ?? true;
