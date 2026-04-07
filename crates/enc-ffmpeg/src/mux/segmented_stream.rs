@@ -57,6 +57,22 @@ fn sync_file(path: &Path) {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SegmentCompletedEvent {
+    pub path: PathBuf,
+    pub index: u32,
+    pub duration: f64,
+    pub file_size: u64,
+    pub is_init: bool,
+    pub media_type: SegmentMediaType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentMediaType {
+    Video,
+    Audio,
+}
+
 pub struct SegmentedVideoEncoder {
     base_path: PathBuf,
 
@@ -71,9 +87,14 @@ pub struct SegmentedVideoEncoder {
 
     completed_segments: Vec<VideoSegmentInfo>,
 
+    pending_segment_indices: Vec<(u32, Duration)>,
+    frames_since_pending_flush: u32,
+
     codec_info: CodecInfo,
 
     disk_space_callback: Option<DiskSpaceCallback>,
+    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    init_notified: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -203,7 +224,7 @@ impl SegmentedVideoEncoder {
                 "seg_duration",
                 &config.segment_duration.as_secs_f64().to_string(),
             );
-            set_opt("use_timeline", "0");
+            set_opt("use_timeline", "1");
             set_opt("use_template", "1");
             set_opt("single_file", "0");
             set_opt("hls_playlist", "1");
@@ -260,8 +281,12 @@ impl SegmentedVideoEncoder {
             last_frame_timestamp: None,
             frames_in_segment: 0,
             completed_segments: Vec::new(),
+            pending_segment_indices: Vec::new(),
+            frames_since_pending_flush: 0,
             codec_info,
             disk_space_callback: None,
+            segment_tx: None,
+            init_notified: false,
         };
 
         instance.write_in_progress_manifest();
@@ -273,11 +298,37 @@ impl SegmentedVideoEncoder {
         self.disk_space_callback = Some(callback);
     }
 
+    pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
+        self.segment_tx = Some(tx);
+        self.try_notify_init_segment();
+    }
+
+    fn try_notify_init_segment(&mut self) {
+        if self.init_notified {
+            return;
+        }
+        let init_path = self.init_segment_path();
+        if let Ok(meta) = std::fs::metadata(&init_path)
+            && meta.len() > 0
+        {
+            self.init_notified = true;
+            self.notify_segment(SegmentCompletedEvent {
+                path: init_path,
+                index: 0,
+                duration: 0.0,
+                file_size: meta.len(),
+                is_init: true,
+                media_type: SegmentMediaType::Video,
+            });
+        }
+    }
+
     pub fn queue_frame(
         &mut self,
         frame: frame::Video,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
+        let is_first_frame = self.segment_start_time.is_none();
         let segment_start = match self.segment_start_time {
             Some(start) => start,
             None => {
@@ -292,6 +343,18 @@ impl SegmentedVideoEncoder {
             .queue_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
 
+        if is_first_frame {
+            self.try_notify_init_segment();
+        }
+
+        if !self.pending_segment_indices.is_empty() {
+            self.frames_since_pending_flush += 1;
+            if self.frames_since_pending_flush >= 10 {
+                self.frames_since_pending_flush = 0;
+                self.flush_pending_segments();
+            }
+        }
+
         let elapsed_in_segment = timestamp.saturating_sub(segment_start);
         if elapsed_in_segment >= self.segment_duration {
             self.on_segment_boundary(self.current_index, timestamp);
@@ -300,7 +363,17 @@ impl SegmentedVideoEncoder {
         Ok(())
     }
 
+    fn notify_segment(&self, event: SegmentCompletedEvent) {
+        if let Some(tx) = &self.segment_tx
+            && let Err(e) = tx.send(event)
+        {
+            tracing::warn!("Failed to send segment completed event: {e}");
+        }
+    }
+
     fn on_segment_boundary(&mut self, completed_index: u32, timestamp: Duration) {
+        self.try_notify_init_segment();
+
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
 
@@ -315,16 +388,124 @@ impl SegmentedVideoEncoder {
             "Segment boundary reached (time-based)"
         );
 
-        self.completed_segments.push(VideoSegmentInfo {
-            path: segment_path,
-            index: completed_index,
-            duration: segment_duration,
-            file_size: None,
-        });
-
         self.current_index = completed_index + 1;
         self.segment_start_time = Some(timestamp);
         self.frames_in_segment = 0;
+
+        let tmp_path = self
+            .base_path
+            .join(format!("segment_{completed_index:03}.m4s.tmp"));
+
+        let (resolved_path, file_size) = if segment_path.exists() {
+            let size = std::fs::metadata(&segment_path)
+                .ok()
+                .map(|m| m.len())
+                .unwrap_or(0);
+            (segment_path.clone(), size)
+        } else if tmp_path.exists() {
+            let size = std::fs::metadata(&tmp_path)
+                .ok()
+                .map(|m| m.len())
+                .unwrap_or(0);
+            (tmp_path, size)
+        } else {
+            (segment_path.clone(), 0)
+        };
+
+        let file_found = resolved_path.exists();
+
+        if file_found && file_size > 0 {
+            self.completed_segments.push(VideoSegmentInfo {
+                path: segment_path.clone(),
+                index: completed_index,
+                duration: segment_duration,
+                file_size: Some(file_size),
+            });
+
+            self.write_in_progress_manifest();
+
+            self.notify_segment(SegmentCompletedEvent {
+                path: resolved_path,
+                index: completed_index,
+                duration: segment_duration.as_secs_f64(),
+                file_size,
+                is_init: false,
+                media_type: SegmentMediaType::Video,
+            });
+        } else {
+            tracing::debug!(
+                segment_index = completed_index,
+                file_exists = file_found,
+                file_size,
+                "Segment file not ready yet, deferring notification"
+            );
+            self.pending_segment_indices
+                .push((completed_index, segment_duration));
+            self.write_in_progress_manifest();
+        }
+    }
+
+    fn flush_pending_segments(&mut self) {
+        if self.pending_segment_indices.is_empty() {
+            return;
+        }
+
+        let mut still_pending = Vec::new();
+
+        for (index, duration) in std::mem::take(&mut self.pending_segment_indices) {
+            let segment_path = self.base_path.join(format!("segment_{index:03}.m4s"));
+            let tmp_path = self.base_path.join(format!("segment_{index:03}.m4s.tmp"));
+
+            let (resolved_path, file_size) = if segment_path.exists() {
+                let size = std::fs::metadata(&segment_path)
+                    .ok()
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                (segment_path.clone(), size)
+            } else if tmp_path.exists() {
+                let size = std::fs::metadata(&tmp_path)
+                    .ok()
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                (tmp_path, size)
+            } else {
+                still_pending.push((index, duration));
+                continue;
+            };
+
+            if file_size == 0 {
+                still_pending.push((index, duration));
+                continue;
+            }
+
+            tracing::debug!(
+                segment_index = index,
+                file_size,
+                "Flushing previously pending segment"
+            );
+
+            self.completed_segments.push(VideoSegmentInfo {
+                path: segment_path,
+                index,
+                duration,
+                file_size: Some(file_size),
+            });
+
+            self.notify_segment(SegmentCompletedEvent {
+                path: resolved_path,
+                index,
+                duration: duration.as_secs_f64(),
+                file_size,
+                is_init: false,
+                media_type: SegmentMediaType::Video,
+            });
+        }
+
+        if !still_pending.is_empty() {
+            self.write_in_progress_manifest();
+        }
+
+        self.pending_segment_indices = still_pending;
     }
 
     fn current_segment_path(&self) -> PathBuf {
@@ -396,6 +577,7 @@ impl SegmentedVideoEncoder {
         }
 
         self.finalize_pending_tmp_files();
+        self.flush_pending_segments();
 
         let end_timestamp =
             last_timestamp.unwrap_or_else(|| segment_start.unwrap_or(Duration::ZERO));
@@ -419,6 +601,7 @@ impl SegmentedVideoEncoder {
         }
 
         self.finalize_pending_tmp_files();
+        self.flush_pending_segments();
 
         let effective_end_timestamp = self
             .last_frame_timestamp
@@ -576,10 +759,19 @@ impl SegmentedVideoEncoder {
                 );
 
                 self.completed_segments.push(VideoSegmentInfo {
-                    path: segment_path,
+                    path: segment_path.clone(),
                     index,
                     duration,
                     file_size: Some(file_size),
+                });
+
+                self.notify_segment(SegmentCompletedEvent {
+                    path: segment_path,
+                    index,
+                    duration: duration.as_secs_f64(),
+                    file_size,
+                    is_init: false,
+                    media_type: SegmentMediaType::Video,
                 });
             }
         }
@@ -679,6 +871,215 @@ impl SegmentedVideoEncoder {
                 init_path.display(),
                 e
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_media_info::VideoInfo;
+    use std::sync::mpsc;
+
+    fn test_video_info() -> VideoInfo {
+        VideoInfo {
+            pixel_format: cap_media_info::Pixel::NV12,
+            width: 320,
+            height: 240,
+            time_base: ffmpeg::Rational(1, 1_000_000),
+            frame_rate: ffmpeg::Rational(30, 1),
+        }
+    }
+
+    fn create_test_frame(width: u32, height: u32) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
+        for plane_idx in 0..frame.planes() {
+            let data = frame.data_mut(plane_idx);
+            for byte in data.iter_mut() {
+                *byte = 128;
+            }
+        }
+        frame
+    }
+
+    #[test]
+    fn segment_callback_fires_for_init_segment() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let (tx, _rx) = mpsc::channel::<SegmentCompletedEvent>();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path,
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        encoder.set_segment_callback(tx);
+
+        let frame = create_test_frame(320, 240);
+        encoder
+            .queue_frame(frame, Duration::from_millis(0))
+            .unwrap();
+
+        let init_exists = encoder.init_segment_path().exists();
+        assert!(init_exists, "init.mp4 should exist after first frame");
+    }
+
+    #[test]
+    fn segment_callback_fires_on_boundary() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let (tx, rx) = mpsc::channel::<SegmentCompletedEvent>();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_millis(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        encoder.set_segment_callback(tx);
+
+        for i in 0..30 {
+            let frame = create_test_frame(320, 240);
+            let ts = Duration::from_millis(i * 33);
+            encoder.queue_frame(frame, ts).unwrap();
+        }
+
+        encoder.finish().unwrap();
+
+        let events: Vec<SegmentCompletedEvent> = rx.try_iter().collect();
+
+        let non_init_events: Vec<&SegmentCompletedEvent> =
+            events.iter().filter(|e| !e.is_init).collect();
+        assert!(
+            !non_init_events.is_empty(),
+            "should have at least one segment boundary event"
+        );
+
+        for event in &non_init_events {
+            assert_eq!(event.media_type, SegmentMediaType::Video);
+            assert!(!event.is_init);
+            assert!(event.duration > 0.0);
+        }
+
+        let all_video = events
+            .iter()
+            .all(|e| e.media_type == SegmentMediaType::Video);
+        assert!(all_video, "all events should be video type");
+    }
+
+    #[test]
+    fn manifest_updated_on_segment_boundary() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_millis(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        for i in 0..15 {
+            let frame = create_test_frame(320, 240);
+            let ts = Duration::from_millis(i * 33);
+            encoder.queue_frame(frame, ts).unwrap();
+        }
+
+        let manifest_path = base_path.join("manifest.json");
+        assert!(manifest_path.exists(), "manifest.json should exist");
+
+        let manifest_content = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
+
+        assert_eq!(manifest["version"], 5);
+        assert_eq!(manifest["type"], "m4s_segments");
+        assert!(manifest["init_segment"].is_string());
+        assert!(!manifest["is_complete"].as_bool().unwrap());
+
+        encoder.finish().unwrap();
+
+        let final_content = std::fs::read_to_string(&manifest_path).unwrap();
+        let final_manifest: serde_json::Value = serde_json::from_str(&final_content).unwrap();
+        assert!(final_manifest["is_complete"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn init_segment_is_valid_after_creation() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path,
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+
+        let frame = create_test_frame(320, 240);
+        encoder.queue_frame(frame, Duration::ZERO).unwrap();
+
+        assert!(encoder.validate_init_segment().is_ok());
+    }
+
+    #[test]
+    fn segment_events_contain_correct_indices() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let (tx, rx) = mpsc::channel::<SegmentCompletedEvent>();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_millis(50),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        encoder.set_segment_callback(tx);
+
+        for i in 0..60 {
+            let frame = create_test_frame(320, 240);
+            let ts = Duration::from_millis(i * 33);
+            encoder.queue_frame(frame, ts).unwrap();
+        }
+
+        encoder.finish().unwrap();
+
+        let events: Vec<SegmentCompletedEvent> = rx.try_iter().collect();
+        let boundary_events: Vec<&SegmentCompletedEvent> =
+            events.iter().filter(|e| !e.is_init).collect();
+
+        if boundary_events.len() >= 2 {
+            for i in 1..boundary_events.len() {
+                assert!(
+                    boundary_events[i].index > boundary_events[i - 1].index,
+                    "segment indices should be strictly increasing"
+                );
+            }
         }
     }
 }
