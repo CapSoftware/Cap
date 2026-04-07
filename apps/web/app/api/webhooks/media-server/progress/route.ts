@@ -75,7 +75,10 @@ export async function POST(request: NextRequest) {
 		const payload: ProgressWebhookPayload = await request.json();
 
 		console.log(
-			`[media-server-webhook] Received progress update for video ${payload.videoId}: ${payload.phase} (${payload.progress}%)`,
+			"[media-server-webhook] Received progress update for video %s: %s (%d%%)",
+			payload.videoId,
+			payload.phase,
+			payload.progress,
 		);
 
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
@@ -141,14 +144,17 @@ export async function POST(request: NextRequest) {
 
 						if (totalDeleted > 0) {
 							console.log(
-								`[media-server-webhook] Cleaned up ${totalDeleted} segment objects for ${videoId}`,
+								"[media-server-webhook] Cleaned up %d segment objects for %s",
+								totalDeleted,
+								videoId,
 							);
 						}
 					})
 						.pipe(runPromise)
 						.catch((err) => {
 							console.warn(
-								`[media-server-webhook] Failed to clean up segments for ${videoId}:`,
+								"[media-server-webhook] Failed to clean up segments for %s:",
+								videoId,
 								err,
 							);
 						});
