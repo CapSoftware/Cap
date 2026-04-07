@@ -1708,11 +1708,26 @@ impl OutputPipeline {
     pub async fn stop(mut self) -> anyhow::Result<FinishedOutputPipeline> {
         drop(self.stop_token.take());
 
-        self.done_fut.await?;
+        const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+        match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
+            Ok(res) => res?,
+            Err(_) => {
+                return Err(anyhow!(
+                    "Pipeline stop timed out after {}s — tasks may still be running",
+                    PIPELINE_STOP_TIMEOUT.as_secs()
+                ));
+            }
+        }
+
+        let first_timestamp = tokio::time::timeout(Duration::from_secs(1), self.first_timestamp_rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_else(|| Timestamp::Instant(Instant::now()));
 
         Ok(FinishedOutputPipeline {
             path: self.path,
-            first_timestamp: self.first_timestamp_rx.await?,
+            first_timestamp,
             video_info: self.video_info,
             video_frame_count: self.video_frame_count.load(Ordering::Acquire),
         })
