@@ -217,10 +217,22 @@ impl Muxer for MacOSFragmentedM4SMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.state
-            && let Err(e) = state.video_tx.send(None)
-        {
-            trace!("M4S encoder channel already closed during stop: {e}");
+        if let Some(state) = &self.state {
+            if state.video_tx.try_send(None).is_ok() {
+                return;
+            }
+            for _ in 0..5 {
+                std::thread::sleep(Duration::from_millis(50));
+                match state.video_tx.try_send(None) {
+                    Ok(()) => return,
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                        trace!("M4S encoder channel closed during stop retry");
+                        return;
+                    }
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                }
+            }
+            warn!("M4S encoder channel still full after retries, finish() will deliver sentinel");
         }
     }
 
@@ -679,10 +691,24 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.state
-            && let Err(e) = state.video_tx.send(None)
-        {
-            trace!("M4S camera encoder channel already closed during stop: {e}");
+        if let Some(state) = &self.state {
+            if state.video_tx.try_send(None).is_ok() {
+                return;
+            }
+            for _ in 0..5 {
+                std::thread::sleep(Duration::from_millis(50));
+                match state.video_tx.try_send(None) {
+                    Ok(()) => return,
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                        trace!("M4S camera encoder channel closed during stop retry");
+                        return;
+                    }
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                }
+            }
+            warn!(
+                "M4S camera encoder channel still full after retries, finish() will deliver sentinel"
+            );
         }
     }
 

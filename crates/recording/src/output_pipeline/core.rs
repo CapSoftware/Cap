@@ -1193,9 +1193,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
             stop_token.cancelled().await;
 
-            if let Err(e) = video_source.stop().await {
-                error!("Video source stop failed: {e:#}");
-            };
+            match tokio::time::timeout(Duration::from_secs(5), video_source.stop()).await {
+                Ok(Err(e)) => {
+                    error!("Video source stop failed: {e:#}");
+                }
+                Err(_) => {
+                    error!("Video source stop timed out after 5s, proceeding with shutdown");
+                }
+                Ok(Ok(())) => {}
+            }
 
             Ok(())
         }
@@ -1284,50 +1290,66 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             info!("mux-video cancelled, draining remaining frames from channel");
             let drain_start = std::time::Instant::now();
             let drain_timeout = Duration::from_secs(2);
+            let drain_deadline = tokio::time::Instant::now() + drain_timeout;
             let max_drain_frames = 500u64;
             let mut drained = 0u64;
             let mut skipped = 0u64;
 
             let mut hit_limit = false;
-            while let Some(frame) = video_rx.next().await {
-                frame_count += 1;
-
-                if drain_start.elapsed() > drain_timeout || drained >= max_drain_frames {
+            loop {
+                if drained >= max_drain_frames {
                     hit_limit = true;
                     break;
                 }
 
-                drained += 1;
+                match tokio::time::timeout_at(drain_deadline, video_rx.next()).await {
+                    Ok(Some(frame)) => {
+                        frame_count += 1;
+                        drained += 1;
 
-                let timestamp = frame.timestamp();
+                        let timestamp = frame.timestamp();
 
-                if let Some(first_tx) = first_tx.take() {
-                    let _ = first_tx.send(timestamp);
-                }
+                        if let Some(first_tx) = first_tx.take() {
+                            let _ = first_tx.send(timestamp);
+                        }
 
-                let raw_duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
-                    Ok(d) => d,
-                    Err(_) => {
-                        warn!("Timestamp anomaly during drain, skipping frame");
-                        skipped += 1;
-                        continue;
+                        let raw_duration =
+                            match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                                Ok(d) => d,
+                                Err(_) => {
+                                    warn!("Timestamp anomaly during drain, skipping frame");
+                                    skipped += 1;
+                                    continue;
+                                }
+                            };
+
+                        if anomaly_tracker.take_resync_flag() {
+                            drift_tracker.reset_baseline();
+                        }
+
+                        let raw_wall_clock = timestamps.instant().elapsed();
+                        let total_pause = shared_pause.total_pause_duration();
+                        let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
+                        let duration =
+                            drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
+
+                        match muxer.lock().await.send_video_frame(frame, duration) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                warn!("Error processing drained frame: {e}");
+                                skipped += 1;
+                            }
+                        }
                     }
-                };
-
-                if anomaly_tracker.take_resync_flag() {
-                    drift_tracker.reset_baseline();
-                }
-
-                let raw_wall_clock = timestamps.instant().elapsed();
-                let total_pause = shared_pause.total_pause_duration();
-                let wall_clock_elapsed = raw_wall_clock.saturating_sub(total_pause);
-                let duration = drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
-
-                match muxer.lock().await.send_video_frame(frame, duration) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        warn!("Error processing drained frame: {e}");
-                        skipped += 1;
+                    Ok(None) => break,
+                    Err(_) => {
+                        hit_limit = true;
+                        warn!(
+                            "mux-video drain timed out after {:?}, closing channel",
+                            drain_start.elapsed()
+                        );
+                        video_rx.close();
+                        break;
                     }
                 }
             }
@@ -1686,11 +1708,39 @@ impl OutputPipeline {
     pub async fn stop(mut self) -> anyhow::Result<FinishedOutputPipeline> {
         drop(self.stop_token.take());
 
-        self.done_fut.await?;
+        const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+        match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
+            Ok(res) => res?,
+            Err(_) => {
+                return Err(anyhow!(
+                    "Pipeline stop timed out after {}s — tasks may still be running",
+                    PIPELINE_STOP_TIMEOUT.as_secs()
+                ));
+            }
+        }
+
+        let first_timestamp = match tokio::time::timeout(
+            Duration::from_secs(1),
+            self.first_timestamp_rx,
+        )
+        .await
+        {
+            Ok(Ok(ts)) => ts,
+            Ok(Err(_)) => {
+                warn!(
+                    "first_timestamp channel was dropped without sending a value, defaulting to now"
+                );
+                Timestamp::Instant(Instant::now())
+            }
+            Err(_) => {
+                warn!("first_timestamp receive timed out after 1s, defaulting to now");
+                Timestamp::Instant(Instant::now())
+            }
+        };
 
         Ok(FinishedOutputPipeline {
             path: self.path,
-            first_timestamp: self.first_timestamp_rx.await?,
+            first_timestamp,
             video_info: self.video_info,
             video_frame_count: self.video_frame_count.load(Ordering::Acquire),
         })

@@ -28,7 +28,6 @@ struct Pipeline {
     audio: Option<OutputPipeline>,
     video_info: VideoInfo,
     segments_dir: PathBuf,
-    audio_path: Option<PathBuf>,
     segment_rx:
         Option<std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
 }
@@ -160,75 +159,45 @@ impl Message<Stop> for Actor {
             }
         }
 
-        let (wall_clock_duration, segments_dir, audio_path) =
+        let segments_dir =
             replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
                 let result = match &state {
-                    ActorState::Recording {
-                        pipeline,
-                        segment_start_time,
-                        ..
-                    }
-                    | ActorState::Paused {
-                        pipeline,
-                        segment_start_time,
-                        ..
-                    } => {
-                        let dur = std::time::Duration::from_secs_f64(
-                            current_time_f64() - segment_start_time,
-                        );
-                        (
-                            dur,
-                            pipeline.segments_dir.clone(),
-                            pipeline.audio_path.clone(),
-                        )
-                    }
-                    ActorState::Stopped => (
-                        std::time::Duration::ZERO,
-                        self.recording_dir.join("content").join("display"),
-                        None,
-                    ),
+                    ActorState::Recording { pipeline, .. }
+                    | ActorState::Paused { pipeline, .. } => pipeline.segments_dir.clone(),
+                    ActorState::Stopped => self.recording_dir.join("content").join("display"),
                 };
                 (result, state)
             });
-        let wall_clock_duration = wall_clock_duration.saturating_sub(self.total_pause_duration);
 
         self.stop().await?;
 
-        let output_path = self.recording_dir.join("content").join("output.mp4");
-
-        let health = tokio::task::spawn_blocking(move || {
-            let assembly_result =
-                assemble_canonical_mp4(&segments_dir, audio_path.as_deref(), &output_path);
-
-            match assembly_result {
-                Ok(()) => {
-                    let validation = crate::output_validation::validate_instant_recording(
-                        &output_path,
-                        wall_clock_duration,
-                    );
-                    match &validation.health {
-                        crate::RecordingHealth::Healthy => {
-                            debug!("Instant recording output validated as healthy");
-                        }
-                        crate::RecordingHealth::Degraded { issues } => {
-                            warn!(?issues, "Instant recording output has quality issues");
-                        }
-                        _ => {}
-                    }
-                    validation.health
-                }
+        let has_init = segments_dir.join("init.mp4").exists();
+        let has_segments = has_init
+            && match std::fs::read_dir(&segments_dir) {
+                Ok(entries) => entries
+                    .filter_map(Result::ok)
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "m4s")),
                 Err(e) => {
-                    error!("Failed to assemble canonical MP4: {e:#}");
-                    crate::RecordingHealth::Damaged {
-                        reason: format!("Segment assembly failed: {e}"),
-                    }
+                    warn!(
+                        path = %segments_dir.display(),
+                        error = %e,
+                        "Failed to read segments directory, treating as no segments"
+                    );
+                    false
                 }
+            };
+
+        let health = if has_segments {
+            crate::RecordingHealth::Healthy
+        } else if has_init {
+            crate::RecordingHealth::Degraded {
+                issues: vec!["Recording too short — no complete segments produced".to_string()],
             }
-        })
-        .await
-        .unwrap_or_else(|e| crate::RecordingHealth::Damaged {
-            reason: format!("Assembly task panicked: {e}"),
-        });
+        } else {
+            crate::RecordingHealth::Damaged {
+                reason: "No video segments produced".to_string(),
+            }
+        };
 
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
@@ -333,164 +302,6 @@ pub struct CompletedRecording {
     pub health: crate::RecordingHealth,
 }
 
-fn assemble_canonical_mp4(
-    segments_dir: &std::path::Path,
-    audio_path: Option<&std::path::Path>,
-    output_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    use cap_enc_ffmpeg::remux::{
-        concatenate_m4s_segments_with_init, merge_video_audio, probe_media_valid,
-    };
-
-    let init_path = segments_dir.join("init.mp4");
-    if !init_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Video init segment not found at {}",
-            init_path.display()
-        ));
-    }
-
-    let manifest_path = segments_dir.join("manifest.json");
-    let segment_paths = if manifest_path.exists() {
-        read_segment_paths_from_manifest(&manifest_path, segments_dir)?
-    } else {
-        discover_segment_files(segments_dir)?
-    };
-
-    if segment_paths.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No video segments found in {}",
-            segments_dir.display()
-        ));
-    }
-
-    info!(
-        segment_count = segment_paths.len(),
-        segments_dir = %segments_dir.display(),
-        has_audio = audio_path.is_some(),
-        "Assembling canonical MP4 from segments"
-    );
-
-    let video_only_path = if audio_path.is_some() {
-        output_path.with_extension("video_only.mp4")
-    } else {
-        output_path.to_path_buf()
-    };
-
-    concatenate_m4s_segments_with_init(&init_path, &segment_paths, &video_only_path)
-        .map_err(|e| anyhow::anyhow!("Video segment concatenation failed: {e}"))?;
-
-    let resolved_audio = audio_path.and_then(|audio| {
-        if audio.is_file() && probe_media_valid(audio) {
-            return Some(audio.to_path_buf());
-        }
-
-        if audio.is_dir() {
-            let audio_init = audio.join("init.mp4");
-            if !audio_init.exists() {
-                warn!(
-                    "Audio init segment not found at {}, skipping audio",
-                    audio_init.display()
-                );
-                return None;
-            }
-
-            let audio_manifest = audio.join("manifest.json");
-            let audio_segments = if audio_manifest.exists() {
-                read_segment_paths_from_manifest(&audio_manifest, audio).ok()
-            } else {
-                discover_segment_files(audio).ok()
-            };
-
-            if let Some(segments) = audio_segments
-                && !segments.is_empty()
-            {
-                let assembled_audio = output_path.with_extension("audio_assembled.m4a");
-                match concatenate_m4s_segments_with_init(&audio_init, &segments, &assembled_audio) {
-                    Ok(()) => {
-                        if probe_media_valid(&assembled_audio) {
-                            return Some(assembled_audio);
-                        }
-                        warn!("Assembled audio file is not valid, skipping audio");
-                        let _ = std::fs::remove_file(&assembled_audio);
-                    }
-                    Err(e) => {
-                        warn!("Failed to assemble audio segments: {e}");
-                    }
-                }
-            }
-        }
-
-        None
-    });
-
-    if let Some(ref audio_file) = resolved_audio {
-        let merge_result = merge_video_audio(&video_only_path, audio_file, output_path);
-        let _ = std::fs::remove_file(&video_only_path);
-        if audio_file != audio_path.unwrap_or(audio_file.as_path()) {
-            let _ = std::fs::remove_file(audio_file);
-        }
-        merge_result.map_err(|e| anyhow::anyhow!("Audio/video merge failed: {e}"))?;
-    } else if audio_path.is_some() {
-        if video_only_path != output_path {
-            std::fs::rename(&video_only_path, output_path)?;
-        }
-        warn!("Audio file missing or invalid, output will be video-only");
-    }
-
-    info!(output = %output_path.display(), "Canonical MP4 assembled");
-    Ok(())
-}
-
-fn read_segment_paths_from_manifest(
-    manifest_path: &std::path::Path,
-    base_dir: &std::path::Path,
-) -> anyhow::Result<Vec<PathBuf>> {
-    let manifest_text = std::fs::read_to_string(manifest_path)?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_text)?;
-
-    let segments = manifest
-        .get("segments")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow::anyhow!("Invalid manifest: no segments array"))?;
-
-    let mut paths = Vec::new();
-    for seg in segments {
-        let is_complete = seg
-            .get("is_complete")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if !is_complete {
-            continue;
-        }
-        if let Some(path_str) = seg.get("path").and_then(|v| v.as_str()) {
-            let full_path = base_dir.join(path_str);
-            if full_path.exists() {
-                paths.push(full_path);
-            }
-        }
-    }
-
-    Ok(paths)
-}
-
-fn discover_segment_files(segments_dir: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut segments: Vec<PathBuf> = std::fs::read_dir(segments_dir)?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "m4s") {
-                Some(path)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    segments.sort();
-    Ok(segments)
-}
-
 async fn create_pipeline(
     content_dir: PathBuf,
     screen_capture: crate::sources::screen_capture::VideoSourceConfig,
@@ -543,7 +354,7 @@ async fn create_pipeline(
     .await?;
 
     let has_audio = mic_feed.is_some() || system_audio_source.is_some();
-    let (audio, audio_path) = if has_audio {
+    let audio = if has_audio {
         let audio_dir = content_dir.join("audio");
         let mut builder =
             output_pipeline::OutputPipeline::builder(audio_dir.clone()).with_timestamps(start_time);
@@ -570,9 +381,9 @@ async fn create_pipeline(
             .await
             .context("audio pipeline setup")?;
 
-        (Some(audio_pipeline), Some(audio_dir))
+        Some(audio_pipeline)
     } else {
-        (None, None)
+        None
     };
 
     let segment_rx = segment_channel.map(|(_, rx)| rx);
@@ -587,7 +398,6 @@ async fn create_pipeline(
             screen_info.fps(),
         ),
         segments_dir,
-        audio_path,
         segment_rx,
     })
 }
@@ -738,7 +548,6 @@ pub async fn spawn_instant_recording_actor(
                     audio: None,
                     video_info,
                     segments_dir: content_dir.clone(),
-                    audio_path: None,
                     segment_rx: None,
                 },
                 video_info,

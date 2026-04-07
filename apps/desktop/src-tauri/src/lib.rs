@@ -1645,6 +1645,55 @@ pub(crate) async fn create_screenshot(
     result
 }
 
+pub(crate) async fn create_screenshot_source_from_segments(
+    segments_dir: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let init_path = segments_dir.join("init.mp4");
+    if !init_path.exists() {
+        return Err(format!("init.mp4 not found in {}", segments_dir.display()));
+    }
+
+    let first_segment = find_first_segment(segments_dir)
+        .ok_or_else(|| format!("No .m4s segments found in {}", segments_dir.display()))?;
+
+    let temp_path = segments_dir.join(".screenshot_source.mp4");
+    let mut out = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(|e| format!("Failed to create screenshot source: {e}"))?;
+
+    let mut init_file = tokio::fs::File::open(&init_path)
+        .await
+        .map_err(|e| format!("Failed to open init.mp4: {e}"))?;
+    tokio::io::copy(&mut init_file, &mut out)
+        .await
+        .map_err(|e| format!("Failed to copy init.mp4: {e}"))?;
+
+    let mut seg_file = tokio::fs::File::open(&first_segment)
+        .await
+        .map_err(|e| format!("Failed to open {}: {e}", first_segment.display()))?;
+    tokio::io::copy(&mut seg_file, &mut out)
+        .await
+        .map_err(|e| format!("Failed to copy segment: {e}"))?;
+
+    Ok(temp_path)
+}
+
+fn find_first_segment(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut segments: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| {
+            let path = e.ok()?.path();
+            if path.extension().is_some_and(|ext| ext == "m4s") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    segments.sort();
+    segments.into_iter().next()
+}
+
 // async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> Result<(), String> {
 //     println!("Creating thumbnail: input={input:?}, output={output:?}, size={size:?}");
 

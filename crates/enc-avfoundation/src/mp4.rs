@@ -1911,10 +1911,10 @@ mod tests {
             let timestamp = Duration::from_millis(ts_ms);
             let frame = create_test_video_frame(&pool, (ts_ms as i64) * 1000, 33_333);
 
-            if let Ok(()) = encoder.queue_video_frame(frame, timestamp) {
-                if ts_ms > threshold_ms {
-                    accepted_past_threshold += 1;
-                }
+            if let Ok(()) = encoder.queue_video_frame(frame, timestamp)
+                && ts_ms > threshold_ms
+            {
+                accepted_past_threshold += 1;
             }
         }
 
