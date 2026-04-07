@@ -1135,6 +1135,22 @@ impl SegmentUploader {
             }
         }
 
+        {
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
+            if !s.failed_segments.is_empty() {
+                let missing: Vec<_> = s
+                    .failed_segments
+                    .iter()
+                    .map(|f| f.subpath.as_str())
+                    .collect();
+                error!(
+                    count = s.failed_segments.len(),
+                    segments = ?missing,
+                    "Completing upload with missing segments - video may have gaps"
+                );
+            }
+        }
+
         let final_manifest = state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1172,6 +1188,8 @@ impl SegmentUploader {
                     });
                     meta.save_for_project().ok();
                 }
+
+                emit_upload_complete(&app, &video_id);
 
                 return Err(format!(
                     "Failed to signal recording complete for {video_id} after 3 attempts"
