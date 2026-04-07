@@ -177,6 +177,7 @@ export const ShareVideo = forwardRef<
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
+		const isSegmentsSource = data.source.type === "desktopSegments";
 		let videoSrc: string;
 		const rawFallbackSrc =
 			data.source.type === "webMP4"
@@ -184,7 +185,9 @@ export const ShareVideo = forwardRef<
 				: undefined;
 		let enableCrossOrigin = false;
 
-		if (isMp4Source) {
+		if (isSegmentsSource) {
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master`;
+		} else if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 			enableCrossOrigin = true;
 		} else if (
@@ -257,8 +260,7 @@ export const ShareVideo = forwardRef<
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
-							// enhancedAudioUrl={enhancedAudioUrl}
-							// enhancedAudioStatus={enhancedAudioStatus}
+							isLiveSegments={isSegmentsSource}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
