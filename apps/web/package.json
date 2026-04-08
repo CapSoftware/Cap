@@ -78,6 +78,7 @@
 		"@tanstack/store": "^0.7.7",
 		"@ts-rest/core": "^3.52.1",
 		"@uidotdev/usehooks": "^2.4.1",
+		"@vercel/firewall": "^1.1.2",
 		"@vercel/functions": "^3.1.0",
 		"@vercel/otel": "^2.0.1",
 		"@virtual-grid/react": "^2.0.3",
