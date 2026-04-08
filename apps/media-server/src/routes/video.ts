@@ -1066,21 +1066,15 @@ async function streamConcatFiles(
 	inputPaths: string[],
 	outputPath: string,
 ): Promise<void> {
-	const { createReadStream, createWriteStream } = await import("node:fs");
-	const { pipeline } = await import("node:stream/promises");
-	const outStream = createWriteStream(outputPath);
+	const { open, readFile } = await import("node:fs/promises");
+	const handle = await open(outputPath, "w");
 	try {
 		for (const filePath of inputPaths) {
-			await pipeline(createReadStream(filePath), outStream, { end: false });
+			const data = await readFile(filePath);
+			await handle.write(data);
 		}
-		outStream.end();
-		await new Promise<void>((resolve, reject) => {
-			outStream.on("finish", resolve);
-			outStream.on("error", reject);
-		});
-	} catch (err) {
-		outStream.destroy();
-		throw err;
+	} finally {
+		await handle.close();
 	}
 }
 
