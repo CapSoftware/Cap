@@ -80,7 +80,7 @@ export const PricingPage = () => {
 						</motion.h1>
 						<motion.div
 							onClick={scrollToTestimonials}
-							className="flex justify-center cursor-pointer items-center px-5 py-2.5 gap-2 mx-auto mt-6 rounded-full border bg-gray-1 border-gray-5 w-fit hover:bg-gray-2 transition-colors"
+							className="hidden sm:flex justify-center cursor-pointer items-center px-5 py-2.5 gap-2 mx-auto mt-6 rounded-full border bg-gray-1 border-gray-5 w-fit hover:bg-gray-2 transition-colors"
 							variants={fadeIn}
 							custom={3}
 							whileHover={{ scale: 1.03 }}
@@ -90,7 +90,9 @@ export const PricingPage = () => {
 								className="text-red-500 size-3.5"
 								icon={faHeart}
 							/>
-							<p className="font-medium text-gray-12">Loved by 30k+ users</p>
+							<p className="font-medium text-gray-12">
+								Trusted by 30,000+ teams, builders and creators
+							</p>
 						</motion.div>
 					</motion.div>
 
