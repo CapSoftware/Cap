@@ -227,6 +227,42 @@ pub async fn upload_signed(
 }
 
 #[instrument(skip(app))]
+pub async fn upload_signed_batch(
+    app: &AppHandle,
+    video_id: &str,
+    subpaths: &[String],
+) -> Result<std::collections::HashMap<String, String>, AuthedApiError> {
+    #[derive(Deserialize)]
+    struct Response {
+        urls: std::collections::HashMap<String, String>,
+    }
+
+    let resp = app
+        .authed_api_request("/api/upload/signed/batch", |client, url| {
+            client.post(url).json(&serde_json::json!({
+                "videoId": video_id,
+                "subpaths": subpaths,
+            }))
+        })
+        .await
+        .map_err(|err| format!("api/upload_signed_batch/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/upload_signed_batch/{status}: {error_body}").into());
+    }
+
+    resp.json::<Response>()
+        .await
+        .map_err(|err| format!("api/upload_signed_batch/response: {err}").into())
+        .map(|data| data.urls)
+}
+
+#[instrument(skip(app))]
 pub async fn desktop_video_progress(
     app: &AppHandle,
     video_id: &str,
