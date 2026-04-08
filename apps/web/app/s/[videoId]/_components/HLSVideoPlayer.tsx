@@ -245,10 +245,29 @@ export function HLSVideoPlayer({
 			});
 
 			let networkRetryCount = 0;
-			const maxNetworkRetries = isLiveSegments ? 30 : 3;
+			const maxNetworkRetries = isLiveSegments ? 30 : 6;
+			let hasTriedPlaylistReload = false;
 
 			hls.on(Hls.Events.ERROR, (event, data) => {
 				console.error("HLSVideoPlayer: HLS error:", event, data);
+
+				const isExpiredUrl =
+					data.response?.code === 403 || data.response?.code === 410;
+				if (
+					!data.fatal &&
+					isExpiredUrl &&
+					(data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+						data.details === Hls.ErrorDetails.KEY_LOAD_ERROR) &&
+					!hasTriedPlaylistReload
+				) {
+					hasTriedPlaylistReload = true;
+					console.log(
+						"HLSVideoPlayer: Presigned URL expired, reloading playlist for fresh URLs",
+					);
+					hls.loadSource(playbackSrc);
+					return;
+				}
+
 				if (data.fatal) {
 					switch (data.type) {
 						case Hls.ErrorTypes.NETWORK_ERROR:
@@ -282,6 +301,7 @@ export function HLSVideoPlayer({
 
 			hls.on(Hls.Events.MANIFEST_LOADED, () => {
 				networkRetryCount = 0;
+				hasTriedPlaylistReload = false;
 			});
 
 			return () => {

@@ -186,14 +186,15 @@ const getPlaylistResponse = (
 					? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-audio`
 					: null;
 
-				let playlist = "#EXTM3U\n#EXT-X-VERSION:7\n";
+				let playlist =
+					"#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n";
 				if (audioPlaylistUrl) {
 					playlist += `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="default",DEFAULT=YES,AUTOSELECT=YES,URI="${audioPlaylistUrl}"\n`;
 					playlist += `#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="audio"\n`;
 				} else {
 					playlist += "#EXT-X-STREAM-INF:BANDWIDTH=2000000\n";
 				}
-				playlist += videoPlaylistUrl + "\n";
+				playlist += `${videoPlaylistUrl}\n`;
 
 				return HttpServerResponse.text(playlist, {
 					headers: {
@@ -234,13 +235,16 @@ const getPlaylistResponse = (
 				segments.reduce((max, seg) => Math.max(max, seg.duration), 0),
 			);
 
-			let playlist = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${Math.max(targetDuration, 1)}\n#EXT-X-MEDIA-SEQUENCE:1\n`;
+			let playlist = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${Math.max(targetDuration, 1)}\n#EXT-X-MEDIA-SEQUENCE:0\n`;
+			if (manifest.is_complete) {
+				playlist += "#EXT-X-PLAYLIST-TYPE:VOD\n";
+			}
 			playlist += `#EXT-X-MAP:URI="${initUrl}"\n`;
 
 			for (let i = 0; i < segmentUrls.length; i++) {
 				const dur = segments[i]?.duration ?? 3.0;
 				playlist += `#EXTINF:${dur.toFixed(3)},\n`;
-				playlist += segmentUrls[i] + "\n";
+				playlist += `${segmentUrls[i]}\n`;
 			}
 
 			if (manifest.is_complete) {
@@ -329,7 +333,10 @@ const getPlaylistResponse = (
 				const playlist = lines.join("\n");
 
 				return HttpServerResponse.text(playlist, {
-					headers: CACHE_CONTROL_HEADERS,
+					headers: {
+						...CACHE_CONTROL_HEADERS,
+						"Content-Type": "application/vnd.apple.mpegurl",
+					},
 				});
 			} else if (isMp4Source) {
 				yield* Effect.log(
@@ -369,7 +376,10 @@ const getPlaylistResponse = (
 				);
 
 				return HttpServerResponse.text(generatedPlaylist, {
-					headers: CACHE_CONTROL_HEADERS,
+					headers: {
+						...CACHE_CONTROL_HEADERS,
+						"Content-Type": "application/vnd.apple.mpegurl",
+					},
 				});
 			}
 
@@ -411,7 +421,10 @@ const getPlaylistResponse = (
 			const generatedPlaylist = generateM3U8Playlist(chunksUrls);
 
 			return HttpServerResponse.text(generatedPlaylist, {
-				headers: CACHE_CONTROL_HEADERS,
+				headers: {
+					...CACHE_CONTROL_HEADERS,
+					"Content-Type": "application/vnd.apple.mpegurl",
+				},
 			});
 		}).pipe(Effect.withSpan("generateUrls"));
 	});
