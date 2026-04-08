@@ -132,12 +132,15 @@ impl Actor {
         });
 
         if let Some(pipeline) = pipeline {
-            if let Some(audio) = pipeline.audio
-                && let Err(e) = audio.stop().await
-            {
-                warn!("Audio pipeline stop failed (video continues): {e:#}");
+            if let Some(audio) = pipeline.audio {
+                let (audio_res, video_res) = tokio::join!(audio.stop(), pipeline.video.stop());
+                if let Err(e) = audio_res {
+                    warn!("Audio pipeline stop failed: {e:#}");
+                }
+                video_res?;
+            } else {
+                pipeline.video.stop().await?;
             }
-            pipeline.video.stop().await?;
         }
 
         Ok(())
