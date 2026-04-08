@@ -163,11 +163,53 @@ async function generateWithAi(transcript: TranscriptData): Promise<AiResult> {
 	const groqClient = getGroqClient();
 	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
 
+	const videoDuration = getVideoDuration(transcript.segments);
+
+	let result: AiResult;
 	if (chunks.length === 1) {
-		return generateSingleChunk(transcript.text, groqClient);
+		result = await generateSingleChunk(
+			transcript.segments,
+			videoDuration,
+			groqClient,
+		);
+	} else {
+		result = await generateMultipleChunks(chunks, videoDuration, groqClient);
 	}
 
-	return generateMultipleChunks(chunks, groqClient);
+	if (result.chapters) {
+		result.chapters = clampChapters(result.chapters, videoDuration);
+	}
+
+	return result;
+}
+
+function getVideoDuration(segments: VttSegment[]): number {
+	if (segments.length === 0) return 0;
+	const lastSegment = segments[segments.length - 1];
+	return lastSegment ? lastSegment.start + 3 : 0;
+}
+
+function clampChapters(
+	chapters: { title: string; start: number }[],
+	videoDuration: number,
+): { title: string; start: number }[] {
+	const filtered = chapters.filter((ch) => ch.start < videoDuration);
+
+	if (filtered.length === 0 && chapters.length > 0) {
+		const first = chapters[0];
+		return first ? [{ title: first.title, start: 0 }] : [];
+	}
+
+	const minGap = Math.max(5, Math.floor(videoDuration / 10));
+	const deduped: { title: string; start: number }[] = [];
+	for (const chapter of filtered) {
+		const last = deduped[deduped.length - 1];
+		if (!last || Math.abs(chapter.start - last.start) >= minGap) {
+			deduped.push(chapter);
+		}
+	}
+
+	return deduped;
 }
 
 async function saveResults(
@@ -324,12 +366,20 @@ function cleanJsonResponse(content: string): string {
 }
 
 async function generateSingleChunk(
-	transcriptText: string,
+	segments: VttSegment[],
+	videoDuration: number,
 	groqClient: ReturnType<typeof getGroqClient>,
 ): Promise<AiResult> {
+	const transcriptWithTimestamps = segments
+		.map(
+			(s) =>
+				`[${Math.floor(s.start / 60)}:${String(s.start % 60).padStart(2, "0")}] ${s.text}`,
+		)
+		.join("\n");
+
 	const prompt = `You are Cap AI, an expert at analyzing video content and creating comprehensive summaries.
 
-Analyze this transcript thoroughly and provide a detailed JSON response:
+The video is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). Analyze this timestamped transcript and provide a detailed JSON response:
 {
   "title": "string (concise but descriptive title that captures the main topic)",
   "summary": "string (detailed summary that covers ALL key points discussed. For meetings: include decisions made, action items, and key discussion points. For tutorials: cover all steps and concepts explained. For presentations: summarize all main arguments and supporting points. Write from 1st person perspective if the speaker is teaching/presenting, e.g. 'In this video, I walk through...'. Make it comprehensive enough that someone could understand the full content without watching.)",
@@ -342,10 +392,11 @@ Guidelines:
 - For longer content, organize the summary by topic or chronologically
 - Include specific details, names, numbers, and conclusions mentioned
 - Chapters should mark distinct topic changes or sections
+- IMPORTANT: All chapter "start" values MUST be between 0 and ${videoDuration} seconds. Use the timestamps from the transcript to determine accurate chapter start times.
 
 Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript:
-${transcriptText}`;
+${transcriptWithTimestamps}`;
 
 	const content = await callAiApi(prompt, groqClient);
 	return parseAiResponse(content);
@@ -353,6 +404,7 @@ ${transcriptText}`;
 
 async function generateMultipleChunks(
 	chunks: { text: string; startTime: number; endTime: number }[],
+	videoDuration: number,
 	groqClient: ReturnType<typeof getGroqClient>,
 ): Promise<AiResult> {
 	const chunkSummaries: {
@@ -367,7 +419,7 @@ async function generateMultipleChunks(
 		const chunk = chunks[i];
 		if (!chunk) continue;
 
-		const chunkPrompt = `You are Cap AI, an expert at analyzing video content. This is section ${i + 1} of ${chunks.length} from a longer video (timestamp ${Math.floor(chunk.startTime / 60)}:${String(chunk.startTime % 60).padStart(2, "0")} to ${Math.floor(chunk.endTime / 60)}:${String(chunk.endTime % 60).padStart(2, "0")}).
+		const chunkPrompt = `You are Cap AI, an expert at analyzing video content. This is section ${i + 1} of ${chunks.length} from a video that is ${videoDuration} seconds long (${Math.floor(videoDuration / 60)}:${String(Math.floor(videoDuration % 60)).padStart(2, "0")} total). This section covers timestamp ${Math.floor(chunk.startTime / 60)}:${String(chunk.startTime % 60).padStart(2, "0")} to ${Math.floor(chunk.endTime / 60)}:${String(chunk.endTime % 60).padStart(2, "0")}.
 
 Analyze this section thoroughly and provide JSON:
 {
@@ -376,6 +428,7 @@ Analyze this section thoroughly and provide JSON:
   "chapters": [{"title": "string (descriptive title for this topic/section)", "start": number (seconds from video start)}]
 }
 
+IMPORTANT: All chapter "start" values MUST be between ${chunk.startTime} and ${chunk.endTime} seconds. The total video is only ${videoDuration} seconds long.
 Be thorough - this summary will be combined with other sections to create a comprehensive overview.
 Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
@@ -398,9 +451,10 @@ ${chunk.text}`;
 	const sortedChapters = chunkSummaries
 		.flatMap((c) => c.chapters)
 		.sort((a, b) => a.start - b.start);
+	const minGap = Math.max(5, Math.floor(videoDuration / 10));
 	for (const chapter of sortedChapters) {
 		const lastChapter = allChapters[allChapters.length - 1];
-		if (!lastChapter || Math.abs(chapter.start - lastChapter.start) >= 30) {
+		if (!lastChapter || Math.abs(chapter.start - lastChapter.start) >= minGap) {
 			allChapters.push(chapter);
 		}
 	}
