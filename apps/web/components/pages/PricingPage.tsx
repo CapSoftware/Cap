@@ -78,16 +78,6 @@ export const PricingPage = () => {
 						>
 							Simple, Flexible Pricing
 						</motion.h1>
-						<motion.p
-							className="mx-auto mt-3 max-w-[800px]"
-							variants={fadeIn}
-							custom={2}
-						>
-							Cap is currently in public beta, and we're offering special early
-							adopter pricing to our first users. This pricing will be locked in
-							for the lifetime of your subscription. Switching from Loom? Import
-							all your existing videos with our built-in Loom importer.
-						</motion.p>
 						<motion.div
 							onClick={scrollToTestimonials}
 							className="flex justify-center cursor-pointer items-center px-5 py-2.5 gap-2 mx-auto mt-6 rounded-full border bg-gray-1 border-gray-5 w-fit hover:bg-gray-2 transition-colors"
@@ -100,7 +90,7 @@ export const PricingPage = () => {
 								className="text-red-500 size-3.5"
 								icon={faHeart}
 							/>
-							<p className="font-medium text-gray-12">Loved by 25k+ users</p>
+							<p className="font-medium text-gray-12">Loved by 30k+ users</p>
 						</motion.div>
 					</motion.div>
 
