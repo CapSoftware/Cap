@@ -74,7 +74,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 		<div className="mt-[90px] mb-[60px] sm:mb-[100px] md:mb-[160px] w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[140px] xl:min-h-[700px]">
 			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-0">
 				<div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
-					<div className="flex flex-col text-left w-full max-w-[650px]">
+					<div className="flex flex-col text-center md:text-left w-full max-w-[650px]">
 						<motion.h1
 							className="text-[2.25rem] font-medium leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4"
 							initial="hidden"
@@ -153,7 +153,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						custom={6}
 						variants={fadeIn}
 					>
-						<p className="mb-4 text-sm italic text-gray-10">
+						<p className="mb-4 text-sm italic text-gray-10 text-center md:text-left">
 							Trusted by <strong>30,000+</strong> teams, builders and creators
 						</p>
 						<LogoMarquee />
