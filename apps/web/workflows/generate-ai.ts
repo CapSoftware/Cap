@@ -462,24 +462,21 @@ function parseAiResponse(content: string): AiResult {
 	try {
 		const data = JSON.parse(cleanJsonResponse(content).trim());
 
-		if (data.chapters && data.chapters.length > 0) {
-			const sortedChapters = data.chapters.sort(
-				(a: { start: number }, b: { start: number }) => a.start - b.start,
-			);
-			const dedupedChapters: { title: string; start: number }[] = [];
-			for (const chapter of sortedChapters) {
-				const lastChapter = dedupedChapters[dedupedChapters.length - 1];
-				if (!lastChapter || Math.abs(chapter.start - lastChapter.start) >= 30) {
-					dedupedChapters.push(chapter);
-				}
-			}
-			data.chapters = dedupedChapters;
-		}
+		const chapters = Array.isArray(data.chapters)
+			? data.chapters
+					.filter(
+						(ch: { start?: number }) =>
+							typeof ch.start === "number" && ch.start >= 0,
+					)
+					.sort(
+						(a: { start: number }, b: { start: number }) => a.start - b.start,
+					)
+			: [];
 
 		return {
 			title: data.title,
 			summary: data.summary,
-			chapters: data.chapters,
+			chapters,
 		};
 	} catch {
 		return {
