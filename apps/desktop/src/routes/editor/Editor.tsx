@@ -365,7 +365,12 @@ function Inner() {
 		setEditorState("playbackTime", payload.playhead_position / FPS);
 	});
 
+	let skipRenderFrameForConfigUpdate = false;
+
 	const emitRenderFrame = (time: number) => {
+		if (skipRenderFrameForConfigUpdate) {
+			return;
+		}
 		if (!editorState.playing) {
 			events.renderFrameEvent.emit({
 				frame_number: Math.max(Math.floor(time * FPS), 0),
@@ -389,6 +394,51 @@ function Inner() {
 		if (preview !== null) return preview;
 		return editorState.playbackTime;
 	});
+
+	const doConfigUpdate = async (time: number) => {
+		const config = getPreviewProjectConfig(project, editorState);
+		const frameNumber = Math.max(Math.floor(time * FPS), 0);
+		const resBase = previewResolutionBase();
+		try {
+			await commands.updateProjectConfigInMemory(
+				config,
+				frameNumber,
+				FPS,
+				resBase,
+			);
+		} catch (e) {
+			console.error(
+				"[Editor] doConfigUpdate - ERROR sending config to Rust:",
+				e,
+			);
+		}
+	};
+	const throttledConfigUpdate = throttle(doConfigUpdate, 1000 / FPS);
+	const trailingConfigUpdate = debounce(doConfigUpdate, 1000 / FPS + 16);
+	const updateConfigAndRender = (time: number) => {
+		throttledConfigUpdate(time);
+		trailingConfigUpdate(time);
+	};
+
+	createEffect(
+		on(
+			() => {
+				trackDeep(project);
+				return {
+					caption: editorState.timeline.tracks.caption,
+					keyboard: editorState.timeline.tracks.keyboard,
+				};
+			},
+			() => {
+				skipRenderFrameForConfigUpdate = true;
+				queueMicrotask(() => {
+					skipRenderFrameForConfigUpdate = false;
+				});
+				updateConfigAndRender(frameNumberToRender());
+			},
+			{ defer: true },
+		),
+	);
 
 	createEffect(
 		on(
@@ -415,46 +465,6 @@ function Inner() {
 				emitRenderFrame(frameNumberToRender());
 			}
 		}),
-	);
-
-	const doConfigUpdate = async (time: number) => {
-		const config = getPreviewProjectConfig(project, editorState);
-		const frameNumber = Math.max(Math.floor(time * FPS), 0);
-		const resBase = previewResolutionBase();
-		try {
-			await commands.updateProjectConfigInMemory(
-				config,
-				frameNumber,
-				FPS,
-				resBase,
-			);
-		} catch (e) {
-			console.error(
-				"[Editor] doConfigUpdate - ERROR sending config to Rust:",
-				e,
-			);
-		}
-	};
-	const throttledConfigUpdate = throttle(doConfigUpdate, 1000 / FPS);
-	const trailingConfigUpdate = debounce(doConfigUpdate, 1000 / FPS + 16);
-	const updateConfigAndRender = (time: number) => {
-		throttledConfigUpdate(time);
-		trailingConfigUpdate(time);
-	};
-	createEffect(
-		on(
-			() => {
-				trackDeep(project);
-				return {
-					caption: editorState.timeline.tracks.caption,
-					keyboard: editorState.timeline.tracks.keyboard,
-				};
-			},
-			() => {
-				updateConfigAndRender(frameNumberToRender());
-			},
-			{ defer: true },
-		),
 	);
 
 	const fullscreenMode = () => {

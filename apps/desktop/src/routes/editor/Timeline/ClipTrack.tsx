@@ -4,6 +4,7 @@ import {
 } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
+	batch,
 	type ComponentProps,
 	createEffect,
 	createMemo,
@@ -718,14 +719,16 @@ export function ClipTrack(
 												initialStart,
 											});
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"start",
-												clampedStart,
-											);
-											setPreviewTime(prevDuration());
+											batch(() => {
+												setProject(
+													"timeline",
+													"segments",
+													i(),
+													"start",
+													clampedStart,
+												);
+												setPreviewTime(prevDuration());
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
@@ -822,17 +825,19 @@ export function ClipTrack(
 												seg.start + minRecordedDuration,
 											);
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"end",
-												clampedEnd,
-											);
-											setPreviewTime(
-												prevDuration() +
-													(clampedEnd - seg.start) / seg.timescale,
-											);
+											batch(() => {
+												setProject(
+													"timeline",
+													"segments",
+													i(),
+													"end",
+													clampedEnd,
+												);
+												setPreviewTime(
+													prevDuration() +
+														(clampedEnd - seg.start) / seg.timescale,
+												);
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
