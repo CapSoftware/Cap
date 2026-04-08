@@ -729,11 +729,21 @@ impl output_pipeline::VideoSource for VideoSource {
                 "Capturer stopping after creating {} video frames",
                 self.video_frame_counter.load(atomic::Ordering::Relaxed)
             );
-            self.capturer.stop().await?;
 
             self.cancel_token.cancel();
 
-            Ok(())
+            let stop_result =
+                tokio::time::timeout(std::time::Duration::from_secs(5), self.capturer.stop()).await;
+
+            match stop_result {
+                Ok(result) => result,
+                Err(_) => {
+                    error!("Screen capturer stop timed out after 5s");
+                    Err(anyhow::anyhow!(
+                        "Screen capturer stop timed out after 5s — native resources may not be fully released"
+                    ))
+                }
+            }
         }
         .boxed()
     }
@@ -785,26 +795,34 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             drop_counter,
         ) = config;
 
-        ctx.tasks().spawn("system-audio", async move {
-            loop {
-                match error_rx.recv().await {
-                    Ok(err) => {
-                        if is_system_stop_error(err.as_ref()) {
-                            warn!("Screen capture audio stream stopped by the system");
-                            return Err(anyhow!(system_stop_message()));
-                        }
-
-                        return Err(anyhow!("{err}"));
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                }
-            }
-
-            Ok(())
-        });
-
         let cancel_token = CancellationToken::new();
+
+        ctx.tasks().spawn("system-audio", {
+            let cancel = cancel_token.child_token();
+            async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => break,
+                        result = error_rx.recv() => {
+                            match result {
+                                Ok(err) => {
+                                    if is_system_stop_error(err.as_ref()) {
+                                        warn!("Screen capture audio stream stopped by the system");
+                                        return Err(anyhow!(system_stop_message()));
+                                    }
+                                    return Err(anyhow!("{err}"));
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+        });
 
         let stats_cancel = cancel_token.clone();
         tokio::spawn(

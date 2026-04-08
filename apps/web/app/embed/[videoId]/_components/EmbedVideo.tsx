@@ -138,6 +138,7 @@ export const EmbedVideo = forwardRef<
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
+		const isSegmentsSource = data.source.type === "desktopSegments";
 		let videoSrc: string;
 		const rawFallbackSrc =
 			data.source.type === "webMP4"
@@ -145,9 +146,10 @@ export const EmbedVideo = forwardRef<
 				: undefined;
 		let enableCrossOrigin = false;
 
-		if (isMp4Source) {
+		if (isSegmentsSource) {
+			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=segments-master`;
+		} else if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-			// Start with CORS enabled for MP4 sources, CapVideoPlayer will disable if needed
 			enableCrossOrigin = true;
 		} else if (
 			NODE_ENV === "development" ||
@@ -213,6 +215,7 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
 							hasActiveUpload={data.hasActiveUpload}
+							isLiveSegments={isSegmentsSource}
 						/>
 					)}
 				</div>

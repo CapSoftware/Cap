@@ -266,7 +266,7 @@ impl CameraPreviewManager {
                 })
                 .ok();
 
-            let _ = rt.block_on(tokio::time::timeout(Duration::from_millis(250), drop_rx));
+            wait_for_shutdown_signal(&rt, drop_rx, Duration::from_millis(250));
 
             shutdown_complete_tx.send(()).ok();
             info!("DONE");
@@ -274,6 +274,12 @@ impl CameraPreviewManager {
 
         Ok(())
     }
+}
+
+fn wait_for_shutdown_signal(runtime: &Runtime, receiver: oneshot::Receiver<()>, timeout: Duration) {
+    runtime.block_on(async move {
+        let _ = tokio::time::timeout(timeout, receiver).await;
+    });
 }
 
 // Internal events for the persistent camera renderer architecture.
@@ -1025,7 +1031,9 @@ async fn resize_window(
 
 #[cfg(test)]
 mod tests {
-    use super::preferred_alpha_mode;
+    use super::{preferred_alpha_mode, wait_for_shutdown_signal};
+    use std::thread;
+    use tokio::{runtime::Runtime, sync::oneshot, time::Duration};
     use wgpu::CompositeAlphaMode;
 
     #[test]
@@ -1065,6 +1073,19 @@ mod tests {
             CompositeAlphaMode::Inherit
         );
         assert_eq!(preferred_alpha_mode(&[]), CompositeAlphaMode::Opaque);
+    }
+
+    #[test]
+    fn wait_for_shutdown_signal_can_run_from_plain_thread() {
+        let runtime = Runtime::new().unwrap();
+        let (tx, rx) = oneshot::channel();
+
+        let handle = thread::spawn(move || {
+            wait_for_shutdown_signal(&runtime, rx, Duration::from_millis(100));
+        });
+
+        tx.send(()).ok();
+        handle.join().unwrap();
     }
 }
 

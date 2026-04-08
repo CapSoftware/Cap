@@ -12,7 +12,10 @@ use replace_with::replace_with_or_abort;
 use std::{
     cmp::Ordering,
     ops::Deref,
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc, Weak,
+        mpsc::{self, SyncSender},
+    },
     time::Duration,
 };
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
@@ -25,6 +28,7 @@ const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Actor)]
 pub struct CameraFeed {
+    lock_generation: u64,
     state: State,
     senders: Vec<flume::Sender<FFmpegVideoFrame>>,
     native_senders: Vec<flume::Sender<NativeCameraFrame>>,
@@ -34,11 +38,30 @@ pub struct CameraFeed {
 
 enum State {
     Open(OpenState),
-    Locked { inner: AttachedState },
+    Locked {
+        inner: AttachedState,
+        token: Weak<()>,
+    },
 }
 
 impl State {
     fn try_as_open(&mut self) -> Result<&mut OpenState, FeedLockedError> {
+        let is_stale = matches!(self, Self::Locked { token, .. } if token.strong_count() == 0);
+
+        if is_stale {
+            warn!("Detected stale camera feed lock, auto-recovering");
+            replace_with_or_abort(self, |state| {
+                if let Self::Locked { inner, .. } = state {
+                    Self::Open(OpenState {
+                        connecting: None,
+                        attached: Some(inner),
+                    })
+                } else {
+                    state
+                }
+            });
+        }
+
         if let Self::Open(open_state) = self {
             Ok(open_state)
         } else {
@@ -136,6 +159,7 @@ impl AttachedState {
 impl Default for CameraFeed {
     fn default() -> Self {
         Self {
+            lock_generation: 0,
             state: State::Open(OpenState {
                 connecting: None,
                 attached: None,
@@ -154,6 +178,7 @@ pub struct CameraFeedLock {
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
     drop_tx: Option<oneshot::Sender<()>>,
+    _token: Arc<()>,
 }
 
 impl CameraFeedLock {
@@ -246,7 +271,9 @@ struct NewFrame(FFmpegVideoFrame);
 
 struct NewNativeFrame(NativeCameraFrame);
 
-struct Unlock;
+struct Unlock {
+    generation: u64,
+}
 
 struct FinalizePendingRelease {
     id: DeviceOrModelID,
@@ -664,7 +691,7 @@ impl Message<SetInput> for CameraFeed {
                     .map(|v| v.map(|v| (v.camera_info, v.video_info)))
                     .boxed())
             }
-            State::Locked { inner } => {
+            State::Locked { inner, .. } => {
                 if inner.id != msg.id {
                     return Err(SetInputError::Locked(FeedLockedError));
                 }
@@ -933,14 +960,22 @@ impl Message<Lock> for CameraFeed {
         let camera_info = attached.camera_info.clone();
         let video_info = attached.video_info;
 
-        self.state = State::Locked { inner: attached };
+        self.lock_generation += 1;
+        let generation = self.lock_generation;
+        let token = Arc::new(());
+        let token_weak = Arc::downgrade(&token);
+
+        self.state = State::Locked {
+            inner: attached,
+            token: token_weak,
+        };
 
         let (drop_tx, drop_rx) = oneshot::channel();
 
         let actor_ref = ctx.actor_ref();
         tokio::spawn(async move {
             let _ = drop_rx.await;
-            let _ = actor_ref.tell(Unlock).await;
+            let _ = actor_ref.tell(Unlock { generation }).await;
         });
 
         Ok(CameraFeedLock {
@@ -948,6 +983,7 @@ impl Message<Lock> for CameraFeed {
             video_info,
             actor: ctx.actor_ref(),
             drop_tx: Some(drop_tx),
+            _token: token,
         })
     }
 }
@@ -1019,7 +1055,7 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
         msg: LockedCameraInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner } = &mut self.state
+        if let State::Locked { inner, .. } = &mut self.state
             && inner.id == msg.id
         {
             inner.stage_pending_release();
@@ -1054,7 +1090,7 @@ impl Message<FinalizePendingRelease> for CameraFeed {
                     attached.finalize_pending_release();
                 }
             }
-            State::Locked { inner } => {
+            State::Locked { inner, .. } => {
                 if inner.id == msg.id {
                     inner.finalize_pending_release();
                 }
@@ -1066,11 +1102,19 @@ impl Message<FinalizePendingRelease> for CameraFeed {
 impl Message<Unlock> for CameraFeed {
     type Reply = ();
 
-    async fn handle(&mut self, _: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        trace!("CameraFeed.Unlock");
+    async fn handle(&mut self, msg: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        trace!("CameraFeed.Unlock(gen={})", msg.generation);
+
+        if msg.generation != self.lock_generation {
+            trace!(
+                "Ignoring stale camera unlock (msg gen {} != current {})",
+                msg.generation, self.lock_generation
+            );
+            return;
+        }
 
         replace_with_or_abort(&mut self.state, |state| {
-            if let State::Locked { inner } = state {
+            if let State::Locked { inner, .. } = state {
                 State::Open(OpenState {
                     connecting: None,
                     attached: Some(inner),

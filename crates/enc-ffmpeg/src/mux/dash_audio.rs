@@ -1,29 +1,17 @@
-use cap_media_info::VideoInfo;
+use crate::audio::aac::{AACEncoder, AACEncoderError};
+use crate::mux::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
+use cap_media_info::AudioInfo;
 use ffmpeg::{format, frame};
 use serde::Serialize;
 use std::{
     ffi::CString,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
     time::Duration,
 };
 
-use crate::video::h264::{
-    DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
-};
-
 const INIT_SEGMENT_NAME: &str = "init.mp4";
-
-#[derive(Debug, Clone)]
-pub struct DiskSpaceWarning {
-    pub available_mb: u64,
-    pub threshold_mb: u64,
-    pub path: String,
-    pub is_critical: bool,
-}
-
-pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
+const MANIFEST_VERSION: u32 = 2;
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
@@ -57,26 +45,9 @@ fn sync_file(path: &Path) {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SegmentCompletedEvent {
-    pub path: PathBuf,
-    pub index: u32,
-    pub duration: f64,
-    pub file_size: u64,
-    pub is_init: bool,
-    pub media_type: SegmentMediaType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentMediaType {
-    Video,
-    Audio,
-}
-
-pub struct SegmentedVideoEncoder {
+pub struct DashAudioSegmentEncoder {
     base_path: PathBuf,
-
-    encoder: H264Encoder,
+    encoder: AACEncoder,
     output: format::context::Output,
 
     current_index: u32,
@@ -85,24 +56,33 @@ pub struct SegmentedVideoEncoder {
     last_frame_timestamp: Option<Duration>,
     frames_in_segment: u32,
 
-    completed_segments: Vec<VideoSegmentInfo>,
+    completed_segments: Vec<AudioSegmentInfo>,
 
     pending_segment_indices: Vec<(u32, Duration)>,
     frames_since_pending_flush: u32,
 
-    codec_info: CodecInfo,
-
-    disk_space_callback: Option<DiskSpaceCallback>,
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     init_notified: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct VideoSegmentInfo {
+pub struct AudioSegmentInfo {
     pub path: PathBuf,
     pub index: u32,
     pub duration: Duration,
     pub file_size: Option<u64>,
+}
+
+pub struct DashAudioSegmentEncoderConfig {
+    pub segment_duration: Duration,
+}
+
+impl Default for DashAudioSegmentEncoderConfig {
+    fn default() -> Self {
+        Self {
+            segment_duration: Duration::from_secs(3),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -115,19 +95,6 @@ struct SegmentEntry {
     file_size: Option<u64>,
 }
 
-#[derive(Serialize, Clone)]
-struct CodecInfo {
-    width: u32,
-    height: u32,
-    frame_rate_num: i32,
-    frame_rate_den: i32,
-    time_base_num: i32,
-    time_base_den: i32,
-    pixel_format: String,
-}
-
-const MANIFEST_VERSION: u32 = 5;
-
 #[derive(Serialize)]
 struct Manifest {
     version: u32,
@@ -135,8 +102,6 @@ struct Manifest {
     manifest_type: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     init_segment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    codec_info: Option<CodecInfo>,
     segments: Vec<SegmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -148,7 +113,7 @@ pub enum InitError {
     #[error("FFmpeg: {0}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Encoder: {0}")]
-    Encoder(#[from] H264EncoderError),
+    Encoder(#[from] AACEncoderError),
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -159,10 +124,6 @@ pub enum QueueFrameError {
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Init: {0}")]
     Init(#[from] InitError),
-    #[error(transparent)]
-    Encode(#[from] crate::video::h264::QueueFrameError),
-    #[error("Init segment validation failed: {0}")]
-    InitSegmentInvalid(String),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -171,29 +132,11 @@ pub enum FinishError {
     FFmpeg(#[from] ffmpeg::Error),
 }
 
-pub struct SegmentedVideoEncoderConfig {
-    pub segment_duration: Duration,
-    pub preset: H264Preset,
-    pub bpp: f32,
-    pub output_size: Option<(u32, u32)>,
-}
-
-impl Default for SegmentedVideoEncoderConfig {
-    fn default() -> Self {
-        Self {
-            segment_duration: Duration::from_secs(DEFAULT_KEYFRAME_INTERVAL_SECS as u64),
-            preset: H264Preset::Ultrafast,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
-            output_size: None,
-        }
-    }
-}
-
-impl SegmentedVideoEncoder {
+impl DashAudioSegmentEncoder {
     pub fn init(
         base_path: PathBuf,
-        video_config: VideoInfo,
-        config: SegmentedVideoEncoderConfig,
+        audio_config: AudioInfo,
+        config: DashAudioSegmentEncoderConfig,
     ) -> Result<Self, InitError> {
         std::fs::create_dir_all(&base_path)?;
 
@@ -227,48 +170,20 @@ impl SegmentedVideoEncoder {
             set_opt("use_timeline", "1");
             set_opt("use_template", "1");
             set_opt("single_file", "0");
-            set_opt("hls_playlist", "1");
         }
 
-        let mut builder = H264EncoderBuilder::new(video_config)
-            .with_preset(config.preset)
-            .with_bpp(config.bpp);
-
-        if let Some((width, height)) = config.output_size {
-            builder = builder.with_output_size(width, height)?;
-        }
-
-        let encoder = builder.build(&mut output)?;
+        let encoder = AACEncoder::init(audio_config, &mut output)?;
 
         output.write_header()?;
 
         let init_path = base_path.join(INIT_SEGMENT_NAME);
-        let manifest_exists = manifest_path.exists();
         let init_exists = init_path.exists();
-        tracing::debug!(
-            manifest_path = %manifest_path.display(),
-            manifest_exists = manifest_exists,
-            init_path = %init_path.display(),
-            init_exists = init_exists,
-            "FFmpeg DASH muxer state after write_header()"
-        );
-
-        let codec_info = CodecInfo {
-            width: video_config.width,
-            height: video_config.height,
-            frame_rate_num: video_config.frame_rate.0,
-            frame_rate_den: video_config.frame_rate.1,
-            time_base_num: video_config.time_base.0,
-            time_base_den: video_config.time_base.1,
-            pixel_format: format!("{:?}", video_config.pixel_format),
-        };
 
         tracing::info!(
             path = %base_path.display(),
             segment_duration_secs = config.segment_duration.as_secs(),
-            width = codec_info.width,
-            height = codec_info.height,
-            "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments). CRITICAL: init.mp4 is required for segment playback/recovery."
+            init_exists = init_exists,
+            "Initialized DASH audio segment encoder (init.mp4 + m4s segments)"
         );
 
         let instance = Self {
@@ -283,8 +198,6 @@ impl SegmentedVideoEncoder {
             completed_segments: Vec::new(),
             pending_segment_indices: Vec::new(),
             frames_since_pending_flush: 0,
-            codec_info,
-            disk_space_callback: None,
             segment_tx: None,
             init_notified: false,
         };
@@ -292,10 +205,6 @@ impl SegmentedVideoEncoder {
         instance.write_in_progress_manifest();
 
         Ok(instance)
-    }
-
-    pub fn set_disk_space_callback(&mut self, callback: DiskSpaceCallback) {
-        self.disk_space_callback = Some(callback);
     }
 
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
@@ -318,14 +227,22 @@ impl SegmentedVideoEncoder {
                 duration: 0.0,
                 file_size: meta.len(),
                 is_init: true,
-                media_type: SegmentMediaType::Video,
+                media_type: SegmentMediaType::Audio,
             });
+        }
+    }
+
+    fn notify_segment(&self, event: SegmentCompletedEvent) {
+        if let Some(tx) = &self.segment_tx
+            && let Err(e) = tx.send(event)
+        {
+            tracing::warn!("Failed to send audio segment completed event: {e}");
         }
     }
 
     pub fn queue_frame(
         &mut self,
-        frame: frame::Video,
+        frame: frame::Audio,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
         let is_first_frame = self.segment_start_time.is_none();
@@ -340,7 +257,7 @@ impl SegmentedVideoEncoder {
         self.last_frame_timestamp = Some(timestamp);
 
         self.encoder
-            .queue_frame(frame, timestamp, &mut self.output)?;
+            .send_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
 
         if is_first_frame {
@@ -363,14 +280,6 @@ impl SegmentedVideoEncoder {
         Ok(())
     }
 
-    fn notify_segment(&self, event: SegmentCompletedEvent) {
-        if let Some(tx) = &self.segment_tx
-            && let Err(e) = tx.send(event)
-        {
-            tracing::warn!("Failed to send segment completed event: {e}");
-        }
-    }
-
     fn on_segment_boundary(&mut self, completed_index: u32, timestamp: Duration) {
         self.try_notify_init_segment();
 
@@ -385,7 +294,7 @@ impl SegmentedVideoEncoder {
             segment_index = completed_index,
             duration_secs = segment_duration.as_secs_f64(),
             frames = self.frames_in_segment,
-            "Segment boundary reached (time-based)"
+            "Audio segment boundary reached (time-based)"
         );
 
         self.current_index = completed_index + 1;
@@ -415,7 +324,7 @@ impl SegmentedVideoEncoder {
         let file_found = resolved_path.exists();
 
         if file_found && file_size > 0 {
-            self.completed_segments.push(VideoSegmentInfo {
+            self.completed_segments.push(AudioSegmentInfo {
                 path: segment_path.clone(),
                 index: completed_index,
                 duration: segment_duration,
@@ -430,7 +339,7 @@ impl SegmentedVideoEncoder {
                 duration: segment_duration.as_secs_f64(),
                 file_size,
                 is_init: false,
-                media_type: SegmentMediaType::Video,
+                media_type: SegmentMediaType::Audio,
             });
         } else {
             tracing::debug!(
@@ -484,7 +393,7 @@ impl SegmentedVideoEncoder {
                 "Flushing previously pending segment"
             );
 
-            self.completed_segments.push(VideoSegmentInfo {
+            self.completed_segments.push(AudioSegmentInfo {
                 path: segment_path,
                 index,
                 duration,
@@ -497,7 +406,7 @@ impl SegmentedVideoEncoder {
                 duration: duration.as_secs_f64(),
                 file_size,
                 is_init: false,
-                media_type: SegmentMediaType::Video,
+                media_type: SegmentMediaType::Audio,
             });
         }
 
@@ -546,9 +455,8 @@ impl SegmentedVideoEncoder {
 
         let manifest = Manifest {
             version: MANIFEST_VERSION,
-            manifest_type: "m4s_segments",
+            manifest_type: "m4s_audio_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
-            codec_info: Some(self.codec_info.clone()),
             segments,
             total_duration: None,
             is_complete: false,
@@ -557,7 +465,7 @@ impl SegmentedVideoEncoder {
         let manifest_path = self.base_path.join("manifest.json");
         if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
             tracing::warn!(
-                "Failed to write in-progress manifest to {}: {e}",
+                "Failed to write audio in-progress manifest to {}: {e}",
                 manifest_path.display()
             );
         }
@@ -569,11 +477,11 @@ impl SegmentedVideoEncoder {
         let frames_before_flush = self.frames_in_segment;
 
         if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Video encoder flush warning: {e}");
+            tracing::warn!("Audio encoder flush warning: {e}");
         }
 
         if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Video write_trailer warning: {e}");
+            tracing::warn!("Audio write_trailer warning: {e}");
         }
 
         self.finalize_pending_tmp_files();
@@ -593,11 +501,11 @@ impl SegmentedVideoEncoder {
         let frames_before_flush = self.frames_in_segment;
 
         if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Video encoder flush warning: {e}");
+            tracing::warn!("Audio encoder flush warning: {e}");
         }
 
         if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Video write_trailer warning: {e}");
+            tracing::warn!("Audio write_trailer warning: {e}");
         }
 
         self.finalize_pending_tmp_files();
@@ -632,12 +540,10 @@ impl SegmentedVideoEncoder {
                 let final_path = self.base_path.join(final_name);
                 let file_size = metadata.len();
 
-                let rename_result = Self::rename_with_retry(&path, &final_path);
-
-                match rename_result {
+                match std::fs::rename(&path, &final_path) {
                     Ok(()) => {
                         tracing::debug!(
-                            "Finalized pending segment: {} ({} bytes)",
+                            "Finalized pending audio segment: {} ({} bytes)",
                             final_path.display(),
                             file_size
                         );
@@ -645,7 +551,7 @@ impl SegmentedVideoEncoder {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to rename tmp segment {} to {}: {}",
+                            "Failed to rename tmp audio segment {} to {}: {}",
                             path.display(),
                             final_path.display(),
                             e
@@ -654,43 +560,6 @@ impl SegmentedVideoEncoder {
                 }
             }
         }
-    }
-
-    #[cfg(target_os = "windows")]
-    fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
-        const MAX_RETRIES: u32 = 10;
-        const RETRY_DELAY_MS: u64 = 50;
-
-        let mut last_error = None;
-        for attempt in 0..MAX_RETRIES {
-            match std::fs::rename(from, to) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    let is_sharing_violation =
-                        e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33);
-
-                    if !is_sharing_violation {
-                        return Err(e);
-                    }
-
-                    if attempt < MAX_RETRIES - 1 {
-                        tracing::trace!(
-                            "Rename attempt {} failed (file locked), retrying in {}ms",
-                            attempt + 1,
-                            RETRY_DELAY_MS
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
-                    }
-                    last_error = Some(e);
-                }
-            }
-        }
-        Err(last_error.unwrap_or_else(|| std::io::Error::other("rename failed after retries")))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
-        std::fs::rename(from, to)
     }
 
     fn collect_orphaned_segments(
@@ -732,7 +601,7 @@ impl SegmentedVideoEncoder {
 
                 if file_size < 100 {
                     tracing::debug!(
-                        "Skipping tiny orphaned segment {} ({} bytes)",
+                        "Skipping tiny orphaned audio segment {} ({} bytes)",
                         segment_path.display(),
                         file_size
                     );
@@ -752,13 +621,13 @@ impl SegmentedVideoEncoder {
                 };
 
                 tracing::info!(
-                    "Recovered orphaned segment {} with {} bytes, estimated duration {:?}",
+                    "Recovered orphaned audio segment {} with {} bytes, estimated duration {:?}",
                     segment_path.display(),
                     file_size,
                     duration
                 );
 
-                self.completed_segments.push(VideoSegmentInfo {
+                self.completed_segments.push(AudioSegmentInfo {
                     path: segment_path.clone(),
                     index,
                     duration,
@@ -771,7 +640,7 @@ impl SegmentedVideoEncoder {
                     duration: duration.as_secs_f64(),
                     file_size,
                     is_init: false,
-                    media_type: SegmentMediaType::Video,
+                    media_type: SegmentMediaType::Audio,
                 });
             }
         }
@@ -784,9 +653,8 @@ impl SegmentedVideoEncoder {
 
         let manifest = Manifest {
             version: MANIFEST_VERSION,
-            manifest_type: "m4s_segments",
+            manifest_type: "m4s_audio_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
-            codec_info: Some(self.codec_info.clone()),
             segments: self
                 .completed_segments
                 .iter()
@@ -810,239 +678,90 @@ impl SegmentedVideoEncoder {
         let manifest_path = self.base_path.join("manifest.json");
         if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
             tracing::warn!(
-                "Failed to write final manifest to {}: {e}",
+                "Failed to write final audio manifest to {}: {e}",
                 manifest_path.display()
             );
         }
     }
 
-    pub fn completed_segments(&self) -> &[VideoSegmentInfo] {
+    pub fn completed_segments(&self) -> &[AudioSegmentInfo] {
         &self.completed_segments
-    }
-
-    pub fn current_encoder(&self) -> Option<&H264Encoder> {
-        Some(&self.encoder)
-    }
-
-    pub fn current_encoder_mut(&mut self) -> Option<&mut H264Encoder> {
-        Some(&mut self.encoder)
     }
 
     pub fn base_path(&self) -> &Path {
         &self.base_path
     }
 
-    pub fn segment_duration(&self) -> Duration {
-        self.segment_duration
-    }
-
-    pub fn current_index(&self) -> u32 {
-        self.current_index
-    }
-
     pub fn init_segment_path(&self) -> PathBuf {
         self.base_path.join(INIT_SEGMENT_NAME)
-    }
-
-    pub fn validate_init_segment(&self) -> Result<(), String> {
-        let init_path = self.init_segment_path();
-
-        if !init_path.exists() {
-            return Err(format!(
-                "CRITICAL: init.mp4 is missing at {}. M4S segments will be unplayable without it!",
-                init_path.display()
-            ));
-        }
-
-        match std::fs::metadata(&init_path) {
-            Ok(metadata) => {
-                let size = metadata.len();
-                if size < 100 {
-                    return Err(format!(
-                        "CRITICAL: init.mp4 at {} is too small ({} bytes). It may be corrupted!",
-                        init_path.display(),
-                        size
-                    ));
-                }
-                Ok(())
-            }
-            Err(e) => Err(format!(
-                "CRITICAL: Cannot read init.mp4 metadata at {}: {}",
-                init_path.display(),
-                e
-            )),
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_media_info::VideoInfo;
+    use cap_media_info::AudioInfo;
     use std::sync::mpsc;
 
-    fn test_video_info() -> VideoInfo {
-        VideoInfo {
-            pixel_format: cap_media_info::Pixel::NV12,
-            width: 320,
-            height: 240,
-            time_base: ffmpeg::Rational(1, 1_000_000),
-            frame_rate: ffmpeg::Rational(30, 1),
+    fn test_audio_info() -> AudioInfo {
+        AudioInfo {
+            sample_format: ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+            sample_rate: 48000,
+            channels: 1,
+            time_base: ffmpeg::Rational(1, 48000),
+            buffer_size: 1024,
+            is_wireless_transport: false,
         }
     }
 
-    fn create_test_frame(width: u32, height: u32) -> ffmpeg::frame::Video {
-        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
-        for plane_idx in 0..frame.planes() {
-            let data = frame.data_mut(plane_idx);
-            for byte in data.iter_mut() {
-                *byte = 128;
-            }
+    fn create_test_audio_frame(samples: usize, sample_num: u64) -> frame::Audio {
+        let mut frame = frame::Audio::new(
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+            samples,
+            ffmpeg::ChannelLayout::MONO,
+        );
+        frame.set_rate(48000);
+        frame.set_pts(Some(sample_num as i64));
+        let data = frame.data_mut(0);
+        for (i, chunk) in data.chunks_exact_mut(4).enumerate() {
+            let val: f32 = (i as f32 * 0.01).sin() * 0.5;
+            chunk.copy_from_slice(&val.to_ne_bytes());
         }
         frame
     }
 
     #[test]
-    fn segment_callback_fires_for_init_segment() {
+    fn dash_audio_encoder_creates_init_segment() {
         ffmpeg::init().ok();
 
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
 
-        let (tx, _rx) = mpsc::channel::<SegmentCompletedEvent>();
-
-        let mut encoder = SegmentedVideoEncoder::init(
-            base_path,
-            test_video_info(),
-            SegmentedVideoEncoderConfig {
+        let mut encoder = DashAudioSegmentEncoder::init(
+            base_path.clone(),
+            test_audio_info(),
+            DashAudioSegmentEncoderConfig {
                 segment_duration: Duration::from_secs(1),
-                ..Default::default()
             },
         )
         .unwrap();
-        encoder.set_segment_callback(tx);
 
-        let frame = create_test_frame(320, 240);
+        let frame = create_test_audio_frame(1024, 0);
         encoder
             .queue_frame(frame, Duration::from_millis(0))
             .unwrap();
 
-        let init_exists = encoder.init_segment_path().exists();
-        assert!(init_exists, "init.mp4 should exist after first frame");
-    }
-
-    #[test]
-    fn segment_callback_fires_on_boundary() {
-        ffmpeg::init().ok();
-
-        let temp = tempfile::tempdir().unwrap();
-        let base_path = temp.path().to_path_buf();
-
-        let (tx, rx) = mpsc::channel::<SegmentCompletedEvent>();
-
-        let mut encoder = SegmentedVideoEncoder::init(
-            base_path.clone(),
-            test_video_info(),
-            SegmentedVideoEncoderConfig {
-                segment_duration: Duration::from_millis(100),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        encoder.set_segment_callback(tx);
-
-        for i in 0..30 {
-            let frame = create_test_frame(320, 240);
-            let ts = Duration::from_millis(i * 33);
-            encoder.queue_frame(frame, ts).unwrap();
-        }
-
-        encoder.finish().unwrap();
-
-        let events: Vec<SegmentCompletedEvent> = rx.try_iter().collect();
-
-        let non_init_events: Vec<&SegmentCompletedEvent> =
-            events.iter().filter(|e| !e.is_init).collect();
-        assert!(
-            !non_init_events.is_empty(),
-            "should have at least one segment boundary event"
-        );
-
-        for event in &non_init_events {
-            assert_eq!(event.media_type, SegmentMediaType::Video);
-            assert!(!event.is_init);
-            assert!(event.duration > 0.0);
-        }
-
-        let all_video = events
-            .iter()
-            .all(|e| e.media_type == SegmentMediaType::Video);
-        assert!(all_video, "all events should be video type");
-    }
-
-    #[test]
-    fn manifest_updated_on_segment_boundary() {
-        ffmpeg::init().ok();
-
-        let temp = tempfile::tempdir().unwrap();
-        let base_path = temp.path().to_path_buf();
-
-        let mut encoder = SegmentedVideoEncoder::init(
-            base_path.clone(),
-            test_video_info(),
-            SegmentedVideoEncoderConfig {
-                segment_duration: Duration::from_millis(100),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        for i in 0..15 {
-            let frame = create_test_frame(320, 240);
-            let ts = Duration::from_millis(i * 33);
-            encoder.queue_frame(frame, ts).unwrap();
-        }
-
         let manifest_path = base_path.join("manifest.json");
         assert!(manifest_path.exists(), "manifest.json should exist");
 
-        let manifest_content = std::fs::read_to_string(&manifest_path).unwrap();
-        let manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
-
-        assert_eq!(manifest["version"], 5);
-        assert_eq!(manifest["type"], "m4s_segments");
-        assert!(manifest["init_segment"].is_string());
+        let content = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(manifest["type"], "m4s_audio_segments");
         assert!(!manifest["is_complete"].as_bool().unwrap());
-
-        encoder.finish().unwrap();
-
-        let final_content = std::fs::read_to_string(&manifest_path).unwrap();
-        let final_manifest: serde_json::Value = serde_json::from_str(&final_content).unwrap();
-        assert!(final_manifest["is_complete"].as_bool().unwrap());
     }
 
     #[test]
-    fn init_segment_is_valid_after_creation() {
-        ffmpeg::init().ok();
-
-        let temp = tempfile::tempdir().unwrap();
-        let base_path = temp.path().to_path_buf();
-
-        let mut encoder = SegmentedVideoEncoder::init(
-            base_path,
-            test_video_info(),
-            SegmentedVideoEncoderConfig::default(),
-        )
-        .unwrap();
-
-        let frame = create_test_frame(320, 240);
-        encoder.queue_frame(frame, Duration::ZERO).unwrap();
-
-        assert!(encoder.validate_init_segment().is_ok());
-    }
-
-    #[test]
-    fn segment_events_contain_correct_indices() {
+    fn dash_audio_segment_callback_fires() {
         ffmpeg::init().ok();
 
         let temp = tempfile::tempdir().unwrap();
@@ -1050,36 +769,74 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<SegmentCompletedEvent>();
 
-        let mut encoder = SegmentedVideoEncoder::init(
+        let mut encoder = DashAudioSegmentEncoder::init(
             base_path.clone(),
-            test_video_info(),
-            SegmentedVideoEncoderConfig {
-                segment_duration: Duration::from_millis(50),
-                ..Default::default()
+            test_audio_info(),
+            DashAudioSegmentEncoderConfig {
+                segment_duration: Duration::from_millis(100),
             },
         )
         .unwrap();
         encoder.set_segment_callback(tx);
 
-        for i in 0..60 {
-            let frame = create_test_frame(320, 240);
-            let ts = Duration::from_millis(i * 33);
+        let mut sample_offset: u64 = 0;
+        for i in 0..100 {
+            let frame = create_test_audio_frame(1024, sample_offset);
+            sample_offset += 1024;
+            let ts = Duration::from_millis(i * 21);
             encoder.queue_frame(frame, ts).unwrap();
         }
 
         encoder.finish().unwrap();
 
         let events: Vec<SegmentCompletedEvent> = rx.try_iter().collect();
-        let boundary_events: Vec<&SegmentCompletedEvent> =
-            events.iter().filter(|e| !e.is_init).collect();
 
-        if boundary_events.len() >= 2 {
-            for i in 1..boundary_events.len() {
-                assert!(
-                    boundary_events[i].index > boundary_events[i - 1].index,
-                    "segment indices should be strictly increasing"
-                );
-            }
+        let init_events: Vec<&SegmentCompletedEvent> =
+            events.iter().filter(|e| e.is_init).collect();
+        assert!(
+            !init_events.is_empty(),
+            "should receive at least one init event"
+        );
+        assert_eq!(init_events[0].media_type, SegmentMediaType::Audio);
+
+        let non_init: Vec<&SegmentCompletedEvent> = events.iter().filter(|e| !e.is_init).collect();
+
+        for event in &non_init {
+            assert_eq!(event.media_type, SegmentMediaType::Audio);
         }
+    }
+
+    #[test]
+    fn dash_audio_finalize_marks_complete() {
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = DashAudioSegmentEncoder::init(
+            base_path.clone(),
+            test_audio_info(),
+            DashAudioSegmentEncoderConfig {
+                segment_duration: Duration::from_millis(100),
+            },
+        )
+        .unwrap();
+
+        let mut sample_offset: u64 = 0;
+        for i in 0..50 {
+            let frame = create_test_audio_frame(1024, sample_offset);
+            sample_offset += 1024;
+            let ts = Duration::from_millis(i * 21);
+            encoder.queue_frame(frame, ts).unwrap();
+        }
+
+        encoder.finish().unwrap();
+
+        let manifest_path = base_path.join("manifest.json");
+        let content = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(manifest["is_complete"].as_bool().unwrap());
+        assert!(manifest["total_duration"].is_number());
     }
 }

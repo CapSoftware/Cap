@@ -4,6 +4,7 @@ import {
 } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
+	batch,
 	type ComponentProps,
 	batch,
 	createEffect,

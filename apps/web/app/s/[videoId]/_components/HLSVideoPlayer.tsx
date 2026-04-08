@@ -72,6 +72,7 @@ interface Props {
 	disableCaptions?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
+	isLiveSegments?: boolean;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	captionLanguage?: string;
@@ -92,6 +93,7 @@ export function HLSVideoPlayer({
 	mediaPlayerClassName,
 	autoplay = false,
 	hasActiveUpload,
+	isLiveSegments = false,
 	disableCaptions,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
@@ -109,7 +111,9 @@ export function HLSVideoPlayer({
 	const [toggleCaptions, setToggleCaptions] = useState(true);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
+	const [hlsInitFailed, setHlsInitFailed] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+	const hasPlayedOnceRef = useRef(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [sourceVersion, setSourceVersion] = useState(0);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
@@ -135,21 +139,21 @@ export function HLSVideoPlayer({
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
-			if (!hasPlayedOnce) {
+			if (!hasPlayedOnceRef.current) {
 				setShowPlayButton(true);
 			}
 		};
 
 		const handleCanPlay = () => {
 			setVideoLoaded(true);
-			if (!hasPlayedOnce) {
+			if (!hasPlayedOnceRef.current) {
 				setShowPlayButton(true);
 			}
 		};
 
 		const handleLoad = () => {
 			setVideoLoaded(true);
-			if (!hasPlayedOnce) {
+			if (!hasPlayedOnceRef.current) {
 				setShowPlayButton(true);
 			}
 		};
@@ -157,6 +161,7 @@ export function HLSVideoPlayer({
 		const handlePlay = () => {
 			setShowPlayButton(false);
 			setHasPlayedOnce(true);
+			hasPlayedOnceRef.current = true;
 		};
 
 		const handleLoadedMetadata = () => {
@@ -188,7 +193,7 @@ export function HLSVideoPlayer({
 
 		if (video.readyState >= 2) {
 			setVideoLoaded(true);
-			if (!hasPlayedOnce) {
+			if (!hasPlayedOnceRef.current) {
 				setShowPlayButton(true);
 			}
 		}
@@ -201,18 +206,29 @@ export function HLSVideoPlayer({
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError);
 		};
-	}, [hasPlayedOnce, playbackSrc, videoRef.current]);
+	}, [playbackSrc, videoRef.current]);
 
-	// HLS setup
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || !playbackSrc) return;
+
+		setHlsInitFailed(false);
 
 		if (Hls.isSupported()) {
 			const hls = new Hls({
 				enableWorker: true,
 				lowLatencyMode: false,
 				backBufferLength: 90,
+				...(isLiveSegments
+					? {
+							liveSyncDurationCount: 3,
+							liveMaxLatencyDurationCount: 6,
+							manifestLoadingRetryDelay: 2000,
+							manifestLoadingMaxRetry: 30,
+							levelLoadingRetryDelay: 2000,
+							levelLoadingMaxRetry: 30,
+						}
+					: {}),
 			});
 
 			hlsInstance.current = hls;
@@ -223,20 +239,50 @@ export function HLSVideoPlayer({
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
 				setVideoLoaded(true);
-				if (!hasPlayedOnce) {
+				if (!hasPlayedOnceRef.current) {
 					setShowPlayButton(true);
 				}
 			});
 
+			let networkRetryCount = 0;
+			const maxNetworkRetries = isLiveSegments ? 30 : 6;
+			let hasTriedPlaylistReload = false;
+
 			hls.on(Hls.Events.ERROR, (event, data) => {
 				console.error("HLSVideoPlayer: HLS error:", event, data);
+
+				const isExpiredUrl =
+					data.response?.code === 403 || data.response?.code === 410;
+				if (
+					!data.fatal &&
+					isExpiredUrl &&
+					(data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+						data.details === Hls.ErrorDetails.KEY_LOAD_ERROR) &&
+					!hasTriedPlaylistReload
+				) {
+					hasTriedPlaylistReload = true;
+					console.log(
+						"HLSVideoPlayer: Presigned URL expired, reloading playlist for fresh URLs",
+					);
+					hls.loadSource(playbackSrc);
+					return;
+				}
+
 				if (data.fatal) {
 					switch (data.type) {
 						case Hls.ErrorTypes.NETWORK_ERROR:
-							console.log(
-								"HLSVideoPlayer: Fatal network error encountered, trying to recover",
-							);
-							hls.startLoad();
+							networkRetryCount++;
+							if (networkRetryCount <= maxNetworkRetries) {
+								const delay = isLiveSegments ? 2000 : 1000;
+								console.log(
+									`HLSVideoPlayer: Fatal network error, retrying in ${delay}ms (attempt ${networkRetryCount}/${maxNetworkRetries})`,
+								);
+								setTimeout(() => hls.startLoad(), delay);
+							} else {
+								console.log("HLSVideoPlayer: Network retries exhausted");
+								setHlsInitFailed(true);
+								hls.destroy();
+							}
 							break;
 						case Hls.ErrorTypes.MEDIA_ERROR:
 							console.log(
@@ -246,10 +292,16 @@ export function HLSVideoPlayer({
 							break;
 						default:
 							console.log("HLSVideoPlayer: Fatal error, cannot recover");
+							setHlsInitFailed(true);
 							hls.destroy();
 							break;
 					}
 				}
+			});
+
+			hls.on(Hls.Events.MANIFEST_LOADED, () => {
+				networkRetryCount = 0;
+				hasTriedPlaylistReload = false;
 			});
 
 			return () => {
@@ -264,8 +316,9 @@ export function HLSVideoPlayer({
 			console.log("HLSVideoPlayer: Using native HLS support");
 		} else {
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
+			setHlsInitFailed(true);
 		}
-	}, [playbackSrc, hasPlayedOnce, videoRef.current]);
+	}, [playbackSrc, isLiveSegments, videoRef.current]);
 
 	// Caption handling
 	useEffect(() => {
@@ -350,7 +403,13 @@ export function HLSVideoPlayer({
 		videoId,
 		hasActiveUpload || false,
 	);
-	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
+	const isErrorWhileHlsLoading =
+		!videoLoaded &&
+		!hlsInitFailed &&
+		(uploadProgressRaw?.status === "error" ||
+			uploadProgressRaw?.status === "failed");
+	const uploadProgress =
+		videoLoaded || isErrorWhileHlsLoading ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isProcessing = uploadProgress?.status === "processing";
 	const isGeneratingThumbnail =
@@ -442,7 +501,7 @@ export function HLSVideoPlayer({
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					hasActiveProgress || videoLoaded || !hasFailedOrError
+					videoLoaded || hasActiveProgress || hasFailedOrError
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",
 				)}
@@ -536,6 +595,7 @@ export function HLSVideoPlayer({
 				onPlay={() => {
 					setShowPlayButton(false);
 					setHasPlayedOnce(true);
+					hasPlayedOnceRef.current = true;
 				}}
 				playsInline
 				autoPlay={autoplay}

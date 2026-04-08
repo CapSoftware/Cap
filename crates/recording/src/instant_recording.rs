@@ -11,7 +11,7 @@ use crate::{
     sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use anyhow::Context as _;
-use cap_media_info::{AudioInfo, VideoInfo};
+use cap_media_info::VideoInfo;
 use cap_project::InstantRecordingMeta;
 use cap_timestamp::Timestamps;
 use cap_utils::ensure_dir;
@@ -24,8 +24,12 @@ use std::{
 use tracing::*;
 
 struct Pipeline {
-    output: OutputPipeline,
+    video: OutputPipeline,
+    audio: Option<OutputPipeline>,
     video_info: VideoInfo,
+    segments_dir: PathBuf,
+    segment_rx:
+        Option<std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
 }
 
 enum ActorState {
@@ -47,6 +51,13 @@ pub struct ActorHandle {
     pub capture_target: ScreenCaptureTarget,
     done_fut: output_pipeline::DoneFut,
     health_rx: Option<output_pipeline::HealthReceiver>,
+    segment_rx: Option<
+        std::sync::Mutex<
+            Option<
+                std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>,
+            >,
+        >,
+    >,
 }
 
 impl ActorHandle {
@@ -77,6 +88,15 @@ impl ActorHandle {
     pub async fn is_paused(&self) -> anyhow::Result<bool> {
         Ok(self.actor_ref.ask(IsPaused).await?)
     }
+
+    pub fn take_segment_rx(
+        &self,
+    ) -> Option<std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>
+    {
+        self.segment_rx
+            .as_ref()
+            .and_then(|m| m.lock().ok().and_then(|mut guard| guard.take()))
+    }
 }
 
 impl Drop for ActorHandle {
@@ -94,6 +114,8 @@ pub struct Actor {
     capture_target: ScreenCaptureTarget,
     video_info: VideoInfo,
     state: ActorState,
+    total_pause_duration: std::time::Duration,
+    pause_started_at: Option<f64>,
 }
 
 impl Actor {
@@ -110,7 +132,15 @@ impl Actor {
         });
 
         if let Some(pipeline) = pipeline {
-            pipeline.output.stop().await?;
+            if let Some(audio) = pipeline.audio {
+                let (audio_res, video_res) = tokio::join!(audio.stop(), pipeline.video.stop());
+                if let Err(e) = audio_res {
+                    warn!("Audio pipeline stop failed: {e:#}");
+                }
+                video_res?;
+            } else {
+                pipeline.video.stop().await?;
+            }
         }
 
         Ok(())
@@ -121,7 +151,56 @@ impl Message<Stop> for Actor {
     type Reply = anyhow::Result<CompletedRecording>;
 
     async fn handle(&mut self, _: Stop, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if matches!(self.state, ActorState::Stopped) {
+            return Err(anyhow::anyhow!("Recording already stopped"));
+        }
+
+        if let Some(pause_start) = self.pause_started_at.take() {
+            let pause_elapsed = current_time_f64() - pause_start;
+            if pause_elapsed > 0.0 {
+                self.total_pause_duration += std::time::Duration::from_secs_f64(pause_elapsed);
+            }
+        }
+
+        let segments_dir =
+            replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
+                let result = match &state {
+                    ActorState::Recording { pipeline, .. }
+                    | ActorState::Paused { pipeline, .. } => pipeline.segments_dir.clone(),
+                    ActorState::Stopped => self.recording_dir.join("content").join("display"),
+                };
+                (result, state)
+            });
+
         self.stop().await?;
+
+        let has_init = segments_dir.join("init.mp4").exists();
+        let has_segments = has_init
+            && match std::fs::read_dir(&segments_dir) {
+                Ok(entries) => entries
+                    .filter_map(Result::ok)
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "m4s")),
+                Err(e) => {
+                    warn!(
+                        path = %segments_dir.display(),
+                        error = %e,
+                        "Failed to read segments directory, treating as no segments"
+                    );
+                    false
+                }
+            };
+
+        let health = if has_segments {
+            crate::RecordingHealth::Healthy
+        } else if has_init {
+            crate::RecordingHealth::Degraded {
+                issues: vec!["Recording too short — no complete segments produced".to_string()],
+            }
+        } else {
+            crate::RecordingHealth::Damaged {
+                reason: "No video segments produced".to_string(),
+            }
+        };
 
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
@@ -130,6 +209,7 @@ impl Message<Stop> for Actor {
                 sample_rate: None,
             },
             display_source: self.capture_target.clone(),
+            health,
         })
     }
 }
@@ -140,13 +220,17 @@ impl Message<Pause> for Actor {
     type Reply = ();
 
     async fn handle(&mut self, _: Pause, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.pause_started_at = Some(current_time_f64());
         replace_with::replace_with_or_abort(&mut self.state, |state| {
             if let ActorState::Recording {
                 pipeline,
                 segment_start_time,
             } = state
             {
-                pipeline.output.pause();
+                pipeline.video.pause();
+                if let Some(ref audio) = pipeline.audio {
+                    audio.pause();
+                }
                 return ActorState::Paused {
                     pipeline,
                     segment_start_time,
@@ -164,13 +248,22 @@ impl Message<Resume> for Actor {
     type Reply = ();
 
     async fn handle(&mut self, _: Resume, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let Some(pause_start) = self.pause_started_at.take() {
+            let pause_elapsed = current_time_f64() - pause_start;
+            if pause_elapsed > 0.0 {
+                self.total_pause_duration += std::time::Duration::from_secs_f64(pause_elapsed);
+            }
+        }
         replace_with::replace_with_or_abort(&mut self.state, |state| {
             if let ActorState::Paused {
                 pipeline,
                 segment_start_time,
             } = state
             {
-                pipeline.output.resume();
+                pipeline.video.resume();
+                if let Some(ref audio) = pipeline.audio {
+                    audio.resume();
+                }
                 return ActorState::Recording {
                     pipeline,
                     segment_start_time,
@@ -209,24 +302,18 @@ pub struct CompletedRecording {
     pub project_path: PathBuf,
     pub display_source: ScreenCaptureTarget,
     pub meta: InstantRecordingMeta,
+    pub health: crate::RecordingHealth,
 }
 
 async fn create_pipeline(
-    output_path: PathBuf,
-    screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
+    content_dir: PathBuf,
+    screen_capture: crate::sources::screen_capture::VideoSourceConfig,
+    screen_info: cap_media_info::VideoInfo,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    system_audio_source: Option<crate::sources::screen_capture::SystemAudioSourceConfig>,
     max_output_size: Option<u32>,
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
-    if let Some(mic_feed) = &mic_feed {
-        debug!(
-            "mic audio info: {:#?}",
-            AudioInfo::from_stream_config(mic_feed.config())
-        );
-    };
-
-    let screen_info = screen_source.info();
-
     let output_resolution = max_output_size
         .map(|max_output_size| {
             clamp_size(
@@ -244,28 +331,77 @@ async fn create_pipeline(
             )
         });
 
-    let (screen_capture, system_audio) = screen_source.to_sources().await?;
+    let segments_dir = content_dir.join("display");
 
-    let output = ScreenCaptureMethod::make_instant_mode_pipeline(
+    #[cfg(target_os = "macos")]
+    let segment_channel = {
+        let (tx, rx) =
+            std::sync::mpsc::channel::<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>();
+        Some((tx, rx))
+    };
+    #[cfg(not(target_os = "macos"))]
+    let segment_channel: Option<(
+        std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>,
+        std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>,
+    )> = None;
+
+    let segment_tx_for_video = segment_channel.as_ref().map(|(tx, _)| tx.clone());
+
+    let video = ScreenCaptureMethod::make_instant_segmented_video_pipeline(
         screen_capture,
-        system_audio,
-        mic_feed,
-        output_path.clone(),
+        segments_dir.clone(),
         output_resolution,
         start_time,
-        #[cfg(windows)]
-        crate::capture_pipeline::EncoderPreferences::new(),
+        segment_tx_for_video,
     )
     .await?;
 
+    let has_audio = mic_feed.is_some() || system_audio_source.is_some();
+    let audio = if has_audio {
+        let audio_dir = content_dir.join("audio");
+        let mut builder =
+            output_pipeline::OutputPipeline::builder(audio_dir.clone()).with_timestamps(start_time);
+
+        if let Some(sys_audio) = system_audio_source {
+            builder = builder
+                .with_audio_source::<crate::sources::screen_capture::SystemAudioSource>(sys_audio);
+        }
+
+        if let Some(mic) = mic_feed {
+            builder = builder.with_audio_source::<crate::sources::Microphone>(mic);
+        }
+
+        let segment_tx_for_audio = segment_channel.as_ref().map(|(tx, _)| tx.clone());
+
+        let audio_pipeline = builder
+            .build::<output_pipeline::DashSegmentedAudioMuxer>(
+                output_pipeline::DashSegmentedAudioMuxerConfig {
+                    shared_pause_state: None,
+                    segment_tx: segment_tx_for_audio,
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("audio pipeline setup")?;
+
+        Some(audio_pipeline)
+    } else {
+        None
+    };
+
+    let segment_rx = segment_channel.map(|(_, rx)| rx);
+
     Ok(Pipeline {
-        output,
+        video,
+        audio,
         video_info: VideoInfo::from_raw_ffmpeg(
             screen_info.pixel_format,
             output_resolution.0,
             output_resolution.1,
             screen_info.fps(),
         ),
+        segments_dir,
+        segment_rx,
     })
 }
 
@@ -390,7 +526,7 @@ pub async fn spawn_instant_recording_actor(
             }
 
             #[cfg(target_os = "macos")]
-            let pipeline = builder
+            let cam_pipeline = builder
                 .build::<output_pipeline::AVFoundationCameraMuxer>(
                     output_pipeline::AVFoundationCameraMuxerConfig::default(),
                 )
@@ -398,7 +534,7 @@ pub async fn spawn_instant_recording_actor(
                 .context("camera-only pipeline setup")?;
 
             #[cfg(windows)]
-            let pipeline = builder
+            let cam_pipeline = builder
                 .build::<output_pipeline::WindowsCameraMuxer>(
                     output_pipeline::WindowsCameraMuxerConfig {
                         encoder_preferences: crate::capture_pipeline::EncoderPreferences::default(),
@@ -411,8 +547,11 @@ pub async fn spawn_instant_recording_actor(
             let video_info = *camera_feed.video_info();
             (
                 Pipeline {
-                    output: pipeline,
+                    video: cam_pipeline,
+                    audio: None,
                     video_info,
+                    segments_dir: content_dir.clone(),
+                    segment_rx: None,
                 },
                 video_info,
             )
@@ -446,10 +585,15 @@ pub async fn spawn_instant_recording_actor(
 
             debug!("screen capture: {screen_source:#?}");
 
+            let screen_info = screen_source.info();
+            let (screen_capture, system_audio_source) = screen_source.to_sources().await?;
+
             let pipeline = create_pipeline(
-                content_dir.join("output.mp4"),
-                screen_source.clone(),
+                content_dir.clone(),
+                screen_capture,
+                screen_info,
                 inputs.mic_feed.clone(),
+                system_audio_source,
                 max_output_size,
                 timestamps,
             )
@@ -465,8 +609,9 @@ pub async fn spawn_instant_recording_actor(
 
     trace!("spawning recording actor");
 
-    let done_fut = pipeline.output.done_fut();
-    let health_rx = pipeline.output.take_health_rx();
+    let segment_rx = pipeline.segment_rx.take();
+    let done_fut = pipeline.video.done_fut();
+    let health_rx = pipeline.video.take_health_rx();
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
         capture_target: inputs.capture_target.clone(),
@@ -475,6 +620,8 @@ pub async fn spawn_instant_recording_actor(
             pipeline,
             segment_start_time,
         },
+        total_pause_duration: std::time::Duration::ZERO,
+        pause_started_at: None,
     });
 
     let actor_handle = ActorHandle {
@@ -482,6 +629,7 @@ pub async fn spawn_instant_recording_actor(
         capture_target: inputs.capture_target,
         done_fut: done_fut.clone(),
         health_rx,
+        segment_rx: segment_rx.map(|rx| std::sync::Mutex::new(Some(rx))),
     };
 
     tokio::spawn(async move {

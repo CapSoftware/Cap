@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.4.83"
+version = "0.4.84"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1386,6 +1386,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo 0.32.1",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",

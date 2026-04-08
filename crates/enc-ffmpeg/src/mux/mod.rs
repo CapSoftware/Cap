@@ -1,3 +1,4 @@
+pub mod dash_audio;
 pub mod fragmented_audio;
 pub mod mov;
 pub mod mp4;

@@ -45,6 +45,7 @@ pub struct MP4Encoder {
     last_audio_end_pts: Option<i64>,
     last_audio_timescale: Option<i32>,
     pending_video_frame: Option<PendingVideoFrame>,
+    instant_mode: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -388,6 +389,7 @@ impl MP4Encoder {
             last_audio_end_pts: None,
             last_audio_timescale: None,
             pending_video_frame: None,
+            instant_mode,
         })
     }
 
@@ -449,8 +451,9 @@ impl MP4Encoder {
             self.pause_timestamp = None;
         }
 
-        if let (Some(audio_end_pts), Some(audio_ts)) =
-            (self.last_audio_end_pts, self.last_audio_timescale)
+        if !self.instant_mode
+            && let (Some(audio_end_pts), Some(audio_ts)) =
+                (self.last_audio_end_pts, self.last_audio_timescale)
         {
             let audio_secs = audio_end_pts as f64 / audio_ts as f64;
             let video_secs = timestamp
@@ -1830,8 +1833,8 @@ mod tests {
     }
 
     #[test]
-    fn video_ahead_of_audio_throttled() {
-        let output = test_output_path("video_ahead_audio");
+    fn instant_mode_video_advances_past_drift_threshold() {
+        let output = test_output_path("instant_video_past_drift");
         let video = valid_video_config();
         let audio = wireless_audio_config();
 
@@ -1845,24 +1848,80 @@ mod tests {
             .queue_audio_frame(&first_audio, Duration::ZERO)
             .unwrap();
 
-        let mut throttled_count = 0u64;
+        let mut accepted_past_threshold = 0u64;
+        let threshold_ms = (MAX_AV_DRIFT_SECS * 1000.0) as u64 + 500;
+
+        for i in 0..60u64 {
+            let ts_ms = i * 100;
+            let timestamp = Duration::from_millis(ts_ms);
+            let frame = create_test_video_frame(&pool, (ts_ms as i64) * 1000, 100_000);
+
+            let mut retries = 0u32;
+            loop {
+                let result = encoder.queue_video_frame(frame.clone(), timestamp);
+                match result {
+                    Ok(()) => {
+                        if ts_ms > threshold_ms {
+                            accepted_past_threshold += 1;
+                        }
+                        break;
+                    }
+                    Err(QueueFrameError::NotReadyForMore) => {
+                        retries += 1;
+                        if retries > 50 {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(e) => panic!("Video encode failed at frame {i}: {e}"),
+                }
+            }
+        }
+
+        assert!(
+            accepted_past_threshold > 0,
+            "Instant mode: video frames must be accepted past the {}s drift threshold",
+            MAX_AV_DRIFT_SECS,
+        );
+
+        let _ = encoder.finish(Some(Duration::from_secs(7)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn non_instant_mode_video_throttled_by_audio_drift() {
+        let output = test_output_path("non_instant_video_throttled");
+        let video = valid_video_config();
+        let audio = wireless_audio_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, Some(audio), None).unwrap();
+
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let first_audio = create_test_audio_frame(48000, 1024);
+        encoder
+            .queue_audio_frame(&first_audio, Duration::ZERO)
+            .unwrap();
+
+        let mut accepted_past_threshold = 0u64;
+        let threshold_ms = (MAX_AV_DRIFT_SECS * 1000.0) as u64 + 500;
+
         for i in 0..200u64 {
             let ts_ms = i * 33;
             let timestamp = Duration::from_millis(ts_ms);
             let frame = create_test_video_frame(&pool, (ts_ms as i64) * 1000, 33_333);
 
-            match encoder.queue_video_frame(frame, timestamp) {
-                Ok(()) => {}
-                Err(QueueFrameError::NotReadyForMore) => {
-                    throttled_count += 1;
-                }
-                Err(e) => panic!("Video encode failed at frame {i}: {e}"),
+            if let Ok(()) = encoder.queue_video_frame(frame, timestamp)
+                && ts_ms > threshold_ms
+            {
+                accepted_past_threshold += 1;
             }
         }
 
-        assert!(
-            throttled_count > 0,
-            "Expected video frames to be throttled when ahead of audio"
+        assert_eq!(
+            accepted_past_threshold, 0,
+            "Non-instant mode: no video frames should be accepted past the {}s drift threshold",
+            MAX_AV_DRIFT_SECS,
         );
 
         let _ = encoder.finish(Some(Duration::from_secs(7)));

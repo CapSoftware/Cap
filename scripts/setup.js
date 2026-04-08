@@ -28,6 +28,12 @@ async function main() {
 	await fs.mkdir(targetDir, { recursive: true });
 
 	let cargoConfigContents = BASE_CARGO_TOML;
+	const sccachePath = await findExecutable("sccache");
+
+	if (sccachePath) {
+		cargoConfigContents += `\n[build]\nrustc-wrapper = "${sccachePath.replaceAll("\\", "/")}"\n`;
+		console.log(`Using sccache at ${sccachePath}`);
+	} else console.log("sccache not found, using rustc directly");
 
 	if (process.platform === "darwin") {
 		const NATIVE_DEPS_VERSION = "v0.25";
@@ -61,34 +67,45 @@ async function main() {
 			console.log(`Extracted ${nativeDepsFolder}`);
 		} else console.log(`Using cached ${nativeDepsFolder}`);
 
-		await trimMacOSFramework(frameworkDir);
-		console.log("Trimmed .framework");
-
-		console.log("Signing .framework libraries");
-		await signMacOSFrameworkLibs(frameworkDir);
-		console.log("Signed .framework libraries");
-
 		const frameworkTargetDir = path.join(
 			targetDir,
 			"Frameworks",
 			"Spacedrive.framework",
 		);
-		await fs.rm(frameworkTargetDir, { recursive: true }).catch(() => {});
-		await fs.cp(
-			frameworkDir,
-			path.join(targetDir, "Frameworks", "Spacedrive.framework"),
-			{ recursive: true },
-		);
+		const debugDir = path.join(targetDir, "debug");
+		const nativeLibDir = path.join(nativeDepsDir, "lib");
+		const needsFrameworkSync =
+			downloadedNativeDeps ||
+			!(await fileExists(frameworkTargetDir)) ||
+			(await missingFiles(debugDir, await fs.readdir(nativeLibDir)).then(
+				(files) => files.length > 0,
+			));
 
-		// alternative to specifying dylibs as linker args
-		await fs.mkdir(path.join(targetDir, "/debug"), { recursive: true });
-		for (const name of await fs.readdir(path.join(nativeDepsDir, "lib"))) {
-			await fs.copyFile(
-				path.join(nativeDepsDir, "lib", name),
-				path.join(targetDir, "debug", name),
+		if (needsFrameworkSync) {
+			await trimMacOSFramework(frameworkDir);
+			console.log("Trimmed .framework");
+
+			console.log("Signing .framework libraries");
+			await signMacOSFrameworkLibs(frameworkDir);
+			console.log("Signed .framework libraries");
+
+			await fs.rm(frameworkTargetDir, { recursive: true }).catch(() => {});
+			await fs.cp(
+				frameworkDir,
+				path.join(targetDir, "Frameworks", "Spacedrive.framework"),
+				{ recursive: true },
 			);
-		}
-		console.log("Copied ffmpeg dylibs to target/debug");
+
+			await fs.mkdir(debugDir, { recursive: true });
+			const nativeLibs = await fs.readdir(nativeLibDir);
+			for (const name of nativeLibs) {
+				await fs.copyFile(
+					path.join(nativeLibDir, name),
+					path.join(debugDir, name),
+				);
+			}
+			console.log("Copied ffmpeg dylibs to target/debug");
+		} else console.log("Using cached macOS native deps setup");
 	} else if (process.platform === "win32") {
 		const FFMPEG_VERSION = "7.1";
 		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
@@ -249,4 +266,19 @@ async function fileExists(path) {
 		.access(path)
 		.then(() => true)
 		.catch(() => false);
+}
+
+async function missingFiles(dir, names) {
+	if (!(await fileExists(dir))) return names;
+
+	const present = new Set(await fs.readdir(dir));
+	return names.filter((name) => !present.has(name));
+}
+
+async function findExecutable(name) {
+	const command = process.platform === "win32" ? "where.exe" : "which";
+
+	return await execFile(command, [name])
+		.then(({ stdout }) => stdout.trim().split(/\r?\n/).find(Boolean) ?? null)
+		.catch(() => null);
 }

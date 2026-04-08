@@ -26,10 +26,9 @@ services:
       context: ../..
       dockerfile: apps/media-server/Dockerfile
     restart: unless-stopped
+    network_mode: host
     environment:
       PORT: 3456
-    ports:
-      - "3456:3456"
 
   # Local S3 Strorage
   minio:

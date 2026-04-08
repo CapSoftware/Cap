@@ -9,6 +9,7 @@ mod camera_legacy;
 mod captions;
 mod deeplink_actions;
 mod editor_window;
+mod exit_shutdown;
 mod export;
 mod fake_window;
 mod flags;
@@ -112,6 +113,7 @@ use crate::{
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     upload::InstantMultipartUpload,
 };
+use exit_shutdown::{AppExitAction, app_exit_action, collect_device_inventory, run_while_active};
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -215,7 +217,7 @@ fn spawn_exit_watchdog() {
     });
 }
 
-fn app_is_exiting(app: &AppHandle) -> bool {
+pub(crate) fn app_is_exiting(app: &AppHandle) -> bool {
     match app.try_state::<AppExitState>() {
         Some(state) => state.is_exiting(),
         None => false,
@@ -572,6 +574,8 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         (app.mic_feed.clone(), handle, previous_label)
     };
 
+    let has_studio = studio_handle.is_some();
+
     let apply_result = async {
         if let Some(handle) = &studio_handle {
             handle.set_mic_feed(None).await.map_err(|e| e.to_string())?;
@@ -579,10 +583,18 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
         match desired_label.as_ref() {
             None => {
-                mic_feed
+                let remove_result = mic_feed
                     .ask(microphone::RemoveInput)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| e.to_string());
+
+                match remove_result {
+                    Ok(()) => {}
+                    Err(e) if has_studio && e.contains("FeedLocked") => {
+                        info!("Microphone feed locked by recording, deselection applied at studio level");
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             Some(label) => {
                 mic_feed
@@ -770,9 +782,11 @@ async fn set_camera_input(
             };
 
             if let Err(e) = init_result {
+                let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
                 let app = &mut *state.write().await;
                 app.selected_camera_id = None;
                 app.camera_in_use = false;
+                app.camera_preview.pause();
                 return Err(e);
             }
 
@@ -884,7 +898,14 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
 
             tokio::time::sleep(Duration::from_millis(500)).await;
 
+            if app_is_exiting(&app_handle) {
+                break;
+            }
+
             let mut app = state.write().await;
+            if app_is_exiting(&app_handle) {
+                break;
+            }
             match app.ensure_selected_mic_ready().await {
                 Ok(()) => {
                     info!("Microphone stream recovered after error");
@@ -948,15 +969,14 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
             }
 
             let permissions = permissions::do_permissions_check(false);
-            let cameras = if permissions.camera.permitted() {
-                cap_camera::list_cameras().collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-            let microphones = if permissions.microphone.permitted() {
-                MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>()
-            } else {
-                Vec::new()
+            let Some((cameras, microphones)) = collect_device_inventory(
+                || app_is_exiting(&app_handle),
+                permissions.camera.permitted(),
+                permissions.microphone.permitted(),
+                || cap_camera::list_cameras().collect::<Vec<_>>(),
+                || MicrophoneFeed::list().keys().cloned().collect::<Vec<_>>(),
+            ) else {
+                break;
             };
             let perm_tuple = (
                 match permissions.screen_recording {
@@ -990,7 +1010,7 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
             if !changed {
                 changed = camera_ids != last_camera_ids || microphones != last_mics;
             }
-            if changed {
+            if changed && !app_is_exiting(&app_handle) {
                 DevicesUpdated {
                     cameras: cameras.clone(),
                     microphones: microphones.clone(),
@@ -1017,8 +1037,16 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
     });
 }
 async fn cleanup_camera_window(app: AppHandle, session_id: u64) {
+    if app_is_exiting(&app) {
+        return;
+    }
+
     let state = app.state::<ArcLock<App>>();
     let mut app_state = state.write().await;
+
+    if app_is_exiting(&app) {
+        return;
+    }
 
     let current_session_id = app_state
         .camera_preview
@@ -1065,10 +1093,18 @@ async fn cleanup_camera_window(app: AppHandle, session_id: u64) {
 }
 
 async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id: u64) {
+    if app_is_exiting(&app) {
+        return;
+    }
+
     let state = app.state::<ArcLock<App>>();
 
     let camera_feed = {
         let mut app_state = state.write().await;
+
+        if app_is_exiting(&app) {
+            return;
+        }
 
         let current_session_id = app_state
             .camera_preview
@@ -1119,6 +1155,8 @@ async fn cleanup_camera_after_overlay_close(app: AppHandle, captured_session_id:
 }
 
 async fn cleanup_app_resources_for_exit(app: &AppHandle) {
+    close_target_select_overlays(app);
+
     let (mic_feed, camera_feed, camera_shutdown) = {
         let state = app.state::<ArcLock<App>>();
         let mut app_state = state.write().await;
@@ -1157,13 +1195,22 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn finalize_app_exit(app: &AppHandle, exit_code: i32) -> ! {
-    app.cleanup_before_exit();
-    std::process::exit(exit_code);
+    let _ = app;
+    sentry::Hub::with(|hub| {
+        if let Some(client) = hub.client() {
+            let _ = client.flush(Some(Duration::from_millis(250)));
+        }
+    });
+    match app_exit_action(exit_code) {
+        AppExitAction::Process(code) => std::process::exit(code),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
-    app.exit(exit_code);
+    match app_exit_action(exit_code) {
+        AppExitAction::Runtime(code) => app.exit(code),
+    }
 }
 
 pub async fn request_app_exit(app: AppHandle) {
@@ -1227,7 +1274,12 @@ fn spawn_microphone_watcher(app_handle: AppHandle) {
             };
 
             if should_check && let Some(selected_label) = label {
-                let devices = microphone::MicrophoneFeed::list();
+                let Some(devices) = run_while_active(
+                    || app_is_exiting(&app_handle),
+                    microphone::MicrophoneFeed::list,
+                ) else {
+                    break;
+                };
                 let matched = find_mic_by_label_or_fuzzy(&devices, &selected_label);
 
                 if matched.is_none() && !is_marked {
@@ -1289,7 +1341,12 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
             };
 
             if should_check && let Some(ref selected_id) = camera_id {
-                let available = is_camera_available(selected_id);
+                let Some(available) = run_while_active(
+                    || app_is_exiting(&app_handle),
+                    || is_camera_available(selected_id),
+                ) else {
+                    break;
+                };
                 debug!(
                     "Camera watcher: checking availability for {:?}, available={}, is_marked={}",
                     selected_id, available, is_marked
@@ -1586,6 +1643,55 @@ pub(crate) async fn create_screenshot(
     .map_err(|e| format!("Task join error: {e}"))?;
 
     result
+}
+
+pub(crate) async fn create_screenshot_source_from_segments(
+    segments_dir: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let init_path = segments_dir.join("init.mp4");
+    if !init_path.exists() {
+        return Err(format!("init.mp4 not found in {}", segments_dir.display()));
+    }
+
+    let first_segment = find_first_segment(segments_dir)
+        .ok_or_else(|| format!("No .m4s segments found in {}", segments_dir.display()))?;
+
+    let temp_path = segments_dir.join(".screenshot_source.mp4");
+    let mut out = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(|e| format!("Failed to create screenshot source: {e}"))?;
+
+    let mut init_file = tokio::fs::File::open(&init_path)
+        .await
+        .map_err(|e| format!("Failed to open init.mp4: {e}"))?;
+    tokio::io::copy(&mut init_file, &mut out)
+        .await
+        .map_err(|e| format!("Failed to copy init.mp4: {e}"))?;
+
+    let mut seg_file = tokio::fs::File::open(&first_segment)
+        .await
+        .map_err(|e| format!("Failed to open {}: {e}", first_segment.display()))?;
+    tokio::io::copy(&mut seg_file, &mut out)
+        .await
+        .map_err(|e| format!("Failed to copy segment: {e}"))?;
+
+    Ok(temp_path)
+}
+
+fn find_first_segment(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut segments: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| {
+            let path = e.ok()?.path();
+            if path.extension().is_some_and(|ext| ext == "m4s") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    segments.sort();
+    segments.into_iter().next()
 }
 
 // async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> Result<(), String> {
@@ -3513,6 +3619,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     camera_feed
                         .tell(feeds::camera::OnFeedDisconnect(Box::new({
                             move || {
+                                if app_is_exiting(&app) {
+                                    return;
+                                }
+
                                 if let Some(win) = CapWindowId::Camera.get(&app) {
                                     win.hide().ok();
                                 }
@@ -4111,12 +4221,18 @@ fn restore_camera_window(app: &AppHandle) {
 
 fn close_target_select_overlays(app: &AppHandle) {
     let focus_manager = app.state::<target_select_overlay::WindowFocusManager>();
+    let mut saw_overlay = false;
 
     for (label, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&label) {
+            saw_overlay = true;
             let _ = window.hide();
             focus_manager.destroy(&display_id, app.global_shortcut());
         }
+    }
+
+    if !saw_overlay {
+        focus_manager.shutdown(app);
     }
 }
 
@@ -4250,6 +4366,121 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                         NotificationType::ShareableLinkCopied.send(&app);
                                     }
                             });
+                        }
+                        UploadMeta::SegmentUpload {
+                            video_id,
+                            pre_created_video,
+                            recording_dir,
+                        } => {
+                            info!(video_id = video_id, "Resuming segment upload on restart");
+                            let content_dir = recording_dir.join("content");
+                            let display_dir = content_dir.join("display");
+                            let audio_dir = content_dir.join("audio");
+
+                            let (segment_tx, segment_rx) = std::sync::mpsc::channel::<
+                                cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
+                            >();
+
+                            use cap_enc_ffmpeg::segmented_stream::{
+                                SegmentCompletedEvent, SegmentMediaType,
+                            };
+
+                            fn read_durations_from_manifest(
+                                dir: &std::path::Path,
+                            ) -> std::collections::HashMap<u32, f64> {
+                                let manifest_path = dir.join("manifest.json");
+                                let mut map = std::collections::HashMap::new();
+                                if let Ok(text) = std::fs::read_to_string(&manifest_path)
+                                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+                                    && let Some(segments) =
+                                        v.get("segments").and_then(|s| s.as_array())
+                                {
+                                    for seg in segments {
+                                        if let Some(index) =
+                                            seg.get("index").and_then(|i| i.as_u64())
+                                            && let Some(duration) =
+                                                seg.get("duration").and_then(|d| d.as_f64())
+                                            && seg
+                                                .get("is_complete")
+                                                .and_then(|c| c.as_bool())
+                                                .unwrap_or(false)
+                                        {
+                                            map.insert(index as u32, duration);
+                                        }
+                                    }
+                                }
+                                map
+                            }
+
+                            let scan_and_send = |dir: &std::path::Path,
+                                                 media_type: SegmentMediaType,
+                                                 tx: &std::sync::mpsc::Sender<
+                                SegmentCompletedEvent,
+                            >| {
+                                if !dir.exists() {
+                                    return;
+                                }
+                                let durations = read_durations_from_manifest(dir);
+                                let init_path = dir.join("init.mp4");
+                                if init_path.exists()
+                                    && let Ok(meta) = std::fs::metadata(&init_path)
+                                {
+                                    let _ = tx.send(SegmentCompletedEvent {
+                                        path: init_path,
+                                        index: 0,
+                                        duration: 0.0,
+                                        file_size: meta.len(),
+                                        is_init: true,
+                                        media_type,
+                                    });
+                                }
+                                if let Ok(entries) = std::fs::read_dir(dir) {
+                                    let mut segments: Vec<_> = entries
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| {
+                                            e.path().extension().is_some_and(|ext| ext == "m4s")
+                                        })
+                                        .collect();
+                                    segments.sort_by_key(|e| e.file_name());
+                                    for entry in segments {
+                                        let path = entry.path();
+                                        if let Some(name) =
+                                            path.file_name().and_then(|n| n.to_str())
+                                            && let Some(idx_str) = name
+                                                .strip_prefix("segment_")
+                                                .and_then(|s| s.strip_suffix(".m4s"))
+                                            && let Ok(index) = idx_str.parse::<u32>()
+                                        {
+                                            let file_size = std::fs::metadata(&path)
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            let duration =
+                                                durations.get(&index).copied().unwrap_or(3.0);
+                                            let _ = tx.send(SegmentCompletedEvent {
+                                                path,
+                                                index,
+                                                duration,
+                                                file_size,
+                                                is_init: false,
+                                                media_type,
+                                            });
+                                        }
+                                    }
+                                }
+                            };
+
+                            scan_and_send(&display_dir, SegmentMediaType::Video, &segment_tx);
+                            scan_and_send(&audio_dir, SegmentMediaType::Audio, &segment_tx);
+                            drop(segment_tx);
+
+                            crate::upload::SegmentUploader::spawn(
+                                app.clone(),
+                                video_id,
+                                segment_rx,
+                                None,
+                                recording_dir,
+                                pre_created_video,
+                            );
                         }
                         UploadMeta::Failed { .. } | UploadMeta::Complete => {}
                     }
