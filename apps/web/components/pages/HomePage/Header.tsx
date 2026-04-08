@@ -130,7 +130,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</motion.p>
 
 					<motion.div
-						className="mt-6 mb-10"
+						className="hidden md:block mt-6 mb-10"
 						initial="hidden"
 						animate="visible"
 						custom={5}
