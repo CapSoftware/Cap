@@ -8,7 +8,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Image from "next/image";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useRef, useState, useTransition } from "react";
+import { sendDownloadLink } from "@/actions/send-download-link";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
 import {
 	getDownloadButtonText,
@@ -56,6 +57,31 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 	const [videoToggled, setVideoToggled] = useState(false);
 	const { platform, isIntel } = useDetectPlatform();
 	const loading = platform === null;
+	const [email, setEmail] = useState("");
+	const [emailStatus, setEmailStatus] = useState<
+		"idle" | "sending" | "sent" | "error"
+	>("idle");
+	const [emailError, setEmailError] = useState("");
+	const [isPending, startTransition] = useTransition();
+
+	const handleEmailSubmit = (e: React.FormEvent) => {
+		e.preventDefault();
+		setEmailStatus("sending");
+		setEmailError("");
+
+		startTransition(async () => {
+			const result = await sendDownloadLink(email);
+			if (result.success) {
+				setEmailStatus("sent");
+				if (typeof window !== "undefined" && window.bento) {
+					window.bento.identify(email);
+				}
+			} else {
+				setEmailStatus("error");
+				setEmailError(result.error ?? "Something went wrong.");
+			}
+		});
+	};
 
 	const getHeaderContent = () => {
 		const variant =
@@ -97,7 +123,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</div>
 
 					<motion.div
-						className="flex flex-wrap gap-4 items-center mb-5"
+						className="hidden md:flex flex-wrap gap-4 items-center mb-5"
 						initial="hidden"
 						animate="visible"
 						custom={3}
@@ -119,8 +145,57 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
 					</motion.div>
 
+					<motion.div
+						className="flex md:hidden flex-col gap-3 mb-5"
+						initial="hidden"
+						animate="visible"
+						custom={3}
+						variants={fadeIn}
+					>
+						{emailStatus === "sent" ? (
+							<div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3">
+								<p className="text-sm font-medium text-green-800">
+									Check your inbox! We've sent the download links to{" "}
+									<strong>{email}</strong>.
+								</p>
+							</div>
+						) : (
+							<form
+								onSubmit={handleEmailSubmit}
+								className="flex flex-col gap-2"
+							>
+								<input
+									type="email"
+									value={email}
+									onChange={(e) => setEmail(e.target.value)}
+									placeholder="you@email.com"
+									required
+									className="w-full rounded-full border border-gray-300 bg-white px-4 py-2.5 text-sm text-black placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+								/>
+								<button
+									type="submit"
+									disabled={isPending}
+									className="w-full rounded-full bg-black px-5 py-2.5 text-sm font-medium text-white transition-opacity disabled:opacity-60"
+								>
+									{isPending ? "Sending..." : "Email me the download link"}
+								</button>
+								{emailStatus === "error" && (
+									<p className="text-xs text-red-600">{emailError}</p>
+								)}
+							</form>
+						)}
+						<div className="flex items-center gap-3 my-1">
+							<div className="h-px flex-1 bg-gray-300" />
+							<span className="text-sm font-medium text-gray-500">or</span>
+							<div className="h-px flex-1 bg-gray-300" />
+						</div>
+						<div className="flex justify-center">
+							<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
+						</div>
+					</motion.div>
+
 					<motion.p
-						className="text-sm text-gray-10"
+						className="text-sm text-gray-10 text-center md:text-left"
 						initial="hidden"
 						animate="visible"
 						custom={4}
