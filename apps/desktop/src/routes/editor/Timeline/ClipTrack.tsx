@@ -6,7 +6,6 @@ import { cx } from "cva";
 import {
 	batch,
 	type ComponentProps,
-	batch,
 	createEffect,
 	createMemo,
 	createRoot,
