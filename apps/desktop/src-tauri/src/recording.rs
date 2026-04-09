@@ -655,7 +655,13 @@ pub async fn start_recording(
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
-                    // Pre-create the video and get the shareable link
+                    let upload_mode =
+                        if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+                            "desktopMP4"
+                        } else {
+                            "desktopSegments"
+                        };
+
                     let s3_config = match crate::upload::create_or_get_video_with_mode(
                         &app,
                         false,
@@ -764,9 +770,12 @@ pub async fn start_recording(
             win.hide().ok();
         }
     }
-    let _ = ShowCapWindow::InProgressRecording { countdown }
-        .show(&app)
-        .await;
+    let _ = ShowCapWindow::InProgressRecording {
+        countdown,
+        capture_target: Some(inputs.capture_target.clone()),
+    }
+    .show(&app)
+    .await;
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         let _ = general_settings
