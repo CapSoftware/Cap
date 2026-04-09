@@ -35,9 +35,7 @@ pub enum DeepLinkAction {
         capture_mode: CaptureMode,
     },
 
-    /// Open Cap's target selection overlay UI (clean UX for Raycast).
     OpenTargetPicker {
-        /// Optional: open the picker in a specific target mode if supported by the UI.
         target_mode: Option<crate::RecordingTargetMode>,
     },
 
@@ -48,23 +46,17 @@ pub enum DeepLinkAction {
         page: Option<String>,
     },
 
-    /// Copies a JSON list of cameras to the clipboard.
     ListCameras,
-    /// Sets the camera by Device/Model ID (null disables camera).
     SetCamera {
         camera: Option<DeviceOrModelID>,
     },
 
-    /// Copies a JSON list of microphone labels to the clipboard.
     ListMicrophones,
-    /// Sets the microphone by label (null disables microphone).
     SetMicrophone {
         mic_label: Option<String>,
     },
 
-    /// Copies a JSON list of capture displays to the clipboard.
     ListDisplays,
-    /// Copies a JSON list of capture windows to the clipboard.
     ListWindows,
 }
 
@@ -218,7 +210,7 @@ impl DeepLinkAction {
                     .into_iter()
                     .next()
                     .map(|(d, _)| d.id)
-                    .ok_or_else(|| "No displays found".to_string());
+                    .ok_or("No displays found".to_string());
 
                 match display_id {
                     Ok(display_id) => ShowCapWindow::TargetSelectOverlay {
