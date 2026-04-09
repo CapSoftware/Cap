@@ -39,7 +39,7 @@ use crate::{
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
-use cap_recording::feeds;
+use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -629,6 +629,8 @@ pub enum ShowCapWindow {
     },
     InProgressRecording {
         countdown: Option<u32>,
+        #[serde(default)]
+        capture_target: Option<ScreenCaptureTarget>,
     },
     Upgrade,
     ModeSelect,
@@ -906,7 +908,7 @@ impl ShowCapWindow {
         }
 
         #[cfg(target_os = "macos")]
-        if let Self::InProgressRecording { .. } = self
+        if let Self::InProgressRecording { capture_target, .. } = self
             && let Some(window) = self.id(app).get(app)
         {
             use crate::panel_manager::is_window_handle_valid;
@@ -915,8 +917,12 @@ impl ShowCapWindow {
                 debug!("InProgressRecording: reusing existing window");
                 let width = 320.0;
                 let height = 150.0;
-                let recording_monitor = CursorMonitorInfo::get();
-                let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
+                let (pos_x, pos_y) = capture_target
+                    .as_ref()
+                    .and_then(fake_window::calculate_recording_controls_position_for_target)
+                    .unwrap_or_else(|| {
+                        CursorMonitorInfo::get().bottom_center_position(width, height, 120.0)
+                    });
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 let label = window.label().to_string();
@@ -960,13 +966,17 @@ impl ShowCapWindow {
         }
 
         #[cfg(not(target_os = "macos"))]
-        if let Self::InProgressRecording { .. } = self
+        if let Self::InProgressRecording { capture_target, .. } = self
             && let Some(window) = self.id(app).get(app)
         {
             let width = 320.0;
             let height = 150.0;
-            let recording_monitor = CursorMonitorInfo::get();
-            let (pos_x, pos_y) = recording_monitor.bottom_center_position(width, height, 120.0);
+            let (pos_x, pos_y) = capture_target
+                .as_ref()
+                .and_then(fake_window::calculate_recording_controls_position_for_target)
+                .unwrap_or_else(|| {
+                    CursorMonitorInfo::get().bottom_center_position(width, height, 120.0)
+                });
             let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
             window.show().ok();
             window.set_focus().ok();
@@ -1894,12 +1904,19 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording { countdown } => {
+            Self::InProgressRecording {
+                countdown,
+                capture_target,
+            } => {
                 let width = 320.0;
                 let height = 150.0;
 
                 let title = CapWindowId::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
+
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                    .ok();
 
                 #[cfg(target_os = "macos")]
                 let window = {
@@ -1944,7 +1961,10 @@ impl ShowCapWindow {
                 #[cfg(target_os = "windows")]
                 log_window_content_protection(&window, should_protect, &title);
 
-                let (pos_x, pos_y) = cursor_monitor.bottom_center_position(width, height, 120.0);
+                let (pos_x, pos_y) = capture_target
+                    .as_ref()
+                    .and_then(fake_window::calculate_recording_controls_position_for_target)
+                    .unwrap_or_else(|| cursor_monitor.bottom_center_position(width, height, 120.0));
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 debug!(

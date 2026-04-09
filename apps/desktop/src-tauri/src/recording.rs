@@ -663,7 +663,7 @@ pub async fn start_recording(
                         Some(project_name.clone()),
                         None,
                         inputs.organization_id.clone(),
-                        "desktopSegments",
+                        upload_mode,
                     )
                     .await
                     {
