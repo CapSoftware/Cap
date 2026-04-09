@@ -287,7 +287,7 @@ fn spawn_camera_setup(
     flow: CameraSetupFlow,
 ) -> (ReadyFuture, SyncSender<()>) {
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
-    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(0);
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
 
     let ready = ready_rx
         .map(|v| {

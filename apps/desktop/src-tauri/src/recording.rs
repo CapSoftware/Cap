@@ -655,7 +655,13 @@ pub async fn start_recording(
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
-                    // Pre-create the video and get the shareable link
+                    let upload_mode =
+                        if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+                            "desktopMP4"
+                        } else {
+                            "desktopSegments"
+                        };
+
                     let s3_config = match crate::upload::create_or_get_video_with_mode(
                         &app,
                         false,
@@ -663,7 +669,7 @@ pub async fn start_recording(
                         Some(project_name.clone()),
                         None,
                         inputs.organization_id.clone(),
-                        "desktopSegments",
+                        upload_mode,
                     )
                     .await
                     {
@@ -764,9 +770,12 @@ pub async fn start_recording(
             win.hide().ok();
         }
     }
-    let _ = ShowCapWindow::InProgressRecording { countdown }
-        .show(&app)
-        .await;
+    let _ = ShowCapWindow::InProgressRecording {
+        countdown,
+        capture_target: Some(inputs.capture_target.clone()),
+    }
+    .show(&app)
+    .await;
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         let _ = general_settings
@@ -1845,27 +1854,36 @@ async fn handle_recording_finish(
             }
 
             let app = app.clone();
-            let segments_dir = recording_dir.join("content/display");
+            let is_camera_only =
+                matches!(recording.display_source, ScreenCaptureTarget::CameraOnly);
 
             let display_screenshot = screenshots_dir.join("display.jpg");
-            let screenshot_task = tokio::spawn({
-                let segments_dir = segments_dir.clone();
-                let display_screenshot = display_screenshot.clone();
-                async move {
-                    let screenshot_source: Result<PathBuf, String> =
-                        create_screenshot_source_from_segments(&segments_dir).await;
-                    match screenshot_source {
-                        Ok(temp_path) => {
-                            let result =
-                                create_screenshot(temp_path.clone(), display_screenshot, None)
-                                    .await;
-                            let _ = tokio::fs::remove_file(&temp_path).await;
-                            result
+            let screenshot_task = if is_camera_only {
+                let output_mp4 = recording_dir.join("content/output.mp4");
+                tokio::spawn({
+                    let display_screenshot = display_screenshot.clone();
+                    async move { create_screenshot(output_mp4, display_screenshot, None).await }
+                })
+            } else {
+                let segments_dir = recording_dir.join("content/display");
+                tokio::spawn({
+                    let display_screenshot = display_screenshot.clone();
+                    async move {
+                        let screenshot_source: Result<PathBuf, String> =
+                            create_screenshot_source_from_segments(&segments_dir).await;
+                        match screenshot_source {
+                            Ok(temp_path) => {
+                                let result =
+                                    create_screenshot(temp_path.clone(), display_screenshot, None)
+                                        .await;
+                                let _ = tokio::fs::remove_file(&temp_path).await;
+                                result
+                            }
+                            Err(e) => Err(format!("Failed to create screenshot source: {e}")),
                         }
-                        Err(e) => Err(format!("Failed to create screenshot source: {e}")),
                     }
-                }
-            });
+                })
+            };
 
             let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 

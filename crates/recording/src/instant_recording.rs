@@ -190,7 +190,12 @@ impl Message<Stop> for Actor {
                 }
             };
 
-        let health = if has_segments {
+        let has_output_mp4 = segments_dir.join("output.mp4").exists()
+            && std::fs::metadata(segments_dir.join("output.mp4"))
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
+
+        let health = if has_segments || has_output_mp4 {
             crate::RecordingHealth::Healthy
         } else if has_init {
             crate::RecordingHealth::Degraded {

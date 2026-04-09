@@ -624,6 +624,7 @@ impl Renderer {
         let mut is_paused = false;
 
         let mut state = default_state;
+        let mut needs_full_reconfigure = false;
 
         let pause_and_hide = || {
             window
@@ -642,6 +643,7 @@ impl Renderer {
                     match reconfigure.recv().await {
                         Ok(ReconfigureEvent::Resume) => {
                             is_paused = false;
+                            while camera_rx.try_recv().is_ok() {}
                             break;
                         }
                         Ok(ReconfigureEvent::Shutdown) => {
@@ -650,6 +652,7 @@ impl Renderer {
                         }
                         Ok(ReconfigureEvent::State(new_state)) => {
                             state = new_state;
+                            needs_full_reconfigure = true;
                         }
                         Ok(ReconfigureEvent::WindowResized { width, height }) => {
                             self.reconfigure_gpu_surface(width, height);
@@ -662,14 +665,35 @@ impl Renderer {
                 }
             }
 
-            let event = loop {
-                let timeout_remaining = if received_first_frame {
-                    Duration::MAX
-                } else {
-                    startup_timeout.saturating_sub(start_time.elapsed())
-                };
+            if needs_full_reconfigure {
+                needs_full_reconfigure = false;
+                self.update_state_uniforms(&state);
+                let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
+                    if state.shape == CameraPreviewShape::Full {
+                        16.0 / 9.0
+                    } else {
+                        1.0
+                    },
+                );
+                self.aspect_ratio = Cached::default();
+                if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio, false)
+                    .await
+                    .map_err(|err| {
+                        error!("Error resizing camera preview window after resume: {err}")
+                    })
+                {
+                    self.reconfigure_gpu_surface(width, height);
+                }
+            }
 
-                if timeout_remaining.is_zero() {
+            let frame_timeout = if received_first_frame {
+                Duration::from_secs(5)
+            } else {
+                startup_timeout.saturating_sub(start_time.elapsed())
+            };
+
+            let event = loop {
+                if frame_timeout.is_zero() {
                     warn!(
                         "Camera preview timed out waiting for first frame, entering paused state"
                     );
@@ -696,8 +720,8 @@ impl Renderer {
                             continue;
                         }
                     },
-                    _ = tokio::time::sleep(timeout_remaining) => {
-                        warn!("Camera preview timed out waiting for first frame, entering paused state");
+                    _ = tokio::time::sleep(frame_timeout) => {
+                        warn!("Camera preview: no frames received within timeout, entering paused state");
                         is_paused = true;
                         pause_and_hide();
                         continue 'main_loop;
@@ -808,8 +832,7 @@ impl Renderer {
                         .ok();
                 }
                 Err(ReconfigureEvent::Resume) => {
-                    // On resume, we just need to present a frame to wake up the surface.
-                    // The actual window.show() happens in windows.rs ShowCapWindow::Camera.
+                    while camera_rx.try_recv().is_ok() {}
                     if let Some(surface) = &self.surface
                         && let Ok(texture) = surface.get_current_texture()
                     {

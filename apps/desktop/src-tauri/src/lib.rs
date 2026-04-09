@@ -206,6 +206,13 @@ where
     }
 }
 
+fn force_exit(code: i32) -> ! {
+    unsafe extern "C" {
+        fn _exit(code: i32) -> !;
+    }
+    unsafe { _exit(code) }
+}
+
 fn spawn_exit_watchdog() {
     std::thread::spawn(move || {
         std::thread::sleep(APP_EXIT_FORCE_TIMEOUT);
@@ -213,7 +220,7 @@ fn spawn_exit_watchdog() {
             timeout_ms = APP_EXIT_FORCE_TIMEOUT.as_millis(),
             "Forcing process exit after shutdown deadline"
         );
-        std::process::exit(0);
+        force_exit(0);
     });
 }
 
@@ -1074,13 +1081,18 @@ async fn cleanup_camera_window(app: AppHandle, session_id: u64) {
             label.starts_with("target-select-overlay-") && window.is_visible().unwrap_or(false)
         });
 
+        let main_window_visible = CapWindowId::Main
+            .get(&app)
+            .and_then(|w| w.is_visible().ok())
+            .unwrap_or(false);
+
         let is_camera_only_mode = recording_settings::RecordingSettingsStore::get(&app)
             .ok()
             .flatten()
             .and_then(|s| s.target)
             .is_some_and(|t| matches!(t, ScreenCaptureTarget::CameraOnly));
 
-        if is_camera_only_mode {
+        if is_camera_only_mode && main_window_visible {
             tracing::info!("Camera cleanup: preserving camera feed for camera-only mode");
             return;
         }
@@ -1202,7 +1214,7 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) -> ! {
         }
     });
     match app_exit_action(exit_code) {
-        AppExitAction::Process(code) => std::process::exit(code),
+        AppExitAction::Process(code) => force_exit(code),
     }
 }
 
@@ -4206,7 +4218,7 @@ fn restore_camera_window(app: &AppHandle) {
     let should_restore_camera = app
         .state::<ArcLock<App>>()
         .try_read()
-        .map(|state| state.selected_camera_id.is_some())
+        .map(|state| state.selected_camera_id.is_some() && !state.camera_cleanup_done)
         .unwrap_or(false);
 
     if should_restore_camera {

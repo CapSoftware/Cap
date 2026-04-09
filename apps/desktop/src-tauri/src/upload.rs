@@ -2684,7 +2684,7 @@ mod tests {
             }
 
             use futures::StreamExt;
-            while let Some(_) = in_flight.next().await {}
+            while in_flight.next().await.is_some() {}
         }
         let old_duration = old_start.elapsed();
 
@@ -2712,7 +2712,7 @@ mod tests {
             }
 
             use futures::StreamExt;
-            while let Some(_) = in_flight.next().await {}
+            while in_flight.next().await.is_some() {}
         }
         let new_duration = new_start.elapsed();
 

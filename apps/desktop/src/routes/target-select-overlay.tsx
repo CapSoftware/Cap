@@ -82,6 +82,55 @@ const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
 	);
 };
 
+async function repositionCameraForWindow(
+	windowBounds: { x: number; y: number; width: number; height: number },
+	displayId: DisplayId,
+) {
+	const win = await WebviewWindow.getByLabel("camera");
+	if (!win) return;
+
+	const [physPos, physSize, scaleFactor] = await Promise.all([
+		win.outerPosition(),
+		win.outerSize(),
+		win.scaleFactor(),
+	]);
+
+	const displayInfo = await commands.displayInformation(displayId);
+	const displayOriginX = displayInfo.logical_bounds?.position?.x ?? 0;
+	const displayOriginY = displayInfo.logical_bounds?.position?.y ?? 0;
+
+	const camPos = physPos.toLogical(scaleFactor);
+	const camSize = physSize.toLogical(scaleFactor);
+
+	const winAbsX = windowBounds.x + displayOriginX;
+	const winAbsY = windowBounds.y + displayOriginY;
+
+	const cameraFullyInside =
+		camPos.x >= winAbsX &&
+		camPos.y >= winAbsY &&
+		camPos.x + camSize.width <= winAbsX + windowBounds.width &&
+		camPos.y + camSize.height <= winAbsY + windowBounds.height;
+
+	if (cameraFullyInside) return;
+
+	const padding = 16;
+	if (
+		camSize.width + padding * 2 > windowBounds.width ||
+		camSize.height + padding * 2 > windowBounds.height
+	) {
+		return;
+	}
+
+	const newX = Math.round(
+		winAbsX + windowBounds.width - camSize.width - padding,
+	);
+	const newY = Math.round(
+		winAbsY + windowBounds.height - camSize.height - padding,
+	);
+
+	await win.setPosition(new LogicalPosition(newX, newY));
+}
+
 export default function () {
 	return (
 		<RecordingOptionsProvider>
@@ -341,108 +390,222 @@ function Inner() {
 			<Match
 				when={
 					options.targetMode === "window" &&
-					targetUnderCursor.display_id === params.displayId
+					targetUnderCursor.display_id === params.displayId &&
+					params.displayId
 				}
 			>
-				<Show when={targetUnderCursor.window} keyed>
-					{(windowUnderCursor) => (
-						<div
-							data-over={targetUnderCursor.display_id === params.displayId}
-							class="relative w-screen h-screen bg-black/70"
-						>
-							<div
-								class="flex absolute flex-col justify-center items-center bg-blue-600/40"
-								style={{
-									width: `${windowUnderCursor.bounds.size.width}px`,
-									height: `${windowUnderCursor.bounds.size.height}px`,
-									left: `${windowUnderCursor.bounds.position.x}px`,
-									top: `${windowUnderCursor.bounds.position.y}px`,
-								}}
-								onClick={() => {
-									setOptions(
-										"captureTarget",
-										reconcile({
-											variant: "window",
-											id: windowUnderCursor.id,
-										}),
-									);
-									setOptions("targetMode", null);
-									commands.closeTargetSelectOverlays();
-								}}
-							>
-								<div class="flex flex-col justify-center items-center text-white">
-									<div class="w-24 h-24">
-										<Suspense>
-											<Show when={windowIcon.data}>
-												{(icon) => (
-													<img
-														src={icon()}
-														alt={`${windowUnderCursor.app_name} icon`}
-														class="mb-3 w-full h-full rounded-lg animate-in fade-in"
-													/>
-												)}
-											</Show>
-										</Suspense>
-									</div>
-									<span class="mb-2 text-3xl font-semibold">
-										{windowUnderCursor.app_name}
-									</span>
-									<span class="mb-2 text-xs">
-										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
-									</span>
-								</div>
-								<div onClick={(e) => e.stopPropagation()}>
-									<RecordingControls
-										target={{
-											variant: "window",
-											id: windowUnderCursor.id,
-										}}
-									/>
-								</div>
+				{(_displayId) => {
+					const [originalCameraBounds, setOriginalCameraBounds] = createSignal<{
+						x: number;
+						y: number;
+					} | null>(null);
 
-								<Button
-									variant="dark"
-									size="sm"
-									onClick={(e) => {
-										e.stopPropagation();
-										setInitialAreaBounds({
-											x: windowUnderCursor.bounds.position.x,
-											y: windowUnderCursor.bounds.position.y,
-											width: windowUnderCursor.bounds.size.width,
-											height: windowUnderCursor.bounds.size.height,
-										});
-										const screenId = params.displayId;
-										if (screenId) {
-											setPendingAreaTarget({
-												variant: "area",
-												screen: screenId,
-												bounds: {
-													position: {
-														x: windowUnderCursor.bounds.position.x,
-														y: windowUnderCursor.bounds.position.y,
-													},
-													size: {
-														width: windowUnderCursor.bounds.size.width,
-														height: windowUnderCursor.bounds.size.height,
-													},
-												},
-											});
-										}
-										setOptions({
-											targetMode: "area",
-										});
-										commands.openTargetSelectOverlays(null, null, "area");
-									}}
+					const [selectedWindow, setSelectedWindow] =
+						createSignal<TargetUnderCursor["window"]>(null);
+
+					const [lockedIcon, setLockedIcon] = createSignal<string | null>(null);
+
+					let lastRepositionedWindowId: string | null = null;
+
+					const activeWindow = createMemo(
+						() => selectedWindow() ?? targetUnderCursor.window,
+					);
+
+					onMount(async () => {
+						try {
+							const win = await WebviewWindow.getByLabel("camera");
+							if (!win) return;
+							const [pos, factor] = await Promise.all([
+								win.outerPosition(),
+								win.scaleFactor(),
+							]);
+							const logical = pos.toLogical(factor);
+							setOriginalCameraBounds({
+								x: logical.x,
+								y: logical.y,
+							});
+						} catch (_) {}
+					});
+
+					createEffect(() => {
+						if (selectedWindow()) return;
+
+						const window = targetUnderCursor.window;
+						if (!window) {
+							lastRepositionedWindowId = null;
+							return;
+						}
+
+						const windowIdStr = String(window.id);
+						if (windowIdStr === lastRepositionedWindowId) return;
+						lastRepositionedWindowId = windowIdStr;
+
+						const currentDisplayId = params.displayId;
+						if (!currentDisplayId) return;
+
+						repositionCameraForWindow(
+							{
+								x: window.bounds.position.x,
+								y: window.bounds.position.y,
+								width: window.bounds.size.width,
+								height: window.bounds.size.height,
+							},
+							currentDisplayId,
+						).catch((e) =>
+							console.error("Failed to reposition camera for window", e),
+						);
+					});
+
+					async function revertCamera() {
+						const original = originalCameraBounds();
+						if (!original) return;
+						try {
+							const win = await WebviewWindow.getByLabel("camera");
+							if (!win) return;
+							await win.setPosition(
+								new LogicalPosition(original.x, original.y),
+							);
+						} catch (_) {}
+					}
+
+					onCleanup(() => {
+						if (originalCameraBounds()) {
+							revertCamera();
+						}
+					});
+
+					return (
+						<Show when={activeWindow()} keyed>
+							{(windowUnderCursor) => (
+								<div
+									data-over={targetUnderCursor.display_id === params.displayId}
+									class="relative w-screen h-screen bg-black/70"
 								>
-									Adjust recording area
-								</Button>
-								<ShowCapFreeWarning
-									isInstantMode={options.mode === "instant"}
-								/>
-							</div>
-						</div>
-					)}
-				</Show>
+									<div
+										class="flex absolute flex-col justify-center items-center bg-blue-600/40"
+										style={{
+											width: `${windowUnderCursor.bounds.size.width}px`,
+											height: `${windowUnderCursor.bounds.size.height}px`,
+											left: `${windowUnderCursor.bounds.position.x}px`,
+											top: `${windowUnderCursor.bounds.position.y}px`,
+										}}
+										onClick={() => {
+											if (!selectedWindow()) {
+												setOriginalCameraBounds(null);
+												setLockedIcon(windowIcon.data ?? null);
+												setSelectedWindow({
+													id: windowUnderCursor.id,
+													bounds: {
+														position: {
+															x: windowUnderCursor.bounds.position.x,
+															y: windowUnderCursor.bounds.position.y,
+														},
+														size: {
+															width: windowUnderCursor.bounds.size.width,
+															height: windowUnderCursor.bounds.size.height,
+														},
+													},
+													app_name: windowUnderCursor.app_name,
+												});
+												setOptions(
+													"captureTarget",
+													reconcile({
+														variant: "window",
+														id: windowUnderCursor.id,
+													}),
+												);
+											}
+										}}
+									>
+										<div class="flex flex-col justify-center items-center text-white">
+											<div class="w-24 h-24">
+												<Suspense>
+													<Show
+														when={
+															selectedWindow() ? lockedIcon() : windowIcon.data
+														}
+													>
+														{(icon) => (
+															<img
+																src={icon()}
+																alt={`${windowUnderCursor.app_name} icon`}
+																class="mb-3 w-full h-full rounded-lg animate-in fade-in"
+															/>
+														)}
+													</Show>
+												</Suspense>
+											</div>
+											<span class="mb-2 text-3xl font-semibold">
+												{windowUnderCursor.app_name}
+											</span>
+											<span class="mb-2 text-xs">
+												{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
+											</span>
+										</div>
+										<div onClick={(e) => e.stopPropagation()}>
+											<RecordingControls
+												target={{
+													variant: "window",
+													id: windowUnderCursor.id,
+												}}
+												onRecordingStart={() => {
+													setOriginalCameraBounds(null);
+													setOptions("targetMode", null);
+													commands.closeTargetSelectOverlays();
+												}}
+											/>
+										</div>
+
+										<Button
+											variant="dark"
+											size="sm"
+											onClick={(e) => {
+												e.stopPropagation();
+												setOriginalCameraBounds(null);
+												const screenId = params.displayId;
+												setInitialAreaBounds({
+													x: windowUnderCursor.bounds.position.x,
+													y: windowUnderCursor.bounds.position.y,
+													width: windowUnderCursor.bounds.size.width,
+													height: windowUnderCursor.bounds.size.height,
+												});
+												if (screenId) {
+													setPendingAreaTarget({
+														variant: "area",
+														screen: screenId,
+														bounds: {
+															position: {
+																x: windowUnderCursor.bounds.position.x,
+																y: windowUnderCursor.bounds.position.y,
+															},
+															size: {
+																width: windowUnderCursor.bounds.size.width,
+																height: windowUnderCursor.bounds.size.height,
+															},
+														},
+													});
+												}
+												setOptions("targetMode", "area");
+												commands.closeTargetSelectOverlays().then(() => {
+													commands.openTargetSelectOverlays(
+														null,
+														screenId ?? null,
+														"area",
+													);
+												});
+											}}
+										>
+											Adjust recording area
+										</Button>
+										<ShowCapFreeWarning
+											isInstantMode={options.mode === "instant"}
+										/>
+									</div>
+								</div>
+							)}
+						</Show>
+					);
+				}}
 			</Match>
 			<Match when={options.targetMode === "area" && params.displayId}>
 				{(displayId) => {
@@ -943,6 +1106,7 @@ function CameraPreviewInline() {
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
 	const [connectionFailed, setConnectionFailed] = createSignal(false);
 	let canvasRef: HTMLCanvasElement | undefined;
+	let containerRef: HTMLDivElement | undefined;
 	let ws: WebSocket | undefined;
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1145,6 +1309,47 @@ function CameraPreviewInline() {
 		ws?.close();
 	});
 
+	const [containerSize, setContainerSize] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
+
+	onMount(() => {
+		if (!containerRef) return;
+		const observer = new ResizeObserver(() => {
+			if (!containerRef) return;
+			const rect = containerRef.getBoundingClientRect();
+			setContainerSize({ width: rect.width, height: rect.height });
+		});
+		observer.observe(containerRef);
+		onCleanup(() => observer.disconnect());
+	});
+
+	const canvasStyle = () => {
+		const f = frame();
+		const cs = containerSize();
+		if (!f || !cs || cs.width === 0 || cs.height === 0) return {};
+
+		const frameAspect = f.width / f.height;
+		const containerAspect = cs.width / cs.height;
+
+		let displayWidth: number;
+		let displayHeight: number;
+
+		if (frameAspect > containerAspect) {
+			displayWidth = cs.width;
+			displayHeight = cs.width / frameAspect;
+		} else {
+			displayHeight = cs.height;
+			displayWidth = cs.height * frameAspect;
+		}
+
+		return {
+			width: `${Math.round(displayWidth)}px`,
+			height: `${Math.round(displayHeight)}px`,
+		};
+	};
+
 	createEffect(() => {
 		const image = frame();
 		const canvas = canvasRef;
@@ -1164,7 +1369,10 @@ function CameraPreviewInline() {
 	};
 
 	return (
-		<div class="flex items-center justify-center w-full h-full bg-black">
+		<div
+			ref={containerRef}
+			class="flex items-center justify-center w-full h-full bg-black"
+		>
 			<Show
 				when={hasCameraSelected()}
 				fallback={
@@ -1193,7 +1401,7 @@ function CameraPreviewInline() {
 						when={frame()}
 						fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
 					>
-						<canvas ref={canvasRef} class="w-full h-full object-contain" />
+						<canvas ref={canvasRef} style={canvasStyle()} />
 					</Show>
 				</Show>
 			</Show>
@@ -1528,10 +1736,10 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 	return (
 		<Suspense>
 			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
+				<p class="text-sm text-center max-w-64 text-gray-3 mt-3">
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
-						class="underline"
+						class="underline font-bold text-gray-3"
 						onClick={() => commands.showWindow("Upgrade")}
 					>
 						Upgrade to Pro

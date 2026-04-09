@@ -49,7 +49,10 @@ export function shouldReloadPlaybackAfterUploadCompletes(
 	videoLoaded: boolean,
 ): boolean {
 	return (
-		previousUploadProgress !== null && uploadProgress === null && !videoLoaded
+		previousUploadProgress !== null &&
+		previousUploadProgress.status !== "fetching" &&
+		uploadProgress === null &&
+		!videoLoaded
 	);
 }
 

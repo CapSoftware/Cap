@@ -3,6 +3,7 @@ import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
 import { useTranscript } from "hooks/use-transcript";
+import { useRouter } from "next/navigation";
 import {
 	forwardRef,
 	useEffect,
@@ -15,6 +16,11 @@ import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
+import { useUploadProgress } from "./ProgressCircle";
+import {
+	PreparingVideoOverlay,
+	RecordingInProgressOverlay,
+} from "./RecordingInProgress";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
@@ -62,6 +68,7 @@ export const ShareVideo = forwardRef<
 	) => {
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
+		const router = useRouter();
 
 		const captionContext = useCaptionContext();
 
@@ -73,6 +80,11 @@ export const ShareVideo = forwardRef<
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
+		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
+		const segmentUploadProgress = useUploadProgress(
+			data.id,
+			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
+		);
 
 		const { data: transcriptContent, error: transcriptError } = useTranscript(
 			data.id,
@@ -178,6 +190,41 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
+		const isActivelyRecording =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			!userConfirmedStopped &&
+			(segmentUploadProgress?.status === "fetching" ||
+				segmentUploadProgress?.status === "uploading");
+
+		const wasRecordingRef = useRef(false);
+		const [isTransitioning, setIsTransitioning] = useState(false);
+		const transitionSourceRef = useRef<string | null>(null);
+
+		useEffect(() => {
+			if (isActivelyRecording) {
+				wasRecordingRef.current = true;
+			} else if (wasRecordingRef.current) {
+				wasRecordingRef.current = false;
+				setIsTransitioning(true);
+				transitionSourceRef.current = data.source.type;
+				router.refresh();
+				const timer = setTimeout(() => setIsTransitioning(false), 5000);
+				return () => clearTimeout(timer);
+			}
+		}, [isActivelyRecording, router, data.source.type]);
+
+		useEffect(() => {
+			if (
+				isTransitioning &&
+				transitionSourceRef.current !== null &&
+				data.source.type !== transitionSourceRef.current
+			) {
+				transitionSourceRef.current = null;
+				setIsTransitioning(false);
+			}
+		}, [isTransitioning, data.source.type]);
+
 		let videoSrc: string;
 		const rawFallbackSrc =
 			data.source.type === "webMP4"
@@ -202,20 +249,17 @@ export const ShareVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
 
-		// const videoMetadata = data.metadata as VideoMetadata | null;
-		// const enhancedAudioStatus = videoMetadata?.enhancedAudioStatus ?? null;
-
-		// const enhancedAudioUrl = useMemo(() => {
-		// 	if (enhancedAudioStatus === "COMPLETE" && data.owner.isPro) {
-		// 		return `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&fileType=enhanced-audio`;
-		// 	}
-		// 	return null;
-		// }, [enhancedAudioStatus, data.owner.isPro, data.owner.id, data.id]);
-
 		return (
 			<>
 				<div className="relative h-full">
-					{isMp4Source ? (
+					{isActivelyRecording ? (
+						<RecordingInProgressOverlay
+							onConfirmStopped={() => setUserConfirmedStopped(true)}
+							className="h-full"
+						/>
+					) : isTransitioning ? (
+						<PreparingVideoOverlay className="h-full" />
+					) : isMp4Source ? (
 						<CapVideoPlayer
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl overflow-visible"
@@ -240,8 +284,6 @@ export const ShareVideo = forwardRef<
 								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
-							// enhancedAudioUrl={enhancedAudioUrl}
-							// enhancedAudioStatus={enhancedAudioStatus}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}

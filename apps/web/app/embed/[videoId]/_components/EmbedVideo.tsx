@@ -15,6 +15,11 @@ import {
 } from "react";
 import { CapVideoPlayer } from "@/app/s/[videoId]/_components/CapVideoPlayer";
 import { HLSVideoPlayer } from "@/app/s/[videoId]/_components/HLSVideoPlayer";
+import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import {
+	PreparingVideoOverlay,
+	RecordingInProgressOverlay,
+} from "@/app/s/[videoId]/_components/RecordingInProgress";
 import {
 	formatChaptersAsVTT,
 	formatTranscriptAsVTT,
@@ -74,6 +79,11 @@ export const EmbedVideo = forwardRef<
 			data.duration ?? 0,
 		);
 		const [isPlaying, setIsPlaying] = useState(false);
+		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
+		const segmentUploadProgress = useUploadProgress(
+			data.id,
+			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
+		);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 
@@ -139,6 +149,27 @@ export const EmbedVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
+		const isActivelyRecording =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			!userConfirmedStopped &&
+			(segmentUploadProgress?.status === "fetching" ||
+				segmentUploadProgress?.status === "uploading");
+
+		const wasRecordingRef = useRef(false);
+		const [isTransitioning, setIsTransitioning] = useState(false);
+
+		useEffect(() => {
+			if (isActivelyRecording) {
+				wasRecordingRef.current = true;
+			} else if (wasRecordingRef.current) {
+				wasRecordingRef.current = false;
+				setIsTransitioning(true);
+				const timer = setTimeout(() => setIsTransitioning(false), 1500);
+				return () => clearTimeout(timer);
+			}
+		}, [isActivelyRecording]);
+
 		let videoSrc: string;
 		const rawFallbackSrc =
 			data.source.type === "webMP4"
@@ -191,7 +222,14 @@ export const EmbedVideo = forwardRef<
 		return (
 			<>
 				<div className="relative w-screen h-screen rounded-xl">
-					{isMp4Source ? (
+					{isActivelyRecording ? (
+						<RecordingInProgressOverlay
+							onConfirmStopped={() => setUserConfirmedStopped(true)}
+							className="w-full h-full"
+						/>
+					) : isTransitioning ? (
+						<PreparingVideoOverlay className="w-full h-full" />
+					) : isMp4Source ? (
 						<CapVideoPlayer
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
