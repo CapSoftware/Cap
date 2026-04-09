@@ -1055,6 +1055,30 @@ impl WindowImpl {
         }
     }
 
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        let physical_bounds = self.physical_bounds()?;
+
+        const BASE_DPI: f64 = 96.0;
+        let dpi = unsafe {
+            match GetDpiForWindow(self.0) {
+                0 => BASE_DPI as u32,
+                dpi => dpi,
+            }
+        } as f64;
+        let scale_factor = dpi / BASE_DPI;
+
+        Some(LogicalBounds::new(
+            LogicalPosition::new(
+                physical_bounds.position().x() / scale_factor,
+                physical_bounds.position().y() / scale_factor,
+            ),
+            LogicalSize::new(
+                physical_bounds.size().width() / scale_factor,
+                physical_bounds.size().height() / scale_factor,
+            ),
+        ))
+    }
+
     pub fn physical_size(&self) -> Option<PhysicalSize> {
         Some(self.physical_bounds()?.size())
     }
