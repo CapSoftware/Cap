@@ -953,9 +953,7 @@ export function Timeline(props: {
 						}}
 					>
 						<div class="flex flex-col gap-2 min-h-full">
-							<TrackRow
-								icon={trackIcons.clip}
-							>
+							<TrackRow icon={trackIcons.clip}>
 								<ClipTrack
 									ref={setTimelineRef}
 									handleUpdatePlayhead={handleUpdatePlayhead}
