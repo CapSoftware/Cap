@@ -2150,25 +2150,27 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
         return Err("This recording has already been imported".to_string());
     }
 
-    let clip_index_offset = (primary_recordings.segments.len()
-        + project_config
-            .external_recordings
-            .iter()
-            .map(|r| {
-                let p = std::path::PathBuf::from(&r.path);
-                RecordingMeta::load_for_project(&p)
-                    .ok()
-                    .and_then(|m| {
-                        m.studio_meta().map(|s| match s {
-                            cap_project::StudioRecordingMeta::SingleSegment { .. } => 1usize,
-                            cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
-                                inner.segments.len()
-                            }
-                        })
-                    })
-                    .unwrap_or(0)
-            })
-            .sum::<usize>()) as u32;
+    let ext_segment_counts = project_config
+        .external_recordings
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let p = std::path::PathBuf::from(&r.path);
+            let m = RecordingMeta::load_for_project(&p)
+                .map_err(|e| format!("existing external recording {i}: {e}"))?;
+            Ok(m.studio_meta()
+                .map(|s| match s {
+                    cap_project::StudioRecordingMeta::SingleSegment { .. } => 1usize,
+                    cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+                        inner.segments.len()
+                    }
+                })
+                .unwrap_or(0))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let clip_index_offset =
+        (primary_recordings.segments.len() + ext_segment_counts.iter().sum::<usize>()) as u32;
 
     let label = ext_meta.pretty_name.clone();
 

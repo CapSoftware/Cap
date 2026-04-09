@@ -729,7 +729,6 @@ export function Timeline(props: {
 		const selected = await openDialog({
 			directory: true,
 			title: "Select a Cap Recording to Import",
-			filters: [{ name: "Cap Recording", extensions: ["cap"] }],
 		});
 		if (!selected || typeof selected !== "string") return;
 		if (!selected.endsWith(".cap")) {
@@ -1043,19 +1042,6 @@ export function Timeline(props: {
 									/>
 								</TrackRow>
 							</Show>
-							<button
-								class="flex items-center gap-1.5 px-3 py-2 mt-1 rounded-xl bg-blue-500 text-white text-xs font-medium disabled:opacity-50 self-start"
-								onClick={handleImportCapRecording}
-								disabled={isImporting()}
-							>
-								<Show
-									when={isImporting()}
-									fallback={<IconLucidePlus class="size-3" />}
-								>
-									<IconLucideLoader2 class="size-3 animate-spin" />
-								</Show>
-								Import recording
-							</button>
 						</div>
 					</div>
 				</div>
