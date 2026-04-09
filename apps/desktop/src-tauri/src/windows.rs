@@ -125,6 +125,7 @@ async fn ensure_camera_input_active(app_state: &mut App) {
         }
 
         app_state.camera_in_use = true;
+        app_state.camera_cleanup_done = false;
     }
 }
 
@@ -329,6 +330,12 @@ fn center_camera_window(app: &AppHandle, window: &WebviewWindow) {
     let _ = window.set_size(tauri::LogicalSize::new(window_width, window_height));
     app.state::<CameraWindowPositionGuard>().ignore_for(1000);
     let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
+
+    if let Ok(guard) = state.try_read() {
+        guard
+            .camera_preview
+            .notify_window_resized(window_width as u32, window_height as u32);
+    }
 }
 
 fn is_position_on_display(display_id: &DisplayId, pos_x: f64, pos_y: f64) -> bool {
