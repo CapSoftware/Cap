@@ -10,6 +10,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
@@ -118,6 +119,9 @@ export function HLSVideoPlayer({
 	const [sourceVersion, setSourceVersion] = useState(0);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const queryClient = useQueryClient();
+	const router = useRouter();
+	const segmentRetryCountRef = useRef(0);
+	const hasTriedRouterRefreshRef = useRef(false);
 	const playbackSrc =
 		sourceVersion === 0
 			? videoSrc
@@ -238,15 +242,27 @@ export function HLSVideoPlayer({
 
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
-				setVideoLoaded(true);
-				if (!hasPlayedOnceRef.current) {
-					setShowPlayButton(true);
+				if (!isLiveSegments) {
+					setVideoLoaded(true);
+					if (!hasPlayedOnceRef.current) {
+						setShowPlayButton(true);
+					}
+				}
+			});
+
+			hls.on(Hls.Events.FRAG_LOADED, () => {
+				if (isLiveSegments && !videoLoaded) {
+					setVideoLoaded(true);
+					if (!hasPlayedOnceRef.current) {
+						setShowPlayButton(true);
+					}
 				}
 			});
 
 			let networkRetryCount = 0;
 			const maxNetworkRetries = isLiveSegments ? 30 : 6;
 			let hasTriedPlaylistReload = false;
+			let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 			hls.on(Hls.Events.ERROR, (event, data) => {
 				console.error("HLSVideoPlayer: HLS error:", event, data);
@@ -271,17 +287,33 @@ export function HLSVideoPlayer({
 				if (data.fatal) {
 					switch (data.type) {
 						case Hls.ErrorTypes.NETWORK_ERROR:
-							networkRetryCount++;
-							if (networkRetryCount <= maxNetworkRetries) {
-								const delay = isLiveSegments ? 2000 : 1000;
-								console.log(
-									`HLSVideoPlayer: Fatal network error, retrying in ${delay}ms (attempt ${networkRetryCount}/${maxNetworkRetries})`,
-								);
-								setTimeout(() => hls.startLoad(), delay);
+							if (
+								isLiveSegments &&
+								!hasPlayedOnceRef.current &&
+								segmentRetryCountRef.current < 30
+							) {
+								segmentRetryCountRef.current++;
+								if (
+									segmentRetryCountRef.current === 3 &&
+									!hasTriedRouterRefreshRef.current
+								) {
+									hasTriedRouterRefreshRef.current = true;
+									router.refresh();
+								}
+								retryTimer = setTimeout(reloadPlayback, 2000);
 							} else {
-								console.log("HLSVideoPlayer: Network retries exhausted");
-								setHlsInitFailed(true);
-								hls.destroy();
+								networkRetryCount++;
+								if (networkRetryCount <= maxNetworkRetries) {
+									const delay = isLiveSegments ? 2000 : 1000;
+									console.log(
+										`HLSVideoPlayer: Fatal network error, retrying in ${delay}ms (attempt ${networkRetryCount}/${maxNetworkRetries})`,
+									);
+									setTimeout(() => hls.startLoad(), delay);
+								} else {
+									console.log("HLSVideoPlayer: Network retries exhausted");
+									setHlsInitFailed(true);
+									hls.destroy();
+								}
 							}
 							break;
 						case Hls.ErrorTypes.MEDIA_ERROR:
@@ -305,6 +337,7 @@ export function HLSVideoPlayer({
 			});
 
 			return () => {
+				if (retryTimer) clearTimeout(retryTimer);
 				if (hlsInstance.current) {
 					hlsInstance.current.destroy();
 					hlsInstance.current = null;
@@ -318,7 +351,7 @@ export function HLSVideoPlayer({
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
 			setHlsInitFailed(true);
 		}
-	}, [playbackSrc, isLiveSegments, videoRef.current]);
+	}, [playbackSrc, isLiveSegments, reloadPlayback, router, videoLoaded]);
 
 	// Caption handling
 	useEffect(() => {
