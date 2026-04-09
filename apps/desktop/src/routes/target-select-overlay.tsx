@@ -1106,6 +1106,7 @@ function CameraPreviewInline() {
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
 	const [connectionFailed, setConnectionFailed] = createSignal(false);
 	let canvasRef: HTMLCanvasElement | undefined;
+	let containerRef: HTMLDivElement | undefined;
 	let ws: WebSocket | undefined;
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1308,6 +1309,47 @@ function CameraPreviewInline() {
 		ws?.close();
 	});
 
+	const [containerSize, setContainerSize] = createSignal<{
+		width: number;
+		height: number;
+	} | null>(null);
+
+	onMount(() => {
+		if (!containerRef) return;
+		const observer = new ResizeObserver(() => {
+			if (!containerRef) return;
+			const rect = containerRef.getBoundingClientRect();
+			setContainerSize({ width: rect.width, height: rect.height });
+		});
+		observer.observe(containerRef);
+		onCleanup(() => observer.disconnect());
+	});
+
+	const canvasStyle = () => {
+		const f = frame();
+		const cs = containerSize();
+		if (!f || !cs || cs.width === 0 || cs.height === 0) return {};
+
+		const frameAspect = f.width / f.height;
+		const containerAspect = cs.width / cs.height;
+
+		let displayWidth: number;
+		let displayHeight: number;
+
+		if (frameAspect > containerAspect) {
+			displayWidth = cs.width;
+			displayHeight = cs.width / frameAspect;
+		} else {
+			displayHeight = cs.height;
+			displayWidth = cs.height * frameAspect;
+		}
+
+		return {
+			width: `${Math.round(displayWidth)}px`,
+			height: `${Math.round(displayHeight)}px`,
+		};
+	};
+
 	createEffect(() => {
 		const image = frame();
 		const canvas = canvasRef;
@@ -1327,7 +1369,10 @@ function CameraPreviewInline() {
 	};
 
 	return (
-		<div class="flex items-center justify-center w-full h-full bg-black">
+		<div
+			ref={containerRef}
+			class="flex items-center justify-center w-full h-full bg-black"
+		>
 			<Show
 				when={hasCameraSelected()}
 				fallback={
@@ -1356,7 +1401,7 @@ function CameraPreviewInline() {
 						when={frame()}
 						fallback={<div class="text-sm text-gray-11">Loading camera...</div>}
 					>
-						<canvas ref={canvasRef} class="w-full h-full object-contain" />
+						<canvas ref={canvasRef} style={canvasStyle()} />
 					</Show>
 				</Show>
 			</Show>
