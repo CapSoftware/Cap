@@ -228,18 +228,17 @@ impl ProjectRecordingsMeta {
             };
             let primary = this.segments.first().ok_or("no primary segments")?;
             let ext_recordings = Self::new(&ext_path, ext_studio_meta)?;
-            if let Some(ext_first) = ext_recordings.segments.first() {
-                if ext_first.display.width != primary.display.width
-                    || ext_first.display.height != primary.display.height
-                {
-                    return Err(format!(
-                        "external recording {i}: resolution {}x{} does not match primary {}x{}",
-                        ext_first.display.width,
-                        ext_first.display.height,
-                        primary.display.width,
-                        primary.display.height,
-                    ));
-                }
+            if let Some(ext_first) = ext_recordings.segments.first()
+                && (ext_first.display.width != primary.display.width
+                    || ext_first.display.height != primary.display.height)
+            {
+                return Err(format!(
+                    "external recording {i}: resolution {}x{} does not match primary {}x{}",
+                    ext_first.display.width,
+                    ext_first.display.height,
+                    primary.display.width,
+                    primary.display.height,
+                ));
             }
             this.segments.extend(ext_recordings.segments);
         }

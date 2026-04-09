@@ -2127,18 +2127,16 @@ async fn import_cap_recording(window: Window, recording_path: PathBuf) -> Result
     if let (Some(primary_first), Some(ext_first)) = (
         primary_recordings.segments.first(),
         ext_recordings.segments.first(),
-    ) {
-        if ext_first.display.width != primary_first.display.width
-            || ext_first.display.height != primary_first.display.height
-        {
-            return Err(format!(
-                "Recording resolution {}x{} does not match project resolution {}x{}",
-                ext_first.display.width,
-                ext_first.display.height,
-                primary_first.display.width,
-                primary_first.display.height,
-            ));
-        }
+    ) && (ext_first.display.width != primary_first.display.width
+        || ext_first.display.height != primary_first.display.height)
+    {
+        return Err(format!(
+            "Recording resolution {}x{} does not match project resolution {}x{}",
+            ext_first.display.width,
+            ext_first.display.height,
+            primary_first.display.width,
+            primary_first.display.height,
+        ));
     }
 
     let mut project_config = ProjectConfiguration::load(&project_path)
