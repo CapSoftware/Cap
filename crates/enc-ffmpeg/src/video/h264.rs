@@ -53,6 +53,7 @@ pub enum H264EncoderError {
 
 impl H264EncoderBuilder {
     pub const QUALITY_BPP: f32 = 0.3;
+    pub const INSTANT_MODE_BPP: f32 = 0.15;
 
     pub fn new(input_config: VideoInfo) -> Self {
         Self {
@@ -351,6 +352,7 @@ impl H264EncoderBuilder {
                 bpp,
             );
             encoder.set_bit_rate(bitrate);
+            encoder.set_max_bit_rate(bitrate * 3 / 2);
         }
 
         let encoder = encoder.open_with(encoder_options)?;
@@ -726,7 +728,7 @@ fn get_codec_and_options(
                 } else {
                     options.set("realtime", "true");
                     options.set("prio_speed", "true");
-                    options.set("profile", "baseline");
+                    options.set("profile", "main");
                 }
             }
             "h264_nvenc" => {
