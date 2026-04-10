@@ -13,7 +13,7 @@ use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
-    windows::{CapWindowId, ShowCapWindow},
+    windows::{CapWindowId, ShowCapWindow, hide_overlay, show_overlay},
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
@@ -98,7 +98,7 @@ pub async fn open_target_select_overlays(
                 .iter()
                 .any(|display_id| display_id == &existing_id)
         {
-            let _ = window.hide();
+            hide_overlay(&window);
             state.destroy(&existing_id, app.global_shortcut());
         }
     }
@@ -112,7 +112,7 @@ pub async fn open_target_select_overlays(
         .get(&app);
 
         if let Some(window) = existing_window {
-            window.show().ok();
+            show_overlay(&window);
 
             if should_focus {
                 window.set_focus().ok();
@@ -306,7 +306,7 @@ pub async fn close_target_select_overlays(
 
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&id) {
-            let _ = window.hide();
+            hide_overlay(&window);
             closed_display_ids.push(display_id);
         }
     }
@@ -456,7 +456,7 @@ impl WindowFocusManager {
 
                     if main_window_was_seen && !main_window_available && !settings_window_available
                     {
-                        window.hide().ok();
+                        hide_overlay(&window);
                         app.state::<WindowFocusManager>()
                             .finish(&display_id, app.global_shortcut());
                         break;

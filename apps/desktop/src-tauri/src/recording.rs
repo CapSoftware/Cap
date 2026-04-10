@@ -67,7 +67,7 @@ use crate::{
     thumbnails::*,
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
-    windows::{CapWindowId, ShowCapWindow},
+    windows::{CapWindowId, ShowCapWindow, hide_overlay},
 };
 
 #[derive(Clone)]
@@ -767,7 +767,7 @@ pub async fn start_recording(
         .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
     {
         if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-            win.hide().ok();
+            hide_overlay(win);
         }
     }
     let _ = ShowCapWindow::InProgressRecording {

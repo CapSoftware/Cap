@@ -105,7 +105,8 @@ use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{
-    CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow, set_window_transparent,
+    CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow, hide_overlay,
+    set_window_transparent, show_overlay,
 };
 
 use crate::{recording::start_recording, upload::build_video_meta};
@@ -1942,35 +1943,57 @@ async fn copy_rendered_screenshot_to_clipboard(
 #[instrument(skip(_app))]
 async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     let path_str = path.to_str().ok_or("Invalid path")?;
+    let is_dir = path.is_dir();
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer")
-            .args(["/select,", path_str])
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {e}"))?;
+        if is_dir {
+            Command::new("explorer")
+                .arg(path_str)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {e}"))?;
+        } else {
+            Command::new("explorer")
+                .args(["/select,", path_str])
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {e}"))?;
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
-            .arg("-R")
-            .arg(path_str)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {e}"))?;
+        if is_dir {
+            Command::new("open")
+                .arg(path_str)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {e}"))?;
+        } else {
+            Command::new("open")
+                .arg("-R")
+                .arg(path_str)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {e}"))?;
+        }
     }
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
-            .arg(
-                path.parent()
-                    .ok_or("Invalid path")?
-                    .to_str()
-                    .ok_or("Invalid path")?,
-            )
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {e}"))?;
+        if is_dir {
+            Command::new("xdg-open")
+                .arg(path_str)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {e}"))?;
+        } else {
+            Command::new("xdg-open")
+                .arg(
+                    path.parent()
+                        .ok_or("Invalid path")?
+                        .to_str()
+                        .ok_or("Invalid path")?,
+                )
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {e}"))?;
+        }
     }
 
     Ok(())
@@ -4001,14 +4024,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             }
                             CapWindowId::Settings => {
                                 for (label, window) in app.webview_windows() {
-                                    if let Ok(id) = CapWindowId::from_str(&label)
-                                        && matches!(
-                                            id,
-                                            CapWindowId::TargetSelectOverlay { .. }
-                                                | CapWindowId::Main
-                                        )
-                                    {
-                                        let _ = window.show();
+                                    if let Ok(id) = CapWindowId::from_str(&label) {
+                                        match id {
+                                            CapWindowId::TargetSelectOverlay { .. } => {
+                                                show_overlay(&window);
+                                            }
+                                            CapWindowId::Main => {
+                                                let _ = window.show();
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
 
@@ -4024,14 +4049,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             }
                             CapWindowId::Upgrade | CapWindowId::ModeSelect => {
                                 for (label, window) in app.webview_windows() {
-                                    if let Ok(id) = CapWindowId::from_str(&label)
-                                        && matches!(
-                                            id,
-                                            CapWindowId::TargetSelectOverlay { .. }
-                                                | CapWindowId::Main
-                                        )
-                                    {
-                                        let _ = window.show();
+                                    if let Ok(id) = CapWindowId::from_str(&label) {
+                                        match id {
+                                            CapWindowId::TargetSelectOverlay { .. } => {
+                                                show_overlay(&window);
+                                            }
+                                            CapWindowId::Main => {
+                                                let _ = window.show();
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                                 restore_camera_window(app);
@@ -4083,7 +4110,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             if let Ok(id) = CapWindowId::from_str(&label)
                                 && matches!(id, CapWindowId::TargetSelectOverlay { .. })
                             {
-                                let _ = window.hide();
+                                hide_overlay(&window);
                             }
                         }
                     }
@@ -4269,7 +4296,7 @@ fn close_target_select_overlays(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&label) {
             saw_overlay = true;
-            let _ = window.hide();
+            hide_overlay(&window);
             focus_manager.destroy(&display_id, app.global_shortcut());
         }
     }
