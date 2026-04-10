@@ -30,7 +30,7 @@ use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0;
 
-static GPU_SURFACE_SCALE: u32 = 4;
+static GPU_SURFACE_SCALE: u32 = 2;
 
 pub const MIN_CAMERA_SIZE: f32 = 150.0;
 pub const MAX_CAMERA_SIZE: f32 = 600.0;
@@ -509,12 +509,21 @@ impl InitializedCameraPreview {
         let surface_capabilities = surface.get_capabilities(&adapter);
         let alpha_mode = preferred_alpha_mode(&surface_capabilities.alpha_modes);
 
+        let present_mode = if surface_capabilities
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
             width: size.0,
             height: size.1,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -738,7 +747,11 @@ impl Renderer {
             };
 
             match event {
-                Ok(frame) => {
+                Ok(mut frame) => {
+                    while let Ok(newer) = camera_rx.try_recv() {
+                        frame = newer;
+                    }
+
                     received_first_frame = true;
                     let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
                     self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
@@ -752,8 +765,9 @@ impl Renderer {
                             .ok()
                     });
                     if let Some(surface) = surface_result {
-                        let output_width = 1280;
-                        let output_height = (1280.0 / aspect_ratio) as u32;
+                        let window_px = (clamp_size(state.size) as u32) * GPU_SURFACE_SCALE;
+                        let output_width = window_px.max(320).min(frame.inner.width());
+                        let output_height = (output_width as f32 / aspect_ratio) as u32;
 
                         let resampler_frame = resampler_frame
                             .get_or_init((output_width, output_height), frame::Video::empty);
@@ -1204,6 +1218,26 @@ impl PreparedTexture {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            buffer,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(self.height),
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1228,26 +1262,6 @@ impl PreparedTexture {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                buffer,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(self.height),
-                },
-                wgpu::Extent3d {
-                    width: self.width,
-                    height: self.height,
-                    depth_or_array_layers: 1,
-                },
-            );
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
