@@ -151,8 +151,8 @@ pub(super) fn start_capturing_impl(
     Ok(AVFoundationRecordingHandle {
         _delegate: delegate,
         session,
-        _output: output,
-        _input: input,
+        output,
+        input,
         _device: device,
     })
 }
@@ -160,15 +160,33 @@ pub(super) fn start_capturing_impl(
 pub struct AVFoundationRecordingHandle {
     _delegate: arc::R<cap_camera_avfoundation::CallbackOutputDelegate>,
     session: arc::R<cidre::av::capture::Session>,
-    _output: arc::R<av::CaptureVideoDataOutput>,
-    _input: arc::R<av::CaptureDeviceInput>,
+    output: arc::R<av::CaptureVideoDataOutput>,
+    input: arc::R<av::CaptureDeviceInput>,
     _device: arc::R<av::CaptureDevice>,
 }
 
 impl AVFoundationRecordingHandle {
     pub fn stop_capturing(mut self) -> Result<(), String> {
-        self.session.stop_running();
+        self.teardown();
         Ok(())
+    }
+
+    fn teardown(&mut self) {
+        self.session.stop_running();
+        self.output
+            .set_sample_buf_delegate::<CallbackOutputDelegate>(None, None);
+        let output = self.output.clone();
+        let input = self.input.clone();
+        self.session.configure(move |s| {
+            s.remove_output(&output);
+            s.remove_input(&input);
+        });
+    }
+}
+
+impl Drop for AVFoundationRecordingHandle {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }
 
