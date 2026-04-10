@@ -1,11 +1,6 @@
 {
 	"version": "1.0.0",
 	"steps": {
-		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
-			"fetch": {
-				"stepId": "step//workflow@4.2.0-beta.73//fetch"
-			}
-		},
 		"workflows/process-video.ts": {
 			"cleanupRawUpload": {
 				"stepId": "step//./workflows/process-video//cleanupRawUpload"
@@ -75,6 +70,11 @@
 			},
 			"__builtin_response_text": {
 				"stepId": "__builtin_response_text"
+			}
+		},
+		"node_modules/.pnpm/workflow@4.2.0-beta.73_@nestjs+common@11.1.17_reflect-metadata@0.2.2_rxjs@7.8.2__@nestj_2a6f07c63175c34d8d104665b34a32ad/node_modules/workflow/dist/stdlib.js": {
+			"fetch": {
+				"stepId": "step//workflow@4.2.0-beta.73//fetch"
 			}
 		},
 		"workflows/generate-ai.ts": {
