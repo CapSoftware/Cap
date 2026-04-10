@@ -40,9 +40,7 @@ async fn profile_recording(
     let mut camera_feed_ref = None;
     let mut mic_feed_ref = None;
 
-    if include_camera
-        && let Some(camera_info) = cap_camera::list_cameras().next()
-    {
+    if include_camera && let Some(camera_info) = cap_camera::list_cameras().next() {
         println!("Camera: {}", camera_info.display_name());
         let feed = CameraFeed::spawn(CameraFeed::default());
         feed.ask(camera::SetInput {
@@ -59,9 +57,7 @@ async fn profile_recording(
         camera_feed_ref = Some(feed);
     }
 
-    if include_mic
-        && let Some((mic_name, _, _)) = MicrophoneFeed::default_device()
-    {
+    if include_mic && let Some((mic_name, _, _)) = MicrophoneFeed::default_device() {
         println!("Microphone: {mic_name}");
         let error_sender = flume::unbounded().0;
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_sender));
