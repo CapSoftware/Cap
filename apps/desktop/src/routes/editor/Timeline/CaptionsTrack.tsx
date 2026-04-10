@@ -173,7 +173,10 @@ export function CaptionsTrack(props: {
 								isSelected() ? "border-green-7" : "border-transparent",
 							)}
 							innerClass="ring-green-6"
-							segment={{ start: segment.start, end: Math.min(segment.end, totalDuration()) }}
+							segment={{
+								start: segment.start,
+								end: Math.min(segment.end, totalDuration()),
+							}}
 							onMouseDown={(e) => {
 								e.stopPropagation();
 								if (editorState.timeline.interactMode === "split") {
