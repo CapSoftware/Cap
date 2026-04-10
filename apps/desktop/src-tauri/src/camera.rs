@@ -725,7 +725,11 @@ impl Renderer {
                         }
                     },
                     _ = tokio::time::sleep(frame_timeout) => {
-                        warn!("Camera preview: no frames received within timeout, entering paused state");
+                        if received_first_frame {
+                            warn!("Camera preview: frames stalled, waiting for feed refresh");
+                            continue;
+                        }
+                        warn!("Camera preview: no frames received within startup timeout, entering paused state");
                         is_paused = true;
                         pause_and_hide();
                         continue 'main_loop;
