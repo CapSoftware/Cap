@@ -1696,6 +1696,7 @@ function Page() {
 		const abort = new AbortController();
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
+				await win.setIgnoreCursorEvents(true);
 				await win.hide();
 			}
 		}
@@ -1704,6 +1705,7 @@ function Page() {
 
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
+				await win.setIgnoreCursorEvents(false);
 				await win.show();
 			}
 		}
