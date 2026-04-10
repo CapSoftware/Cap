@@ -3260,6 +3260,36 @@ fn ignore_camera_window_position(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
+async fn refresh_camera_feed(state: MutableState<'_, App>) -> Result<(), String> {
+    let app = state.read().await;
+    let camera_feed = app.camera_feed.clone();
+
+    #[allow(deprecated)]
+    let camera_ws_sender = app.camera_ws_sender.clone();
+
+    let camera_preview_sender = app.camera_preview.sender();
+
+    drop(app);
+
+    #[allow(deprecated)]
+    camera_feed
+        .ask(feeds::camera::AddSender(camera_ws_sender))
+        .await
+        .map_err(|err| format!("error re-adding camera ws sender: {err}"))?;
+
+    if let Some(sender) = camera_preview_sender {
+        camera_feed
+            .ask(feeds::camera::AddSender(sender))
+            .await
+            .map_err(|err| format!("error re-adding camera preview sender: {err}"))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(app))]
 async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, String> {
     let app = app.read().await.camera_feed.clone();
@@ -3426,6 +3456,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_camera_window_position,
             ignore_camera_window_position,
             await_camera_preview_ready,
+            refresh_camera_feed,
             captions::create_dir,
             captions::save_model_file,
             captions::transcribe_audio,
