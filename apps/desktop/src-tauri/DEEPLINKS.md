@@ -16,7 +16,8 @@ Query params:
 - `target`: screen/window name exactly as shown in Cap (required)
 - `capture_system_audio`: `true` / `false` (optional)
 - `mic_label`: microphone label exactly as shown in Cap (optional)
-- omitting `mic_label`, `device_id`, `model_id`, and `off` keeps the current Cap inputs unchanged
+- `mic_off=true` disables microphone input and cannot be combined with `mic_label`
+- omitting `mic_label`, `device_id`, `model_id`, `off`, and `mic_off` keeps the current Cap inputs unchanged
 - camera:
   - `device_id=<id>` or `model_id=<VID:PID>`
   - `off=true` to disable camera

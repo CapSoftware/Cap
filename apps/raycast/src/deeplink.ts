@@ -38,10 +38,6 @@ export async function sendCapDeepLink(
 ) {
 	const url = buildCapUrl(path, params);
 
-	if (!url.startsWith("cap-desktop://")) {
-		throw new Error("Cap deeplink must use cap-desktop://");
-	}
-
 	try {
 		await openUrl(url);
 		await closeMainWindow();
