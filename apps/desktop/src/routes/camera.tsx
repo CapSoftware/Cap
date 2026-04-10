@@ -586,14 +586,24 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		ctx?.putImageData(imageData.data, 0, 0);
 	}
 
+	const STALL_TIMEOUT_MS = 2000;
+
 	const { cameraWsPort } = window.__CAP__;
 	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
 	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
 	let reconnectInterval: ReturnType<typeof setInterval> | undefined;
+	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
+	let lastFrameTime = 0;
 
 	onMount(() => {
-		const handleVisibilityChange = () => setIsWindowVisible(!document.hidden);
+		const handleVisibilityChange = () => {
+			setIsWindowVisible(!document.hidden);
+			if (!document.hidden) {
+				lastFrameTime = Date.now();
+				commands.refreshCameraFeed().catch(() => {});
+			}
+		};
 		document.addEventListener("visibilitychange", handleVisibilityChange);
 		onCleanup(() =>
 			document.removeEventListener("visibilitychange", handleVisibilityChange),
@@ -606,6 +616,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 		socket.addEventListener("open", () => {
 			setIsConnected(true);
+			lastFrameTime = Date.now();
 		});
 
 		socket.addEventListener("close", () => {
@@ -618,6 +629,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 		socket.onmessage = (event) => {
 			if (!isWindowVisible()) return;
+
+			lastFrameTime = Date.now();
 
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
@@ -681,6 +694,11 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			reconnectInterval = undefined;
 		}
 
+		if (stallCheckInterval) {
+			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
+		}
+
 		if (ws) {
 			ws.close();
 			ws = undefined;
@@ -692,6 +710,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	const startSocket = () => {
 		if (ws || !isWindowVisible()) return;
 
+		lastFrameTime = Date.now();
 		ws = createSocket();
 
 		reconnectInterval = setInterval(() => {
@@ -700,6 +719,20 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				ws = createSocket();
 			}
 		}, 5000);
+
+		stallCheckInterval = setInterval(() => {
+			if (
+				ws?.readyState === WebSocket.OPEN &&
+				isWindowVisible() &&
+				lastFrameTime > 0 &&
+				Date.now() - lastFrameTime > STALL_TIMEOUT_MS
+			) {
+				lastFrameTime = Date.now();
+				commands.refreshCameraFeed().catch(() => {});
+				if (ws) ws.close();
+				ws = createSocket();
+			}
+		}, STALL_TIMEOUT_MS);
 	};
 
 	createEffect(() => {
