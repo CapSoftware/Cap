@@ -35,8 +35,25 @@ export default function (props: RouteSectionProps) {
 		}
 	});
 
+	const handleKeyDown = (e: KeyboardEvent) => {
+		const isMac = ostype() === "macos";
+		const closeShortcut = isMac
+			? e.metaKey && e.key === "w"
+			: e.ctrlKey && e.key === "w";
+
+		if (closeShortcut) {
+			e.preventDefault();
+			getCurrentWindow().close();
+		}
+	};
+
+	onMount(() => {
+		window.addEventListener("keydown", handleKeyDown);
+	});
+
 	onCleanup(() => {
 		unlistenResize?.();
+		window.removeEventListener("keydown", handleKeyDown);
 	});
 
 	const isMacOS = ostype() === "macos";
