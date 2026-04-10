@@ -34,7 +34,11 @@ export function CaptionsTrack(props: {
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
-	const captionSegments = () => project.timeline?.captionSegments ?? [];
+	const captionSegments = createMemo(() =>
+		(project.timeline?.captionSegments ?? []).filter(
+			(s) => s.start < totalDuration(),
+		),
+	);
 	const selectedCaptionIndices = createMemo(() => {
 		const selection = editorState.timeline.selection;
 		if (!selection || selection.type !== "caption") return null;
@@ -169,7 +173,7 @@ export function CaptionsTrack(props: {
 								isSelected() ? "border-green-7" : "border-transparent",
 							)}
 							innerClass="ring-green-6"
-							segment={segment}
+							segment={{ start: segment.start, end: Math.min(segment.end, totalDuration()) }}
 							onMouseDown={(e) => {
 								e.stopPropagation();
 								if (editorState.timeline.interactMode === "split") {
