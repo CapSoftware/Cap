@@ -559,6 +559,26 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		return reusableFrameData;
 	}
 
+	let pendingRender = false;
+	let rafId: number | null = null;
+	let cachedCtx: CanvasRenderingContext2D | null = null;
+
+	function scheduleRender() {
+		if (rafId !== null) return;
+		rafId = requestAnimationFrame(() => {
+			rafId = null;
+			if (!pendingRender) return;
+			pendingRender = false;
+
+			if (!cachedCtx && cameraCanvasRef) {
+				cachedCtx = cameraCanvasRef.getContext("2d");
+			}
+			if (cachedCtx && reusableFrameData) {
+				cachedCtx.putImageData(reusableFrameData, 0, 0);
+			}
+		});
+	}
+
 	function imageDataHandler(imageData: { width: number; data: ImageData }) {
 		const currentFrame = latestFrame();
 		if (
@@ -582,8 +602,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			});
 		}
 
-		const ctx = cameraCanvasRef?.getContext("2d");
-		ctx?.putImageData(imageData.data, 0, 0);
+		pendingRender = true;
+		scheduleRender();
 	}
 
 	const STALL_TIMEOUT_MS = 2000;
@@ -744,6 +764,11 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 
 	onCleanup(() => {
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+		cachedCtx = null;
 		reusableFrameData = null;
 		reusableFrameWidth = 0;
 		reusableFrameHeight = 0;
