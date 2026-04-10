@@ -9,6 +9,7 @@ workspace = true
 [features]
 default = []
 test-utils = []
+memory-profiling = ["dep:dhat"]
 
 [dependencies]
 cap-audio = { path = "../audio" }
@@ -57,6 +58,7 @@ inquire = "0.7.5"
 replace_with = "0.1.8"
 retry = "2.1.0"
 sysinfo = "0.35"
+dhat = { version = "0.3", optional = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -117,3 +119,6 @@ name = "playback-test-runner"
 
 [[example]]
 name = "real-device-test-runner"
+
+[[example]]
+name = "memory-stress-test"
