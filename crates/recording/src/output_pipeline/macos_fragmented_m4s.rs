@@ -146,6 +146,7 @@ pub struct MacOSFragmentedM4SMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     state: Option<EncoderState>,
     pause: SharedPauseState,
@@ -158,6 +159,7 @@ pub struct MacOSFragmentedM4SMuxer {
 pub struct MacOSFragmentedM4SMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
@@ -169,6 +171,7 @@ impl Default for MacOSFragmentedM4SMuxerConfig {
         Self {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
+            bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
@@ -206,6 +209,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: config.bpp,
             output_size: config.output_size,
             state: None,
             pause,
@@ -267,7 +271,7 @@ impl MacOSFragmentedM4SMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
         };
 
@@ -619,6 +623,7 @@ pub struct MacOSFragmentedM4SCameraMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     state: Option<EncoderState>,
     pause: SharedPauseState,
@@ -631,6 +636,7 @@ pub struct MacOSFragmentedM4SCameraMuxer {
 pub struct MacOSFragmentedM4SCameraMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
@@ -642,6 +648,7 @@ impl Default for MacOSFragmentedM4SCameraMuxerConfig {
         Self {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
+            bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
@@ -680,6 +687,7 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: config.bpp,
             output_size: config.output_size,
             state: None,
             pause,
@@ -743,7 +751,7 @@ impl MacOSFragmentedM4SCameraMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
         };
 

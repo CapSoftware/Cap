@@ -9,6 +9,7 @@ use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerCon
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
+use cap_enc_ffmpeg::h264::H264EncoderBuilder;
 #[cfg(windows)]
 use cap_enc_ffmpeg::h264::H264Preset;
 use cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent;
@@ -124,6 +125,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
             .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
                 segment_tx,
                 ..Default::default()
@@ -155,6 +157,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                     segment_duration: std::time::Duration::from_secs(3),
                     preset: H264Preset::Ultrafast,
+                    bpp: H264EncoderBuilder::QUALITY_BPP,
                     output_size,
                     shared_pause_state,
                     disk_space_callback: None,
@@ -201,6 +204,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                 segment_duration: std::time::Duration::from_secs(3),
                 preset: H264Preset::Ultrafast,
+                bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
                 shared_pause_state: None,
                 disk_space_callback: None,

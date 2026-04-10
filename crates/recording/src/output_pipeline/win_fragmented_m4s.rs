@@ -191,6 +191,7 @@ pub struct WindowsFragmentedM4SMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     state: Option<EncoderState>,
     pause: SharedPauseState,
@@ -202,6 +203,7 @@ pub struct WindowsFragmentedM4SMuxer {
 pub struct WindowsFragmentedM4SMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
@@ -212,6 +214,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
         Self {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
+            bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
@@ -248,6 +251,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: config.bpp,
             output_size: config.output_size,
             state: None,
             pause,
@@ -300,7 +304,7 @@ impl WindowsFragmentedM4SMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
         };
 
@@ -583,6 +587,7 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     state: Option<CameraEncoderState>,
     pause: SharedPauseState,
@@ -594,6 +599,7 @@ pub struct WindowsFragmentedM4SCameraMuxer {
 pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
@@ -604,6 +610,7 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
         Self {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
+            bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
@@ -641,6 +648,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: config.bpp,
             output_size: config.output_size,
             state: None,
             pause,
@@ -735,7 +743,7 @@ impl WindowsFragmentedM4SCameraMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
         };
 
