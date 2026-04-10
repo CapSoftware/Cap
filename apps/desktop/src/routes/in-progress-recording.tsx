@@ -202,6 +202,7 @@ function InProgressRecordingInner() {
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
+				aborted = false;
 				setState({ variant: "recording" });
 				setStart(Date.now());
 				setTime(Date.now());
@@ -254,12 +255,32 @@ function InProgressRecordingInner() {
 			| CurrentRecording
 			| null
 			| undefined;
+
+		if (s.variant === "stopped" && !currentRecording.isPending && recording) {
+			setStartingDismissed(false);
+			setDisconnectedInputs({ microphone: false, camera: false });
+			setRecordingFailure(null);
+			setDegradedReason(null);
+			setPauseResumes([]);
+			aborted = false;
+			if (recording.status === "recording") {
+				setState({ variant: "recording" });
+				setStart(Date.now());
+				setTime(Date.now());
+			} else {
+				setState({ variant: "initializing" });
+			}
+			return;
+		}
+
 		if (s.variant !== "initializing" && s.variant !== "countdown") return;
 		if (currentRecording.isPending) return;
 		if (recording?.status === "recording") {
 			setStartingDismissed(false);
 			setDisconnectedInputs({ microphone: false, camera: false });
 			setRecordingFailure(null);
+			setDegradedReason(null);
+			setPauseResumes([]);
 			setState({ variant: "recording" });
 			setStart(Date.now());
 			setTime(Date.now());
