@@ -2,9 +2,14 @@ use cap_camera::CapturedFrame;
 use cap_camera_avfoundation::ImageBufExt;
 use cidre::*;
 use ffmpeg::{format::Pixel, software::scaling};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::CapturedFrameExt;
+
+type CachedScaler = (Pixel, u32, u32, scaling::Context, ffmpeg::frame::Video);
 
 #[derive(thiserror::Error, Debug)]
 pub enum AsFFmpegError {
@@ -368,31 +373,56 @@ impl CapturedFrameExt for CapturedFrame {
                         dest_row.copy_from_slice(src_row);
                     }
 
-                    let mut scaler = scaling::Context::get(
-                        info.pixel,
-                        width as u32,
-                        height as u32,
-                        Pixel::RGBA,
-                        width as u32,
-                        height as u32,
-                        scaling::flag::Flags::FAST_BILINEAR,
-                    )
-                    .map_err(|e| AsFFmpegError::SwscaleFallbackFailed {
-                        format: format.to_string(),
-                        reason: format!("Failed to create scaler: {e}"),
-                    })?;
+                    thread_local! {
+                        static FALLBACK_SCALER: RefCell<Option<CachedScaler>> = const { RefCell::new(None) };
+                    }
 
-                    let mut output_frame =
-                        ffmpeg::frame::Video::new(Pixel::RGBA, width as u32, height as u32);
+                    FALLBACK_SCALER.with(|cell| {
+                        let mut cached = cell.borrow_mut();
 
-                    scaler.run(&src_frame, &mut output_frame).map_err(|e| {
-                        AsFFmpegError::SwscaleFallbackFailed {
-                            format: format.to_string(),
-                            reason: format!("Conversion failed: {e}"),
+                        let w = width as u32;
+                        let h = height as u32;
+
+                        let needs_reinit = cached.as_ref().is_none_or(|(p, cw, ch, _, _)| {
+                            *p != info.pixel || *cw != w || *ch != h
+                        });
+
+                        if needs_reinit {
+                            let scaler = scaling::Context::get(
+                                info.pixel,
+                                w,
+                                h,
+                                Pixel::RGBA,
+                                w,
+                                h,
+                                scaling::flag::Flags::FAST_BILINEAR,
+                            )
+                            .map_err(|e| {
+                                AsFFmpegError::SwscaleFallbackFailed {
+                                    format: format.to_string(),
+                                    reason: format!("Failed to create scaler: {e}"),
+                                }
+                            })?;
+
+                            let out = ffmpeg::frame::Video::new(Pixel::RGBA, w, h);
+                            *cached = Some((info.pixel, w, h, scaler, out));
                         }
-                    })?;
 
-                    output_frame
+                        let (_, _, _, scaler, output) = cached.as_mut().unwrap();
+
+                        scaler.run(&src_frame, output).map_err(|e| {
+                            AsFFmpegError::SwscaleFallbackFailed {
+                                format: format.to_string(),
+                                reason: format!("Conversion failed: {e}"),
+                            }
+                        })?;
+
+                        let mut cloned = ffmpeg::frame::Video::new(Pixel::RGBA, w, h);
+                        let src_data = output.data(0);
+                        let dest_data = cloned.data_mut(0);
+                        dest_data[..src_data.len()].copy_from_slice(src_data);
+                        Ok::<_, AsFFmpegError>(cloned)
+                    })?
                 } else {
                     return Err(AsFFmpegError::UnsupportedSubType(format.to_string()));
                 }
