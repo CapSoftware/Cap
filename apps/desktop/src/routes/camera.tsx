@@ -222,6 +222,18 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		if (isCameraOnlyMode()) {
 			centerCameraOnlyWindow();
 		}
+
+		const handleVisibilityChange = () => {
+			if (!document.hidden) {
+				setTimeout(() => {
+					commands.refreshCameraFeed().catch(() => {});
+				}, 500);
+			}
+		};
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		onCleanup(() =>
+			document.removeEventListener("visibilitychange", handleVisibilityChange),
+		);
 	});
 
 	createEffect(
