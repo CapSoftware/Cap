@@ -18,7 +18,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
+use tokio::{sync::oneshot, task::LocalSet};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ffmpeg::FFmpegVideoFrame;
@@ -34,6 +34,7 @@ pub struct CameraFeed {
     native_senders: Vec<flume::Sender<NativeCameraFrame>>,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
+    previous_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 enum State {
@@ -168,6 +169,7 @@ impl Default for CameraFeed {
             native_senders: Vec::new(),
             on_ready: Vec::new(),
             on_disconnect: Vec::new(),
+            previous_thread: None,
         }
     }
 }
@@ -285,7 +287,7 @@ fn spawn_camera_setup(
     new_frame_recipient: Recipient<NewFrame>,
     native_frame_recipient: Recipient<NewNativeFrame>,
     flow: CameraSetupFlow,
-) -> (ReadyFuture, SyncSender<()>) {
+) -> (ReadyFuture, SyncSender<()>, std::thread::JoinHandle<()>) {
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -297,12 +299,16 @@ fn spawn_camera_setup(
         .boxed()
         .shared();
 
-    let runtime = Runtime::new().expect("Failed to get Tokio runtime!");
     let done_rx_thread = done_rx;
     let done_tx_thread = done_tx.clone();
     let ready_tx_thread = ready_tx;
 
-    std::thread::spawn(move || {
+    let join_handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build camera tokio runtime");
+
         LocalSet::new().block_on(&runtime, async move {
             let setup_result = setup_camera(&id, new_frame_recipient, native_frame_recipient).await;
 
@@ -394,11 +400,15 @@ fn spawn_camera_setup(
 
             let _ = handle.stop_capturing();
 
+            std::thread::sleep(Duration::from_millis(50));
+
             warn!("Camera capture thread: stopped capture of {:?}", &id);
-        })
+        });
+
+        drop(runtime);
     });
 
-    (ready, done_tx)
+    (ready, done_tx, join_handle)
 }
 
 // Impls
@@ -667,6 +677,10 @@ impl Message<SetInput> for CameraFeed {
             SetInputError::Initialisation
         );
 
+        if let Some(handle) = self.previous_thread.take() {
+            let _ = handle.join();
+        }
+
         match &mut self.state {
             State::Open(state) => {
                 let actor_ref = ctx.actor_ref();
@@ -674,13 +688,15 @@ impl Message<SetInput> for CameraFeed {
                 let native_frame_recipient = actor_ref.clone().recipient();
                 let id = msg.id.clone();
 
-                let (ready, _done_tx) = spawn_camera_setup(
+                let (ready, _done_tx, join_handle) = spawn_camera_setup(
                     id.clone(),
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
                     CameraSetupFlow::Open,
                 );
+
+                self.previous_thread = Some(join_handle);
 
                 state.connecting = Some(ConnectingState {
                     id,
@@ -700,13 +716,15 @@ impl Message<SetInput> for CameraFeed {
                 let new_frame_recipient = actor_ref.clone().recipient();
                 let native_frame_recipient = actor_ref.clone().recipient();
 
-                let (ready, _done_tx) = spawn_camera_setup(
+                let (ready, _done_tx, join_handle) = spawn_camera_setup(
                     msg.id.clone(),
                     actor_ref,
                     new_frame_recipient,
                     native_frame_recipient,
                     CameraSetupFlow::Locked,
                 );
+
+                self.previous_thread = Some(join_handle);
 
                 Ok(ready
                     .map(|v| v.map(|v| (v.camera_info, v.video_info)))
@@ -733,6 +751,10 @@ impl Message<RemoveInput> for CameraFeed {
 
         self.senders.clear();
         self.native_senders.clear();
+
+        if let Some(handle) = self.previous_thread.take() {
+            let _ = handle.join();
+        }
 
         for cb in &self.on_disconnect {
             (cb)();
