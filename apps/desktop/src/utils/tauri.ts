@@ -289,6 +289,9 @@ async ignoreCameraWindowPosition(durationMs: number) : Promise<null> {
 async awaitCameraPreviewReady() : Promise<boolean> {
     return await TAURI_INVOKE("await_camera_preview_ready");
 },
+async refreshCameraFeed() : Promise<null> {
+    return await TAURI_INVOKE("refresh_camera_feed");
+},
 async createDir(path: string, recursive: boolean) : Promise<null> {
     return await TAURI_INVOKE("create_dir", { path, recursive });
 },
