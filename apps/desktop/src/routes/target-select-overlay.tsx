@@ -1101,6 +1101,8 @@ function calculateBackoffWithJitter(
 	return Math.max(initialMs, Math.floor(exponentialBackoff + jitter));
 }
 
+const WS_STALL_TIMEOUT_MS = 2000;
+
 function CameraPreviewInline() {
 	const { rawOptions } = useRecordingOptions();
 	const [frame, setFrame] = createSignal<ImageData | null>(null);
@@ -1110,10 +1112,12 @@ function CameraPreviewInline() {
 	let ws: WebSocket | undefined;
 	let retryCount = 0;
 	let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
+	let stallCheckInterval: ReturnType<typeof setInterval> | undefined;
 	let isCleanedUp = false;
 	let reusableFrame: ImageData | null = null;
 	let reusableFrameWidth = 0;
 	let reusableFrameHeight = 0;
+	let lastFrameTime = 0;
 
 	const cameraWsPort = window.__CAP__?.cameraWsPort;
 	const hasCameraSelected = () => rawOptions.cameraID !== null;
@@ -1182,6 +1186,7 @@ function CameraPreviewInline() {
 
 		socket.onopen = () => {
 			resetBackoff();
+			lastFrameTime = Date.now();
 		};
 
 		socket.onclose = () => {
@@ -1195,6 +1200,7 @@ function CameraPreviewInline() {
 		};
 
 		socket.onmessage = (event) => {
+			lastFrameTime = Date.now();
 			const buffer = event.data as ArrayBuffer;
 			const clamped = new Uint8ClampedArray(buffer);
 			if (clamped.length < 24) return;
@@ -1271,6 +1277,10 @@ function CameraPreviewInline() {
 			clearTimeout(reconnectTimeoutId);
 			reconnectTimeoutId = undefined;
 		}
+		if (stallCheckInterval !== undefined) {
+			clearInterval(stallCheckInterval);
+			stallCheckInterval = undefined;
+		}
 
 		if (hasCameraSelected()) {
 			if (
@@ -1279,8 +1289,24 @@ function CameraPreviewInline() {
 				ws.readyState === WebSocket.CLOSING
 			) {
 				resetBackoff();
+				lastFrameTime = Date.now();
 				ws = createSocket();
 			}
+
+			stallCheckInterval = setInterval(() => {
+				if (
+					!isCleanedUp &&
+					ws?.readyState === WebSocket.OPEN &&
+					lastFrameTime > 0 &&
+					Date.now() - lastFrameTime > WS_STALL_TIMEOUT_MS
+				) {
+					lastFrameTime = Date.now();
+					commands.refreshCameraFeed().catch(() => {});
+					ws?.close();
+					resetBackoff();
+					ws = createSocket();
+				}
+			}, WS_STALL_TIMEOUT_MS);
 		} else {
 			if (
 				ws &&
@@ -1302,6 +1328,9 @@ function CameraPreviewInline() {
 		isCleanedUp = true;
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
+		}
+		if (stallCheckInterval !== undefined) {
+			clearInterval(stallCheckInterval);
 		}
 		reusableFrame = null;
 		reusableFrameWidth = 0;
