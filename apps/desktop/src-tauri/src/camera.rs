@@ -139,6 +139,10 @@ impl CameraPreviewManager {
         self.preview.is_some()
     }
 
+    pub fn sender(&self) -> Option<flume::Sender<FFmpegVideoFrame>> {
+        self.preview.as_ref().map(|p| p.camera_tx.clone())
+    }
+
     pub fn notify_window_resized(&self, width: u32, height: u32) {
         if let Some(preview) = &self.preview {
             preview
