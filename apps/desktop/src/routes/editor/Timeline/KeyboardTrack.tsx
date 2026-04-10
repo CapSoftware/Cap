@@ -32,7 +32,11 @@ export function KeyboardTrack(props: {
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
-	const keyboardSegments = () => project.timeline?.keyboardSegments ?? [];
+	const keyboardSegments = createMemo(() =>
+		(project.timeline?.keyboardSegments ?? []).filter(
+			(s) => s.start < totalDuration(),
+		),
+	);
 	const selectedKeyboardIndices = createMemo(() => {
 		const selection = editorState.timeline.selection;
 		if (!selection || selection.type !== "keyboard") return null;
