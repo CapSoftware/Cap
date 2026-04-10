@@ -297,19 +297,15 @@ function Inner() {
 		}
 	});
 
+	createEffect(() => {
+		if (!options.targetMode) {
+			setTargetUnderCursor(reconcile({ display_id: null, window: null }));
+		}
+	});
+
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
 		setOptions("targetMode", null);
 		commands.closeTargetSelectOverlays();
-
-		// We can't easily access `revertCamera` here because it's inside the Match.
-		// However, if we close overlays, the camera might stay moved?
-		// The user request says "if the user cancels the selection".
-		// Pressing Escape cancels the selection mode entirely.
-		// Ideally we should revert the camera position if we moved it.
-		// But `revertCamera` is scoped to `Inner` -> `Match`.
-		// We can rely on the fact that `originalCameraBounds` state is local to that Match block.
-		// If the block unmounts, we might want to revert?
-		// `onCleanup` inside the Match block is the right place.
 	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
@@ -990,6 +986,7 @@ function Inner() {
 									const allWindows = await WebviewWindow.getAll();
 									for (const win of allWindows) {
 										if (win.label.startsWith("target-select-overlay-")) {
+											await win.setIgnoreCursorEvents(true);
 											await win.hide();
 										}
 									}
@@ -1136,15 +1133,39 @@ function CameraPreviewInline() {
 		return reusableFrame;
 	};
 
+	let pendingRender = false;
+	let rafId: number | null = null;
+	let cachedCtx: CanvasRenderingContext2D | null = null;
+	let latestImageData: ImageData | null = null;
+
+	const scheduleRender = () => {
+		if (rafId !== null) return;
+		rafId = requestAnimationFrame(() => {
+			rafId = null;
+			if (!pendingRender || !latestImageData) return;
+			pendingRender = false;
+
+			const canvas = canvasRef;
+			if (!canvas) return;
+			if (
+				canvas.width !== latestImageData.width ||
+				canvas.height !== latestImageData.height
+			) {
+				canvas.width = latestImageData.width;
+				canvas.height = latestImageData.height;
+				cachedCtx = null;
+			}
+			if (!cachedCtx) {
+				cachedCtx = canvas.getContext("2d");
+			}
+			cachedCtx?.putImageData(latestImageData, 0, 0);
+		});
+	};
+
 	const drawFrame = (image: ImageData) => {
-		const canvas = canvasRef;
-		if (!canvas) return;
-		if (canvas.width !== image.width || canvas.height !== image.height) {
-			canvas.width = image.width;
-			canvas.height = image.height;
-		}
-		const ctx = canvas.getContext("2d");
-		ctx?.putImageData(image, 0, 0);
+		latestImageData = image;
+		pendingRender = true;
+		scheduleRender();
 	};
 
 	const scheduleReconnect = () => {
@@ -1326,6 +1347,12 @@ function CameraPreviewInline() {
 
 	onCleanup(() => {
 		isCleanedUp = true;
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+		cachedCtx = null;
+		latestImageData = null;
 		if (reconnectTimeoutId !== undefined) {
 			clearTimeout(reconnectTimeoutId);
 		}
@@ -1383,10 +1410,11 @@ function CameraPreviewInline() {
 		const image = frame();
 		const canvas = canvasRef;
 		if (!image || !canvas) return;
-		canvas.width = image.width;
-		canvas.height = image.height;
-		const ctx = canvas.getContext("2d");
-		ctx?.putImageData(image, 0, 0);
+		if (canvas.width !== image.width || canvas.height !== image.height) {
+			canvas.width = image.width;
+			canvas.height = image.height;
+			cachedCtx = null;
+		}
 	});
 
 	const handleRetryConnection = () => {
