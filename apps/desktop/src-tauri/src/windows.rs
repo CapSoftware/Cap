@@ -86,6 +86,16 @@ fn is_system_dark_mode() -> bool {
     false
 }
 
+pub fn hide_overlay(window: &WebviewWindow) {
+    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.hide();
+}
+
+pub fn show_overlay(window: &WebviewWindow) {
+    let _ = window.set_ignore_cursor_events(false);
+    let _ = window.show();
+}
+
 fn hide_recording_windows(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label)
@@ -94,7 +104,11 @@ fn hide_recording_windows(app: &AppHandle) {
                 CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main | CapWindowId::Camera
             )
         {
-            let _ = window.hide();
+            if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
+                hide_overlay(&window);
+            } else {
+                let _ = window.hide();
+            }
         }
     }
 }
