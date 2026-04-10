@@ -179,8 +179,14 @@ const getPlaylistResponse = (
 			const manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
+			const hasVideoSegments =
+				manifest.video_init_uploaded && manifest.video_segments.length > 0;
 
 			if (urlParams.videoType === "segments-master") {
+				if (!hasVideoSegments) {
+					return yield* Effect.fail(new HttpApiError.NotFound());
+				}
+
 				const videoPlaylistUrl = `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-video`;
 				const audioPlaylistUrl = manifest.audio_init_uploaded
 					? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=segments-audio`
