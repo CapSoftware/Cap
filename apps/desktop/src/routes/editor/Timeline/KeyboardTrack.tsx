@@ -153,7 +153,8 @@ export function KeyboardTrack(props: {
 						return indices.has(i());
 					});
 
-					const segmentWidth = () => segment.end - segment.start;
+					const segmentWidth = () =>
+						Math.min(segment.end, totalDuration()) - segment.start;
 
 					return (
 						<SegmentRoot
