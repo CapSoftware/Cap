@@ -32,7 +32,11 @@ export function KeyboardTrack(props: {
 	const minDuration = () =>
 		Math.max(MIN_SEGMENT_SECS, secsPerPixel() * MIN_SEGMENT_PIXELS);
 
-	const keyboardSegments = () => project.timeline?.keyboardSegments ?? [];
+	const keyboardSegments = createMemo(() =>
+		(project.timeline?.keyboardSegments ?? []).filter(
+			(s) => s.start < totalDuration(),
+		),
+	);
 	const selectedKeyboardIndices = createMemo(() => {
 		const selection = editorState.timeline.selection;
 		if (!selection || selection.type !== "keyboard") return null;
@@ -149,7 +153,8 @@ export function KeyboardTrack(props: {
 						return indices.has(i());
 					});
 
-					const segmentWidth = () => segment.end - segment.start;
+					const segmentWidth = () =>
+						Math.min(segment.end, totalDuration()) - segment.start;
 
 					return (
 						<SegmentRoot
@@ -161,7 +166,10 @@ export function KeyboardTrack(props: {
 								isSelected() ? "border-sky-7" : "border-transparent",
 							)}
 							innerClass="ring-sky-6"
-							segment={segment}
+							segment={{
+								start: segment.start,
+								end: Math.min(segment.end, totalDuration()),
+							}}
 							onMouseDown={(e) => {
 								e.stopPropagation();
 								if (editorState.timeline.interactMode === "split") {
