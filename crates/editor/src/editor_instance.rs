@@ -247,10 +247,14 @@ impl EditorInstance {
             }
         }
 
-        let recordings = Arc::new(ProjectRecordingsMeta::new(
-            &recording_meta.project_path,
-            meta.as_ref(),
-        )?);
+        let recordings = Arc::new(
+            ProjectRecordingsMeta::new_with_external(
+                &recording_meta.project_path,
+                meta.as_ref(),
+                &project.external_recordings,
+            )
+            .map_err(|e| format!("Failed to load recordings: {e}"))?,
+        );
 
         let render_constants = if let Some(shared) = shared_device {
             let rc = RenderVideoConstants::new_with_device(
@@ -272,7 +276,13 @@ impl EditorInstance {
             Arc::new(rc)
         };
 
-        let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
+        let segments = create_all_segments(
+            &recording_meta,
+            meta.as_ref(),
+            &project.external_recordings,
+            false,
+        )
+        .await?;
 
         let layers_rx = editor::start_renderer_layers_creation(&render_constants);
 
@@ -625,6 +635,28 @@ pub struct SegmentMedia {
     pub cursor: Arc<CursorEvents>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
+}
+
+pub async fn create_all_segments(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    external_recordings: &[cap_project::ExternalRecordingReference],
+    force_ffmpeg: bool,
+) -> Result<Vec<SegmentMedia>, String> {
+    let mut all = create_segments(recording_meta, meta, force_ffmpeg).await?;
+    for (i, ext_ref) in external_recordings.iter().enumerate() {
+        let ext_path = std::path::PathBuf::from(&ext_ref.path);
+        let ext_meta = cap_project::RecordingMeta::load_for_project(&ext_path)
+            .map_err(|e| format!("external recording {i}: {e}"))?;
+        let cap_project::RecordingMetaInner::Studio(ext_studio_meta) = &ext_meta.inner else {
+            return Err(format!("external recording {i}: not a studio recording"));
+        };
+        let ext_segments = create_segments(&ext_meta, ext_studio_meta.as_ref(), force_ffmpeg)
+            .await
+            .map_err(|e| format!("external recording {i}: {e}"))?;
+        all.extend(ext_segments);
+    }
+    Ok(all)
 }
 
 pub async fn create_segments(

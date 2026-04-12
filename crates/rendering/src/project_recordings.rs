@@ -122,7 +122,7 @@ pub struct ProjectRecordingsMeta {
 }
 
 impl ProjectRecordingsMeta {
-    pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Result<Self, String> {
+    pub fn new(recording_path: &Path, meta: &StudioRecordingMeta) -> Result<Self, String> {
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment: s } => {
                 let display = Video::new(s.display.path.to_path(recording_path), 0.0)
@@ -211,6 +211,38 @@ impl ProjectRecordingsMeta {
         };
 
         Ok(Self { segments })
+    }
+
+    pub fn new_with_external(
+        recording_path: &Path,
+        meta: &StudioRecordingMeta,
+        external_recordings: &[cap_project::ExternalRecordingReference],
+    ) -> Result<Self, String> {
+        let mut this = Self::new(recording_path, meta)?;
+        for (i, ext_ref) in external_recordings.iter().enumerate() {
+            let ext_path = PathBuf::from(&ext_ref.path);
+            let ext_meta = cap_project::RecordingMeta::load_for_project(&ext_path)
+                .map_err(|e| format!("external recording {i}: failed to load meta: {e}"))?;
+            let cap_project::RecordingMetaInner::Studio(ext_studio_meta) = &ext_meta.inner else {
+                return Err(format!("external recording {i}: not a studio recording"));
+            };
+            let primary = this.segments.first().ok_or("no primary segments")?;
+            let ext_recordings = Self::new(&ext_path, ext_studio_meta)?;
+            if let Some(ext_first) = ext_recordings.segments.first()
+                && (ext_first.display.width != primary.display.width
+                    || ext_first.display.height != primary.display.height)
+            {
+                return Err(format!(
+                    "external recording {i}: resolution {}x{} does not match primary {}x{}",
+                    ext_first.display.width,
+                    ext_first.display.height,
+                    primary.display.width,
+                    primary.display.height,
+                ));
+            }
+            this.segments.extend(ext_recordings.segments);
+        }
+        Ok(this)
     }
 
     pub fn duration(&self) -> f64 {
