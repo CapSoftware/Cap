@@ -956,17 +956,34 @@ pub async fn start_recording(
                                 return Err(anyhow!("Video upload info not found"));
                             };
 
+                            let settings_resolution = general_settings
+                                .as_ref()
+                                .map(|settings| settings.instant_mode_max_resolution)
+                                .unwrap_or(1920);
+
+                            let speed_test_resolution = {
+                                let network_state = app_handle
+                                    .state::<std::sync::Arc<tokio::sync::RwLock<crate::speed_test::NetworkState>>>();
+                                let state = network_state.read().await;
+                                match &state.speed_test_status {
+                                    crate::speed_test::SpeedTestStatus::Completed(result) => {
+                                        Some(result.recommended_quality.max_resolution())
+                                    }
+                                    _ => None,
+                                }
+                            };
+
+                            let max_resolution = match speed_test_resolution {
+                                Some(speed_res) => settings_resolution.min(speed_res),
+                                None => settings_resolution,
+                            };
+
                             let mut builder = instant_recording::Actor::builder(
                                 recording_dir.clone(),
                                 inputs.capture_target.clone(),
                             )
                             .with_system_audio(inputs.capture_system_audio)
-                            .with_max_output_size(
-                                general_settings
-                                    .as_ref()
-                                    .map(|settings| settings.instant_mode_max_resolution)
-                                    .unwrap_or(1920),
-                            );
+                            .with_max_output_size(max_resolution);
 
                             #[cfg(target_os = "macos")]
                             {
@@ -1092,6 +1109,8 @@ pub async fn start_recording(
 
     let _ = RecordingEvent::Started.emit(&app);
     let _ = RecordingStarted.emit(&app);
+
+    crate::speed_test::set_recording_active(&app, true).await;
 
     spawn_actor({
         let app = app.clone();
@@ -1321,6 +1340,8 @@ where
 #[specta::specta]
 #[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    crate::speed_test::set_recording_active(&app, false).await;
+
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string())?;
