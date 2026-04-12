@@ -14,7 +14,6 @@ export interface DeeplinkParams {
 
 export const DEEPLINK_PREFIX = 'cap://';
 
-// Validate action against known types
 function isValidAction(action: string): action is DeeplinkAction {
   const validActions: DeeplinkAction[] = [
     'record',
@@ -33,11 +32,13 @@ export function parseDeeplink(url: string): DeeplinkParams | null {
       return null;
     }
 
-    if (!url.startsWith(DEEPLINK_PREFIX)) {
+    const trimmedUrl = url.trim();
+
+    if (!trimmedUrl.startsWith(DEEPLINK_PREFIX)) {
       return null;
     }
 
-    const urlPart = url.slice(DEEPLINK_PREFIX.length).trim();
+    const urlPart = trimmedUrl.slice(DEEPLINK_PREFIX.length);
     
     if (!urlPart) {
       return null;
@@ -61,7 +62,7 @@ export function parseDeeplink(url: string): DeeplinkParams | null {
           }
         });
       } catch {
-        // Invalid query string, continue with parsed params
+        
       }
     }
 
@@ -80,7 +81,6 @@ export function createDeeplink(
 ): string {
   let url = `${DEEPLINK_PREFIX}${action}`;
 
-  // Filter out undefined/empty values
   const validParams = Object.entries(params || {})
     .filter(([, value]) => value !== undefined && value !== '')
     .reduce((acc, [key, value]) => {
@@ -96,7 +96,6 @@ export function createDeeplink(
   return url;
 }
 
-// Builder pattern for fluent API
 export class DeeplinkBuilder {
   private action: DeeplinkAction;
   private params: Record<string, string> = {};

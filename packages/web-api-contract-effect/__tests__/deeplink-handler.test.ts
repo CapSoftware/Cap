@@ -38,4 +38,82 @@ describe('DeeplinkHandler', () => {
       const onPauseRecording = vi.fn();
       const handler = new DeeplinkHandler({ onPauseRecording });
 
-      const result = await handler.handle('cap://
+      const result = await handler.handle('cap://pause');
+
+      expect(result).toBe(true);
+      expect(onPauseRecording).toHaveBeenCalledOnce();
+    });
+
+    it('should handle resume action', async () => {
+      const onResumeRecording = vi.fn();
+      const handler = new DeeplinkHandler({ onResumeRecording });
+
+      const result = await handler.handle('cap://resume');
+
+      expect(result).toBe(true);
+      expect(onResumeRecording).toHaveBeenCalledOnce();
+    });
+
+    it('should handle switch-microphone with deviceId', async () => {
+      const onSwitchMicrophone = vi.fn();
+      const handler = new DeeplinkHandler({ onSwitchMicrophone });
+
+      const result = await handler.handle('cap://switch-microphone?deviceId=mic-1');
+
+      expect(result).toBe(true);
+      expect(onSwitchMicrophone).toHaveBeenCalledWith('mic-1');
+    });
+
+    it('should handle switch-camera with deviceId', async () => {
+      const onSwitchCamera = vi.fn();
+      const handler = new DeeplinkHandler({ onSwitchCamera });
+
+      const result = await handler.handle('cap://switch-camera?deviceId=cam-1');
+
+      expect(result).toBe(true);
+      expect(onSwitchCamera).toHaveBeenCalledWith('cam-1');
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return false for invalid URL', async () => {
+      const onError = vi.fn();
+      const handler = new DeeplinkHandler({ onError });
+
+      const result = await handler.handle('invalid-url');
+
+      expect(result).toBe(false);
+      expect(onError).toHaveBeenCalled();
+    });
+
+    it('should return false for empty string', async () => {
+      const onError = vi.fn();
+      const handler = new DeeplinkHandler({ onError });
+
+      const result = await handler.handle('');
+
+      expect(result).toBe(false);
+      expect(onError).toHaveBeenCalled();
+    });
+
+    it('should throw for switch-microphone without deviceId', async () => {
+      const onError = vi.fn();
+      const handler = new DeeplinkHandler({ onError });
+
+      const result = await handler.handle('cap://switch-microphone');
+
+      expect(result).toBe(false);
+      expect(onError).toHaveBeenCalled();
+    });
+
+    it('should return false for unknown action', async () => {
+      const onError = vi.fn();
+      const handler = new DeeplinkHandler({ onError });
+
+      const result = await handler.handle('cap://unknown-action');
+
+      expect(result).toBe(false);
+      expect(onError).toHaveBeenCalled();
+    });
+  });
+});
