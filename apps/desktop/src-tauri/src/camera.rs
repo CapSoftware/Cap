@@ -657,6 +657,24 @@ impl Renderer {
                         Ok(ReconfigureEvent::Resume) => {
                             is_paused = false;
                             while camera_rx.try_recv().is_ok() {}
+                            if let Some(surface) = &self.surface
+                                && let Ok(texture) = surface.get_current_texture()
+                            {
+                                let (buffer, stride) =
+                                    render_solid_frame([0x11, 0x11, 0x11, 0xFF], 5, 5);
+                                PreparedTexture::init(
+                                    self.device.clone(),
+                                    self.queue.clone(),
+                                    &self.sampler,
+                                    &self.bind_group_layout,
+                                    self.uniform_bind_group.clone(),
+                                    self.render_pipeline.clone(),
+                                    5,
+                                    5,
+                                )
+                                .render(&texture, &buffer, stride);
+                                texture.present();
+                            }
                             break;
                         }
                         Ok(ReconfigureEvent::Shutdown) => {
@@ -858,6 +876,18 @@ impl Renderer {
                     if let Some(surface) = &self.surface
                         && let Ok(texture) = surface.get_current_texture()
                     {
+                        let (buffer, stride) = render_solid_frame([0x11, 0x11, 0x11, 0xFF], 5, 5);
+                        PreparedTexture::init(
+                            self.device.clone(),
+                            self.queue.clone(),
+                            &self.sampler,
+                            &self.bind_group_layout,
+                            self.uniform_bind_group.clone(),
+                            self.render_pipeline.clone(),
+                            5,
+                            5,
+                        )
+                        .render(&texture, &buffer, stride);
                         texture.present();
                     }
                 }
