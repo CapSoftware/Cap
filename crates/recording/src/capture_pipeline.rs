@@ -52,6 +52,7 @@ impl EncoderPreferences {
 }
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
+    #[allow(clippy::too_many_arguments)]
     async fn make_studio_mode_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
@@ -169,6 +170,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
 #[cfg(windows)]
 impl MakeCapturePipeline for screen_capture::Direct3DCapture {
+    #[allow(clippy::too_many_arguments)]
     async fn make_studio_mode_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
