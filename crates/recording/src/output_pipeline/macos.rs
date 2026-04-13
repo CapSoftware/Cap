@@ -256,6 +256,7 @@ pub struct AVFoundationMp4Muxer {
 pub struct AVFoundationMp4MuxerConfig {
     pub output_height: Option<u32>,
     pub instant_mode: bool,
+    pub ultra_quality: bool,
 }
 
 impl Muxer for AVFoundationMp4Muxer {
@@ -297,6 +298,13 @@ impl Muxer for AVFoundationMp4Muxer {
 
         let encoder = if config.instant_mode {
             cap_enc_avfoundation::MP4Encoder::init_instant_mode(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+            )
+        } else if config.ultra_quality {
+            cap_enc_avfoundation::MP4Encoder::init_ultra(
                 output_path.clone(),
                 video_config,
                 audio_config,
