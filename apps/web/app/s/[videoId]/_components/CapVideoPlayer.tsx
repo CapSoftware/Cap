@@ -45,6 +45,7 @@ import {
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
+import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
 
 const { circumference } = getProgressCircleConfig();
 
@@ -402,29 +403,9 @@ export function CapVideoPlayer({
 	]);
 
 	const generateVideoFrameThumbnail = useCallback(
-		(time: number): string => {
-			const video = videoRef.current;
-
-			if (!video) {
-				return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
-			}
-
-			const canvas = document.createElement("canvas");
-			canvas.width = 224;
-			canvas.height = 128;
-			const ctx = canvas.getContext("2d");
-
-			if (ctx) {
-				try {
-					ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-					return canvas.toDataURL("image/jpeg", 0.8);
-				} catch (_error) {
-					return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-				}
-			}
-			return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-		},
-		[videoRef.current],
+		(_time: number): string | undefined =>
+			captureVideoFrameDataUrl({ video: videoRef.current }),
+		[],
 	);
 
 	const isUploadFailed = uploadProgress?.status === "failed";
@@ -756,7 +737,7 @@ export function CapVideoPlayer({
 				<MediaPlayerSeek
 					fallbackDuration={playerDuration}
 					tooltipThumbnailSrc={
-						isMobile || !resolvedSrc.isSuccess
+						isMobile || !resolvedSrc.data?.supportsCrossOrigin
 							? undefined
 							: generateVideoFrameThumbnail
 					}
