@@ -985,6 +985,156 @@ export async function generateThumbnail(
 	}
 }
 
+const SPRITE_TIMEOUT_MS = 120_000;
+const MAX_SPRITE_FRAMES = 300;
+
+export interface SpriteSheetOptions {
+	frameInterval?: number;
+	frameWidth?: number;
+	frameHeight?: number;
+	columns?: number;
+	quality?: number;
+}
+
+export interface SpriteSheetResult {
+	imageData: Uint8Array;
+	vttContent: string;
+	frameCount: number;
+}
+
+export async function generateSpriteSheet(
+	inputPath: string,
+	duration: number,
+	options: SpriteSheetOptions = {},
+): Promise<SpriteSheetResult> {
+	const frameWidth = options.frameWidth ?? 160;
+	const frameHeight = options.frameHeight ?? 90;
+	const columns = options.columns ?? 10;
+	const quality = options.quality ?? 5;
+
+	let frameInterval = options.frameInterval ?? 2;
+	let frameCount = Math.max(1, Math.floor(duration / frameInterval));
+	if (frameCount > MAX_SPRITE_FRAMES) {
+		frameInterval = duration / MAX_SPRITE_FRAMES;
+		frameCount = MAX_SPRITE_FRAMES;
+	}
+
+	const rows = Math.ceil(frameCount / columns);
+
+	const ffmpegArgs = [
+		"ffmpeg",
+		"-i",
+		inputPath,
+		"-vf",
+		`fps=1/${frameInterval},scale=${frameWidth}:${frameHeight},tile=${columns}x${rows}`,
+		"-q:v",
+		quality.toString(),
+		"-frames:v",
+		"1",
+		"-f",
+		"image2",
+		"pipe:1",
+	];
+
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ffmpegArgs,
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
+
+	try {
+		const imageData = await withTimeout(
+			(async () => {
+				const stderrPromise = readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				);
+
+				const chunks: Uint8Array[] = [];
+				let totalBytes = 0;
+				const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+
+				try {
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						chunks.push(value);
+						totalBytes += value.length;
+					}
+				} finally {
+					reader.releaseLock();
+				}
+
+				const [, exitCode] = await Promise.all([stderrPromise, proc.exited]);
+
+				if (exitCode !== 0) {
+					throw new Error(`FFmpeg sprite sheet exited with code ${exitCode}`);
+				}
+
+				if (totalBytes === 0) {
+					throw new Error("FFmpeg produced empty sprite sheet");
+				}
+
+				const output = new Uint8Array(totalBytes);
+				let offset = 0;
+				for (const chunk of chunks) {
+					output.set(chunk, offset);
+					offset += chunk.length;
+				}
+
+				return output;
+			})(),
+			SPRITE_TIMEOUT_MS,
+			() => terminateProcess(proc),
+		);
+
+		const vttLines = ["WEBVTT", ""];
+		for (let i = 0; i < frameCount; i++) {
+			const startTime = i * frameInterval;
+			const endTime = Math.min((i + 1) * frameInterval, duration);
+			const col = i % columns;
+			const row = Math.floor(i / columns);
+			const x = col * frameWidth;
+			const y = row * frameHeight;
+
+			vttLines.push(
+				`${formatVttTimestamp(startTime)} --> ${formatVttTimestamp(endTime)}`,
+			);
+			vttLines.push(
+				`__SPRITE_URL__#xywh=${x},${y},${frameWidth},${frameHeight}`,
+			);
+			vttLines.push("");
+		}
+
+		return {
+			imageData,
+			vttContent: vttLines.join("\n"),
+			frameCount,
+		};
+	} finally {
+		await terminateProcess(proc);
+	}
+}
+
+function formatVttTimestamp(seconds: number): string {
+	const hrs = Math.floor(seconds / 3600);
+	const mins = Math.floor((seconds % 3600) / 60);
+	const secs = seconds % 60;
+	const wholeSecs = Math.floor(secs);
+	const ms = Math.round((secs - wholeSecs) * 1000);
+	return (
+		String(hrs).padStart(2, "0") +
+		":" +
+		String(mins).padStart(2, "0") +
+		":" +
+		String(wholeSecs).padStart(2, "0") +
+		"." +
+		String(ms).padStart(3, "0")
+	);
+}
+
 export async function uploadToS3(
 	data: Uint8Array | Blob,
 	presignedUrl: string,

@@ -401,31 +401,7 @@ export function CapVideoPlayer({
 		videoRef.current,
 	]);
 
-	const generateVideoFrameThumbnail = useCallback(
-		(time: number): string => {
-			const video = videoRef.current;
-
-			if (!video) {
-				return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
-			}
-
-			const canvas = document.createElement("canvas");
-			canvas.width = 224;
-			canvas.height = 128;
-			const ctx = canvas.getContext("2d");
-
-			if (ctx) {
-				try {
-					ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-					return canvas.toDataURL("image/jpeg", 0.8);
-				} catch (_error) {
-					return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-				}
-			}
-			return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-		},
-		[videoRef.current],
-	);
+	const thumbnailsVttUrl = `/api/playlist?videoId=${videoId}&videoType=mp4&fileType=thumbnails-vtt`;
 
 	const isUploadFailed = uploadProgress?.status === "failed";
 	const isUploadError = uploadProgress?.status === "error";
@@ -614,6 +590,12 @@ export function CapVideoPlayer({
 							src={captionsSrc}
 						/>
 					)}
+					<track
+						default
+						kind="metadata"
+						label="thumbnails"
+						src={thumbnailsVttUrl}
+					/>
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
@@ -753,14 +735,7 @@ export function CapVideoPlayer({
 				isUploadingOrFailed={blockPlaybackControls}
 			>
 				<MediaPlayerControlsOverlay className="rounded-b-xl" />
-				<MediaPlayerSeek
-					fallbackDuration={playerDuration}
-					tooltipThumbnailSrc={
-						isMobile || !resolvedSrc.isSuccess
-							? undefined
-							: generateVideoFrameThumbnail
-					}
-				/>
+				<MediaPlayerSeek fallbackDuration={playerDuration} />
 				<div className="flex gap-2 items-center w-full">
 					<div className="flex flex-1 gap-2 items-center">
 						<MediaPlayerPlay />

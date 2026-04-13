@@ -135,6 +135,8 @@ async function startMediaServerProcessJob(
 		videoUrl: string;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
+		spriteSheetPresignedUrl: string;
+		spriteVttPresignedUrl: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension: string;
@@ -233,6 +235,8 @@ async function processVideoOnMediaServer(
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
+	const spriteSheetKey = `${userId}/${videoId}/sprites/sprite.jpg`;
+	const spriteVttKey = `${userId}/${videoId}/sprites/thumbnails.vtt`;
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(outputKey, {
@@ -246,6 +250,18 @@ async function processVideoOnMediaServer(
 		})
 		.pipe(runPromise);
 
+	const spriteSheetPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(spriteSheetKey, {
+			ContentType: "image/jpeg",
+		})
+		.pipe(runPromise);
+
+	const spriteVttPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(spriteVttKey, {
+			ContentType: "text/vtt",
+		})
+		.pipe(runPromise);
+
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
@@ -255,6 +271,8 @@ async function processVideoOnMediaServer(
 		videoUrl: rawVideoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		spriteSheetPresignedUrl,
+		spriteVttPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),
