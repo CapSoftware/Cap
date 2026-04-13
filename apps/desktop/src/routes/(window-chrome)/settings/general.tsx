@@ -38,6 +38,7 @@ import {
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
+	type StudioRecordingQuality,
 	type WindowExclusion,
 } from "~/utils/tauri";
 import IconLucidePlus from "~icons/lucide/plus";
@@ -328,6 +329,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
+			| StudioRecordingQuality
 			| number,
 	>(props: {
 		label: string;
@@ -423,6 +425,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				)}
 
 				<SettingGroup title="Recording">
+					<SelectSettingItem
+						label="Studio mode quality"
+						description="Balanced uses less storage and CPU. Ultra records at higher bitrate for maximum quality."
+						value={settings.studioRecordingQuality ?? "balanced"}
+						onChange={(value) => handleChange("studioRecordingQuality", value)}
+						options={[
+							{ text: "Balanced", value: "balanced" as StudioRecordingQuality },
+							{ text: "Ultra", value: "ultra" as StudioRecordingQuality },
+						]}
+					/>
 					<SelectSettingItem
 						label="Instant mode max resolution"
 						description="Choose the maximum resolution for Instant Mode recordings."
