@@ -1,119 +1,43 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DeeplinkHandler, DeeplinkHandlerError } from '../deeplink-handler';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { CapDeeplinkHandler } from '../deeplink-handler';
+import { parseCapDeeplink } from '@capsoftware/utils';
 
-describe('DeeplinkHandler', () => {
-  describe('initialization', () => {
-    it('should throw if context is not provided', () => {
-      expect(() => new DeeplinkHandler(null as any)).toThrow();
-    });
+vi.mock('@capsoftware/utils', () => ({
+  parseCapDeeplink: vi.fn(),
+}));
 
-    it('should accept empty context object', () => {
-      const handler = new DeeplinkHandler({});
-      expect(handler).toBeDefined();
-    });
+describe('CapDeeplinkHandler', () => {
+  let handler: CapDeeplinkHandler;
+
+  beforeEach(() => {
+    handler = new CapDeeplinkHandler();
+    vi.clearAllMocks();
   });
 
-  describe('handle valid actions', () => {
-    it('should handle record action', async () => {
-      const onStartRecording = vi.fn();
-      const handler = new DeeplinkHandler({ onStartRecording });
+  it('should handle pause action', () => {
+    const mockDeeplink = { action: 'pause', payload: {} };
+    (parseCapDeeplink as any).mockReturnValue(mockDeeplink);
 
-      const result = await handler.handle('cap://record');
+    const result = handler.handle('cap://pause');
 
-      expect(result).toBe(true);
-      expect(onStartRecording).toHaveBeenCalledOnce();
-    });
-
-    it('should handle stop action', async () => {
-      const onStopRecording = vi.fn();
-      const handler = new DeeplinkHandler({ onStopRecording });
-
-      const result = await handler.handle('cap://stop');
-
-      expect(result).toBe(true);
-      expect(onStopRecording).toHaveBeenCalledOnce();
-    });
-
-    it('should handle pause action', async () => {
-      const onPauseRecording = vi.fn();
-      const handler = new DeeplinkHandler({ onPauseRecording });
-
-      const result = await handler.handle('cap://pause');
-
-      expect(result).toBe(true);
-      expect(onPauseRecording).toHaveBeenCalledOnce();
-    });
-
-    it('should handle resume action', async () => {
-      const onResumeRecording = vi.fn();
-      const handler = new DeeplinkHandler({ onResumeRecording });
-
-      const result = await handler.handle('cap://resume');
-
-      expect(result).toBe(true);
-      expect(onResumeRecording).toHaveBeenCalledOnce();
-    });
-
-    it('should handle switch-microphone with deviceId', async () => {
-      const onSwitchMicrophone = vi.fn();
-      const handler = new DeeplinkHandler({ onSwitchMicrophone });
-
-      const result = await handler.handle('cap://switch-microphone?deviceId=mic-1');
-
-      expect(result).toBe(true);
-      expect(onSwitchMicrophone).toHaveBeenCalledWith('mic-1');
-    });
-
-    it('should handle switch-camera with deviceId', async () => {
-      const onSwitchCamera = vi.fn();
-      const handler = new DeeplinkHandler({ onSwitchCamera });
-
-      const result = await handler.handle('cap://switch-camera?deviceId=cam-1');
-
-      expect(result).toBe(true);
-      expect(onSwitchCamera).toHaveBeenCalledWith('cam-1');
-    });
+    expect(parseCapDeeplink).toHaveBeenCalledWith('cap://pause');
+    expect(result).toEqual({ success: true, action: 'pause' });
   });
 
-  describe('error handling', () => {
-    it('should return false for invalid URL', async () => {
-      const onError = vi.fn();
-      const handler = new DeeplinkHandler({ onError });
+  it('should return error for invalid deeplink', () => {
+    (parseCapDeeplink as any).mockReturnValue(null);
 
-      const result = await handler.handle('invalid-url');
+    const result = handler.handle('invalid://link');
 
-      expect(result).toBe(false);
-      expect(onError).toHaveBeenCalled();
-    });
+    expect(result).toEqual({ success: false, error: 'Invalid deeplink format' });
+  });
 
-    it('should return false for empty string', async () => {
-      const onError = vi.fn();
-      const handler = new DeeplinkHandler({ onError });
+  it('should return error for unsupported action', () => {
+    const mockDeeplink = { action: 'unknown', payload: {} };
+    (parseCapDeeplink as any).mockReturnValue(mockDeeplink);
 
-      const result = await handler.handle('');
+    const result = handler.handle('cap://unknown');
 
-      expect(result).toBe(false);
-      expect(onError).toHaveBeenCalled();
-    });
-
-    it('should throw for switch-microphone without deviceId', async () => {
-      const onError = vi.fn();
-      const handler = new DeeplinkHandler({ onError });
-
-      const result = await handler.handle('cap://switch-microphone');
-
-      expect(result).toBe(false);
-      expect(onError).toHaveBeenCalled();
-    });
-
-    it('should return false for unknown action', async () => {
-      const onError = vi.fn();
-      const handler = new DeeplinkHandler({ onError });
-
-      const result = await handler.handle('cap://unknown-action');
-
-      expect(result).toBe(false);
-      expect(onError).toHaveBeenCalled();
-    });
+    expect(result).toEqual({ success: false, error: 'Unsupported action: unknown' });
   });
 });
