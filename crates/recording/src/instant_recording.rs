@@ -338,17 +338,11 @@ async fn create_pipeline(
 
     let segments_dir = content_dir.join("display");
 
-    #[cfg(target_os = "macos")]
     let segment_channel = {
         let (tx, rx) =
             std::sync::mpsc::channel::<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>();
         Some((tx, rx))
     };
-    #[cfg(not(target_os = "macos"))]
-    let segment_channel: Option<(
-        std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>,
-        std::sync::mpsc::Receiver<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>,
-    )> = None;
 
     let segment_tx_for_video = segment_channel.as_ref().map(|(tx, _)| tx.clone());
 
