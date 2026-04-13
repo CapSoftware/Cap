@@ -1,26 +1,45 @@
-import { describe, it, expect } from 'vitest';
-import { DeeplinkHandler } from '../deeplink-handler';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CapDeeplinkHandler } from '../deeplink-handler';
+import { parseCapDeeplink } from '@cap/utils';
 
-describe('DeeplinkHandler', () => {
-  const handler = new DeeplinkHandler();
+vi.mock('@cap/utils', () => ({
+  parseCapDeeplink: vi.fn(),
+}));
 
-  it('should handle pause action', () => {
-    const result = handler.handle('cap://pause');
-    expect(result).toEqual({ type: 'pause' });
+describe('CapDeeplinkHandler', () => {
+  let handler: CapDeeplinkHandler;
+  const mockPause = vi.fn();
+
+  beforeEach(() => {
+    handler = new CapDeeplinkHandler();
+    handler.registerAction('pause', mockPause);
+    vi.clearAllMocks();
   });
 
-  it('should handle resume action', () => {
-    const result = handler.handle('cap://resume');
-    expect(result).toEqual({ type: 'resume' });
+  it('should handle valid pause deeplink', () => {
+    const deeplink = { action: 'pause', params: {} };
+    vi.mocked(parseCapDeeplink).mockReturnValue(deeplink);
+
+    handler.handle('cap://pause');
+
+    expect(parseCapDeeplink).toHaveBeenCalledWith('cap://pause');
+    expect(mockPause).toHaveBeenCalledWith({});
   });
 
-  it('should handle unknown action', () => {
-    const result = handler.handle('cap://unknown');
-    expect(result).toEqual({ type: 'unknown', action: 'unknown' });
+  it('should not call action for invalid deeplink', () => {
+    vi.mocked(parseCapDeeplink).mockReturnValue(null);
+
+    handler.handle('invalid://link');
+
+    expect(mockPause).not.toHaveBeenCalled();
   });
 
-  it('should handle invalid deeplink', () => {
-    const result = handler.handle('invalid://link');
-    expect(result).toEqual({ type: 'invalid' });
+  it('should not call action for unregistered action', () => {
+    const deeplink = { action: 'unknown', params: {} };
+    vi.mocked(parseCapDeeplink).mockReturnValue(deeplink);
+
+    handler.handle('cap://unknown');
+
+    expect(mockPause).not.toHaveBeenCalled();
   });
 });
