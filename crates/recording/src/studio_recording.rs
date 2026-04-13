@@ -673,6 +673,7 @@ pub struct ActorBuilder {
     keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
+    quality: crate::StudioQuality,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
 }
@@ -689,6 +690,7 @@ impl ActorBuilder {
             keyboard_capture: true,
             fragmented: false,
             max_fps: 60,
+            quality: crate::StudioQuality::Balanced,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -729,6 +731,11 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_quality(mut self, quality: crate::StudioQuality) -> Self {
+        self.quality = quality;
+        self
+    }
+
     #[cfg(target_os = "macos")]
     pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
@@ -755,6 +762,7 @@ impl ActorBuilder {
             self.keyboard_capture,
             self.fragmented,
             self.max_fps,
+            self.quality,
         )
         .await
     }
@@ -768,6 +776,7 @@ async fn spawn_studio_recording_actor(
     keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
+    quality: crate::StudioQuality,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -798,6 +807,7 @@ async fn spawn_studio_recording_actor(
         keyboard_capture,
         fragmented,
         max_fps,
+        quality,
         completion_tx.clone(),
     );
 
@@ -1094,6 +1104,7 @@ struct SegmentPipelineFactory {
     keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
+    quality: crate::StudioQuality,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
@@ -1110,6 +1121,7 @@ impl SegmentPipelineFactory {
         keyboard_capture: bool,
         fragmented: bool,
         max_fps: u32,
+        quality: crate::StudioQuality,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
         Self {
@@ -1120,6 +1132,7 @@ impl SegmentPipelineFactory {
             keyboard_capture,
             fragmented,
             max_fps,
+            quality,
             index: 0,
             completion_tx,
             #[cfg(windows)]
@@ -1144,6 +1157,7 @@ impl SegmentPipelineFactory {
             self.keyboard_capture,
             self.fragmented,
             self.max_fps,
+            self.quality,
             segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
@@ -1229,6 +1243,7 @@ async fn create_segment_pipeline(
     keyboard_capture: bool,
     fragmented: bool,
     max_fps: u32,
+    quality: crate::StudioQuality,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
@@ -1342,6 +1357,7 @@ async fn create_segment_pipeline(
             fragmented,
             shared_pause_state.clone(),
             output_size,
+            quality,
             #[cfg(windows)]
             encoder_preferences.clone(),
         )
