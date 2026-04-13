@@ -957,7 +957,7 @@ impl ShowCapWindow {
 
                     ensure_camera_input_active(&mut app_state).await;
 
-                    if enable_native_camera_preview && !app_state.camera_preview.is_initialized() {
+                    if enable_native_camera_preview {
                         let camera_feed = app_state.camera_feed.clone();
                         if let Err(err) = app_state
                             .camera_preview
