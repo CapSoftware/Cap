@@ -982,9 +982,7 @@ fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
 fn get_ultra_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixels = width * height;
     let fps_factor = fps.min(60.0) / 30.0;
-    (pixels * fps_factor * 10.0)
-        .max(MIN_STUDIO_BITRATE)
-        .min(MAX_ULTRA_BITRATE)
+    (pixels * fps_factor * 10.0).clamp(MIN_STUDIO_BITRATE, MAX_ULTRA_BITRATE)
 }
 
 fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {
