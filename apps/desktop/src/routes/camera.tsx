@@ -637,6 +637,17 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		socket.addEventListener("open", () => {
 			setIsConnected(true);
 			lastFrameTime = Date.now();
+			reusableFrameData = null;
+			reusableFrameWidth = 0;
+			reusableFrameHeight = 0;
+			if (cachedCtx && cameraCanvasRef) {
+				cachedCtx.clearRect(
+					0,
+					0,
+					cameraCanvasRef.width,
+					cameraCanvasRef.height,
+				);
+			}
 		});
 
 		socket.addEventListener("close", () => {
