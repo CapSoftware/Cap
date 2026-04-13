@@ -677,6 +677,17 @@ impl Message<SetInput> for CameraFeed {
             SetInputError::Initialisation
         );
 
+        match &self.state {
+            State::Open(state) => {
+                if let Some(attached) = &state.attached {
+                    let _ = attached.done_tx.send(());
+                }
+            }
+            State::Locked { inner, .. } => {
+                let _ = inner.done_tx.send(());
+            }
+        }
+
         if let Some(handle) = self.previous_thread.take() {
             let _ = handle.join();
         }
