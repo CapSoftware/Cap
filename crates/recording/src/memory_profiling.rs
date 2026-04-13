@@ -58,7 +58,7 @@ impl MemoryProfiler {
         #[cfg(feature = "memory-profiling")]
         {
             let stats = dhat::HeapStats::get();
-            return LeakCheckResult {
+            LeakCheckResult {
                 growth_rate_mb_per_sec: growth.rate_mb_per_sec,
                 total_growth_mb: growth.total_mb,
                 peak_mb: growth.peak_mb,
@@ -66,7 +66,7 @@ impl MemoryProfiler {
                 dhat_current_bytes: Some(stats.curr_bytes as u64),
                 dhat_peak_bytes: Some(stats.max_bytes as u64),
                 verdict: classify_leak(growth.rate_mb_per_sec),
-            };
+            }
         }
 
         #[cfg(not(feature = "memory-profiling"))]

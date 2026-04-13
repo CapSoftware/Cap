@@ -1,5 +1,5 @@
 use crate::{
-    SharedPauseState,
+    SharedPauseState, StudioQuality,
     output_pipeline::*,
     sources::screen_capture::{self, CropBounds, ScreenCaptureFormat, ScreenCaptureTarget},
 };
@@ -52,6 +52,7 @@ impl EncoderPreferences {
 }
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
+    #[allow(clippy::too_many_arguments)]
     async fn make_studio_mode_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
@@ -59,6 +60,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         fragmented: bool,
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
+        quality: StudioQuality,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -86,29 +88,61 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         fragmented: bool,
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
+        quality: StudioQuality,
     ) -> anyhow::Result<OutputPipeline> {
+        let ultra = quality == StudioQuality::Ultra;
+
+        tracing::debug!(
+            ?quality,
+            ultra,
+            fragmented,
+            "Studio mode capture pipeline quality selection"
+        );
+
         if fragmented {
             let fragments_dir = output_path
                 .parent()
                 .map(|p| p.join("display"))
                 .unwrap_or_else(|| output_path.with_file_name("display"));
 
+            let bpp = if ultra {
+                H264EncoderBuilder::ULTRA_BPP
+            } else {
+                H264EncoderBuilder::QUALITY_BPP
+            };
+
+            let preset = if ultra {
+                cap_enc_ffmpeg::h264::H264Preset::Medium
+            } else {
+                cap_enc_ffmpeg::h264::H264Preset::Ultrafast
+            };
+
+            tracing::debug!(bpp, ?preset, "Fragmented studio pipeline encoder config");
+
             OutputPipeline::builder(fragments_dir)
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
                 .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                    preset,
+                    bpp,
                     output_size,
                     shared_pause_state,
                     ..Default::default()
                 })
                 .await
         } else {
+            tracing::debug!(
+                ultra_quality = ultra,
+                "Non-fragmented studio pipeline encoder config"
+            );
+
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
                 .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
                     output_height: output_size.map(|(_, h)| h),
                     instant_mode: false,
+                    ultra_quality: ultra,
                 })
                 .await
         }
@@ -136,6 +170,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
 #[cfg(windows)]
 impl MakeCapturePipeline for screen_capture::Direct3DCapture {
+    #[allow(clippy::too_many_arguments)]
     async fn make_studio_mode_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
@@ -143,21 +178,36 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         fragmented: bool,
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
+        quality: StudioQuality,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
+        let ultra = quality == StudioQuality::Ultra;
+
         if fragmented {
             let fragments_dir = output_path
                 .parent()
                 .map(|p| p.join("display"))
                 .unwrap_or_else(|| output_path.with_file_name("display"));
 
+            let bpp = if ultra {
+                H264EncoderBuilder::ULTRA_BPP
+            } else {
+                H264EncoderBuilder::QUALITY_BPP
+            };
+
+            let preset = if ultra {
+                H264Preset::Medium
+            } else {
+                H264Preset::Ultrafast
+            };
+
             OutputPipeline::builder(fragments_dir)
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
                 .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                     segment_duration: std::time::Duration::from_secs(3),
-                    preset: H264Preset::Ultrafast,
-                    bpp: H264EncoderBuilder::QUALITY_BPP,
+                    preset,
+                    bpp,
                     output_size,
                     shared_pause_state,
                     disk_space_callback: None,
@@ -166,13 +216,15 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 .await
         } else {
             let d3d_device = screen_capture.d3d_device.clone();
+            let bitrate_multiplier = if ultra { 0.3f32 } else { 0.15f32 };
+
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
                 .build::<WindowsMuxer>(WindowsMuxerConfig {
                     pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                     d3d_device,
-                    bitrate_multiplier: 0.15f32,
+                    bitrate_multiplier,
                     frame_rate: 30u32,
                     output_size: output_size.map(|(w, h)| windows::Graphics::SizeInt32 {
                         Width: w as i32,

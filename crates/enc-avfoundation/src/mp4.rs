@@ -119,7 +119,30 @@ impl MP4Encoder {
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
-        Self::init_with_options(output, video_config, audio_config, output_height, false)
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            false,
+            false,
+        )
+    }
+
+    pub fn init_ultra(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            false,
+            true,
+        )
     }
 
     pub fn init_instant_mode(
@@ -128,7 +151,14 @@ impl MP4Encoder {
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
-        Self::init_with_options(output, video_config, audio_config, output_height, true)
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            true,
+            false,
+        )
     }
 
     fn init_with_options(
@@ -137,6 +167,7 @@ impl MP4Encoder {
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
         instant_mode: bool,
+        ultra_quality: bool,
     ) -> Result<Self, InitError> {
         info!(
             width = video_config.width,
@@ -227,17 +258,21 @@ impl MP4Encoder {
 
             let bitrate = if instant_mode {
                 get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
+            } else if ultra_quality {
+                get_ultra_bitrate(output_width as f32, output_height as f32, fps)
             } else {
                 get_average_bitrate(output_width as f32, output_height as f32, fps)
             };
 
-            debug!(instant_mode, "recording bitrate: {bitrate}");
+            debug!(instant_mode, ultra_quality, "recording bitrate: {bitrate}");
 
             let keyframe_interval = if instant_mode {
                 fps as i32
             } else {
                 (fps * 2.0) as i32
             };
+
+            let allow_frame_reordering = ultra_quality && !instant_mode;
 
             output_settings.insert(
                 av::video_settings_keys::compression_props(),
@@ -250,7 +285,7 @@ impl MP4Encoder {
                     ],
                     &[
                         ns::Number::with_f32(bitrate).as_id_ref(),
-                        ns::Number::with_bool(false).as_id_ref(),
+                        ns::Number::with_bool(allow_frame_reordering).as_id_ref(),
                         ns::Number::with_f32(fps).as_id_ref(),
                         ns::Number::with_i32(keyframe_interval).as_id_ref(),
                     ],
@@ -935,10 +970,19 @@ fn timescale_value_to_duration(value: i64, timescale: i32) -> Duration {
     Duration::from_nanos(nanos)
 }
 
+const MIN_STUDIO_BITRATE: f32 = 8_000_000.0;
+const MAX_ULTRA_BITRATE: f32 = 120_000_000.0;
+
 fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
-    5_000_000.0
-        + width * height / (1920.0 * 1080.0) * 2_000_000.0
-        + fps.min(60.0) / 30.0 * 5_000_000.0
+    let pixels = width * height;
+    let fps_factor = fps.min(60.0) / 30.0;
+    (pixels * fps_factor * 5.0).max(MIN_STUDIO_BITRATE)
+}
+
+fn get_ultra_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    let pixels = width * height;
+    let fps_factor = fps.min(60.0) / 30.0;
+    (pixels * fps_factor * 10.0).clamp(MIN_STUDIO_BITRATE, MAX_ULTRA_BITRATE)
 }
 
 fn get_instant_mode_bitrate(width: f32, height: f32, fps: f32) -> f32 {

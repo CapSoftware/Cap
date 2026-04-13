@@ -919,6 +919,20 @@ pub async fn start_recording(
                             )
                             .with_max_fps(
                                 general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60),
+                            )
+                            .with_quality(
+                                match general_settings
+                                    .as_ref()
+                                    .map(|s| s.studio_recording_quality)
+                                    .unwrap_or_default()
+                                {
+                                    crate::general_settings::StudioRecordingQuality::Balanced => {
+                                        cap_recording::StudioQuality::Balanced
+                                    }
+                                    crate::general_settings::StudioRecordingQuality::Ultra => {
+                                        cap_recording::StudioQuality::Ultra
+                                    }
+                                },
                             );
 
                             #[cfg(target_os = "macos")]
