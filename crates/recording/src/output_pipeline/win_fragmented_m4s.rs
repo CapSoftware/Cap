@@ -198,6 +198,8 @@ pub struct WindowsFragmentedM4SMuxer {
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    segment_tx:
+        Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
@@ -207,6 +209,8 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub segment_tx:
+        Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -218,6 +222,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            segment_tx: None,
         }
     }
 }
@@ -258,6 +263,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             frame_drops: FrameDropTracker::new(),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            segment_tx: config.segment_tx,
         };
 
         muxer.start_encoder()?;
@@ -312,6 +318,9 @@ impl WindowsFragmentedM4SMuxer {
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
+        }
+        if let Some(tx) = self.segment_tx.take() {
+            encoder.set_segment_callback(tx);
         }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();

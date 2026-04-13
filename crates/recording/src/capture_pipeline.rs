@@ -161,6 +161,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     output_size,
                     shared_pause_state,
                     disk_space_callback: None,
+                    segment_tx: None,
                 })
                 .await
         } else {
@@ -192,12 +193,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         start_time: Timestamps,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
-        if segment_tx.is_some() {
-            tracing::info!(
-                "Segment upload channel not yet supported on Windows, using fragmented muxer fallback"
-            );
-        }
-        drop(segment_tx);
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -208,6 +203,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 output_size: Some(output_size),
                 shared_pause_state: None,
                 disk_space_callback: None,
+                segment_tx,
             })
             .await
     }
