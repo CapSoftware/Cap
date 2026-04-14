@@ -49,6 +49,13 @@
 			}
 		},
 		{
+			"includes": ["extensions/raycast/**/*"],
+			"formatter": {
+				"indentStyle": "space",
+				"indentWidth": 2
+			}
+		},
+		{
 			"includes": ["**/*.css"],
 			"linter": {
 				"rules": {
