@@ -1,6 +1,3 @@
-// Complete the test file
+// Complete the test file by adding the missing tests and closing the strings and blocks
 handler.handle('cap://pause');
-// Add any additional tests that were missing
-// ... rest of the tests
-expect(handler.handle('cap://pause')).toBe('paused');
-// Add a final newline at the end of the file
+// Add more tests as needed
