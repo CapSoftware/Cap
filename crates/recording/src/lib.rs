@@ -42,6 +42,13 @@ pub enum RecordingMode {
     Screenshot,
 }
 
+#[derive(Clone, Debug, Copy, Default, PartialEq, Eq)]
+pub enum StudioQuality {
+    #[default]
+    Balanced,
+    Ultra,
+}
+
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {

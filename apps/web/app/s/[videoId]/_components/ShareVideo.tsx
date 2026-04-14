@@ -194,36 +194,41 @@ export const ShareVideo = forwardRef<
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
 			!userConfirmedStopped &&
-			(segmentUploadProgress?.status === "fetching" ||
-				segmentUploadProgress?.status === "uploading");
+			segmentUploadProgress?.status === "uploading";
 
-		const wasRecordingRef = useRef(false);
-		const [isTransitioning, setIsTransitioning] = useState(false);
-		const transitionSourceRef = useRef<string | null>(null);
+		const isProcessingInProgress =
+			isSegmentsSource &&
+			(data.hasActiveUpload ?? false) &&
+			!isActivelyRecording &&
+			segmentUploadProgress !== null;
+
+		const prevProgressRef = useRef<typeof segmentUploadProgress>(
+			segmentUploadProgress,
+		);
+		const [awaitingSourceRefresh, setAwaitingSourceRefresh] = useState(false);
+		const refreshTriggeredRef = useRef(false);
 
 		useEffect(() => {
-			if (isActivelyRecording) {
-				wasRecordingRef.current = true;
-			} else if (wasRecordingRef.current) {
-				wasRecordingRef.current = false;
-				setIsTransitioning(true);
-				transitionSourceRef.current = data.source.type;
+			const prev = prevProgressRef.current;
+			prevProgressRef.current = segmentUploadProgress;
+
+			if (refreshTriggeredRef.current || !isSegmentsSource) return;
+
+			const prevWasActive = prev !== null;
+			const isNowComplete = segmentUploadProgress === null;
+
+			if (prevWasActive && isNowComplete) {
+				refreshTriggeredRef.current = true;
+				setAwaitingSourceRefresh(true);
 				router.refresh();
-				const timer = setTimeout(() => setIsTransitioning(false), 5000);
-				return () => clearTimeout(timer);
 			}
-		}, [isActivelyRecording, router, data.source.type]);
+		}, [segmentUploadProgress, router, isSegmentsSource]);
 
 		useEffect(() => {
-			if (
-				isTransitioning &&
-				transitionSourceRef.current !== null &&
-				data.source.type !== transitionSourceRef.current
-			) {
-				transitionSourceRef.current = null;
-				setIsTransitioning(false);
+			if (awaitingSourceRefresh && !isSegmentsSource) {
+				setAwaitingSourceRefresh(false);
 			}
-		}, [isTransitioning, data.source.type]);
+		}, [awaitingSourceRefresh, isSegmentsSource]);
 
 		let videoSrc: string;
 		const rawFallbackSrc =
@@ -257,7 +262,7 @@ export const ShareVideo = forwardRef<
 							onConfirmStopped={() => setUserConfirmedStopped(true)}
 							className="h-full"
 						/>
-					) : isTransitioning ? (
+					) : isProcessingInProgress || awaitingSourceRefresh ? (
 						<PreparingVideoOverlay className="h-full" />
 					) : isMp4Source ? (
 						<CapVideoPlayer

@@ -919,6 +919,20 @@ pub async fn start_recording(
                             )
                             .with_max_fps(
                                 general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60),
+                            )
+                            .with_quality(
+                                match general_settings
+                                    .as_ref()
+                                    .map(|s| s.studio_recording_quality)
+                                    .unwrap_or_default()
+                                {
+                                    crate::general_settings::StudioRecordingQuality::Balanced => {
+                                        cap_recording::StudioQuality::Balanced
+                                    }
+                                    crate::general_settings::StudioRecordingQuality::Ultra => {
+                                        cap_recording::StudioQuality::Ultra
+                                    }
+                                },
                             );
 
                             #[cfg(target_os = "macos")]
@@ -1685,11 +1699,13 @@ async fn handle_recording_end(
         let _ = camera.hide();
     }
 
+    app.camera_preview.pause();
+    let _ = app.mic_feed.ask(microphone::RemoveInput).await;
+    let _ = app.camera_feed.ask(camera::RemoveInput).await;
+
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        let _ = app.mic_feed.ask(microphone::RemoveInput).await;
-        let _ = app.camera_feed.ask(camera::RemoveInput).await;
         app.selected_mic_label = None;
         app.selected_camera_id = None;
     }

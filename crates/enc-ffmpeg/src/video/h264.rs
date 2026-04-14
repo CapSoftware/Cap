@@ -53,6 +53,7 @@ pub enum H264EncoderError {
 
 impl H264EncoderBuilder {
     pub const QUALITY_BPP: f32 = 0.3;
+    pub const ULTRA_BPP: f32 = 1.0;
     pub const INSTANT_MODE_BPP: f32 = 0.15;
 
     pub fn new(input_config: VideoInfo) -> Self {
@@ -808,17 +809,12 @@ fn get_codec_and_options(
                         options.set("trellis", "0");
                     }
                 } else {
-                    options.set(
-                        "preset",
-                        match preset {
-                            H264Preset::Slow => "slow",
-                            H264Preset::Medium => "medium",
-                            H264Preset::Ultrafast | H264Preset::HighThroughput => "ultrafast",
-                        },
-                    );
-                    if matches!(preset, H264Preset::Ultrafast | H264Preset::HighThroughput) {
-                        options.set("tune", "zerolatency");
-                    }
+                    let realtime_preset = match preset {
+                        H264Preset::Slow | H264Preset::Medium => "veryfast",
+                        H264Preset::Ultrafast | H264Preset::HighThroughput => "ultrafast",
+                    };
+                    options.set("preset", realtime_preset);
+                    options.set("tune", "zerolatency");
                 }
                 options.set("vsync", "1");
                 options.set("g", &keyframe_interval_str);

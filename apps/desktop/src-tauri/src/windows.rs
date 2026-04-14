@@ -162,6 +162,92 @@ async fn restore_main_window_inputs(app: &AppHandle) {
     if let Err(err) = crate::set_mic_input(app.state(), settings.mic_name).await {
         warn!("Failed to restore microphone input for main window: {err}");
     }
+
+    let operation_lock = app.state::<crate::CameraWindowOperationLock>();
+    let operation_guard = operation_lock.lock().await;
+
+    let camera_to_restore = app
+        .state::<ArcLock<App>>()
+        .try_read()
+        .map(|s| {
+            if s.selected_camera_id.is_some() && !s.camera_cleanup_done && !s.camera_in_use {
+                s.selected_camera_id.clone()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(None);
+
+    if let Some(camera_id) = camera_to_restore {
+        let state = app.state::<ArcLock<App>>();
+
+        let (camera_feed, camera_ws_sender, native_sender) = {
+            let app_state = &mut *state.write().await;
+            app_state.camera_in_use = true;
+            app_state.camera_cleanup_done = false;
+            #[allow(deprecated)]
+            (
+                app_state.camera_feed.clone(),
+                app_state.camera_ws_sender.clone(),
+                app_state.camera_preview.sender(),
+            )
+        };
+
+        #[allow(deprecated)]
+        let _ = camera_feed
+            .ask(feeds::camera::AddSender(camera_ws_sender))
+            .await;
+
+        if let Some(sender) = native_sender {
+            let _ = camera_feed.ask(feeds::camera::AddSender(sender)).await;
+        }
+
+        let mut attempts = 0;
+        let init_result: Result<(), String> = loop {
+            attempts += 1;
+            let request = camera_feed
+                .ask(feeds::camera::SetInput {
+                    id: camera_id.clone(),
+                })
+                .await
+                .map_err(|e| e.to_string());
+
+            match request {
+                Ok(future) => match future.await {
+                    Ok(_) => break Ok(()),
+                    Err(e) => {
+                        if attempts >= 3 {
+                            break Err(format!(
+                                "Failed to restore camera after {attempts} attempts: {e}"
+                            ));
+                        }
+                        warn!("Camera restore attempt {attempts} failed: {e}. Retrying...");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                },
+                Err(e) => {
+                    if attempts >= 3 {
+                        break Err(e);
+                    }
+                    warn!("Camera restore attempt {attempts} failed: {e}. Retrying...");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        };
+
+        drop(operation_guard);
+
+        if init_result.is_ok() {
+            crate::restore_camera_window(app);
+        } else {
+            warn!("Failed to restore camera input for main window");
+            let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
+            let app_state = &mut *state.write().await;
+            app_state.selected_camera_id = None;
+            app_state.camera_in_use = false;
+            app_state.camera_preview.pause();
+        }
+    }
 }
 
 async fn cleanup_camera_window(
@@ -871,7 +957,7 @@ impl ShowCapWindow {
 
                     ensure_camera_input_active(&mut app_state).await;
 
-                    if enable_native_camera_preview && !app_state.camera_preview.is_initialized() {
+                    if enable_native_camera_preview {
                         let camera_feed = app_state.camera_feed.clone();
                         if let Err(err) = app_state
                             .camera_preview
