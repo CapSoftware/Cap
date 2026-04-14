@@ -46,7 +46,6 @@ import {
 } from "./video/media-player";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
 
-
 const { circumference } = getProgressCircleConfig();
 
 function getProgressStatusText(
