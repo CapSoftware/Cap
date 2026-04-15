@@ -278,7 +278,13 @@ impl TryFrom<&Url> for DeepLinkAction {
                 ("record", "toggle-pause") => Ok(Self::TogglePauseRecording),
                 ("record", "restart") => Ok(Self::RestartRecording),
                 ("device", "microphone") => {
-                    let (mic_label, _) = parse_microphone_from_query(&query, "label", "off")?;
+                    let (mic_label, apply_mic) =
+                        parse_microphone_from_query(&query, "label", "off")?;
+                    if !apply_mic {
+                        return Err(ActionParseFromUrlError::ParseFailed(
+                            "device/microphone requires 'label' or 'off=true'".to_string(),
+                        ));
+                    }
                     Ok(Self::SwitchMicrophone { mic_label })
                 }
                 ("device", "camera") => Ok(Self::SwitchCamera {
@@ -513,5 +519,95 @@ mod tests {
         let action = DeepLinkAction::try_from(&url);
 
         assert!(matches!(action, Err(ActionParseFromUrlError::NotAction)));
+    }
+
+    #[test]
+    fn rejects_microphone_with_no_params() {
+        // Regression test: a bare `cap-desktop://device/microphone` URL must not
+        // silently disable an active microphone. It must fail parsing so the
+        // caller receives a clear error instead of an accidental mic-off.
+        let url = Url::parse("cap-desktop://device/microphone").unwrap();
+        let action = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(action, Err(ActionParseFromUrlError::ParseFailed(_))));
+    }
+
+    #[test]
+    fn parses_switch_microphone_label() {
+        let url =
+            Url::parse("cap-desktop://device/microphone?label=MacBook+Mic").unwrap();
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::SwitchMicrophone { mic_label: Some(ref l) } if l == "MacBook Mic"
+        ));
+    }
+
+    #[test]
+    fn parses_stop_pause_resume_restart_toggle() {
+        let cases = [
+            ("cap-desktop://record/stop", DeepLinkAction::StopRecording),
+            ("cap-desktop://record/pause", DeepLinkAction::PauseRecording),
+            ("cap-desktop://record/resume", DeepLinkAction::ResumeRecording),
+            (
+                "cap-desktop://record/toggle-pause",
+                DeepLinkAction::TogglePauseRecording,
+            ),
+            (
+                "cap-desktop://record/restart",
+                DeepLinkAction::RestartRecording,
+            ),
+        ];
+
+        for (raw, expected) in cases {
+            let url = Url::parse(raw).unwrap();
+            let action = DeepLinkAction::try_from(&url).unwrap();
+            assert!(
+                std::mem::discriminant(&action) == std::mem::discriminant(&expected),
+                "unexpected action for {raw}",
+            );
+        }
+    }
+
+    #[test]
+    fn parses_settings_open_with_page() {
+        let url = Url::parse("cap-desktop://settings/open?page=general").unwrap();
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::OpenSettings { page: Some(ref p) } if p == "general"
+        ));
+    }
+
+    #[test]
+    fn parses_settings_open_without_page() {
+        let url = Url::parse("cap-desktop://settings/open").unwrap();
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::OpenSettings { page: None }
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_path_domain() {
+        let url = Url::parse("cap-desktop://bogus/route").unwrap();
+        let action = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(action, Err(ActionParseFromUrlError::NotAction)));
+    }
+
+    #[test]
+    fn rejects_start_recording_invalid_capture_type() {
+        let url = Url::parse(
+            "cap-desktop://record/start?mode=studio&capture_type=speaker&target=Display",
+        )
+        .unwrap();
+        let action = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(action, Err(ActionParseFromUrlError::ParseFailed(_))));
     }
 }
