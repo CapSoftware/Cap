@@ -332,6 +332,10 @@ function Inner() {
 					<RecordingControls
 						target={{ variant: "cameraOnly" } as ScreenCaptureTarget}
 						showBackground
+						onClose={() => {
+							setOptions("targetMode", null);
+							commands.closeTargetSelectOverlays();
+						}}
 					/>
 				</div>
 			</Match>
@@ -378,6 +382,10 @@ function Inner() {
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: displayId() }}
+							onClose={() => {
+								setOptions("targetMode", null);
+								commands.closeTargetSelectOverlays();
+							}}
 						/>
 						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 					</div>
@@ -406,6 +414,14 @@ function Inner() {
 					const activeWindow = createMemo(
 						() => selectedWindow() ?? targetUnderCursor.window,
 					);
+
+					createEffect(() => {
+						const selected = selectedWindow();
+						const icon = windowIcon.data;
+						if (selected && icon && !lockedIcon()) {
+							setLockedIcon(icon);
+						}
+					});
 
 					onMount(async () => {
 						try {
@@ -476,6 +492,34 @@ function Inner() {
 								<div
 									data-over={targetUnderCursor.display_id === params.displayId}
 									class="relative w-screen h-screen bg-black/70"
+									onClick={() => {
+										const current = selectedWindow();
+										const hovered = targetUnderCursor.window;
+										if (current && hovered && hovered.id !== current.id) {
+											setLockedIcon(windowIcon.data ?? null);
+											setSelectedWindow({
+												id: hovered.id,
+												bounds: {
+													position: {
+														x: hovered.bounds.position.x,
+														y: hovered.bounds.position.y,
+													},
+													size: {
+														width: hovered.bounds.size.width,
+														height: hovered.bounds.size.height,
+													},
+												},
+												app_name: hovered.app_name,
+											});
+											setOptions(
+												"captureTarget",
+												reconcile({
+													variant: "window",
+													id: hovered.id,
+												}),
+											);
+										}
+									}}
 								>
 									<div
 										class="flex absolute flex-col justify-center items-center bg-blue-600/40"
@@ -486,7 +530,9 @@ function Inner() {
 											top: `${windowUnderCursor.bounds.position.y}px`,
 										}}
 										onClick={() => {
-											if (!selectedWindow()) {
+											const current = selectedWindow();
+											const hovered = targetUnderCursor.window;
+											if (!current) {
 												setOriginalCameraBounds(null);
 												setLockedIcon(windowIcon.data ?? null);
 												setSelectedWindow({
@@ -510,6 +556,29 @@ function Inner() {
 														id: windowUnderCursor.id,
 													}),
 												);
+											} else if (hovered && hovered.id !== current.id) {
+												setLockedIcon(windowIcon.data ?? null);
+												setSelectedWindow({
+													id: hovered.id,
+													bounds: {
+														position: {
+															x: hovered.bounds.position.x,
+															y: hovered.bounds.position.y,
+														},
+														size: {
+															width: hovered.bounds.size.width,
+															height: hovered.bounds.size.height,
+														},
+													},
+													app_name: hovered.app_name,
+												});
+												setOptions(
+													"captureTarget",
+													reconcile({
+														variant: "window",
+														id: hovered.id,
+													}),
+												);
 											}
 										}}
 									>
@@ -518,7 +587,9 @@ function Inner() {
 												<Suspense>
 													<Show
 														when={
-															selectedWindow() ? lockedIcon() : windowIcon.data
+															selectedWindow()
+																? (lockedIcon() ?? windowIcon.data)
+																: windowIcon.data
 														}
 													>
 														{(icon) => (
@@ -546,6 +617,12 @@ function Inner() {
 												}}
 												onRecordingStart={() => {
 													setOriginalCameraBounds(null);
+													setOptions("targetMode", null);
+													commands.closeTargetSelectOverlays();
+												}}
+												onClose={() => {
+													setSelectedWindow(null);
+													setLockedIcon(null);
 													setOptions("targetMode", null);
 													commands.closeTargetSelectOverlays();
 												}}
@@ -1038,6 +1115,10 @@ function Inner() {
 											disabled={!isValid()}
 											showBackground={controllerInside()}
 											onRecordingStart={() => setOriginalCameraBounds(null)}
+											onClose={() => {
+												setOptions("targetMode", null);
+												commands.closeTargetSelectOverlays();
+											}}
 										/>
 									</Show>
 									<Show when={!isValid()}>
@@ -1472,6 +1553,7 @@ function RecordingControls(props: {
 	showBackground?: boolean;
 	disabled?: boolean;
 	onRecordingStart?: () => void;
+	onClose?: () => void;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -1612,8 +1694,12 @@ function RecordingControls(props: {
 					<div class="flex gap-2.5 items-center">
 						<div
 							onClick={() => {
-								setOptions("targetMode", null);
-								commands.closeTargetSelectOverlays();
+								if (props.onClose) {
+									props.onClose();
+								} else {
+									setOptions("targetMode", null);
+									commands.closeTargetSelectOverlays();
+								}
 							}}
 							class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 						>
