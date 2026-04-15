@@ -1479,18 +1479,18 @@ pub async fn take_screenshot(
 
     let mut hid_any = false;
     for (label, window) in app.webview_windows() {
-        if let Ok(id) = CapWindowId::from_str(&label) {
-            if matches!(
+        if let Ok(id) = CapWindowId::from_str(&label)
+            && matches!(
                 id,
                 CapWindowId::TargetSelectOverlay { .. }
                     | CapWindowId::WindowCaptureOccluder { .. }
                     | CapWindowId::CaptureArea
                     | CapWindowId::ModeSelect
                     | CapWindowId::RecordingsOverlay
-            ) {
-                hide_overlay(&window);
-                hid_any = true;
-            }
+            )
+        {
+            hide_overlay(&window);
+            hid_any = true;
         }
     }
 
