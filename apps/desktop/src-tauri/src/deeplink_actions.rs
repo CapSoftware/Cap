@@ -287,9 +287,20 @@ impl TryFrom<&Url> for DeepLinkAction {
                     }
                     Ok(Self::SwitchMicrophone { mic_label })
                 }
-                ("device", "camera") => Ok(Self::SwitchCamera {
-                    camera: parse_camera_from_query(&query)?,
-                }),
+                ("device", "camera") => {
+                    let has_camera_param = query.contains_key("device_id")
+                        || query.contains_key("model_id")
+                        || query.contains_key("off");
+                    if !has_camera_param {
+                        return Err(ActionParseFromUrlError::ParseFailed(
+                            "device/camera requires 'device_id', 'model_id', or 'off=true'"
+                                .to_string(),
+                        ));
+                    }
+                    Ok(Self::SwitchCamera {
+                        camera: parse_camera_from_query(&query)?,
+                    })
+                }
                 ("settings", "open") => Ok(Self::OpenSettings {
                     page: parse_optional_string(query.get("page")),
                 }),
@@ -530,6 +541,29 @@ mod tests {
         let action = DeepLinkAction::try_from(&url);
 
         assert!(matches!(action, Err(ActionParseFromUrlError::ParseFailed(_))));
+    }
+
+    #[test]
+    fn rejects_camera_with_no_params() {
+        // Regression test mirroring rejects_microphone_with_no_params: a bare
+        // `cap-desktop://device/camera` URL must not silently disable an
+        // active camera. `SwitchCamera { camera: None }` is only produced
+        // when the caller explicitly asks for `off=true`.
+        let url = Url::parse("cap-desktop://device/camera").unwrap();
+        let action = DeepLinkAction::try_from(&url);
+
+        assert!(matches!(action, Err(ActionParseFromUrlError::ParseFailed(_))));
+    }
+
+    #[test]
+    fn parses_switch_camera_off() {
+        let url = Url::parse("cap-desktop://device/camera?off=true").unwrap();
+        let action = DeepLinkAction::try_from(&url).unwrap();
+
+        assert!(matches!(
+            action,
+            DeepLinkAction::SwitchCamera { camera: None }
+        ));
     }
 
     #[test]
