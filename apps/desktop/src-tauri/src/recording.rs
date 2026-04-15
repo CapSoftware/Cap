@@ -879,6 +879,16 @@ pub async fn start_recording(
                         settings.excluded_windows.clone()
                     });
 
+                let window_exclusions = if matches!(inputs.mode, RecordingMode::Instant) {
+                    let camera_title = CapWindowId::Camera.title();
+                    crate::window_exclusion::filter_for_instant_mode(
+                        window_exclusions,
+                        &camera_title,
+                    )
+                } else {
+                    window_exclusions
+                };
+
                 crate::window_exclusion::resolve_window_ids(&window_exclusions)
             };
 
