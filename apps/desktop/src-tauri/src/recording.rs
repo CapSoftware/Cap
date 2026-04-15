@@ -1477,6 +1477,27 @@ pub async fn take_screenshot(
         None,
     );
 
+    let mut hid_any = false;
+    for (label, window) in app.webview_windows() {
+        if let Ok(id) = CapWindowId::from_str(&label) {
+            if matches!(
+                id,
+                CapWindowId::TargetSelectOverlay { .. }
+                    | CapWindowId::WindowCaptureOccluder { .. }
+                    | CapWindowId::CaptureArea
+                    | CapWindowId::ModeSelect
+                    | CapWindowId::RecordingsOverlay
+            ) {
+                hide_overlay(&window);
+                hid_any = true;
+            }
+        }
+    }
+
+    if hid_any {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+
     let image = capture_screenshot(target)
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;

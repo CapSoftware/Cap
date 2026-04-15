@@ -64,6 +64,11 @@ const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap Settings",
     "Cap Recording Controls",
     "Cap Camera",
+    "Cap Target Select",
+    "Cap Window Capture Occluder",
+    "Cap Capture Area",
+    "Cap Mode Selection",
+    "Cap Recordings Overlay",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {

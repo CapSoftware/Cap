@@ -1740,11 +1740,19 @@ function RecordingControls(props: {
 
 								if (rawOptions.mode === "screenshot") {
 									try {
+										const allWindows = await WebviewWindow.getAll();
+										for (const win of allWindows) {
+											if (win.label.startsWith("target-select-overlay-")) {
+												await win.setIgnoreCursorEvents(true);
+												await win.hide();
+											}
+										}
+
 										const path = await invoke<string>("take_screenshot", {
 											target: props.target,
 										});
-										commands.showWindow({ ScreenshotEditor: { path } });
-										commands.closeTargetSelectOverlays();
+										await commands.showWindow({ ScreenshotEditor: { path } });
+										await commands.closeTargetSelectOverlays();
 									} catch (e) {
 										const message = e instanceof Error ? e.message : String(e);
 										toast.error(`Failed to take screenshot: ${message}`);
