@@ -89,8 +89,7 @@ async function repositionCameraForWindow(
 	const win = await WebviewWindow.getByLabel("camera");
 	if (!win) return;
 
-	const [physPos, physSize, scaleFactor] = await Promise.all([
-		win.outerPosition(),
+	const [physSize, scaleFactor] = await Promise.all([
 		win.outerSize(),
 		win.scaleFactor(),
 	]);
@@ -99,19 +98,10 @@ async function repositionCameraForWindow(
 	const displayOriginX = displayInfo.logical_bounds?.position?.x ?? 0;
 	const displayOriginY = displayInfo.logical_bounds?.position?.y ?? 0;
 
-	const camPos = physPos.toLogical(scaleFactor);
 	const camSize = physSize.toLogical(scaleFactor);
 
 	const winAbsX = windowBounds.x + displayOriginX;
 	const winAbsY = windowBounds.y + displayOriginY;
-
-	const cameraFullyInside =
-		camPos.x >= winAbsX &&
-		camPos.y >= winAbsY &&
-		camPos.x + camSize.width <= winAbsX + windowBounds.width &&
-		camPos.y + camSize.height <= winAbsY + windowBounds.height;
-
-	if (cameraFullyInside) return;
 
 	const padding = 16;
 	if (
