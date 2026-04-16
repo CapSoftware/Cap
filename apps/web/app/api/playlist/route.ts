@@ -265,6 +265,34 @@ const getPlaylistResponse = (
 			});
 		}
 
+		if (
+			Option.isSome(urlParams.fileType) &&
+			urlParams.fileType.value === "thumbnails-vtt"
+		) {
+			const vttKey = `${video.ownerId}/${video.id}/sprites/thumbnails.vtt`;
+			const spriteKey = `${video.ownerId}/${video.id}/sprites/sprite.jpg`;
+			return yield* Effect.gen(function* () {
+				const vttContent = yield* s3.getObject(vttKey);
+				if (Option.isNone(vttContent)) {
+					return yield* new HttpApiError.NotFound();
+				}
+				const spriteUrl = yield* s3.getSignedObjectUrl(spriteKey);
+				const resolvedVtt = vttContent.value.replaceAll(
+					"__SPRITE_URL__",
+					spriteUrl,
+				);
+				return HttpServerResponse.text(resolvedVtt).pipe(
+					HttpServerResponse.setHeaders({
+						...CACHE_CONTROL_HEADERS,
+						"Content-Type": "text/vtt",
+					}),
+				);
+			}).pipe(
+				Effect.catchTag("S3Error", () => new HttpApiError.NotFound()),
+				Effect.withSpan("fetchThumbnailsVtt"),
+			);
+		}
+
 		if (Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
