@@ -334,7 +334,7 @@ export const getOrgAnalyticsData = async (
 	const topCapIds = tinybirdData.topCapsRaw
 		.map((cap: TopCapRow) => cap.videoId)
 		.filter(Boolean);
-	const allVideoIds = capId ? [...new Set([...topCapIds, capId])] : topCapIds;
+	const allVideoIds = capId ? [capId, ...topCapIds] : topCapIds;
 	const videoNames = await loadVideoNames(allVideoIds);
 	const capName = capId ? videoNames.get(capId) : undefined;
 
