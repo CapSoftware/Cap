@@ -277,30 +277,28 @@ impl RecordableLayer for BackgroundLayer {
 
         // Handle image loading if needed
         match &new_background {
-            Background::Image { path } | Background::Wallpaper { path } => {
-                if self.image_path.as_ref() != Some(path) || self.loaded_image.is_none() {
-                    // For now, we'll do synchronous loading. In a real implementation,
-                    // this should be async or cached at a higher level
-                    match std::fs::read(path) {
-                        Ok(image_data) => {
-                            let data = skia_safe::Data::new_copy(&image_data);
-                            if let Some(image) = Image::from_encoded(&data) {
-                                self.loaded_image = Some(image);
-                                self.image_path = Some(path.clone());
-                            } else {
-                                tracing::error!("Failed to decode image: {:?}", path);
-                                return Err(SkiaRenderingError::Other(anyhow::anyhow!(
-                                    "Failed to decode image"
-                                )));
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to load image: {:?}, error: {}", path, e);
+            Background::Image { path } | Background::Wallpaper { path }
+                if self.image_path.as_ref() != Some(path) || self.loaded_image.is_none() =>
+            {
+                match std::fs::read(path) {
+                    Ok(image_data) => {
+                        let data = skia_safe::Data::new_copy(&image_data);
+                        if let Some(image) = Image::from_encoded(&data) {
+                            self.loaded_image = Some(image);
+                            self.image_path = Some(path.clone());
+                        } else {
+                            tracing::error!("Failed to decode image: {:?}", path);
                             return Err(SkiaRenderingError::Other(anyhow::anyhow!(
-                                "Failed to load image: {}",
-                                e
+                                "Failed to decode image"
                             )));
                         }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load image: {:?}, error: {}", path, e);
+                        return Err(SkiaRenderingError::Other(anyhow::anyhow!(
+                            "Failed to load image: {}",
+                            e
+                        )));
                     }
                 }
             }

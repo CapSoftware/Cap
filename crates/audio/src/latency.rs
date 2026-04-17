@@ -685,15 +685,13 @@ mod macos {
         let mut latency_secs = total_frames as f64 / effective_rate;
 
         match transport_kind {
-            OutputTransportKind::Airplay => {
-                if latency_secs < AIRPLAY_MIN_LATENCY_SECS {
-                    latency_secs = AIRPLAY_MIN_LATENCY_SECS;
-                }
+            OutputTransportKind::Airplay if latency_secs < AIRPLAY_MIN_LATENCY_SECS => {
+                latency_secs = AIRPLAY_MIN_LATENCY_SECS;
             }
-            OutputTransportKind::Wireless | OutputTransportKind::ContinuityWireless => {
-                if latency_secs < WIRELESS_MIN_LATENCY_SECS {
-                    latency_secs = WIRELESS_MIN_LATENCY_SECS;
-                }
+            OutputTransportKind::Wireless | OutputTransportKind::ContinuityWireless
+                if latency_secs < WIRELESS_MIN_LATENCY_SECS =>
+            {
+                latency_secs = WIRELESS_MIN_LATENCY_SECS;
             }
             _ => {}
         }
