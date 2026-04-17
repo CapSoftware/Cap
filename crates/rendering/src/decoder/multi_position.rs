@@ -204,7 +204,7 @@ impl DecoderPoolManager {
             .iter()
             .map(|(&frame, &count)| (frame, count))
             .collect();
-        hotspots.sort_by(|a, b| b.1.cmp(&a.1));
+        hotspots.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         let top_hotspots: Vec<f32> = hotspots
             .into_iter()
