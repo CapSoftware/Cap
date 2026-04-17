@@ -38,6 +38,15 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 				if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
 				if (v.count < RATE_LIMIT_MAX_REQUESTS) requestCounts.delete(k);
 			}
+			if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
+				const byExpiry = [...requestCounts.entries()].sort(
+					(a, b) => a[1].resetAt - b[1].resetAt,
+				);
+				for (const [k] of byExpiry) {
+					if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
+					requestCounts.delete(k);
+				}
+			}
 		}
 	}
 
