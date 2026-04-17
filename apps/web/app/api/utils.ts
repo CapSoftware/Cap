@@ -34,7 +34,10 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 			if (now > v.resetAt) requestCounts.delete(k);
 		}
 		if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
-			requestCounts.clear();
+			for (const [k, v] of requestCounts) {
+				if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
+				if (v.count < RATE_LIMIT_MAX_REQUESTS) requestCounts.delete(k);
+			}
 		}
 	}
 
