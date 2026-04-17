@@ -5,7 +5,10 @@ import IconCapLogo from "~icons/cap/logo";
 function SkeletonPulse(props: { class?: string }) {
 	return (
 		<div
-			class={cx("animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4", props.class)}
+			class={cx(
+				"animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4",
+				props.class,
+			)}
 		/>
 	);
 }

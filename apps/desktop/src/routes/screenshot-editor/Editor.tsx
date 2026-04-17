@@ -120,7 +120,9 @@ export function Editor() {
 						setLayersPanelOpen(!layersPanelOpen());
 						break;
 					case "h":
-						setActivePopover(activePopover() === "shadow-sm" ? null : "shadow-sm");
+						setActivePopover(
+							activePopover() === "shadow-sm" ? null : "shadow-sm",
+						);
 						break;
 					case "e":
 						setActivePopover(activePopover() === "border" ? null : "border");

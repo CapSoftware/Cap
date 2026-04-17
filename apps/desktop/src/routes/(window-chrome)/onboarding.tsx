@@ -1782,7 +1782,7 @@ function StartupOverlay(props: {
 
 		const tryPlay = () => {
 			if (!audioEl || audioEl.muted) return;
-			void audioEl.play().catch(() => { });
+			void audioEl.play().catch(() => {});
 		};
 
 		tryPlay();
@@ -1804,7 +1804,7 @@ function StartupOverlay(props: {
 		setAudioState("isMuted", next);
 		if (audioEl) {
 			audioEl.muted = next;
-			if (!next) void audioEl.play().catch(() => { });
+			if (!next) void audioEl.play().catch(() => {});
 		}
 	};
 
@@ -1924,7 +1924,7 @@ function StartupOverlay(props: {
 				</div>
 
 				<Button
-					class="mt-14 px-16 py-4 min-h-[3.75rem] min-w-[15rem] text-xl font-medium shadow-[0_0_30px_rgba(0,0,0,0.12)] bg-white border border-white/30 text-[#161b26] hover:bg-white/95 hover:border-white/40 flex-col gap-0.5"
+					class="mt-14 px-16 py-4 min-h-15 min-w-60 text-xl font-medium shadow-[0_0_30px_rgba(0,0,0,0.12)] bg-white border border-white/30 text-[#161b26] hover:bg-white/95 hover:border-white/40 flex-col gap-0.5"
 					variant="white"
 					size="lg"
 					onClick={handleGetStarted}
@@ -2029,7 +2029,7 @@ function PermissionsStep(props: {
 			}
 		} catch (err) {
 			console.error(`Error requesting permission: ${err}`);
-			fetchPermissions().catch(() => { });
+			fetchPermissions().catch(() => {});
 		} finally {
 			setRequestingPermission(false);
 		}
@@ -2127,13 +2127,13 @@ function PermissionsStep(props: {
 											disabled={requestingPermission()}
 											onClick={() =>
 												permission.requiresManualGrant ||
-													permStatus() === "denied"
+												permStatus() === "denied"
 													? openSettings(permission.key)
 													: requestPermission(permission.key)
 											}
 										>
 											{permission.requiresManualGrant ||
-												permStatus() === "denied"
+											permStatus() === "denied"
 												? "Open Settings"
 												: "Grant"}
 										</Button>

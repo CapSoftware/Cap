@@ -571,7 +571,7 @@ function Inner() {
 								</div>
 							</div>
 							<Show when={!isTranscriptMode()}>
-								<div class="ml-2 flex min-h-0 w-[26rem] min-w-[26rem] flex-none overflow-hidden">
+								<div class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden">
 									<ConfigSidebar />
 								</div>
 							</Show>

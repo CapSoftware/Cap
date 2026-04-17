@@ -230,9 +230,7 @@ export const Dialog = {
 		);
 	},
 	Header(props: ComponentProps<"div">) {
-		return (
-			<div {...props} class="h-14 px-4 flex flex-row items-center" />
-		);
+		return <div {...props} class="h-14 px-4 flex flex-row items-center" />;
 	},
 	Content(props: ComponentProps<"div">) {
 		return (

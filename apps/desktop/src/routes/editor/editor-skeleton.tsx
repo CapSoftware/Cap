@@ -9,7 +9,10 @@ const RESIZE_HANDLE_HEIGHT = 16;
 function SkeletonPulse(props: { class?: string }) {
 	return (
 		<div
-			class={cx("animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4", props.class)}
+			class={cx(
+				"animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4",
+				props.class,
+			)}
 		/>
 	);
 }
