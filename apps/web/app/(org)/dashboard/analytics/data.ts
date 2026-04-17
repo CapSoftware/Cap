@@ -331,17 +331,12 @@ export const getOrgAnalyticsData = async (
 				?.count ?? 0,
 	}));
 
-	const videoNames = await loadVideoNames(
-		tinybirdData.topCapsRaw
-			.map((cap: TopCapRow) => cap.videoId)
-			.filter(Boolean),
-	);
-
-	let capName: string | undefined;
-	if (capId) {
-		const capNames = await loadVideoNames([capId]);
-		capName = capNames.get(capId);
-	}
+	const topCapIds = tinybirdData.topCapsRaw
+		.map((cap: TopCapRow) => cap.videoId)
+		.filter(Boolean);
+	const allVideoIds = capId ? [...new Set([...topCapIds, capId])] : topCapIds;
+	const videoNames = await loadVideoNames(allVideoIds);
+	const capName = capId ? videoNames.get(capId) : undefined;
 
 	return {
 		counts: {
