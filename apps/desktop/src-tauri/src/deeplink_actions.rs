@@ -97,6 +97,18 @@ pub enum ActionParseFromUrlError {
     NotAction,
 }
 
+fn is_action_deeplink_host(url: &Url) -> bool {
+    // Canonical (macOS / most): `cap-desktop://action?value=...`
+    if url.host_str() == Some("action") {
+        return true;
+    }
+    // Windows / some handlers: `cap-desktop:/action?value=...` — empty host, path `/action`
+    if url.host_str().is_none() && url.path() == "/action" {
+        return true;
+    }
+    false
+}
+
 impl TryFrom<&Url> for DeepLinkAction {
     type Error = ActionParseFromUrlError;
 
@@ -109,8 +121,7 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        // `cap-desktop://action?value=...` — host must be exactly `action` (see tauri deep-link config).
-        if url.host_str() != Some("action") {
+        if !is_action_deeplink_host(url) {
             return Err(if url.host_str().is_some() {
                 ActionParseFromUrlError::NotAction
             } else {

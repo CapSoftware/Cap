@@ -28,7 +28,11 @@ Pick the extension in Raycast, then run **Refresh Device Cache** once Cap is ope
 | Set Microphone | `set_microphone.mic_label` (string or null) |
 | Set Camera | `set_camera.camera` = JSON of `device_or_model_id` from cache |
 
-Desktop parsing for `cap-desktop://action?...` now checks `host_str() == "action"` so action URLs are not rejected as invalid.
+Desktop parsing accepts both `cap-desktop://action?...` (host `action`) and **`cap-desktop:/action?...`** (empty host, path `/action`) — the second shape shows up from some Windows launchers.
+
+On **Windows**, Raycast uses `cmd /c start "" <url>` so the registered `cap-desktop` handler gets the same ShellExecute path as Explorer.
+
+**If the cache file stays empty:** Cap must be **installed** (URL scheme is registered by the installer), running, and check both `%AppData%\so.cap.desktop` and `%AppData%\so.cap.desktop.dev` if you mix prod vs dev builds.
 
 ## Bounty PR
 
