@@ -29,9 +29,14 @@ function parseMode(m: string): "studio" | "instant" | null {
   return null;
 }
 
-function parseBool(s: string): boolean {
-  const v = s.trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+/** Empty → false (default). Recognized truthy/falsy only; garbage → error. */
+function parseCaptureSystemAudio(raw: string | undefined): { ok: true; value: boolean } | { ok: false } {
+  const s = (raw ?? "").trim();
+  if (s.length === 0) return { ok: true, value: false };
+  const v = s.toLowerCase();
+  if (v === "1" || v === "true" || v === "yes" || v === "on") return { ok: true, value: true };
+  if (v === "0" || v === "false" || v === "no" || v === "off") return { ok: true, value: false };
+  return { ok: false };
 }
 
 export default async function main(props: LaunchProps<Args>) {
@@ -62,7 +67,16 @@ export default async function main(props: LaunchProps<Args>) {
       return;
     }
   }
-  const capture_system_audio = parseBool(props.arguments.captureSystemAudio ?? "false");
+  const sysAudio = parseCaptureSystemAudio(props.arguments.captureSystemAudio);
+  if (!sysAudio.ok) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Invalid captureSystemAudio",
+      message: `Got "${props.arguments.captureSystemAudio ?? ""}". Use true/false, yes/no, on/off, or 1/0 (empty = false).`,
+    });
+    return;
+  }
+  const capture_system_audio = sysAudio.value;
   await runCapDeeplink({
     start_recording: {
       capture_mode,

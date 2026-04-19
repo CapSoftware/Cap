@@ -244,6 +244,7 @@ impl DeepLinkAction {
                 });
 
                 let path = raycast_device_cache_path(app)?;
+                // Async fs only: `execute` runs on Tokio; `std::fs` would block a worker thread.
                 if let Some(parent) = path.parent() {
                     tokio::fs::create_dir_all(parent)
                         .await
