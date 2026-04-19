@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
-use tracing::trace;
+use tracing::{info, trace, warn};
 
 use crate::{
     recording::StartRecordingInputs,
@@ -65,10 +65,10 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
             DeepLinkAction::try_from(&url)
                 .map_err(|e| match e {
                     ActionParseFromUrlError::ParseFailed(msg) => {
-                        eprintln!("Failed to parse deep link \"{}\": {}", &url, msg)
+                        warn!(%url, %msg, "failed to parse cap-desktop action deeplink (unknown fields / old app?)");
                     }
                     ActionParseFromUrlError::Invalid => {
-                        eprintln!("Invalid deep link format \"{}\"", &url)
+                        warn!(%url, "invalid cap-desktop action deeplink (missing value= or bad host/path)");
                     }
                     // Likely login action, not handled here.
                     ActionParseFromUrlError::NotAction => {}
@@ -85,7 +85,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {e}");
+                warn!(error = %e, "failed to execute cap-desktop deeplink action");
             }
         }
     });
@@ -265,6 +265,7 @@ impl DeepLinkAction {
                 tokio::fs::write(&path, json.as_bytes())
                     .await
                     .map_err(|e| e.to_string())?;
+                info!(path = %path.display(), "wrote Raycast device cache");
                 Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {

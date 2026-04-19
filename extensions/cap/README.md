@@ -30,7 +30,7 @@ Pick the extension in Raycast, then run **Refresh Device Cache** once Cap is ope
 
 Desktop parsing accepts both `cap-desktop://action?...` (host `action`) and **`cap-desktop:/action?...`** (empty host, path `/action`) — the second shape shows up from some Windows launchers.
 
-On **Windows**, Raycast uses `cmd /c start "" <url>` so the registered `cap-desktop` handler gets the same ShellExecute path as Explorer.
+On **Windows**, Raycast opens URLs via `rundll32 url.dll,FileProtocolHandler` (not `cmd /c start`, which corrupts `%`-encoded query strings).
 
 **If the cache file stays empty:** Cap must be **installed** (URL scheme is registered by the installer), running, and check both `%AppData%\so.cap.desktop` and `%AppData%\so.cap.desktop.dev` if you mix prod vs dev builds.
 

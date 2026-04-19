@@ -4,10 +4,15 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** Windows: `open()` can fail to hand off custom protocols; `start` uses ShellExecute like Explorer. */
+/**
+ * Windows: `open()` is flaky for custom schemes. `cmd /c start "" <url>` looks fine but **cmd expands
+ * `%…%` in the whole line**, so `encodeURIComponent` JSON (`%22`, `%7B`, …) gets mangled before `start`
+ * runs — Cap never sees a valid `value` query. `rundll32 url.dll,FileProtocolHandler` hands the URL
+ * to the shell without that corruption.
+ */
 async function openCustomProtocolUrl(url: string): Promise<void> {
   if (process.platform === "win32") {
-    await execFileAsync("cmd.exe", ["/c", "start", "", url], { windowsHide: true });
+    await execFileAsync("rundll32.exe", ["url.dll,FileProtocolHandler", url], { windowsHide: true });
     return;
   }
   await open(url);
