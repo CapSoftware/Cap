@@ -150,7 +150,6 @@ fn raycast_device_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("raycast-device-cache.json"))
 }
 
@@ -245,11 +244,15 @@ impl DeepLinkAction {
                 });
 
                 let path = raycast_device_cache_path(app)?;
-                std::fs::write(
-                    &path,
-                    serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+                tokio::fs::write(&path, json.as_bytes())
+                    .await
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             }
             DeepLinkAction::OpenEditor { project_path } => {
