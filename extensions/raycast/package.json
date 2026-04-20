@@ -1,0 +1,78 @@
+{
+	"$schema": "https://www.raycast.com/schemas/extension.json",
+	"name": "cap",
+	"title": "Cap",
+	"description": "Control Cap screen recording directly from Raycast.",
+	"icon": "icon.png",
+	"author": "CapSoftware",
+	"license": "MIT",
+	"commands": [
+		{
+			"name": "start-recording",
+			"title": "Start Recording",
+			"description": "Start a new screen recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"description": "Stop the current screen recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "pause-recording",
+			"title": "Pause Recording",
+			"description": "Pause the current screen recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "resume-recording",
+			"title": "Resume Recording",
+			"description": "Resume the current screen recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "toggle-pause-recording",
+			"title": "Toggle Pause Recording",
+			"description": "Toggle pause/resume the current screen recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "take-screenshot",
+			"title": "Take Screenshot",
+			"description": "Take a screenshot in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "mute-recording",
+			"title": "Mute Recording",
+			"description": "Mute the microphone during recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "unmute-recording",
+			"title": "Unmute Recording",
+			"description": "Unmute the microphone during recording in Cap.",
+			"mode": "no-view"
+		},
+		{
+			"name": "toggle-mute-recording",
+			"title": "Toggle Mute Recording",
+			"description": "Toggle mute/unmute the microphone during recording in Cap.",
+			"mode": "no-view"
+		}
+	],
+	"dependencies": {
+		"@raycast/api": "^1.83.2"
+	},
+	"devDependencies": {
+		"@raycast/utils": "^1.17.0",
+		"@types/node": "20.8.10",
+		"@types/react": "18.3.3",
+		"typescript": "^5.4.5"
+	},
+	"scripts": {
+		"build": "ray build -e dist",
+		"dev": "ray develop"
+	}
+}
