@@ -1,5 +1,10 @@
-import { open } from "@raycast/api";
+import { open, showHUD } from "@raycast/api";
 
 export default async function Command() {
-	await open("cap://start-recording");
+  try {
+    await open("cap://start-recording");
+    await showHUD("Starting recording...");
+  } catch {
+    await showHUD("Failed to open Cap");
+  }
 }

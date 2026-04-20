@@ -1,5 +1,10 @@
-import { open } from "@raycast/api";
+import { open, showHUD } from "@raycast/api";
 
 export default async function Command() {
-	await open("cap://unmute-recording");
+  try {
+    await open("cap://unmute-recording");
+    await showHUD("Unmuting microphone...");
+  } catch {
+    await showHUD("Failed to open Cap");
+  }
 }

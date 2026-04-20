@@ -946,28 +946,3 @@ impl Message<Unlock> for MicrophoneFeed {
         });
     }
 }
-
-impl Message<Mute> for MicrophoneFeed {
-    type Reply = ();
-
-    async fn handle(&mut self, _: Mute, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.muted = true;
-    }
-}
-
-impl Message<Unmute> for MicrophoneFeed {
-    type Reply = ();
-
-    async fn handle(&mut self, _: Unmute, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.muted = false;
-    }
-}
-
-impl Message<ToggleMute> for MicrophoneFeed {
-    type Reply = bool;
-
-    async fn handle(&mut self, _: ToggleMute, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.muted = !self.muted;
-        self.muted
-    }
-}

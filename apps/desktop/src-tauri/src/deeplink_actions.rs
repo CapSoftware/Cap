@@ -328,7 +328,7 @@ mod tests {
             ("cap://toggle-mute-recording", "toggle-mute-recording"),
         ];
 
-        for (url_str, expected_host) in urls {
+        for (url_str, _expected_host) in urls {
             let url = Url::parse(url_str).unwrap();
             let action = DeepLinkAction::try_from(&url);
             assert!(action.is_ok(), "Failed to parse action for {}", url_str);
