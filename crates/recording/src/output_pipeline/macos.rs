@@ -137,10 +137,11 @@ struct FrameDropTracker {
     last_check: std::time::Instant,
     health_tx: Option<HealthSender>,
     health_emitted: bool,
+    source: &'static str,
 }
 
 impl FrameDropTracker {
-    fn new(health_tx: Option<HealthSender>) -> Self {
+    fn new(health_tx: Option<HealthSender>, source: &'static str) -> Self {
         Self {
             drops_in_window: 0,
             frames_in_window: 0,
@@ -149,6 +150,7 @@ impl FrameDropTracker {
             last_check: std::time::Instant::now(),
             health_tx,
             health_emitted: false,
+            source,
         }
     }
 
@@ -183,6 +185,7 @@ impl FrameDropTracker {
                             emit_health(
                                 tx,
                                 PipelineHealthEvent::FrameDropRateHigh {
+                                    source: self.source.to_string(),
                                     rate_pct: drop_rate,
                                 },
                             );
@@ -611,7 +614,7 @@ impl Muxer for AVFoundationMp4Muxer {
                 instant_mode: is_instant,
             }),
             pause_flag,
-            frame_drops: FrameDropTracker::new(None),
+            frame_drops: FrameDropTracker::new(None, "muxer:macos-mp4"),
             channel_pressure,
             audio_channel_pressure,
             was_paused: false,
@@ -1030,7 +1033,7 @@ impl Muxer for AVFoundationCameraMuxer {
                 encoder_handle: Some(encoder_handle),
             }),
             pause_flag,
-            frame_drops: FrameDropTracker::new(None),
+            frame_drops: FrameDropTracker::new(None, "muxer:macos-mp4-camera"),
             was_paused: false,
             fatal_error,
         })
