@@ -41,6 +41,7 @@ pub struct MicrophoneFeed {
     state: State,
     senders: Vec<flume::Sender<MicrophoneSamples>>,
     error_sender: flume::Sender<StreamError>,
+    muted: bool,
 }
 
 enum State {
@@ -123,6 +124,7 @@ impl MicrophoneFeed {
             }),
             senders: Vec::new(),
             error_sender,
+            muted: false,
         }
     }
 
@@ -473,6 +475,12 @@ pub struct AddSender(pub flume::Sender<MicrophoneSamples>);
 
 pub struct Lock;
 
+pub struct Mute;
+
+pub struct Unmute;
+
+pub struct ToggleMute;
+
 // Private Events
 
 struct InputConnected {
@@ -735,6 +743,10 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
         msg: MicrophoneSamples,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if self.muted {
+            return;
+        }
+
         let mut to_remove = vec![];
 
         for (i, sender) in self.senders.iter().enumerate() {
@@ -750,6 +762,31 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
                 self.senders.swap_remove(i);
             }
         }
+    }
+}
+
+impl Message<Mute> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(&mut self, _: Mute, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.muted = true;
+    }
+}
+
+impl Message<Unmute> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(&mut self, _: Unmute, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.muted = false;
+    }
+}
+
+impl Message<ToggleMute> for MicrophoneFeed {
+    type Reply = bool;
+
+    async fn handle(&mut self, _: ToggleMute, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.muted = !self.muted;
+        self.muted
     }
 }
 
