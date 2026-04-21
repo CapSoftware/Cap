@@ -3679,6 +3679,31 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             gpu_context::prewarm_gpu();
 
+            #[cfg(unix)]
+            {
+                let app_for_signal = app.clone();
+                tokio::spawn(async move {
+                    use tokio::signal::unix::{SignalKind, signal};
+                    let Ok(mut term) = signal(SignalKind::terminate()) else {
+                        tracing::warn!("Failed to register SIGTERM handler");
+                        return;
+                    };
+                    let Ok(mut hup) = signal(SignalKind::hangup()) else {
+                        tracing::warn!("Failed to register SIGHUP handler");
+                        return;
+                    };
+                    tokio::select! {
+                        _ = term.recv() => {
+                            tracing::info!("Received SIGTERM; initiating graceful shutdown");
+                        }
+                        _ = hup.recv() => {
+                            tracing::info!("Received SIGHUP; initiating graceful shutdown");
+                        }
+                    }
+                    request_app_exit(app_for_signal).await;
+                });
+            }
+
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
                 let app = app.clone();
