@@ -58,6 +58,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
@@ -86,6 +87,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
@@ -96,6 +98,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             ?quality,
             ultra,
             fragmented,
+            use_oop_muxer,
             "Studio mode capture pipeline quality selection"
         );
 
@@ -119,17 +122,57 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
             tracing::debug!(bpp, ?preset, "Fragmented studio pipeline encoder config");
 
-            OutputPipeline::builder(fragments_dir)
-                .with_video::<screen_capture::VideoSource>(screen_capture)
-                .with_timestamps(start_time)
-                .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
-                    preset,
-                    bpp,
-                    output_size,
-                    shared_pause_state,
-                    ..Default::default()
-                })
-                .await
+            let oop_ok = if use_oop_muxer {
+                match crate::output_pipeline::oop_muxer::resolve_muxer_binary() {
+                    Ok(bin_path) => {
+                        tracing::info!(
+                            bin_path = %bin_path.display(),
+                            "Using out-of-process fragmented M4S muxer (Phase 5 OOP isolation)"
+                        );
+                        true
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "out_of_process_muxer requested but cap-muxer binary is unavailable; \
+                             falling back to in-process muxer to preserve the recording"
+                        );
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            if oop_ok {
+                use crate::output_pipeline::{
+                    OutOfProcessFragmentedM4SMuxer, OutOfProcessFragmentedM4SMuxerConfig,
+                };
+
+                OutputPipeline::builder(fragments_dir)
+                    .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_timestamps(start_time)
+                    .build::<OutOfProcessFragmentedM4SMuxer>(OutOfProcessFragmentedM4SMuxerConfig {
+                        preset,
+                        bpp,
+                        output_size,
+                        shared_pause_state,
+                        ..Default::default()
+                    })
+                    .await
+            } else {
+                OutputPipeline::builder(fragments_dir)
+                    .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_timestamps(start_time)
+                    .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                        preset,
+                        bpp,
+                        output_size,
+                        shared_pause_state,
+                        ..Default::default()
+                    })
+                    .await
+            }
         } else {
             tracing::debug!(
                 ultra_quality = ultra,
@@ -176,6 +219,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
@@ -201,19 +245,62 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 H264Preset::Ultrafast
             };
 
-            OutputPipeline::builder(fragments_dir)
-                .with_video::<screen_capture::VideoSource>(screen_capture)
-                .with_timestamps(start_time)
-                .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
-                    segment_duration: std::time::Duration::from_secs(3),
-                    preset,
-                    bpp,
-                    output_size,
-                    shared_pause_state,
-                    disk_space_callback: None,
-                    segment_tx: None,
-                })
-                .await
+            let oop_ok = if use_oop_muxer {
+                match crate::output_pipeline::oop_muxer::resolve_muxer_binary() {
+                    Ok(bin_path) => {
+                        tracing::info!(
+                            bin_path = %bin_path.display(),
+                            "Using Windows out-of-process fragmented M4S muxer (Phase 5 OOP isolation)"
+                        );
+                        true
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "out_of_process_muxer requested but cap-muxer binary is unavailable; \
+                             falling back to in-process muxer to preserve the recording"
+                        );
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            if oop_ok {
+                use crate::output_pipeline::{
+                    WindowsOOPFragmentedM4SMuxer, WindowsOOPFragmentedM4SMuxerConfig,
+                };
+
+                OutputPipeline::builder(fragments_dir)
+                    .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_timestamps(start_time)
+                    .build::<WindowsOOPFragmentedM4SMuxer>(WindowsOOPFragmentedM4SMuxerConfig {
+                        segment_duration: std::time::Duration::from_secs(2),
+                        preset,
+                        bpp,
+                        output_size,
+                        shared_pause_state,
+                        disk_space_callback: None,
+                        segment_tx: None,
+                        ..Default::default()
+                    })
+                    .await
+            } else {
+                OutputPipeline::builder(fragments_dir)
+                    .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_timestamps(start_time)
+                    .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
+                        segment_duration: std::time::Duration::from_secs(2),
+                        preset,
+                        bpp,
+                        output_size,
+                        shared_pause_state,
+                        disk_space_callback: None,
+                        segment_tx: None,
+                    })
+                    .await
+            }
         } else {
             let d3d_device = screen_capture.d3d_device.clone();
             let bitrate_multiplier = if ultra { 0.3f32 } else { 0.15f32 };
@@ -249,7 +336,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
             .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
-                segment_duration: std::time::Duration::from_secs(3),
+                segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
