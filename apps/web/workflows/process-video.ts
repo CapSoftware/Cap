@@ -37,6 +37,10 @@ export async function processVideoWorkflow(
 
 	const { videoId, userId, rawFileKey, bucketId } = payload;
 
+	console.log(
+		`[process-video] Workflow started: videoId=${videoId} rawFileKey=${rawFileKey}`,
+	);
+
 	try {
 		await validateProcessingRequest(videoId, rawFileKey);
 
@@ -50,6 +54,10 @@ export async function processVideoWorkflow(
 		await saveMetadataAndComplete(videoId, result.metadata);
 		await cleanupRawUpload(rawFileKey, bucketId);
 
+		console.log(
+			`[process-video] Workflow completed successfully: videoId=${videoId}`,
+		);
+
 		return {
 			success: true,
 			message: "Video processing completed",
@@ -57,6 +65,9 @@ export async function processVideoWorkflow(
 		};
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
+		console.error(
+			`[process-video] Workflow failed: videoId=${videoId} error=${errorMessage}`,
+		);
 		await setProcessingError(videoId, errorMessage);
 		throw new FatalError(errorMessage);
 	}
@@ -260,6 +271,10 @@ async function processVideoOnMediaServer(
 		inputExtension: getInputExtension(rawFileKey),
 	});
 
+	console.log(
+		`[process-video] Media server job started: videoId=${videoId} jobId=${jobId} webhookUrl=${webhookUrl}`,
+	);
+
 	const result = await pollForCompletion(mediaServerUrl, jobId);
 
 	return result;
@@ -306,15 +321,28 @@ async function pollForCompletion(
 			if (!status.metadata) {
 				throw new Error("Processing completed but no metadata returned");
 			}
+			console.log(
+				`[process-video] Job ${jobId} complete after ${attempt + 1} poll(s)`,
+			);
 			return { metadata: status.metadata };
 		}
 
 		if (status.phase === "error") {
+			console.error(
+				`[process-video] Job ${jobId} failed: ${status.error || "unknown error"}`,
+			);
 			throw new Error(status.error || "Video processing failed");
 		}
 
 		if (status.phase === "cancelled") {
+			console.error(`[process-video] Job ${jobId} was cancelled`);
 			throw new Error("Video processing was cancelled");
+		}
+
+		if (attempt % 12 === 0) {
+			console.log(
+				`[process-video] Job ${jobId} still running: phase=${status.phase} progress=${status.progress}% (poll ${attempt + 1}/${maxAttempts})`,
+			);
 		}
 	}
 
@@ -338,6 +366,10 @@ async function saveMetadataAndComplete(
 			...(duration === undefined ? {} : { duration }),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	console.log(
+		`[process-video] Deleting videoUploads for ${videoId} (unblocks transcription)`,
+	);
 
 	await db()
 		.delete(videoUploads)

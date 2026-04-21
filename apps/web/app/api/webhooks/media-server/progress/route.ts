@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
 	try {
 		const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 		const authHeader = request.headers.get("x-media-server-secret");
-		if (!webhookSecret || authHeader !== webhookSecret) {
+		if (webhookSecret && authHeader !== webhookSecret) {
 			return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 		}
 
@@ -82,6 +82,12 @@ export async function POST(request: NextRequest) {
 		);
 
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
+
+		console.log(
+			"[media-server-webhook] Mapped to dbPhase=%s for video %s",
+			dbPhase,
+			payload.videoId,
+		);
 
 		if (dbPhase === "complete") {
 			if (payload.metadata) {
@@ -104,6 +110,11 @@ export async function POST(request: NextRequest) {
 				})
 				.from(videos)
 				.where(eq(videos.id, payload.videoId as Video.VideoId));
+
+			const [currentUpload] = await db()
+				.select({ rawFileKey: videoUploads.rawFileKey })
+				.from(videoUploads)
+				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 
 			if (currentVideo?.source?.type === "desktopSegments") {
 				await db()
@@ -164,6 +175,37 @@ export async function POST(request: NextRequest) {
 			await db()
 				.delete(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+
+			console.log(
+				"[media-server-webhook] Deleted videoUploads for %s (transcription now unblocked)",
+				payload.videoId,
+			);
+
+			if (currentUpload?.rawFileKey) {
+				const rawFileKey = currentUpload.rawFileKey;
+				Effect.gen(function* () {
+					const bucketId = Option.fromNullable(
+						currentVideo?.bucket ?? null,
+					) as Option.Option<S3Bucket.S3BucketId>;
+					const [bucket] = yield* S3Buckets.getBucketAccess(bucketId);
+					yield* bucket.deleteObject(rawFileKey);
+				})
+					.pipe(runPromise)
+					.then(() => {
+						console.log(
+							"[media-server-webhook] Cleaned up raw file %s for %s",
+							rawFileKey,
+							payload.videoId,
+						);
+					})
+					.catch((err) => {
+						console.warn(
+							"[media-server-webhook] Failed to clean up raw file for %s:",
+							payload.videoId,
+							err,
+						);
+					});
+			}
 		} else if (dbPhase === "error") {
 			await db()
 				.update(videoUploads)

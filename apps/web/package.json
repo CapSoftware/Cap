@@ -142,7 +142,7 @@
 		"tldts": "^7.0.11",
 		"ua-parser-js": "^1.0.38",
 		"uuid": "^9.0.1",
-		"workflow": "4.2.0-beta.73",
+		"workflow": "4.2.4",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {

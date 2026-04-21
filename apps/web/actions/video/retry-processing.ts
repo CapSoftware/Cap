@@ -6,7 +6,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import {
-	startVideoProcessingWorkflow,
+	startVideoProcessingDirect,
 	type VideoProcessingStartStatus,
 } from "@/lib/video-processing";
 
@@ -62,7 +62,7 @@ export async function retryVideoProcessing({
 	if (!upload) throw new Error("No upload record found");
 	if (!upload.rawFileKey) throw new Error("No raw file key found for retry");
 
-	const status = await startVideoProcessingWorkflow({
+	const status = await startVideoProcessingDirect({
 		videoId,
 		userId: user.id,
 		rawFileKey: upload.rawFileKey,

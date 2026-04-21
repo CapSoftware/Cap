@@ -45,6 +45,46 @@ interface VideoData {
 	isOwnerPro: boolean;
 }
 
+export async function runTranscription(
+	payload: TranscribeWorkflowPayload,
+): Promise<void> {
+	const { videoId, userId, aiGenerationEnabled } = payload;
+
+	console.log(`[transcribe-direct] Started: videoId=${videoId}`);
+
+	const videoData = await validateVideo(videoId);
+
+	if (videoData.transcriptionDisabled) {
+		console.log(`[transcribe-direct] Transcription disabled for ${videoId}`);
+		await markSkipped(videoId);
+		return;
+	}
+
+	const audioUrl = await extractAudio(videoId, userId, videoData.bucketId);
+
+	if (!audioUrl) {
+		console.log(`[transcribe-direct] No audio detected for ${videoId}`);
+		await markNoAudio(videoId);
+		return;
+	}
+
+	console.log(
+		`[transcribe-direct] Audio extracted for ${videoId}, sending to Deepgram`,
+	);
+
+	const transcription = await transcribeWithDeepgram(audioUrl);
+
+	await saveTranscription(videoId, userId, videoData.bucketId, transcription);
+
+	console.log(`[transcribe-direct] Transcription saved for ${videoId}`);
+
+	await cleanupTempAudio(videoId, userId, videoData.bucketId);
+
+	if (aiGenerationEnabled) {
+		await queueAiGeneration(videoId, userId);
+	}
+}
+
 export async function transcribeVideoWorkflow(
 	payload: TranscribeWorkflowPayload,
 ) {
@@ -52,9 +92,16 @@ export async function transcribeVideoWorkflow(
 
 	const { videoId, userId, aiGenerationEnabled } = payload;
 
+	console.log(
+		`[transcribe-workflow] Started: videoId=${videoId} userId=${userId} aiGenerationEnabled=${aiGenerationEnabled}`,
+	);
+
 	const videoData = await validateVideo(videoId);
 
 	if (videoData.transcriptionDisabled) {
+		console.log(
+			`[transcribe-workflow] Transcription disabled for ${videoId}, skipping`,
+		);
 		await markSkipped(videoId);
 		return { success: true, message: "Transcription disabled - skipped" };
 	}
@@ -62,12 +109,19 @@ export async function transcribeVideoWorkflow(
 	const audioUrl = await extractAudio(videoId, userId, videoData.bucketId);
 
 	if (!audioUrl) {
+		console.log(
+			`[transcribe-workflow] No audio detected for ${videoId}, skipping`,
+		);
 		await markNoAudio(videoId);
 		return {
 			success: true,
 			message: "Video has no audio track - skipped transcription",
 		};
 	}
+
+	console.log(
+		`[transcribe-workflow] Audio extracted for ${videoId}, sending to Deepgram`,
+	);
 
 	// const enhancementConfigured = isAudioEnhancementConfigured();
 	// const shouldEnhanceAudio = videoData.isOwnerPro && enhancementConfigured;
@@ -88,6 +142,8 @@ export async function transcribeVideoWorkflow(
 	]);
 
 	await saveTranscription(videoId, userId, videoData.bucketId, transcription);
+
+	console.log(`[transcribe-workflow] Transcription saved for ${videoId}`);
 
 	await cleanupTempAudio(videoId, userId, videoData.bucketId);
 
