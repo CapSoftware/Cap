@@ -70,7 +70,7 @@ pub fn free_bytes_for_path(path: &Path) -> io::Result<u64> {
             Some(&mut total_number_of_bytes),
             Some(&mut total_number_of_free_bytes),
         )
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     }
 
     Ok(free_bytes_available_to_caller)
