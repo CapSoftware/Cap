@@ -207,6 +207,10 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
+      - name: Build cap-muxer sidecar
+        shell: bash
+        run: ./scripts/build-cap-muxer.sh ${{ matrix.settings.target }}
+
       - name: Build app
         working-directory: apps/desktop
         run: |
