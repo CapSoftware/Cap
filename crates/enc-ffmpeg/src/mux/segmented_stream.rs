@@ -450,9 +450,11 @@ impl SegmentedVideoEncoder {
             return;
         }
 
+        let taken = std::mem::take(&mut self.pending_segment_indices);
+        let taken_len = taken.len();
         let mut still_pending = Vec::new();
 
-        for (index, duration) in std::mem::take(&mut self.pending_segment_indices) {
+        for (index, duration) in taken {
             let segment_path = self.base_path.join(format!("segment_{index:03}.m4s"));
             let tmp_path = self.base_path.join(format!("segment_{index:03}.m4s.tmp"));
 
@@ -501,11 +503,12 @@ impl SegmentedVideoEncoder {
             });
         }
 
-        if !still_pending.is_empty() {
+        let flushed_any = still_pending.len() < taken_len;
+        self.pending_segment_indices = still_pending;
+
+        if flushed_any {
             self.write_in_progress_manifest();
         }
-
-        self.pending_segment_indices = still_pending;
     }
 
     fn current_segment_path(&self) -> PathBuf {
