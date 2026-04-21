@@ -27,6 +27,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod recording_telemetry;
 mod recovery;
 mod screenshot_editor;
 mod target_select_overlay;
