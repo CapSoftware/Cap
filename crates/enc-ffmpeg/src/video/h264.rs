@@ -12,6 +12,7 @@ use ffmpeg::{
 use tracing::{debug, error, trace, warn};
 
 use crate::base::EncoderBase;
+use crate::video::h264_packet::H264PacketEncoder;
 
 fn is_420(format: ffmpeg::format::Pixel) -> bool {
     format
@@ -20,6 +21,7 @@ fn is_420(format: ffmpeg::format::Pixel) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Clone)]
 pub struct H264EncoderBuilder {
     bpp: f32,
     input_config: VideoInfo,
@@ -107,6 +109,11 @@ impl H264EncoderBuilder {
 
     pub fn with_crf(mut self, crf: u8) -> Self {
         self.crf = Some(crf);
+        self
+    }
+
+    pub fn with_encoder_priority_override(mut self, codecs: &'static [&'static str]) -> Self {
+        self.encoder_priority_override = Some(codecs);
         self
     }
 
@@ -220,159 +227,32 @@ impl H264EncoderBuilder {
         external_conversion: bool,
         crf: Option<u8>,
     ) -> Result<H264Encoder, H264EncoderError> {
-        let encoder_supports_input_format = codec
-            .video()
-            .ok()
-            .and_then(|codec_video| codec_video.formats())
-            .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format));
-
-        let mut needs_pixel_conversion = false;
-
-        let output_format = if encoder_supports_input_format {
-            input_config.pixel_format
-        } else {
-            needs_pixel_conversion = true;
-            ffmpeg::format::Pixel::NV12
-        };
-
-        debug!(
-            encoder = %codec.name(),
-            input_format = ?input_config.pixel_format,
-            output_format = ?output_format,
-            needs_pixel_conversion = needs_pixel_conversion,
-            external_conversion = external_conversion,
-            "Encoder pixel format configuration"
-        );
-
-        if is_420(output_format)
-            && (!output_width.is_multiple_of(2) || !output_height.is_multiple_of(2))
-        {
-            return Err(H264EncoderError::InvalidOutputDimensions {
-                width: output_width,
-                height: output_height,
-            });
-        }
-
-        let needs_scaling =
-            output_width != input_config.width || output_height != input_config.height;
-
-        if needs_scaling && !external_conversion {
-            debug!(
-                "Scaling video frames for H264 encoding from {}x{} to {}x{}",
-                input_config.width, input_config.height, output_width, output_height
-            );
-        }
-
-        let converter = if external_conversion {
-            debug!(
-                output_format = ?output_format,
-                output_width = output_width,
-                output_height = output_height,
-                "External conversion enabled, skipping internal converter"
-            );
-            None
-        } else if needs_pixel_conversion || needs_scaling {
-            let flags = if needs_scaling {
-                ffmpeg::software::scaling::flag::Flags::BICUBIC
-            } else {
-                ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR
-            };
-
-            match ffmpeg::software::scaling::Context::get(
-                input_config.pixel_format,
-                input_config.width,
-                input_config.height,
-                output_format,
-                output_width,
-                output_height,
-                flags,
-            ) {
-                Ok(context) => {
-                    debug!(
-                        encoder = %codec.name(),
-                        src_format = ?input_config.pixel_format,
-                        src_size = %format!("{}x{}", input_config.width, input_config.height),
-                        dst_format = ?output_format,
-                        dst_size = %format!("{}x{}", output_width, output_height),
-                        needs_scaling = needs_scaling,
-                        "Created SOFTWARE scaler for pixel format conversion (CPU-intensive)"
-                    );
-                    Some(context)
-                }
-                Err(e) => {
-                    if needs_pixel_conversion {
-                        error!(
-                            "Failed to create converter from {:?} to {:?}: {:?}",
-                            input_config.pixel_format, output_format, e
-                        );
-                        return Err(H264EncoderError::PixFmtNotSupported(
-                            input_config.pixel_format,
-                        ));
-                    }
-
-                    return Err(H264EncoderError::FFmpeg(e));
-                }
-            }
-        } else {
-            debug!(
-                encoder = %codec.name(),
-                "No pixel format conversion needed (zero-copy path)"
-            );
-            None
-        };
-
-        let mut encoder_ctx = context::Context::new_with_codec(codec);
-
-        let thread_count = thread::available_parallelism()
-            .map(|v| v.get())
-            .unwrap_or(1);
-        encoder_ctx.set_threading(Config::count(thread_count));
-        let mut encoder = encoder_ctx.encoder().video()?;
-
-        encoder.set_width(output_width);
-        encoder.set_height(output_height);
-        encoder.set_format(output_format);
-        encoder.set_time_base(input_config.time_base);
-        encoder.set_frame_rate(Some(input_config.frame_rate));
-        encoder.set_colorspace(color::Space::BT709);
-        encoder.set_color_range(color::Range::MPEG);
-        unsafe {
-            (*encoder.as_mut_ptr()).color_primaries =
-                ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-            (*encoder.as_mut_ptr()).color_trc =
-                ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
-        }
-
-        if crf.is_some() {
-            encoder.set_bit_rate(0);
-        } else {
-            let bitrate = get_bitrate(
-                output_width,
-                output_height,
-                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
-                bpp,
-            );
-            encoder.set_bit_rate(bitrate);
-            encoder.set_max_bit_rate(bitrate * 3 / 2);
-        }
-
-        let encoder = encoder.open_with(encoder_options)?;
+        let OpenedVideoEncoder {
+            encoder,
+            converter,
+            converted_frame_pool,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+        } = open_video_encoder(
+            codec,
+            encoder_options,
+            input_config,
+            output_width,
+            output_height,
+            bpp,
+            external_conversion,
+            crf,
+        )?;
 
         let mut output_stream = output.add_stream(codec)?;
         let stream_index = output_stream.index();
         output_stream.set_time_base((1, H264Encoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
-
-        let converted_frame_pool = if converter.is_some() {
-            Some(frame::Video::new(
-                output_format,
-                output_width,
-                output_height,
-            ))
-        } else {
-            None
-        };
 
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
@@ -381,12 +261,344 @@ impl H264EncoderBuilder {
             output_format,
             output_width,
             output_height,
-            input_format: input_config.pixel_format,
-            input_width: input_config.width,
-            input_height: input_config.height,
+            input_format,
+            input_width,
+            input_height,
             converted_frame_pool,
         })
     }
+
+    pub fn build_standalone(self) -> Result<H264PacketEncoder, H264EncoderError> {
+        let input_config = self.input_config;
+        let (raw_width, raw_height) = self
+            .output_size
+            .unwrap_or((input_config.width, input_config.height));
+
+        let output_width = ensure_even(raw_width);
+        let output_height = ensure_even(raw_height);
+
+        if raw_width != output_width || raw_height != output_height {
+            warn!(
+                raw_width,
+                raw_height,
+                output_width,
+                output_height,
+                "Auto-adjusted odd dimensions to even for H264 encoding (standalone)"
+            );
+        }
+
+        let candidates = get_codec_and_options(
+            &input_config,
+            self.preset,
+            self.encoder_priority_override,
+            self.is_export,
+            self.crf,
+        );
+        if candidates.is_empty() {
+            return Err(H264EncoderError::CodecNotFound);
+        }
+
+        let mut last_error = None;
+
+        for (codec, encoder_options) in candidates {
+            let codec_name = codec.name().to_string();
+            match Self::build_standalone_with_codec(
+                codec,
+                encoder_options,
+                &input_config,
+                output_width,
+                output_height,
+                self.bpp,
+                self.external_conversion,
+                self.crf,
+            ) {
+                Ok(encoder) => {
+                    let fps =
+                        input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32;
+                    debug!(
+                        encoder = %codec_name,
+                        width = input_config.width,
+                        height = input_config.height,
+                        fps = fps,
+                        "Selected standalone H264 encoder"
+                    );
+                    return Ok(encoder);
+                }
+                Err(err) => {
+                    debug!("Standalone encoder {} init failed: {:?}", codec_name, err);
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or(H264EncoderError::CodecNotFound))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_standalone_with_codec(
+        codec: Codec,
+        encoder_options: Dictionary<'static>,
+        input_config: &VideoInfo,
+        output_width: u32,
+        output_height: u32,
+        bpp: f32,
+        external_conversion: bool,
+        crf: Option<u8>,
+    ) -> Result<H264PacketEncoder, H264EncoderError> {
+        let opened = open_video_encoder_with_flags(
+            codec,
+            encoder_options,
+            input_config,
+            output_width,
+            output_height,
+            bpp,
+            external_conversion,
+            crf,
+            true,
+        )?;
+        let codec_name = codec.name().to_string();
+        Ok(H264PacketEncoder::from_opened(
+            opened,
+            codec_name,
+            input_config.time_base,
+            input_config.frame_rate,
+        ))
+    }
+}
+
+pub(crate) struct OpenedVideoEncoder {
+    pub encoder: encoder::Video,
+    pub converter: Option<ffmpeg::software::scaling::Context>,
+    pub converted_frame_pool: Option<frame::Video>,
+    pub output_format: format::Pixel,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub input_format: format::Pixel,
+    pub input_width: u32,
+    pub input_height: u32,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn open_video_encoder(
+    codec: Codec,
+    encoder_options: Dictionary<'static>,
+    input_config: &VideoInfo,
+    output_width: u32,
+    output_height: u32,
+    bpp: f32,
+    external_conversion: bool,
+    crf: Option<u8>,
+) -> Result<OpenedVideoEncoder, H264EncoderError> {
+    open_video_encoder_inner(
+        codec,
+        encoder_options,
+        input_config,
+        output_width,
+        output_height,
+        bpp,
+        external_conversion,
+        crf,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn open_video_encoder_with_flags(
+    codec: Codec,
+    encoder_options: Dictionary<'static>,
+    input_config: &VideoInfo,
+    output_width: u32,
+    output_height: u32,
+    bpp: f32,
+    external_conversion: bool,
+    crf: Option<u8>,
+    global_header: bool,
+) -> Result<OpenedVideoEncoder, H264EncoderError> {
+    open_video_encoder_inner(
+        codec,
+        encoder_options,
+        input_config,
+        output_width,
+        output_height,
+        bpp,
+        external_conversion,
+        crf,
+        global_header,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_video_encoder_inner(
+    codec: Codec,
+    encoder_options: Dictionary<'static>,
+    input_config: &VideoInfo,
+    output_width: u32,
+    output_height: u32,
+    bpp: f32,
+    external_conversion: bool,
+    crf: Option<u8>,
+    global_header: bool,
+) -> Result<OpenedVideoEncoder, H264EncoderError> {
+    let encoder_supports_input_format = codec
+        .video()
+        .ok()
+        .and_then(|codec_video| codec_video.formats())
+        .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format));
+
+    let mut needs_pixel_conversion = false;
+
+    let output_format = if encoder_supports_input_format {
+        input_config.pixel_format
+    } else {
+        needs_pixel_conversion = true;
+        ffmpeg::format::Pixel::NV12
+    };
+
+    debug!(
+        encoder = %codec.name(),
+        input_format = ?input_config.pixel_format,
+        output_format = ?output_format,
+        needs_pixel_conversion = needs_pixel_conversion,
+        external_conversion = external_conversion,
+        "Encoder pixel format configuration"
+    );
+
+    if is_420(output_format)
+        && (!output_width.is_multiple_of(2) || !output_height.is_multiple_of(2))
+    {
+        return Err(H264EncoderError::InvalidOutputDimensions {
+            width: output_width,
+            height: output_height,
+        });
+    }
+
+    let needs_scaling = output_width != input_config.width || output_height != input_config.height;
+
+    if needs_scaling && !external_conversion {
+        debug!(
+            "Scaling video frames for H264 encoding from {}x{} to {}x{}",
+            input_config.width, input_config.height, output_width, output_height
+        );
+    }
+
+    let converter = if external_conversion {
+        debug!(
+            output_format = ?output_format,
+            output_width = output_width,
+            output_height = output_height,
+            "External conversion enabled, skipping internal converter"
+        );
+        None
+    } else if needs_pixel_conversion || needs_scaling {
+        let flags = if needs_scaling {
+            ffmpeg::software::scaling::flag::Flags::BICUBIC
+        } else {
+            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR
+        };
+
+        match ffmpeg::software::scaling::Context::get(
+            input_config.pixel_format,
+            input_config.width,
+            input_config.height,
+            output_format,
+            output_width,
+            output_height,
+            flags,
+        ) {
+            Ok(context) => {
+                debug!(
+                    encoder = %codec.name(),
+                    src_format = ?input_config.pixel_format,
+                    src_size = %format!("{}x{}", input_config.width, input_config.height),
+                    dst_format = ?output_format,
+                    dst_size = %format!("{}x{}", output_width, output_height),
+                    needs_scaling = needs_scaling,
+                    "Created SOFTWARE scaler for pixel format conversion (CPU-intensive)"
+                );
+                Some(context)
+            }
+            Err(e) => {
+                if needs_pixel_conversion {
+                    error!(
+                        "Failed to create converter from {:?} to {:?}: {:?}",
+                        input_config.pixel_format, output_format, e
+                    );
+                    return Err(H264EncoderError::PixFmtNotSupported(
+                        input_config.pixel_format,
+                    ));
+                }
+
+                return Err(H264EncoderError::FFmpeg(e));
+            }
+        }
+    } else {
+        debug!(
+            encoder = %codec.name(),
+            "No pixel format conversion needed (zero-copy path)"
+        );
+        None
+    };
+
+    let mut encoder_ctx = context::Context::new_with_codec(codec);
+
+    let thread_count = thread::available_parallelism()
+        .map(|v| v.get())
+        .unwrap_or(1);
+    encoder_ctx.set_threading(Config::count(thread_count));
+    let mut encoder = encoder_ctx.encoder().video()?;
+
+    encoder.set_width(output_width);
+    encoder.set_height(output_height);
+    encoder.set_format(output_format);
+    encoder.set_time_base(input_config.time_base);
+    encoder.set_frame_rate(Some(input_config.frame_rate));
+    encoder.set_colorspace(color::Space::BT709);
+    encoder.set_color_range(color::Range::MPEG);
+    unsafe {
+        (*encoder.as_mut_ptr()).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+        (*encoder.as_mut_ptr()).color_trc =
+            ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        if global_header {
+            (*encoder.as_mut_ptr()).flags |= ffmpeg::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+        }
+    }
+
+    if crf.is_some() {
+        encoder.set_bit_rate(0);
+    } else {
+        let bitrate = get_bitrate(
+            output_width,
+            output_height,
+            input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+            bpp,
+        );
+        encoder.set_bit_rate(bitrate);
+        encoder.set_max_bit_rate(bitrate * 3 / 2);
+    }
+
+    let encoder = encoder.open_with(encoder_options)?;
+
+    let converted_frame_pool = if converter.is_some() {
+        Some(frame::Video::new(
+            output_format,
+            output_width,
+            output_height,
+        ))
+    } else {
+        None
+    };
+
+    Ok(OpenedVideoEncoder {
+        encoder,
+        converter,
+        converted_frame_pool,
+        output_format,
+        output_width,
+        output_height,
+        input_format: input_config.pixel_format,
+        input_width: input_config.width,
+        input_height: input_config.height,
+    })
 }
 
 pub struct H264Encoder {
@@ -685,7 +897,7 @@ fn export_encoder_priority_override(
     None
 }
 
-pub const DEFAULT_KEYFRAME_INTERVAL_SECS: u32 = 3;
+pub const DEFAULT_KEYFRAME_INTERVAL_SECS: u32 = 2;
 
 fn get_codec_and_options(
     config: &VideoInfo,
