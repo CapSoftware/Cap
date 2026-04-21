@@ -219,6 +219,30 @@ impl AudioInfo {
         this
     }
 
+    pub fn with_sample_rate(&self, rate: u32) -> Self {
+        let mut this = *self;
+        this.sample_rate = rate;
+        this
+    }
+
+    pub fn with_sample_format(&self, format: Sample) -> Self {
+        let mut this = *self;
+        this.sample_format = format;
+        this
+    }
+
+    pub fn with_channels(&self, channels: usize) -> Self {
+        let mut this = *self;
+        this.channels = channels;
+        this
+    }
+
+    pub fn matches_format(&self, other: &Self) -> bool {
+        self.sample_rate == other.sample_rate
+            && self.channels == other.channels
+            && self.sample_format == other.sample_format
+    }
+
     /// Returns a version of this AudioInfo with channels clamped for FFmpeg compatibility.
     /// FFmpeg channel layouts only support up to 8 channels (7.1 surround).
     pub fn for_ffmpeg_output(&self) -> Self {
@@ -356,12 +380,12 @@ pub fn ensure_even(value: u32) -> u32 {
 
 pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
     match sample_format {
-        SampleFormat::U8 => Some(Sample::U8(Type::Planar)),
-        SampleFormat::I16 => Some(Sample::I16(Type::Planar)),
-        SampleFormat::I32 => Some(Sample::I32(Type::Planar)),
-        SampleFormat::I64 => Some(Sample::I64(Type::Planar)),
-        SampleFormat::F32 => Some(Sample::F32(Type::Planar)),
-        SampleFormat::F64 => Some(Sample::F64(Type::Planar)),
+        SampleFormat::U8 => Some(Sample::U8(Type::Packed)),
+        SampleFormat::I16 => Some(Sample::I16(Type::Packed)),
+        SampleFormat::I32 => Some(Sample::I32(Type::Packed)),
+        SampleFormat::I64 => Some(Sample::I64(Type::Packed)),
+        SampleFormat::F32 => Some(Sample::F32(Type::Packed)),
+        SampleFormat::F64 => Some(Sample::F64(Type::Packed)),
         _ => None,
     }
 }
