@@ -443,10 +443,9 @@ enum CaptureClosureKind {
 
 fn classify_capture_closure(device: &ID3D11Device) -> CaptureClosureKind {
     unsafe {
-        let removed_hr = device.GetDeviceRemovedReason();
-        if removed_hr.is_err() {
+        if let Err(e) = device.GetDeviceRemovedReason() {
             return CaptureClosureKind::DeviceRemoved {
-                hresult: removed_hr.0,
+                hresult: e.code().0,
             };
         }
     }

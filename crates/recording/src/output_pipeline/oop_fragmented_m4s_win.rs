@@ -1,5 +1,5 @@
 use super::core::{
-    BlockingThreadFinish, DiskSpaceMonitor, HealthSender, SharedHealthSender,
+    BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
     wait_for_blocking_thread_finish,
 };
 use super::oop_muxer::{
