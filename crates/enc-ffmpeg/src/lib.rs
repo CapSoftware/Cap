@@ -19,3 +19,9 @@ pub mod segmented_audio {
 pub mod segmented_stream {
     pub use crate::mux::segmented_stream::*;
 }
+pub mod fragment_manifest {
+    pub use crate::mux::fragment_manifest::*;
+}
+pub mod fragmented_mp4 {
+    pub use crate::mux::fragmented_mp4::*;
+}
