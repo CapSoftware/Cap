@@ -1546,6 +1546,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-muxer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-muxer-protocol",
+ "ffmpeg-next",
+ "libc",
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "cap-muxer-protocol"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
@@ -1584,6 +1606,7 @@ dependencies = [
  "cap-media-info",
  "cap-mediafoundation-ffmpeg",
  "cap-mediafoundation-utils",
+ "cap-muxer-protocol",
  "cap-project",
  "cap-rendering",
  "cap-timestamp",
@@ -1612,6 +1635,7 @@ dependencies = [
  "objc",
  "objc2 0.6.2",
  "objc2-app-kit",
+ "parking_lot",
  "relative-path",
  "replace_with",
  "retry",
@@ -1718,6 +1742,7 @@ dependencies = [
  "flume",
  "indicatif",
  "kameo",
+ "libc",
  "parking_lot",
  "scap-targets",
  "serde",
@@ -1752,6 +1777,7 @@ dependencies = [
  "directories 5.0.1",
  "flume",
  "futures",
+ "libc",
  "nix 0.29.0",
  "serde",
  "serde_json",
