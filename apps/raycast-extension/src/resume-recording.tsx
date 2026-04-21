@@ -1,26 +1,16 @@
-import { Action, ActionPanel, Icon, showToast, Toast } from "@raycast/api";
-import { sendDeepLink } from "../deeplink";
+import { Action, ActionPanel, Icon, showHUD } from "@raycast/api";
+import { sendDeepLink } from "./deeplink";
 
 export default function ResumeRecordingCommand() {
   const handleResume = async () => {
     try {
-      await showToast({
-        style: Toast.Style.Animated,
-        title: "Resuming Recording...",
-      });
+      await showHUD("▶️ Resuming Recording...");
       
       await sendDeepLink("resume_recording");
       
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Recording Resumed",
-      });
+      await showHUD("▶️ Recording Resumed");
     } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to Resume Recording",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      await showHUD("❌ Failed to Resume Recording");
     }
   };
 

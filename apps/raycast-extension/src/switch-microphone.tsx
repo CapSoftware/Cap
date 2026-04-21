@@ -1,5 +1,5 @@
 import { Action, ActionPanel, Icon, List, showToast, Toast } from "@raycast/api";
-import { sendDeepLink, getAvailableMicrophones } from "../deeplink";
+import { sendDeepLink, getAvailableMicrophones } from "./deeplink";
 
 export default function SwitchMicrophoneCommand() {
   return (

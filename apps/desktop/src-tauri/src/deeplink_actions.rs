@@ -16,7 +16,7 @@ pub enum CaptureMode {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "action")]
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,

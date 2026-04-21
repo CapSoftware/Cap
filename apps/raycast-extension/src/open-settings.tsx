@@ -1,5 +1,5 @@
 import { Action, ActionPanel, Icon, List, showToast, Toast } from "@raycast/api";
-import { sendDeepLink } from "../deeplink";
+import { sendDeepLink } from "./deeplink";
 
 export default function OpenSettingsCommand() {
   const handleOpen = async (page?: string) => {

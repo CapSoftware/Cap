@@ -1,13 +1,10 @@
-import { Action, ActionPanel, confirmAlert, Icon, showToast, Toast } from "@raycast/api";
-import { sendDeepLink } from "../deeplink";
+import { Action, ActionPanel, Icon, showHUD } from "@raycast/api";
+import { sendDeepLink } from "./deeplink";
 
 export default function StartRecordingCommand() {
   const handleStart = async () => {
     try {
-      await showToast({
-        style: Toast.Style.Animated,
-        title: "Starting Recording...",
-      });
+      await showHUD("🔴 Starting Recording...");
       
       await sendDeepLink("start_recording", {
         capture_mode: "screen",
@@ -15,16 +12,9 @@ export default function StartRecordingCommand() {
         capture_system_audio: "true",
       });
       
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Recording Started",
-      });
+      await showHUD("🔴 Recording Started");
     } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to Start Recording",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      await showHUD("❌ Failed to Start Recording");
     }
   };
 

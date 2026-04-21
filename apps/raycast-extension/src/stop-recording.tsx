@@ -1,26 +1,16 @@
-import { Action, ActionPanel, Icon, showToast, Toast } from "@raycast/api";
-import { sendDeepLink } from "../deeplink";
+import { Action, ActionPanel, Icon, showHUD } from "@raycast/api";
+import { sendDeepLink } from "./deeplink";
 
 export default function StopRecordingCommand() {
   const handleStop = async () => {
     try {
-      await showToast({
-        style: Toast.Style.Animated,
-        title: "Stopping Recording...",
-      });
+      await showHUD("⏹️ Stopping Recording...");
       
       await sendDeepLink("stop_recording");
       
-      await showToast({
-        style: Toast.Style.Success,
-        title: "Recording Stopped",
-      });
+      await showHUD("⏹️ Recording Stopped");
     } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to Stop Recording",
-        message: error instanceof Error ? error.message : "Unknown error",
-      });
+      await showHUD("❌ Failed to Stop Recording");
     }
   };
 
