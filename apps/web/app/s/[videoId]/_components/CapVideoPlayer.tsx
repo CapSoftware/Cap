@@ -14,6 +14,12 @@ import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
 import {
+	AVC_LEVEL_IOS_HARDWARE_CEILING,
+	createLevelPatchedMp4ObjectUrl,
+	isIosSafari,
+	probeAvcLevelFromUrl,
+} from "./mp4-level-patch";
+import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
 	shouldDeferPlaybackSource,
@@ -143,6 +149,9 @@ export function CapVideoPlayer({
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
 	const [hasTriedRawFallback, setHasTriedRawFallback] = useState(false);
+	const [iosLevelPatchedUrl, setIosLevelPatchedUrl] = useState<string | null>(
+		null,
+	);
 	const queryClient = useQueryClient();
 
 	useEffect(() => {
@@ -200,6 +209,73 @@ export function CapVideoPlayer({
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
 	}, [videoSrc, rawFallbackSrc]);
+
+	useEffect(() => {
+		const resolvedUrl = resolvedSrc.data?.url;
+		const resolvedType = resolvedSrc.data?.type;
+
+		setIosLevelPatchedUrl((previous) => {
+			if (previous) URL.revokeObjectURL(previous);
+			return null;
+		});
+
+		if (!resolvedUrl || resolvedType !== "mp4") {
+			return;
+		}
+
+		if (
+			typeof window === "undefined" ||
+			!isIosSafari(window.navigator?.userAgent)
+		) {
+			return;
+		}
+
+		const controller = new AbortController();
+		let cancelled = false;
+		let createdUrl: string | null = null;
+
+		(async () => {
+			const observedLevel = await probeAvcLevelFromUrl(resolvedUrl, {
+				signal: controller.signal,
+			});
+
+			if (cancelled) return;
+			if (observedLevel === null) return;
+			if (observedLevel <= AVC_LEVEL_IOS_HARDWARE_CEILING) return;
+
+			const patched = await createLevelPatchedMp4ObjectUrl(resolvedUrl, {
+				signal: controller.signal,
+			});
+
+			if (cancelled || !patched) {
+				if (patched) URL.revokeObjectURL(patched.objectUrl);
+				return;
+			}
+
+			if (!patched.patched) {
+				URL.revokeObjectURL(patched.objectUrl);
+				return;
+			}
+
+			createdUrl = patched.objectUrl;
+			setIosLevelPatchedUrl(patched.objectUrl);
+		})();
+
+		return () => {
+			cancelled = true;
+			controller.abort();
+			if (createdUrl) URL.revokeObjectURL(createdUrl);
+		};
+	}, [resolvedSrc.data?.url, resolvedSrc.data?.type]);
+
+	useEffect(() => {
+		return () => {
+			setIosLevelPatchedUrl((previous) => {
+				if (previous) URL.revokeObjectURL(previous);
+				return null;
+			});
+		};
+	}, []);
 
 	// Track video duration for comment markers
 	useEffect(() => {
@@ -571,7 +647,7 @@ export function CapVideoPlayer({
 			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
-					src={resolvedSrc.data.url}
+					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
 						setVideoLoaded(true);
