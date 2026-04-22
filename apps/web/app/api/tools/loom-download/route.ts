@@ -7,6 +7,10 @@ import {
 } from "@/lib/media-client";
 import { convertRemoteVideoToMp4Buffer } from "@/lib/video-convert";
 
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const WINDOW_MS = 60_000;
+const MAX_REQUESTS = 10;
+
 function isHlsUrl(url: string): boolean {
 	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".m3u8");
 }
@@ -164,6 +168,16 @@ export async function GET(request: NextRequest) {
 	const user = await getCurrentUser();
 	if (!user) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+	}
+
+	const now = Date.now();
+	const entry = rateLimitMap.get(user.id);
+	if (!entry || now > entry.resetAt) {
+		rateLimitMap.set(user.id, { count: 1, resetAt: now + WINDOW_MS });
+	} else if (entry.count >= MAX_REQUESTS) {
+		return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
+	} else {
+		entry.count++;
 	}
 
 	const videoId = request.nextUrl.searchParams.get("id");
