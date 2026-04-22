@@ -643,24 +643,26 @@ impl output_pipeline::VideoSource for VideoSource {
                 let mut error_tx = error_tx;
                 let mut d3d_device = d3d_device;
 
-                let build_params = |device: &ID3D11Device| -> CreateCapturerParams<'_> {
-                    CreateCapturerParams {
-                        display_id: &display_id,
-                        settings: &settings,
-                        d3d_device: device,
-                        video_tx: &video_tx,
-                        video_frame_counter: &video_frame_counter,
-                        video_drop_counter: &video_drop_counter,
-                        expected_width,
-                        expected_height,
-                        frame_scaler: frame_scaler.clone(),
-                        scaling_logged: scaling_logged.clone(),
-                        scaled_frame_count: scaled_frame_count.clone(),
-                        stall_health_tx: stats_health_tx.clone(),
-                    }
-                };
+                macro_rules! build_params {
+                    ($device:expr) => {
+                        CreateCapturerParams {
+                            display_id: &display_id,
+                            settings: &settings,
+                            d3d_device: $device,
+                            video_tx: &video_tx,
+                            video_frame_counter: &video_frame_counter,
+                            video_drop_counter: &video_drop_counter,
+                            expected_width,
+                            expected_height,
+                            frame_scaler: frame_scaler.clone(),
+                            scaling_logged: scaling_logged.clone(),
+                            scaled_frame_count: scaled_frame_count.clone(),
+                            stall_health_tx: stats_health_tx.clone(),
+                        }
+                    };
+                }
 
-                let mut capturer = match create_d3d_capturer(&build_params(&d3d_device), &error_tx) {
+                let mut capturer = match create_d3d_capturer(&build_params!(&d3d_device), &error_tx) {
                     Ok(c) => {
                         trace!("D3D capturer created successfully");
                         Some(c)
@@ -768,7 +770,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                     continue;
                                 }
                             }
-                            match create_d3d_capturer(&build_params(&d3d_device), &error_tx) {
+                            match create_d3d_capturer(&build_params!(&d3d_device), &error_tx) {
                                 Ok(mut new_cap) => match new_cap.start() {
                                     Ok(()) => {
                                         info!(
@@ -808,7 +810,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                 drop(old);
                             }
 
-                            match create_d3d_capturer(&build_params(&d3d_device), &error_tx) {
+                            match create_d3d_capturer(&build_params!(&d3d_device), &error_tx) {
                                 Ok(mut new_cap) => match new_cap.start() {
                                     Ok(()) => {
                                         let count = restart_counter

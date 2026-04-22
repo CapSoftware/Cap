@@ -385,7 +385,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                         }
                     };
 
-                let mut encode_one =
+                let encode_one =
                     |encoder: &mut cap_enc_ffmpeg::h264_packet::H264PacketEncoder,
                      subprocess: &mut RespawningMuxerSubprocess,
                      tracker: &mut FragmentManifestTracker,
