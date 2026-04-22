@@ -62,6 +62,7 @@ impl WindowExclusion {
     }
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub fn filter_for_instant_mode(
     mut exclusions: Vec<WindowExclusion>,
     camera_title: &str,
