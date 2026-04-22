@@ -21,7 +21,7 @@ import { ProArt, type ProArtRef } from "./ProArt";
 export const ProCard = () => {
 	const stripeCtx = useStripeContext();
 	const [users, setUsers] = useState(1);
-	const [isAnnually, setIsAnnually] = useState(true);
+	const [isAnnually, setIsAnnually] = useState(false);
 	const proArtRef = useRef<ProArtRef>(null);
 
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
