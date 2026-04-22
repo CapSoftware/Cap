@@ -108,7 +108,6 @@ services:
       /bin/sh -c "
       mc alias set capminio http://minio:9000 $${MINIO_ROOT_USER:-capadmin} $${MINIO_ROOT_PASSWORD:-changeme123};
       mc mb capminio/$${S3_BUCKET:-cap} --ignore-existing;
-      mc anonymous set download capminio/$${S3_BUCKET:-cap};
       exit 0;
       "
     environment:
